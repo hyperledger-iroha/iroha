@@ -175,7 +175,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 24
+        return 25
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -633,36 +633,36 @@ public enum ParliamentTimedOvnBallotChoiceV1: UInt8, Sendable {
 /// Immutable external trust anchor for one Parliament timed-OVN casting proof.
 public struct ParliamentTimedOvnCastingTrustAnchorV1: Equatable, Sendable {
     private let networkIDBytes: [UInt8]
-    /// Exact nonzero finalized checkpoint height.
+    /// Positive request-height hint; native verification authenticates the complete checkpoint.
     public let trustedCheckpointHeight: UInt64
-    private let checkpointContextIDBytes: [UInt8]
+    private let checkpointBytes: [UInt8]
     private let ballotAttemptIDBytes: [UInt8]
 
     /// Create a complete network/checkpoint/ballot anchor; no field has a default.
     public init(
         networkID: Data,
         trustedCheckpointHeight: UInt64,
-        trustedCheckpointContextID: Data,
+        trustedCheckpointNorito: Data,
         expectedBallotAttemptID: Data
     ) throws {
         guard networkID.count == 32,
               trustedCheckpointHeight > 0,
-              trustedCheckpointContextID.count == 32,
+              !trustedCheckpointNorito.isEmpty && trustedCheckpointNorito.count <= 68 * 1024 * 1024,
               expectedBallotAttemptID.count == 32,
               expectedBallotAttemptID.contains(where: { $0 != 0 }) else {
             throw ParliamentTimedOvnNativeWalletError.invalidTrustAnchor
         }
         self.networkIDBytes = Array(networkID)
         self.trustedCheckpointHeight = trustedCheckpointHeight
-        self.checkpointContextIDBytes = Array(trustedCheckpointContextID)
+        self.checkpointBytes = Array(trustedCheckpointNorito)
         self.ballotAttemptIDBytes = Array(expectedBallotAttemptID)
     }
 
     /// Defensive copy of the raw genesis-derived network id.
     public var networkID: Data { Data(networkIDBytes) }
 
-    /// Defensive copy of the trusted `HeightContextId`.
-    public var trustedCheckpointContextID: Data { Data(checkpointContextIDBytes) }
+    /// Defensive copy of the independently selected complete canonical checkpoint.
+    public var trustedCheckpointNorito: Data { Data(checkpointBytes) }
 
     /// Defensive copy of the expected `BallotAttemptId`.
     public var expectedBallotAttemptID: Data { Data(ballotAttemptIDBytes) }
@@ -674,17 +674,17 @@ public struct ParliamentTimedOvnCastingTrustAnchorV1: Equatable, Sendable {
         try ParliamentTimedOvnCastingTrustAnchorV1(
             networkID: networkID,
             trustedCheckpointHeight: verification.evaluatedBlockHeight,
-            trustedCheckpointContextID: verification.evaluatedContextID,
+            trustedCheckpointNorito: verification.promotedCheckpointNorito,
             expectedBallotAttemptID: expectedBallotAttemptID
         )
     }
 
     fileprivate func snapshot() -> (
         networkID: [UInt8],
-        checkpointContextID: [UInt8],
+        checkpointNorito: [UInt8],
         ballotAttemptID: [UInt8]
     ) {
-        (networkIDBytes, checkpointContextIDBytes, ballotAttemptIDBytes)
+        (networkIDBytes, checkpointBytes, ballotAttemptIDBytes)
     }
 }
 
@@ -696,26 +696,40 @@ public struct ParliamentTimedOvnCastingProofPageVerificationV1: Equatable, Senda
     public let evaluatedContextID: Data
     /// Whether another independently fetched and verified page is required.
     public let moreAvailable: Bool
+    /// Exact complete checkpoint returned by native authentication.
+    public let promotedCheckpointNorito: Data
 
     public init(
         evaluatedBlockHeight: UInt64,
         evaluatedContextID: Data,
-        moreAvailable: Bool
+        moreAvailable: Bool,
+        promotedCheckpointNorito: Data
     ) throws {
         guard evaluatedBlockHeight > 0,
               evaluatedContextID.count == 32,
+              !promotedCheckpointNorito.isEmpty,
+              promotedCheckpointNorito.count <= 68 * 1024 * 1024,
               evaluatedContextID.contains(where: { $0 != 0 }) else {
             throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
         }
         self.evaluatedBlockHeight = evaluatedBlockHeight
         self.evaluatedContextID = Data(evaluatedContextID)
         self.moreAvailable = moreAvailable
+        self.promotedCheckpointNorito = Data(promotedCheckpointNorito)
     }
+}
+
+/// A public wallet record and its exact native-authenticated checkpoint promotion.
+public struct ParliamentTimedOvnPublicRecordV1: Equatable, Sendable {
+    /// Canonical registration or masked-ballot record for submission.
+    public let record: Data
+    /// Complete canonical checkpoint, to persist with the operation's public state.
+    public let promotedCheckpointNorito: Data
 }
 
 /// Fail-closed errors from secret-local Parliament timed-OVN wallet operations.
 public enum ParliamentTimedOvnNativeWalletError: Error, Equatable, Sendable {
-    /// The exact ABI-24 bridge and all proof-gated V1 wallet symbols are unavailable.
+    /// The exact ABI-25 bridge and all proof-gated V1 wallet symbols are unavailable.
     case bridgeUnavailable
     /// The canonical proof response is empty or exceeds 8 MiB.
     case invalidCastingProof
@@ -780,8 +794,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
     private static let parliamentTimedOvnCastingProofMaximumBytes = 8 * 1024 * 1024
-    /// Exact ABI-24 page-verification result width.
-    public static let parliamentTimedOvnCastingProofPageVerificationBytes = 41
+    /// Exact ABI-25 diagnostic summary width; complete checkpoint bytes are separate.
+    public static let parliamentTimedOvnCastingProofPageSummaryBytes = 41
     private static let parliamentTimedOvnSeedBytes = 32
     private static let parliamentTimedOvnAuthorityMaximumBytes = 8 * 1024
     private static let parliamentTimedOvnRegistrationRecordBytes = 3_624
@@ -1763,37 +1777,37 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias ParliamentTimedOvnVerifyCastingProofFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias ParliamentTimedOvnVerifyCastingProofPageFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+        UnsafeMutablePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias ParliamentTimedOvnRegistrationFromProofFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<CChar>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias ParliamentTimedOvnBallotFromProofFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<CChar>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
 
@@ -2172,7 +2186,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }) else {
             self.loadedBridgeAbiVersion = nil
             NSLog(
-                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-24 exports"
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-25 exports"
             )
             return
         }
@@ -3280,7 +3294,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether the exact ABI-24 bridge exposes the complete proof-gated Parliament wallet.
+    /// Whether the exact ABI-25 bridge exposes the complete proof-gated Parliament wallet.
     public var isParliamentTimedOvnWalletAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -3303,7 +3317,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime,
               loadedBridgeAbiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion,
-              let verifyPageFn = parliamentTimedOvnVerifyCastingProofPageFn else {
+              let verifyPageFn = parliamentTimedOvnVerifyCastingProofPageFn,
+              let freeFn else {
             throw ParliamentTimedOvnNativeWalletError.bridgeUnavailable
         }
         guard !castingProofResponseNorito.isEmpty,
@@ -3315,11 +3330,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let anchor = trustAnchor.snapshot()
         var encoded = [UInt8](
             repeating: 0,
-            count: Self.parliamentTimedOvnCastingProofPageVerificationBytes
+            count: Self.parliamentTimedOvnCastingProofPageSummaryBytes
         )
+        var checkpointPointer: UnsafeMutablePointer<UInt8>? = nil
+        var checkpointLength: CUnsignedLong = 0
+        defer { if let checkpointPointer { freeFn(checkpointPointer) } }
         let status = proofBytes.withUnsafeBytes { proof in
             anchor.networkID.withUnsafeBytes { networkID in
-                anchor.checkpointContextID.withUnsafeBytes { checkpointContextID in
+                anchor.checkpointNorito.withUnsafeBytes { checkpointNorito in
                     anchor.ballotAttemptID.withUnsafeBytes { ballotAttemptID in
                         encoded.withUnsafeMutableBytes { output in
                             verifyPageFn(
@@ -3327,15 +3345,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 CUnsignedLong(proofBytes.count),
                                 networkID.bindMemory(to: UInt8.self).baseAddress,
                                 CUnsignedLong(anchor.networkID.count),
-                                trustAnchor.trustedCheckpointHeight,
-                                checkpointContextID.bindMemory(to: UInt8.self).baseAddress,
-                                CUnsignedLong(anchor.checkpointContextID.count),
+                                checkpointNorito.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(anchor.checkpointNorito.count),
                                 ballotAttemptID.bindMemory(to: UInt8.self).baseAddress,
                                 CUnsignedLong(anchor.ballotAttemptID.count),
                                 output.bindMemory(to: UInt8.self).baseAddress,
                                 CUnsignedLong(
-                                    Self.parliamentTimedOvnCastingProofPageVerificationBytes
-                                )
+                                    Self.parliamentTimedOvnCastingProofPageSummaryBytes
+                                ),
+                                &checkpointPointer,
+                                &checkpointLength
                             )
                         }
                     }
@@ -3345,8 +3364,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard status == 0 else {
             throw ParliamentTimedOvnNativeWalletError.nativeRejected
         }
+        guard let checkpointPointer, checkpointLength > 0,
+              checkpointLength <= 68 * 1024 * 1024 else {
+            throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
+        }
         return try Self.decodeParliamentTimedOvnCastingProofPageVerificationV1(
-            Data(encoded)
+            Data(encoded),
+            checkpointNorito: Data(bytes: checkpointPointer, count: Int(checkpointLength))
         )
         #else
         _ = castingProofResponseNorito
@@ -3356,9 +3380,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     static func decodeParliamentTimedOvnCastingProofPageVerificationV1(
-        _ encoded: Data
+        _ encoded: Data,
+        checkpointNorito: Data
     ) throws -> ParliamentTimedOvnCastingProofPageVerificationV1 {
-        guard encoded.count == parliamentTimedOvnCastingProofPageVerificationBytes,
+        guard encoded.count == parliamentTimedOvnCastingProofPageSummaryBytes,
               encoded[40] == 0 || encoded[40] == 1 else {
             throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
         }
@@ -3369,7 +3394,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return try ParliamentTimedOvnCastingProofPageVerificationV1(
             evaluatedBlockHeight: evaluatedHeight,
             evaluatedContextID: Data(encoded[8..<40]),
-            moreAvailable: encoded[40] == 1
+            moreAvailable: encoded[40] == 1,
+            promotedCheckpointNorito: checkpointNorito
         )
     }
 
@@ -3383,7 +3409,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         trustAnchor: ParliamentTimedOvnCastingTrustAnchorV1,
         authority: String,
         seedHandle: any ParliamentTimedOvnSeedHandle
-    ) throws -> Data {
+    ) throws -> ParliamentTimedOvnPublicRecordV1 {
         try parliamentTimedOvnPublicRecordV1(
             castingProofResponseNorito: castingProofResponseNorito,
             trustAnchor: trustAnchor,
@@ -3403,7 +3429,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         authority: String,
         seedHandle: any ParliamentTimedOvnSeedHandle,
         choice: ParliamentTimedOvnBallotChoiceV1
-    ) throws -> Data {
+    ) throws -> ParliamentTimedOvnPublicRecordV1 {
         try parliamentTimedOvnPublicRecordV1(
             castingProofResponseNorito: castingProofResponseNorito,
             trustAnchor: trustAnchor,
@@ -3419,7 +3445,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         authority: String,
         seedHandle: any ParliamentTimedOvnSeedHandle,
         choice: ParliamentTimedOvnBallotChoiceV1?
-    ) throws -> Data {
+    ) throws -> ParliamentTimedOvnPublicRecordV1 {
         #if canImport(Darwin)
         guard isParliamentTimedOvnWalletAvailable,
               let verifyFn = parliamentTimedOvnVerifyCastingProofFn,
@@ -3443,20 +3469,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         // the preflight or the seed-bearing native call.
         let proofBytes = Array(castingProofResponseNorito)
         let anchor = trustAnchor.snapshot()
+        var verifiedCheckpointPointer: UnsafeMutablePointer<UInt8>? = nil
+        var verifiedCheckpointLength: CUnsignedLong = 0
+        defer { if let verifiedCheckpointPointer { freeFn(verifiedCheckpointPointer) } }
         let verifyStatus = proofBytes.withUnsafeBytes { proof in
             anchor.networkID.withUnsafeBytes { networkID in
-                anchor.checkpointContextID.withUnsafeBytes { checkpointContextID in
+                anchor.checkpointNorito.withUnsafeBytes { checkpointNorito in
                     anchor.ballotAttemptID.withUnsafeBytes { ballotAttemptID in
                         verifyFn(
                             proof.bindMemory(to: UInt8.self).baseAddress,
                             CUnsignedLong(proofBytes.count),
                             networkID.bindMemory(to: UInt8.self).baseAddress,
                             CUnsignedLong(anchor.networkID.count),
-                            trustAnchor.trustedCheckpointHeight,
-                            checkpointContextID.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(anchor.checkpointContextID.count),
+                            checkpointNorito.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(anchor.checkpointNorito.count),
                             ballotAttemptID.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(anchor.ballotAttemptID.count)
+                            CUnsignedLong(anchor.ballotAttemptID.count),
+                            &verifiedCheckpointPointer,
+                            &verifiedCheckpointLength
                         )
                     }
                 }
@@ -3466,21 +3496,29 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             throw ParliamentTimedOvnNativeWalletError.nativeRejected
         }
 
-        return try seedHandle.withUnsafeSeedBytes { seed in
+        guard let verifiedCheckpointPointer, verifiedCheckpointLength > 0,
+              verifiedCheckpointLength <= 68 * 1024 * 1024 else {
+            throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
+        }
+        let verifiedCheckpoint = Data(bytes: verifiedCheckpointPointer, count: Int(verifiedCheckpointLength))
+        let record = try seedHandle.withUnsafeSeedBytes { seed in
             guard seed.count == Self.parliamentTimedOvnSeedBytes,
                   seed.contains(where: { $0 != 0 }) else {
                 throw ParliamentTimedOvnNativeWalletError.invalidSeed
             }
             var outputPointer: UnsafeMutablePointer<UInt8>? = nil
             var outputLength: CUnsignedLong = 0
+            var checkpointPointer: UnsafeMutablePointer<UInt8>? = nil
+            var checkpointLength: CUnsignedLong = 0
+            defer { if let checkpointPointer { freeFn(checkpointPointer) } }
             let status = proofBytes.withUnsafeBytes { proof in
                 anchor.networkID.withUnsafeBytes { networkID in
-                    anchor.checkpointContextID.withUnsafeBytes { checkpointContextID in
+                    anchor.checkpointNorito.withUnsafeBytes { checkpointNorito in
                         anchor.ballotAttemptID.withUnsafeBytes { ballotAttemptID in
                             authority.withCString { authorityPointer in
                                 let proofPointer = proof.bindMemory(to: UInt8.self).baseAddress
                                 let networkPointer = networkID.bindMemory(to: UInt8.self).baseAddress
-                                let contextPointer = checkpointContextID
+                                let contextPointer = checkpointNorito
                                     .bindMemory(to: UInt8.self).baseAddress
                                 let ballotPointer = ballotAttemptID
                                     .bindMemory(to: UInt8.self).baseAddress
@@ -3491,9 +3529,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         CUnsignedLong(proofBytes.count),
                                         networkPointer,
                                         CUnsignedLong(anchor.networkID.count),
-                                        trustAnchor.trustedCheckpointHeight,
-                                        contextPointer,
-                                        CUnsignedLong(anchor.checkpointContextID.count),
+                                                contextPointer,
+                                        CUnsignedLong(anchor.checkpointNorito.count),
                                         ballotPointer,
                                         CUnsignedLong(anchor.ballotAttemptID.count),
                                         authorityPointer,
@@ -3502,7 +3539,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         CUnsignedLong(seed.count),
                                         choice.rawValue,
                                         &outputPointer,
-                                        &outputLength
+                                        &outputLength,
+                                        &checkpointPointer,
+                                        &checkpointLength
                                     )
                                 }
                                 return registrationFn(
@@ -3510,9 +3549,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     CUnsignedLong(proofBytes.count),
                                     networkPointer,
                                     CUnsignedLong(anchor.networkID.count),
-                                    trustAnchor.trustedCheckpointHeight,
-                                    contextPointer,
-                                    CUnsignedLong(anchor.checkpointContextID.count),
+                                        contextPointer,
+                                    CUnsignedLong(anchor.checkpointNorito.count),
                                     ballotPointer,
                                     CUnsignedLong(anchor.ballotAttemptID.count),
                                     authorityPointer,
@@ -3520,7 +3558,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     seedPointer,
                                     CUnsignedLong(seed.count),
                                     &outputPointer,
-                                    &outputLength
+                                    &outputLength,
+                                    &checkpointPointer,
+                                    &checkpointLength
                                 )
                             }
                         }
@@ -3543,8 +3583,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             guard outputLength == CUnsignedLong(expectedLength) else {
                 throw ParliamentTimedOvnNativeWalletError.invalidPublicRecord
             }
+            guard let checkpointPointer, checkpointLength == verifiedCheckpointLength,
+                  Data(bytes: checkpointPointer, count: Int(checkpointLength)) == verifiedCheckpoint else {
+                throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
+            }
             return Data(bytes: outputPointer, count: expectedLength)
         }
+        return ParliamentTimedOvnPublicRecordV1(record: record, promotedCheckpointNorito: verifiedCheckpoint)
         #else
         _ = castingProofResponseNorito
         _ = trustAnchor

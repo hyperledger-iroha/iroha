@@ -1,4 +1,4 @@
-//! Offline game settlement verification anchored to an independently pinned v2 context.
+//! Offline game settlement verification anchored to an independently pinned native checkpoint.
 //!
 //! The downloaded bundle supplies only untrusted carriers. None of its fields can select the
 //! trusted network, validator context, transaction, session, profile or expected outcome.
@@ -9,14 +9,15 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{
-        SignedBlock,
-        consensus_v2::{HeightContext, HeightContextId},
-        decode_versioned_signed_block,
+        SignedBlock, decode_versioned_signed_block,
         proofs::{BlockProofs, TrustedBlockProofAnchor},
     },
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     game::game_message_hash_v1,
     isi::game::SettleGameSessionV1,
+    sumeragi_finality::{
+        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
+        SumeragiFinalityVerifier, VerifiedSumeragiBlock,
+    },
     transaction::signed::TransactionEntrypoint,
 };
 use norito::json::Value;
@@ -34,7 +35,7 @@ const INDEX_FORMAT: &str = "iroha.execution.settlement-index";
 
 const MAX_JSON_BYTES: usize = 96 * 1024 * 1024;
 const MAX_TOTAL_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_FINALITY_BYTES: usize = 9 * 1024 * 1024;
+const MAX_FINALITY_BYTES: usize = 36 * 1024 * 1024;
 const MAX_BLOCK_BYTES: usize = 32 * 1024 * 1024;
 const MAX_PROOFS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FINALITY_HEIGHTS: usize = 256;
@@ -54,9 +55,9 @@ pub struct VerifySettlementArgs {
     /// Independently pinned exact genesis-derived network identity.
     #[arg(long)]
     network_id: NetworkId,
-    /// Independently pinned first HeightContextId, never copied from the bundle.
-    #[arg(long)]
-    trusted_context_id: Hash,
+    /// Independently authenticated canonical checkpoint, never selected by the bundle.
+    #[arg(long, value_name = "PATH")]
+    trusted_checkpoint: PathBuf,
     /// Canonical entrypoint hash retained when the wallet signed the settlement.
     #[arg(long)]
     expected_entry_hash: Hash,
@@ -94,8 +95,10 @@ struct BundleIndex {
 /// One verifier survives every file boundary. No continuation file can choose an anchor.
 #[derive(Clone)]
 struct FinalityStream {
-    verifier: BridgeFinalityVerifier,
-    latest: Option<BridgeFinalityProof>,
+    verifier: SumeragiFinalityVerifier,
+    pinned_tip: SumeragiFinalityProof,
+    latest: Option<VerifiedSumeragiBlock>,
+    latest_proof: Option<SumeragiFinalityProof>,
     heights: u64,
     archive_bytes: u64,
     max_heights: u64,
@@ -111,17 +114,28 @@ impl FinalityStream {
             (1..=HARD_TOTAL_ARCHIVES).contains(&args.max_finality_archive_bytes),
             "total carrier byte budget must be 1..={HARD_TOTAL_ARCHIVES}"
         );
-        let trusted = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            args.trusted_context_id,
-        ));
-        Ok(Self {
-            verifier: BridgeFinalityVerifier::with_context(args.network_id, trusted),
+        let bytes = read_public_file(&args.trusted_checkpoint, MAX_FINALITY_CHECKPOINT_BYTES)
+            .wrap_err("read independently pinned native checkpoint")?;
+        let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes)
+            .wrap_err("decode independently pinned native checkpoint")?;
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &args.network_id,
+            checkpoint.chain_id(),
+        )
+        .wrap_err("pinned native checkpoint rejected")?;
+        let mut stream = Self {
+            verifier,
+            pinned_tip: checkpoint.tip().clone(),
             latest: None,
+            latest_proof: None,
             heights: 0,
             archive_bytes: 0,
             max_heights: args.max_finality_heights,
             max_archive_bytes: args.max_finality_archive_bytes,
-        })
+        };
+        stream.charge_bytes(bytes.len())?;
+        Ok(stream)
     }
     fn charge_bytes(&mut self, bytes: usize) -> Result<()> {
         let next = self
@@ -154,11 +168,15 @@ impl FinalityStream {
                 "finality carrier exceeds its bound"
             );
             self.charge_bytes(bytes.len())?;
-            let proof: BridgeFinalityProof = archive(bytes)?;
-            self.verifier
-                .verify(&proof)
-                .wrap_err("pinned-context finality chain rejected")?;
-            self.latest = Some(proof);
+            let proof: SumeragiFinalityProof = archive(bytes)?;
+            let verified = if self.heights == 0 {
+                self.verifier.verify_same_decision(&self.pinned_tip, &proof)
+            } else {
+                self.verifier.verify(&proof)
+            }
+            .wrap_err("pinned native checkpoint finality chain rejected")?;
+            self.latest = Some(verified);
+            self.latest_proof = Some(proof);
             self.heights += 1;
         }
         Ok(())
@@ -511,15 +529,10 @@ impl VerifySettlementArgs {
         let block = block_from_wire(&bundle.block)?;
         let entry_hash =
             HashOf::<TransactionEntrypoint>::from_untyped_unchecked(self.expected_entry_hash);
-        // `latest` was accepted by the pinned chain verifier above. Its target context,
-        // rather than the initial predecessor pin, now authenticates this exact height.
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-            &block,
-            &finality.finality_artifact,
-            finality.finality_artifact.context_id(),
-            &entry_hash,
-        )
-        .wrap_err("finality does not authenticate the exact executed block and target entry")?;
+        // Only the native verifier produces this capability from the independently
+        // selected checkpoint; the transport cannot promote a candidate context.
+        let anchor = TrustedBlockProofAnchor::from_verified_finality(&block, finality, &entry_hash)
+            .wrap_err("finality does not authenticate the exact executed block and target entry")?;
         let proofs: BlockProofs = archive(&bundle.proofs)?;
         ensure!(
             proofs.verify(&anchor),
@@ -543,6 +556,9 @@ impl VerifySettlementArgs {
             transaction.network_id() == Some(&self.network_id),
             "authenticated settlement transaction belongs to a different network"
         );
+        transaction
+            .verify_signature()
+            .wrap_err("authenticated settlement wallet signature is invalid")?;
         let matches = transaction
             .instructions()
             .explicit_instructions()
@@ -575,12 +591,23 @@ impl VerifySettlementArgs {
             outcome == settlement.outcome,
             "native verified outcome differs from finalized settlement"
         );
+        // Export only after all application witnesses and caller expectations pass.
+        let checkpoint = stream
+            .verifier
+            .export_checkpoint(
+                stream
+                    .latest_proof
+                    .as_ref()
+                    .expect("verified nonempty finality chain"),
+            )?
+            .encode_canonical()?;
         Ok(norito::json!({
-            "version": 1, "verified": true, "verification": "pinned_context_finalized_settlement",
+            "version": 1, "verified": true, "verification": "native_checkpoint_finalized_settlement",
             "network_id": (self.network_id.to_string()), "session_id": (self.session_id.to_string()),
             "profile_id": (self.profile_id.to_string()), "profile_qualified": (profile.qualified), "outcome_hash": (self.outcome_hash.to_string()),
             "entry_hash": (self.expected_entry_hash.to_string()), "block_height": (anchor.block_height().get().to_string()),
-            "block_hash": (anchor.block_hash().to_string()), "height_context_id": (finality.finality_artifact.context_id().0.to_string()),
+            "block_hash": (anchor.block_hash().to_string()), "context_id": (finality.context_id().to_string()),
+            "checkpoint_base64": (STANDARD.encode(checkpoint)),
             "finality_heights_verified": (stream.heights), "archive_bytes_verified": (stream.archive_bytes),
             "outcome": outcome
         }))
@@ -590,53 +617,36 @@ impl VerifySettlementArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::zk::kagemusha_v1_recursion::{
-        KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
-        decode_kagemusha_mint_finality_seal_bundle_v1,
-        derive_kagemusha_mint_finality_validator_keys_v1, sign_kagemusha_mint_finality_seal_v1,
-        verify_kagemusha_mint_finality_seal_bundle_v1,
+    use iroha_core::sumeragi::{
+        finality::{build_checkpoint, build_proof},
+        test_chain::CertifiedTestChain,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
-        block::{
-            BlockHeader,
-            builder::BlockBuilder,
-            consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-                GlobalPhase, KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1, QuorumCertificate,
-                ValidatorPower, Vote, decode_kagemusha_consensus_signature_envelope_v1,
-                encode_kagemusha_consensus_signature_envelope_v1, finality::V2FinalityArtifact,
-            },
-            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-            output_budget::ExecutionOutputLimits,
-        },
-        bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
+        block::{builder::BlockBuilder, consensus::CommitCertificate},
         execution_proofs::{ExecutionProofEnvelopeV1, ExecutionPublicInputsV1},
         game::GameOutcomeV1,
-        isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-            KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalitySealBundleV1,
-        },
+        testing::native_finality::NativeFinalityFixture,
         transaction::{FeePaymentIntent, TransactionResultInner, signed::TransactionBuilder},
         trigger::DataTriggerSequence,
     };
-    use iroha_model_base::peer::PeerId;
-    use norito::codec::Encode as _;
-    use std::{num::NonZeroU64, str::FromStr as _};
-    const FIXTURE_NETWORK_ID: &str =
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";
+    use std::sync::OnceLock;
+
     struct Fixture {
         block: SignedBlock,
-        finality: BridgeFinalityProof,
+        finality: SumeragiFinalityProof,
         block_proofs: BlockProofs,
         alternate_block_proofs: BlockProofs,
-        trusted_context_id: [u8; Hash::LENGTH],
-        validator_keys: Vec<KeyPair>,
+        native: NativeFinalityFixture,
+        checkpoint_path: PathBuf,
+        _directory: tempfile::TempDir,
     }
-    // Same real BLS quorum/PoP fixture construction as iroha_js_host's authenticated_block_proofs
-    // tests. It creates fresh local test keys and requires no endpoint or client credentials.
+    fn fixture_network() -> NetworkId {
+        static NETWORK: OnceLock<NetworkId> = OnceLock::new();
+        *NETWORK
+            .get_or_init(|| NativeFinalityFixture::start("execution-finality-tests").network_id())
+    }
     fn checked_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .unwrap_or_else(|error| panic!("{algorithm:?} fixture key generation failed: {error}"))
@@ -647,54 +657,60 @@ mod tests {
     ) -> Fixture {
         make_fixture_after(instructions, rejected, None)
     }
+    // Actual native BLS/PoP finality over explicitly synthetic application outputs.
+    // This fixture performs no World execution, funding, staking, or settlement.
     fn make_fixture_after(
         instructions: Vec<iroha_data_model::isi::InstructionBox>,
         rejected: bool,
         previous: Option<&Fixture>,
     ) -> Fixture {
+        make_fixture_with_signature(instructions, rejected, previous, true)
+    }
+    fn make_fixture_with_signature(
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+        rejected: bool,
+        previous: Option<&Fixture>,
+        valid_signature: bool,
+    ) -> Fixture {
+        let mut native = previous.map_or_else(
+            || NativeFinalityFixture::start("execution-finality-tests"),
+            |parent| parent.native.clone(),
+        );
         let transaction_key = checked_keypair(Algorithm::Ed25519);
         let alternate_transaction_key = checked_keypair(Algorithm::Ed25519);
-        let network_id: NetworkId = FIXTURE_NETWORK_ID
-            .parse()
-            .expect("fixture network identity");
         let transaction = TransactionBuilder::new(
-            network_id,
+            native.network_id(),
             AccountId::new(transaction_key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions(instructions)
-        .try_sign(transaction_key.private_key())
-        .expect("fixture transaction signature");
+        .with_instructions(instructions);
+        let transaction = if valid_signature {
+            transaction
+                .try_sign(transaction_key.private_key())
+                .expect("fixture transaction signature")
+        } else {
+            transaction.build_with_signature(Signature::from_bytes(&[0; 64]))
+        };
         let entry_hash = transaction.hash_as_entrypoint();
         let alternate_transaction = TransactionBuilder::new(
-            network_id,
+            native.network_id(),
             AccountId::new(alternate_transaction_key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .try_sign(alternate_transaction_key.private_key())
         .expect("alternate fixture transaction signature");
         let alternate_entry_hash = alternate_transaction.hash_as_entrypoint();
-        let height = previous.map_or(1, |parent| parent.block.header().height().get() + 1);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("non-zero height"),
-            previous.map(|parent| parent.block.hash()),
-            None,
-            0,
-            0,
-        );
-        let mut builder = BlockBuilder::new(header);
+        let mut builder = BlockBuilder::new(native.next_header());
         builder.push_transaction(transaction);
         builder.push_transaction(alternate_transaction);
         let mut block = builder
             .try_build_with_signature(0, transaction_key.private_key())
             .expect("fixture signed proposal");
-        let results = [
+        let results = vec![
             if rejected {
                 Err(
                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "fixture rejection".to_owned(),
-                        ),
+                        iroha_data_model::ValidationFail::NotPermitted("fixture rejection".into()),
                     ),
                 )
             } else {
@@ -702,356 +718,45 @@ mod tests {
             },
             TransactionResultInner::Ok(DataTriggerSequence::default()),
         ];
-        let outputs = results
-            .into_iter()
-            .enumerate()
-            .map(|(index, result)| {
-                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                    input_index: u32::try_from(index).expect("fixture input index fits u32"),
-                    result: result.into(),
-                    completions: Vec::new(),
-                })
-            })
-            .collect();
-        block
-            .set_execution_outputs(
-                outputs,
-                // Attaching synthetic outputs commits no execution fragments.
-                0,
-                Default::default(),
-                Vec::new(),
-                Default::default(),
-                Default::default(),
-                Vec::new(),
-                &ExecutionOutputLimits {
-                    max_outputs: 2,
-                    max_output_bytes: 1024 * 1024,
-                    max_total_output_bytes: 2 * 1024 * 1024,
-                    max_executed_wire_bytes: u64::try_from(MAX_BLOCK_BYTES)
-                        .expect("fixture block byte bound"),
-                },
-            )
-            .expect("fixture block outputs align with network inputs");
+        NativeFinalityFixture::install_network_results(&mut block, results);
         let block_proofs = block
             .network_execution_proof(&entry_hash)
-            .expect("fixture block proof exists");
+            .expect("target proof");
         let alternate_block_proofs = block
             .network_execution_proof(&alternate_entry_hash)
-            .expect("alternate fixture block proof exists");
-        let executed_block_wire = block
-            .encode_wire()
-            .expect("encode authenticated proof fixture block wire");
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"authenticated proof fixture parent state"),
-            Hash::new(b"authenticated proof fixture post state"),
-            Hash::new(b"authenticated proof fixture ordinary writes"),
-            u64::try_from(executed_block_wire.len())
-                .expect("authenticated proof fixture block wire length fits u64"),
-            Hash::new(&executed_block_wire),
-        );
-        let (artifact, validator_keys) = finalized_artifact_for_block(
-            &block,
-            network_id,
-            &execution_commitment,
-            previous,
-            height,
-        );
-        let trusted_context_id = *artifact.context_id().0.as_ref();
-        let finality = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-            block_header: block.header(),
-            finality_artifact: artifact,
-        };
+            .expect("alternate proof");
+        let finality = native.certify(block.clone());
+        let directory = tempfile::tempdir().unwrap();
+        let checkpoint_path = directory.path().join("checkpoint.nrt");
+        fs::write(
+            &checkpoint_path,
+            native.checkpoint().encode_canonical().unwrap(),
+        )
+        .unwrap();
         Fixture {
             block,
             finality,
             block_proofs,
             alternate_block_proofs,
-            trusted_context_id,
-            validator_keys,
+            native,
+            checkpoint_path,
+            _directory: directory,
         }
     }
-    fn finalized_artifact_for_block(
-        block: &SignedBlock,
-        network_id: NetworkId,
-        execution_commitment: &ExecutionCommitment,
-        previous: Option<&Fixture>,
-        height: u64,
-    ) -> (V2FinalityArtifact, Vec<KeyPair>) {
-        let mut keys = previous.map_or_else(
-            || {
-                (0..4)
-                    .map(|_| checked_keypair(Algorithm::BlsNormal))
-                    .collect::<Vec<_>>()
-            },
-            |parent| parent.validator_keys.clone(),
-        );
-        keys.sort_by(|left, right| {
-            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-        });
-        let roster = keys
-            .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let validator_set_pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator PoP")
-            })
-            .collect::<Vec<_>>();
-        let snapshot = previous.and_then(|parent| {
-            parent
-                .finality
-                .finality_artifact
-                .height_context
-                .next_epoch_snapshot
-                .as_ref()
-        });
-        let (authorization, authority) = match (snapshot, previous) {
-            (Some(next), _) => (
-                next.kagemusha_mint_finality_authorization,
-                next.kagemusha_mint_finality_authority.clone(),
-            ),
-            (None, Some(parent)) => {
-                let parent_context = &parent.finality.finality_artifact.height_context;
-                (
-                    parent_context.kagemusha_mint_finality_authorization,
-                    parent_context.kagemusha_mint_finality_authority.clone(),
-                )
-            }
-            (None, None) => {
-                let authority = mint_finality_authority(network_id, &roster);
-                let authorization =
-                    KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 1_000_000)
-                        .expect("fixture genesis scheduling authorization");
-                (authorization, authority)
-            }
-        };
-        let context = HeightContext {
-            network_id,
-            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            height,
-            epoch: authorization.epoch,
-            kagemusha_mint_finality_authorization: authorization,
-            kagemusha_mint_finality_authority: authority,
-            epoch_end_height: authorization.last_height,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: previous
-                .map(|parent| parent.finality.finality_artifact.commit_qc.clone()),
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"authenticated proof fixture nexus context"),
-            execution_policy_hash: Hash::new(b"authenticated proof fixture execution policy"),
-            da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(
-            ),
-            leader_seed: snapshot.map_or_else(
-                || {
-                    previous.map_or([0xA7; 32], |parent| {
-                        parent.finality.finality_artifact.height_context.leader_seed
-                    })
-                },
-                |next| next.leader_seed,
-            ),
-        };
-        let subject = BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("fixture proposal wire hashes"),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height,
-            view: block.header().view_change_index(),
-        };
-        let commit_qc = signed_commit_qc(&context, subject, execution_commitment, round, &keys);
-        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-        artifact.verify().expect("fixture finality verifies");
-        artifact
-            .validate_for_header(&block.header())
-            .expect("fixture finality matches block header");
-        (artifact, keys)
-    }
-    fn mint_finality_seed(index: usize) -> [u8; 32] {
-        // Public fixture-only seeds are independent of the randomly generated BLS keys.
-        let index = u8::try_from(index).expect("small fixture validator index");
-        [0xB0_u8.checked_add(index).expect("fixture seed byte"); 32]
-    }
-    fn mint_finality_authority(
-        network_id: NetworkId,
-        roster: &[ValidatorPower],
-    ) -> KagemushaMintFinalityAuthorityGenerationV1 {
-        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            generation: 0,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| {
-                    derive_kagemusha_mint_finality_validator_keys_v1(
-                        &mint_finality_seed(index),
-                        0,
-                        validator.validator.clone(),
-                    )
-                    .expect("derive real paired-Pasta fixture keys")
-                })
-                .collect(),
-        };
-        authority
-            .validate()
-            .expect("canonical fixture key generation");
-        authority
-    }
-    fn seal_epoch_boundary(fixture: &mut Fixture) {
-        use iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot;
-        let artifact = &mut fixture.finality.finality_artifact;
-        let mut context = artifact.height_context.clone();
-        assert_eq!(
-            context.height, 1,
-            "this fixture closes its signed genesis schedule"
-        );
-        assert_eq!(context.epoch, 0);
-        context.epoch_end_height = context.height;
-        context.kagemusha_mint_finality_authorization =
-            KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &context.kagemusha_mint_finality_authority,
-                context.epoch_end_height,
-            )
-            .expect("genesis authorization ends at the fixture boundary");
-        let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            epoch: context.epoch + 1,
-            first_height: context.height + 1,
-            last_height: 1_000_000,
-            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: [0xC5; 32],
-                transcript_hash: [0xC6; 32],
-            }),
-            previous_authorization_id: context
-                .kagemusha_mint_finality_authorization
-                .authorization_id()
-                .unwrap(),
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
-            ..context.kagemusha_mint_finality_authorization
-        };
-        next_authorization
-            .validate_successor(&context.kagemusha_mint_finality_authorization)
-            .expect("exact contiguous retained scheduling authorization");
-        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
-            committee_preparation: None,
-            epoch: next_authorization.epoch,
-            kagemusha_mint_finality_authorization: next_authorization,
-            kagemusha_mint_finality_authority: context.kagemusha_mint_finality_authority.clone(),
-            epoch_end_height: 1_000_000,
-            mode: context.mode,
-            roster: context.roster.clone(),
-            validator_set_pops: artifact.validator_set_pops.clone(),
-            quorum: context.quorum,
-            leader_seed: [0xC4; 32],
-        });
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let qc = signed_commit_qc(
-            &context,
-            artifact.subject,
-            &artifact.commit_qc.execution_commitment,
-            round,
-            &fixture.validator_keys,
-        );
-        *artifact = V2FinalityArtifact::new(
-            context,
-            artifact.subject,
-            qc,
-            artifact.validator_set_pops.clone(),
-        );
-        artifact.verify().expect("signed epoch-boundary fixture");
-        fixture.trusted_context_id = *artifact.context_id().0.as_ref();
-    }
-    fn signed_commit_qc(
-        context: &HeightContext,
-        subject: BlockSubject,
-        execution_commitment: &ExecutionCommitment,
-        round: ConsensusRound,
-        keys: &[KeyPair],
-    ) -> QuorumCertificate {
-        let signers = [0, 1, 2];
-        let vote = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment: *execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        };
-        let preimage = vote.signature_preimage();
-        let shares = signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(keys[*index].private_key(), &preimage)
-                    .expect("fixture commit vote signature")
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let mut certificate = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment: *execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                .expect("aggregate fixture commit votes"),
-        };
-        let authority = &context.kagemusha_mint_finality_authority;
-        if let Some(message) =
-            build_kagemusha_mint_finality_seal_message_v1(authority, context, &vote)
-                .expect("derive exact fixture mint-finality statement")
-        {
-            let seals = certificate
-                .signers
-                .iter()
-                .map(|index| {
-                    let signer = KagemushaMintFinalitySignerV1::from_seed(
-                        zeroize::Zeroizing::new(mint_finality_seed(
-                            usize::try_from(*index).unwrap(),
-                        )),
-                        *index,
-                        authority,
-                    )
-                    .expect("admit fixture seed against authoritative Pasta keys");
-                    sign_kagemusha_mint_finality_seal_v1(&signer, &message)
-                        .expect("sign both Pasta parity statements")
-                })
-                .collect();
-            let bundle = KagemushaMintFinalitySealBundleV1 { message, seals };
-            certificate.aggregate_signature = encode_kagemusha_consensus_signature_envelope_v1(
-                KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
-                &certificate.aggregate_signature,
-                &bundle.encode(),
-            )
-            .expect("canonical BLS plus paired-Pasta CommitQC envelope");
-            verify_kagemusha_mint_finality_seal_bundle_v1(
-                authority,
-                context,
-                &certificate,
-                &bundle,
-            )
-            .expect("verify actual exact-quorum paired-Pasta fixture seals");
-        }
-        certificate
+    fn alter_qc(
+        proof: &mut SumeragiFinalityProof,
+        mutate: impl FnOnce(&mut iroha_sumeragi::message::Qc),
+    ) {
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let mut qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        mutate(&mut qc);
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            norito::encode_canonical(&qc).unwrap(),
+            certificate.result_preimage().to_vec(),
+        )));
+        proof.block_wire = block.encode_wire().unwrap();
     }
 
     fn bundle(fixture: &Fixture) -> Bundle {
@@ -1093,9 +798,8 @@ mod tests {
     fn expectations(fixture: &Fixture) -> VerifySettlementArgs {
         VerifySettlementArgs {
             bundle: PathBuf::from("unused-fixture.json"),
-            network_id: FIXTURE_NETWORK_ID.parse().expect("network"),
-            trusted_context_id: Hash::from_str(&hex::encode(fixture.trusted_context_id))
-                .expect("marked context"),
+            network_id: fixture.native.network_id(),
+            trusted_checkpoint: fixture.checkpoint_path.clone(),
             expected_entry_hash: Hash::from(fixture.block_proofs.entry_hash),
             session_id: Hash::new(b"expected session"),
             profile_id: iroha_core::execution_proofs::race_profile_id_v1(),
@@ -1125,10 +829,7 @@ mod tests {
             .consume(&encoded[256..257])
             .expect("authenticated continuation from original pin");
         assert_eq!(stream.heights, 257);
-        assert_eq!(
-            stream.latest.as_ref().unwrap().finality_artifact.height,
-            257
-        );
+        assert_eq!(stream.latest.as_ref().unwrap().height(), 258);
 
         for bad in [&encoded[255..256], &encoded[257..258]] {
             assert!(
@@ -1137,7 +838,7 @@ mod tests {
                     .consume(bad)
                     .unwrap_err()
                     .to_string()
-                    .contains("pinned-context"),
+                    .contains("pinned native checkpoint"),
                 "duplicate or missing boundary height must fail"
             );
         }
@@ -1158,7 +859,7 @@ mod tests {
                 .is_err()
         );
         let mut foreign = expectations(&fixtures[0]);
-        foreign.trusted_context_id = Hash::new(b"untrusted replacement anchor");
+        foreign.trusted_checkpoint = fixtures[1].checkpoint_path.clone();
         assert!(
             FinalityStream::new(&foreign)
                 .unwrap()
@@ -1169,12 +870,7 @@ mod tests {
         foreign.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
             Hash::new(b"foreign network"),
         ));
-        assert!(
-            FinalityStream::new(&foreign)
-                .unwrap()
-                .consume(&encoded[..1])
-                .is_err()
-        );
+        assert!(FinalityStream::new(&foreign).is_err());
         let mut work = boundary.clone();
         work.max_heights = 256;
         assert!(
@@ -1197,7 +893,7 @@ mod tests {
         // exact final executed block inclusion have authenticated.
         let directory = tempfile::tempdir().unwrap();
         let mut args = expectations(&fixtures[256]);
-        args.trusted_context_id = expectations(&fixtures[0]).trusted_context_id;
+        args.trusted_checkpoint = fixtures[0].checkpoint_path.clone();
         args.bundle = write_index(directory.path(), &encoded[..256], &fixtures[256]);
         assert!(
             args.verify()
@@ -1214,116 +910,76 @@ mod tests {
         );
     }
     #[test]
-    fn zero_top_up_boundary_carries_verifiable_paired_pasta_authorization() {
-        let mut fixture = make_fixture(Vec::new(), false);
-        seal_epoch_boundary(&mut fixture);
-        let artifact = &fixture.finality.finality_artifact;
-        let context = &artifact.height_context;
-        let certificate = &artifact.commit_qc;
-        assert_eq!(certificate.execution_commitment.kagemusha_top_up_count, 0);
-        assert!(
-            certificate
-                .execution_commitment
-                .kagemusha_top_up_root
-                .is_none()
-        );
-        let parts =
-            decode_kagemusha_consensus_signature_envelope_v1(&certificate.aggregate_signature)
-                .unwrap()
-                .expect("a boundary has a paired-Pasta envelope even without top-ups");
-        assert_eq!(parts.kind, KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1);
-        let seals = decode_kagemusha_mint_finality_seal_bundle_v1(parts.auxiliary_payload).unwrap();
-        let next = context.next_epoch_snapshot.as_ref().unwrap();
-        assert_eq!(
-            seals.message.next_epoch_authorization,
-            Some(next.kagemusha_mint_finality_authorization)
-        );
-        assert_eq!(
-            seals.message.epoch_authorization,
-            context.kagemusha_mint_finality_authorization
-        );
-        assert_eq!(seals.seals.len(), 3);
-        assert_eq!(
-            context.kagemusha_mint_finality_authority.validators.len(),
-            4
-        );
-        assert_eq!(
-            next.kagemusha_mint_finality_authority,
-            context.kagemusha_mint_finality_authority
-        );
-        assert_eq!(next.kagemusha_mint_finality_authority.generation, 0);
-        assert_eq!(next.kagemusha_mint_finality_authorization.epoch, 1);
-        verify_kagemusha_mint_finality_seal_bundle_v1(
-            &context.kagemusha_mint_finality_authority,
-            context,
-            certificate,
-            &seals,
+    fn original_zero_top_up_boundary_continues_native_finality_across_files() {
+        // Actual original Core execution and paired-Pasta verification, with a genuinely
+        // proved DKG seeded as component prestate. This is not a live ceremony test.
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        let checkpoint = build_checkpoint(&chain.state().view(), 9).unwrap();
+        let first = build_proof(&chain.state().view(), 9).unwrap();
+        chain.commit(Vec::new());
+        let boundary = build_proof(&chain.state().view(), 10).unwrap();
+        chain.commit(Vec::new());
+        let child = build_proof(&chain.state().view(), 11).unwrap();
+        let fixture = make_fixture(Vec::new(), false);
+        let mut args = expectations(&fixture);
+        args.network_id = checkpoint.network_id();
+        fs::write(
+            &args.trusted_checkpoint,
+            checkpoint.encode_canonical().unwrap(),
         )
-        .expect("native paired-Pasta equations authenticate the exact retained schedule");
-        let mut altered_signature = seals.clone();
-        altered_signature.seals[0].eq_proof_signature.response[0] ^= 1;
-        assert!(
-            verify_kagemusha_mint_finality_seal_bundle_v1(
-                &context.kagemusha_mint_finality_authority,
-                context,
-                certificate,
-                &altered_signature,
-            )
-            .is_err()
-        );
-        let mut altered_schedule = seals;
-        altered_schedule
-            .message
-            .next_epoch_authorization
-            .as_mut()
-            .unwrap()
-            .last_height -= 1;
-        assert!(
-            verify_kagemusha_mint_finality_seal_bundle_v1(
-                &context.kagemusha_mint_finality_authority,
-                context,
-                certificate,
-                &altered_schedule,
-            )
-            .is_err()
-        );
-    }
-    #[test]
-    fn continuation_authenticates_epoch_transition_exactly_at_file_boundary() {
-        let mut parent = make_fixture(Vec::new(), false);
-        seal_epoch_boundary(&mut parent);
-        let child = make_fixture_after(Vec::new(), false, Some(&parent));
-        assert_eq!(child.finality.finality_artifact.height_context.epoch, 1);
-        let selected = parent
-            .finality
-            .finality_artifact
-            .height_context
-            .next_epoch_snapshot
-            .as_ref()
-            .unwrap();
-        let child_context = &child.finality.finality_artifact.height_context;
-        assert_eq!(
-            child_context.kagemusha_mint_finality_authorization,
-            selected.kagemusha_mint_finality_authorization
-        );
-        assert_eq!(
-            child_context.kagemusha_mint_finality_authority,
-            selected.kagemusha_mint_finality_authority
-        );
-        assert_eq!(
-            child_context.kagemusha_mint_finality_authority.generation,
-            0
-        );
-        let mut stream = FinalityStream::new(&expectations(&parent)).unwrap();
-        stream.consume(&bundle(&parent).finality).unwrap();
+        .unwrap();
+        let mut stream = FinalityStream::new(&args).unwrap();
         stream
-            .consume(&bundle(&child).finality)
-            .expect("old QC authorizes the next epoch across the file boundary");
-        assert_eq!(stream.heights, 2);
-        let foreign = make_fixture_after(Vec::new(), false, Some(&make_fixture(Vec::new(), false)));
-        let mut stream = FinalityStream::new(&expectations(&parent)).unwrap();
-        stream.consume(&bundle(&parent).finality).unwrap();
-        assert!(stream.consume(&bundle(&foreign).finality).is_err());
+            .consume(&[norito::encode_canonical(&first).unwrap()])
+            .unwrap();
+        stream
+            .consume(&[norito::encode_canonical(&boundary).unwrap()])
+            .unwrap();
+        let verified = stream.latest.as_ref().unwrap();
+        assert_eq!(verified.height(), 10);
+        assert_eq!(verified.execution().kagemusha_top_up_count, 0);
+        assert!(verified.execution().kagemusha_top_up_root.is_none());
+        let selected = verified
+            .commitment()
+            .schedule
+            .boundary
+            .as_ref()
+            .unwrap()
+            .next
+            .clone();
+        assert_eq!(
+            selected.authority,
+            verified.commitment().schedule.current.authority
+        );
+        assert_eq!(
+            selected.authorization.epoch,
+            verified.commitment().schedule.current.authorization.epoch + 1
+        );
+        let certificate = verified.block().commit_certificate().unwrap();
+        let qc: iroha_sumeragi::message::Qc =
+            norito::decode_canonical(certificate.commit_qc()).unwrap();
+        assert!(qc.attest);
+        assert_eq!(qc.attestations.len(), 3);
+        assert!(qc.attestation_witness.is_some());
+        stream
+            .consume(&[norito::encode_canonical(&child).unwrap()])
+            .expect("authenticated epoch successor across another file boundary");
+        assert_eq!(stream.heights, 3);
+        assert_eq!(
+            stream
+                .latest
+                .as_ref()
+                .unwrap()
+                .commitment()
+                .schedule
+                .current,
+            selected
+        );
+        assert!(
+            stream
+                .consume(&[norito::encode_canonical(&boundary).unwrap()])
+                .is_err()
+        );
     }
     #[test]
     fn continuation_index_rejects_extra_trust_paths_duplicates_and_oversized_work() {
@@ -1396,12 +1052,13 @@ mod tests {
                 .contains("exactly one explicit settlement"),
             "{error:#}"
         );
-        args.trusted_context_id = Hash::new(b"different pinned validator context");
+        let foreign = make_fixture(Vec::new(), false);
+        args.trusted_checkpoint = foreign.checkpoint_path.clone();
         assert!(
             args.verify_carriers(bundle(&fixture))
                 .expect_err("self-consistent untrusted roster")
                 .to_string()
-                .contains("pinned-context")
+                .contains("pinned native checkpoint")
         );
     }
     #[test]
@@ -1442,7 +1099,7 @@ mod tests {
             args.verify_carriers(skipped)
                 .expect_err("repeated height")
                 .to_string()
-                .contains("pinned-context")
+                .contains("pinned native checkpoint")
         );
     }
     #[test]
@@ -1474,12 +1131,11 @@ mod tests {
         );
     }
     #[test]
-    fn consecutive_finality_authenticates_target_without_accepting_a_new_roster() {
+    fn consecutive_finality_authenticates_target_without_accepting_another_parent() {
         let parent = make_fixture(Vec::new(), false);
         let child = make_fixture_after(Vec::new(), false, Some(&parent));
         let mut args = expectations(&child);
-        args.trusted_context_id =
-            Hash::from_str(&hex::encode(parent.trusted_context_id)).expect("first pinned context");
+        args.trusted_checkpoint = parent.checkpoint_path.clone();
         let mut carriers = bundle(&child);
         carriers.finality.insert(
             0,
@@ -1496,10 +1152,10 @@ mod tests {
             args.verify_carriers(bundle(&child))
                 .expect_err("skipped pinned height")
                 .to_string()
-                .contains("pinned-context")
+                .contains("pinned native checkpoint")
         );
 
-        // A self-consistent unrelated committee cannot replace a linked successor.
+        // A self-consistent foreign parent cannot replace a linked successor.
         let foreign_parent = make_fixture(Vec::new(), false);
         let foreign_child = make_fixture_after(Vec::new(), false, Some(&foreign_parent));
         let mut carriers = bundle(&foreign_child);
@@ -1511,21 +1167,22 @@ mod tests {
             args.verify_carriers(carriers)
                 .expect_err("untrusted successor committee")
                 .to_string()
-                .contains("pinned-context")
+                .contains("pinned native checkpoint")
         );
     }
     #[test]
     fn invalid_quorum_pop_and_wrong_network_never_authenticate_inclusion() {
         let fixture = make_fixture(Vec::new(), false);
         let args = expectations(&fixture);
-        for tamper in 0..3 {
+        for tamper in 0..4 {
             let mut finality = fixture.finality.clone();
             match tamper {
-                0 => finality.finality_artifact.commit_qc.aggregate_signature[0] ^= 1,
-                1 => finality.finality_artifact.validator_set_pops[0][0] ^= 1,
-                _ => {
-                    finality.finality_artifact.commit_qc.signers.pop();
-                }
+                0 => alter_qc(&mut finality, |qc| qc.agg_sig.0[0] ^= 1),
+                1 => finality.committee[0].proof_of_possession[0] ^= 1,
+                2 => alter_qc(&mut finality, |qc| {
+                    qc.signers = iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1]).unwrap();
+                }),
+                _ => finality.committee.swap(0, 1),
             }
             let mut carriers = bundle(&fixture);
             carriers.finality[0] = norito::encode_canonical(&finality).expect("tampered finality");
@@ -1533,7 +1190,7 @@ mod tests {
                 args.verify_carriers(carriers)
                     .expect_err("invalid certificate")
                     .to_string()
-                    .contains("pinned-context")
+                    .contains("pinned native checkpoint")
             );
         }
         let mut wrong_network = expectations(&fixture);
@@ -1545,11 +1202,11 @@ mod tests {
                 .verify_carriers(bundle(&fixture))
                 .expect_err("wrong network")
                 .to_string()
-                .contains("pinned-context")
+                .contains("pinned native checkpoint")
         );
     }
     fn invalid_settlement() -> SettleGameSessionV1 {
-        let network_id = FIXTURE_NETWORK_ID.parse().expect("network");
+        let network_id = fixture_network();
         let session_id = Hash::new(b"expected session");
         let outcome = GameOutcomeV1 {
             terminal_tick: 6,
@@ -1662,7 +1319,7 @@ mod tests {
             },
         };
         use norito::codec::Encode as _;
-        let network_id = FIXTURE_NETWORK_ID.parse().expect("network");
+        let network_id = fixture_network();
         let session_id = Hash::new(b"expected session");
         let profile_id = iroha_core::execution_proofs::race_profile_id_v1();
         let replay = RaceReplayV1 {
@@ -1748,8 +1405,7 @@ mod tests {
         );
         let mut args = expectations(&fixture);
         args.outcome_hash = outcome_hash;
-        args.trusted_context_id =
-            Hash::from_str(&hex::encode(parent.trusted_context_id)).expect("pinned first context");
+        args.trusted_checkpoint = parent.checkpoint_path.clone();
         let mut carriers = bundle(&fixture);
         carriers.finality.insert(
             0,
@@ -1759,7 +1415,15 @@ mod tests {
             .verify_carriers(carriers)
             .expect("independently authenticated finalized settlement");
         assert_eq!(verdict["verified"].as_bool(), Some(true));
-        assert_eq!(verdict["block_height"].as_str(), Some("2"));
+        assert_eq!(verdict["block_height"].as_str(), Some("3"));
+        let promoted = SumeragiFinalityCheckpoint::decode_canonical(
+            &STANDARD
+                .decode(verdict["checkpoint_base64"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(promoted.height(), 3);
+        assert_eq!(promoted.network_id(), args.network_id);
         assert_eq!(
             verdict["outcome"],
             norito::json::to_value(&outcome).expect("outcome JSON")
@@ -1787,6 +1451,87 @@ mod tests {
             args.verify().expect("tagged genuine indexed settlement"),
             verdict
         );
+    }
+    #[test]
+    fn native_finality_cannot_replace_the_selected_wallet_signature() {
+        let fixture =
+            make_fixture_with_signature(vec![invalid_settlement().into()], false, None, false);
+        assert!(
+            expectations(&fixture)
+                .verify_carriers(bundle(&fixture))
+                .unwrap_err()
+                .to_string()
+                .contains("wallet signature")
+        );
+    }
+    #[test]
+    fn checkpoint_files_are_canonical_bounded_and_count_towards_the_local_budget() {
+        let fixture = make_fixture(Vec::new(), false);
+        let mut args = expectations(&fixture);
+        let bytes = fs::read(&args.trusted_checkpoint).unwrap();
+        args.max_finality_archive_bytes = bytes.len() as u64;
+        let mut stream = FinalityStream::new(&args).unwrap();
+        assert_eq!(stream.archive_bytes, bytes.len() as u64);
+        assert!(
+            stream
+                .consume(&bundle(&fixture).finality)
+                .unwrap_err()
+                .to_string()
+                .contains("byte budget")
+        );
+        args.max_finality_archive_bytes -= 1;
+        assert!(FinalityStream::new(&args).is_err());
+        args.max_finality_archive_bytes = DEFAULT_TOTAL_ARCHIVES;
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        for rejected in [vec![], vec![0; 32], trailing] {
+            fs::write(&args.trusted_checkpoint, rejected).unwrap();
+            assert!(FinalityStream::new(&args).is_err());
+        }
+        let file = fs::File::create(&args.trusted_checkpoint).unwrap();
+        file.set_len(MAX_FINALITY_CHECKPOINT_BYTES as u64 + 1)
+            .unwrap();
+        assert!(FinalityStream::new(&args).is_err());
+        fs::write(&args.trusted_checkpoint, bytes).unwrap();
+        assert!(FinalityStream::new(&args).is_ok());
+    }
+    #[test]
+    fn cli_requires_native_checkpoint_and_rejects_the_retired_scalar_pin() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Command {
+            #[command(flatten)]
+            args: VerifySettlementArgs,
+        }
+        let fixture = make_fixture(Vec::new(), false);
+        let selected = expectations(&fixture);
+        let mut args = vec![
+            "verify-settlement".to_owned(),
+            "--bundle".into(),
+            "bundle.json".into(),
+            "--network-id".into(),
+            selected.network_id.to_string(),
+            "--trusted-checkpoint".into(),
+            selected.trusted_checkpoint.to_string_lossy().into_owned(),
+            "--expected-entry-hash".into(),
+            selected.expected_entry_hash.to_string(),
+            "--session-id".into(),
+            selected.session_id.to_string(),
+            "--profile-id".into(),
+            selected.profile_id.to_string(),
+            "--outcome-hash".into(),
+            selected.outcome_hash.to_string(),
+        ];
+        assert_eq!(
+            Command::try_parse_from(&args)
+                .unwrap()
+                .args
+                .trusted_checkpoint,
+            selected.trusted_checkpoint
+        );
+        args[5] = "--trusted-context-id".into();
+        args[6] = Hash::new(b"retired scalar pin").to_string();
+        assert!(Command::try_parse_from(&args).is_err());
     }
     #[test]
     fn first_release_formats_are_closed_and_old_version_only_drafts_reject() {
@@ -1847,6 +1592,17 @@ mod tests {
     fn bundle_does_not_accept_a_transport_selected_trust_context() {
         let value = br#"{"format":"iroha.execution.settlement-bundle","version":1,"finality_chain_base64":["AQ=="],"executed_block_wire_base64":"AQ==","block_proofs_base64":"AQ==","trusted_context_id":"forged"}"#;
         assert!(parse_bundle(value).is_err());
+        for name in [
+            "trusted_checkpoint",
+            "trusted_checkpoint_base64",
+            "checkpoint_base64",
+        ] {
+            let mut injected: Value = norito::json::from_slice(value).unwrap();
+            let fields = injected.as_object_mut().unwrap();
+            fields.remove("trusted_context_id");
+            fields.insert(name.into(), Value::from("endpoint-selected"));
+            assert!(parse_bundle(norito::json::to_json(&injected).unwrap().as_bytes()).is_err());
+        }
         assert!(parse_bundle(br#"{"format":"iroha.execution.settlement-bundle","version":1,"finality_chain_base64":[],"executed_block_wire_base64":"AQ==","block_proofs_base64":"AQ=="}"#).is_err());
     }
     #[test]

@@ -818,8 +818,6 @@ impl Kura {
         intent_path: &Path,
         mut intent_file: std::fs::File,
         kind: &str,
-        certified_reset: Option<&AdmittedCertifiedResetRecovery>,
-        expected_receipt: Option<&LaneBlockApplicationReceiptArtifact>,
     ) -> bool {
         let Ok(intent) = Self::decode_bound_progress_append_intent(
             &mut intent_file,
@@ -831,43 +829,9 @@ impl Kura {
         ) else {
             return false;
         };
-        if let Some(admitted) = certified_reset
-            && admitted
-                .append
-                .as_ref()
-                .is_none_or(|append| append.intent != intent)
-        {
-            warn!(
-                ?intent_path,
-                kind, "opened certified append differs from its admitted recovery"
-            );
-            return false;
-        }
-        if let Some(receipt) = expected_receipt {
-            // The receipt writer has already authenticated this exact carrier
-            // and execution under prune/canonical guards. Bind the decoded
-            // durable operation before even removing a superseded build file.
-            let Ok(payload) = receipt.encode_framed() else {
-                return false;
-            };
-            if intent.height != receipt.proposal.descriptor.lane_block_height
-                || intent.payload_len() != u64::try_from(payload.len()).ok()
-                || intent.payload_hash != BoundProgressAppendIntentV1::payload_digest(&payload)
-            {
-                warn!(
-                    ?intent_path,
-                    kind, "receipt append intent differs from its authenticated writer"
-                );
-                return false;
-            }
-        }
-        // Recovery can roll forward or restore the exact old image. Account
-        // every stable/temp path only after the expected receipt is bound; a
-        // failed attempt invalidates observations instead of releasing bytes.
-        let receipt_accounting = expected_receipt.map(|_| {
-            self.begin_total_disk_usage_mutation()
-                .with_resource_paths(Self::sidecar_physical_resource_paths(data_path, index_path))
-        });
+        let accounting = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(Self::sidecar_physical_resource_paths(data_path, index_path));
         if let Some(build) = build {
             drop(build);
             if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, build_path) {
@@ -1241,9 +1205,7 @@ impl Kura {
         if !Self::progress_mutation_namespace_unchanged(namespace) {
             return false;
         }
-        if let Some(accounting) = receipt_accounting {
-            accounting.finish_resources_before_disk_rescan();
-        }
+        accounting.finish_resources_before_disk_rescan();
         true
     }
     #[must_use]
@@ -1305,7 +1267,7 @@ impl Kura {
         kind: &str,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
         if self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
-            namespace, data_path, index_path, kind, None, None,
+            namespace, data_path, index_path, kind,
         ) {
             Ok(())
         } else {
@@ -1320,8 +1282,6 @@ impl Kura {
         data_path: &Path,
         index_path: &Path,
         kind: &str,
-        certified_reset: Option<&AdmittedCertifiedResetRecovery>,
-        certified_rewrite: Option<&AdmittedCertifiedHistoryRewrite<'_>>,
     ) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
@@ -1363,59 +1323,6 @@ impl Kura {
         let Some(append_intent) = open_optional(&append_intent_path) else {
             return false;
         };
-        if temp_index.is_some()
-            && data_path.file_name().and_then(std::ffi::OsStr::to_str)
-                == Some(CERTIFIED_LANE_BLOCKS_DATA_FILE)
-            && certified_rewrite.is_none_or(|admitted| {
-                append_intent.is_some()
-                    || append_build.is_some()
-                    || prepend_index.is_some()
-                    || self
-                        .recheck_admitted_certified_history_rewrite_locked(
-                            admitted, data_path, index_path,
-                        )
-                        .is_err()
-            })
-        {
-            warn!(
-                ?data_path,
-                kind, "certified rewrite requires its authenticated terminal owner"
-            );
-            return false;
-        }
-        // Only a committed append or prepend can overwrite certified history.
-        // A lone build or data temporary precedes publication: its existing
-        // namespace-bound cleanup grants no permission to change the main pair.
-        let observed_certified = if append_intent.is_some() || prepend_index.is_some() {
-            if let Some(admitted) = certified_reset {
-                if self
-                    .recheck_admitted_certified_reset_recovery_locked(
-                        admitted, data_path, index_path,
-                    )
-                    .is_err()
-                {
-                    return false;
-                }
-                None
-            } else {
-                match self.require_certified_reset_recovery_admission_locked(data_path, index_path)
-                {
-                    Ok(admitted) => admitted,
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            ?data_path,
-                            kind,
-                            "certified reset recovery remains pending State authorization"
-                        );
-                        return false;
-                    }
-                }
-            }
-        } else {
-            None
-        };
-        let certified_reset = certified_reset.or(observed_certified.as_ref());
         if append_intent.is_some()
             && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
         {
@@ -1437,8 +1344,6 @@ impl Kura {
                 &append_intent_path,
                 append_intent,
                 kind,
-                certified_reset,
-                None,
             );
         }
         if let Some(append_build) = append_build {
@@ -4156,7 +4061,7 @@ impl Kura {
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
         let entry_byte_limit =
-            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+            u64::try_from(MAX_PIPELINE_RECOVERY_SIDECAR_BYTES).unwrap_or(u64::MAX);
         let recover = !self.emergency_fast_startup_enabled();
         if recover
             && !self.recover_indexed_sidecar_with_physical_resources(&data_path, &index_path, kind)

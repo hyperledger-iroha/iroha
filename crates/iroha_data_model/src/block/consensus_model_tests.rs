@@ -105,7 +105,14 @@ enum RetiredEvidencePayload {
         tx_hash: HashOf<crate::transaction::SignedTransaction>,
         receipts: Vec<crate::transaction::TransactionSubmissionReceipt>,
     },
-    SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
+    SumeragiV2Equivocation(RetiredAuthorityAttachedEvidenceFixture),
+}
+// Encode-only negative input for the removed authority-attached evidence slot.
+#[derive(norito::codec::Encode)]
+struct RetiredAuthorityAttachedEvidenceFixture {
+    context: crate::block::consensus_v2::HeightContext,
+    proofs_of_possession: Vec<Vec<u8>>,
+    conflict: crate::block::consensus_v2::SumeragiV2Equivocation,
 }
 #[derive(norito::codec::Encode)]
 struct RetiredEvidence {

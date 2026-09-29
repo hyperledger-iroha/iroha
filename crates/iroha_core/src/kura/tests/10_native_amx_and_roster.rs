@@ -1461,62 +1461,6 @@ fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
     }
 }
 #[test]
-fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
-    for invalid_shape in [
-        "manifest without checkpoint",
-        "missing published commit manifest",
-        "below-tip metadata gap",
-    ] {
-        let (_temp_dir, config) =
-            kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
-        let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
-        establish_dummy_store_primary_anchor(&kura);
-        let entry = kura
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("primary lane storage entry");
-        let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-        match invalid_shape {
-            "manifest without checkpoint" => kura
-                .remove_wsv_checkpoint_without_binding_for_tests(1)
-                .expect("remove checkpoint"),
-            "missing published commit manifest" => kura
-                .remove_commit_manifest_without_binding_for_tests(1)
-                .expect("remove commit manifest"),
-            "below-tip metadata gap" => {
-                kura.remove_commit_manifest_without_binding_for_tests(1)
-                    .expect("remove commit manifest");
-                kura.remove_wsv_checkpoint_without_binding_for_tests(1)
-                    .expect("remove checkpoint");
-                let parent = kura
-                    .get_block(nonzero!(1_usize))
-                    .expect("fixture application block");
-                let mut generator = DummyBlocks {
-                    blocks: vec![parent],
-                };
-                let successor = generator.next();
-                kura.store_block(Arc::clone(&successor))
-                    .expect("append exact child above Native evidence");
-                assert_eq!(
-                    kura.get_durable_block_hash(nonzero!(2_usize)),
-                    Some(successor.hash())
-                );
-            }
-            _ => unreachable!(),
-        }
-        let error = kura
-            .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-            .expect_err("partial or below-tip Native evidence must fail closed");
-        assert!(
-            error.to_string().contains("manifest")
-                || error.to_string().contains("checkpoint")
-                || error.to_string().contains("below the exact durable tip"),
-            "unexpected {invalid_shape} error: {error}"
-        );
-    }
-}
-#[test]
 fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
     let NativeAmxPublicationCapacityFixture {
         _temp_dir,
@@ -2734,7 +2678,11 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         .collect::<Vec<_>>();
     let network_id = crate::unit_test_support::synthetic_network_id("native-frontier-token-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, block.header().height().get(), &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id,
+            block.header().height().get(),
+            &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

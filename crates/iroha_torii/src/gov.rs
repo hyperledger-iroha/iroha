@@ -1348,22 +1348,29 @@ pub fn handle_gov_parliament_timed_ovn_casting_proof(
     } else {
         None
     };
-    drop(state_view);
+    let proof_view = state_view;
+    if !std::ptr::eq(kura.as_ref(), proof_view.kura()) {
+        return Err(inconsistent(
+            "casting proof storage differs from the selected State".to_owned(),
+        ));
+    }
 
     let terminal_fields = if let Some((archive, archive_bytes)) = terminal_archive {
-        let proof = kura
-            .parliament_timed_ovn_finalized_casting_proof_v1(evaluated_height, ballot_attempt_id)
-            .map_err(|error| {
-                inconsistent(format!(
-                    "evaluated Parliament casting proof is invalid: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                inconsistent(
-                    "authorized ballot has no retained finalized casting membership proof"
-                        .to_owned(),
-                )
-            })?;
+        let proof = iroha_core::query::native_receipts::parliament_casting_proof(
+            &proof_view,
+            evaluated_height,
+            ballot_attempt_id,
+        )
+        .map_err(|error| {
+            inconsistent(format!(
+                "evaluated Parliament casting proof is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            inconsistent(
+                "authorized ballot has no retained finalized casting membership proof".to_owned(),
+            )
+        })?;
         let validated_archive = archive.validate_v1().map_err(|error| {
             inconsistent(format!(
                 "authorized Parliament casting archive failed replay: {error}"
@@ -1393,10 +1400,12 @@ pub fn handle_gov_parliament_timed_ovn_casting_proof(
                 "trusted checkpoint is newer than the evaluated casting block".to_owned(),
             )
         })?;
+    let chain = iroha_core::sumeragi::certified_chain::CertifiedChain::new(&proof_view)
+        .map_err(|error| inconsistent(format!("native finality source is unavailable: {error}")))?;
     let mut finality_chain = Vec::with_capacity(proof_count);
     for height in request.trusted_checkpoint_height..=evaluated_height {
         finality_chain.push(
-            iroha_core::bridge::build_finality_proof(state.as_ref(), height).map_err(|error| {
+            iroha_core::sumeragi::finality::build_proof(&proof_view, height).map_err(|error| {
                 inconsistent(format!(
                     "Parliament casting finality proof at height {height} is unavailable: {error}"
                 ))
@@ -1419,8 +1428,13 @@ pub fn handle_gov_parliament_timed_ovn_casting_proof(
     let evaluated = finality_chain
         .last()
         .ok_or_else(|| inconsistent("Parliament casting finality chain is empty".to_owned()))?;
-    let evaluated_context_id = evaluated.finality_artifact.context_id();
-    let evaluated_block_hash = evaluated.finality_artifact.block_hash;
+    let evaluated_native = chain.committed(evaluated_height).map_err(|error| {
+        inconsistent(format!(
+            "evaluated native commitment is unavailable: {error}"
+        ))
+    })?;
+    let evaluated_context_id = iroha_crypto::Hash::from(evaluated_native.id().0);
+    let evaluated_block_hash = evaluated.block_header.hash();
     let response = ParliamentTimedOvnCastingProofResponseV1 {
         version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
         casting_context_archive: terminal_fields.0,
@@ -1434,17 +1448,13 @@ pub fn handle_gov_parliament_timed_ovn_casting_proof(
         observed_ledger_tip_height,
         more_available: evaluated_height < observed_ledger_tip_height,
     };
-    let trusted = response
-        .finality_chain
-        .first()
-        .expect("constructed Parliament casting finality chain is non-empty");
+    let checkpoint = iroha_core::sumeragi::finality::build_checkpoint(
+        &proof_view,
+        request.trusted_checkpoint_height,
+    )
+    .map_err(|error| inconsistent(format!("trusted native prefix is unavailable: {error}")))?;
     response
-        .verify_consensus_page_against(
-            trusted.finality_artifact.height_context.network_id,
-            request.trusted_checkpoint_height,
-            *trusted.finality_artifact.context_id().0.as_ref(),
-            ballot_attempt_id,
-        )
+        .verify_consensus_page_against(checkpoint.network_id(), &checkpoint, ballot_attempt_id)
         .map_err(|error| inconsistent(format!("constructed casting proof failed: {error}")))?;
     let response_encoded_bytes = norito::core::encoded_frame_len(&response).map_err(|error| {
         inconsistent(format!(

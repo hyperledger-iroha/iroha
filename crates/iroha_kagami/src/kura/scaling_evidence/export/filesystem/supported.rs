@@ -684,23 +684,14 @@ fn replay_with_hook(
 pub(crate) fn export_bound_request(
     request: RetainedLauncherRequest,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     input: ProofInputBinding,
 ) -> Result<RetainedProof> {
-    export_with_hook(
-        request,
-        block_store,
-        merge_log,
-        reader_limits,
-        input,
-        |_| Ok(()),
-    )
+    export_with_hook(request, block_store, reader_limits, input, |_| Ok(()))
 }
 fn export_with_hook(
     request: RetainedLauncherRequest,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     input: ProofInputBinding,
     mut hook: impl FnMut(Phase) -> Result<()>,
@@ -728,7 +719,6 @@ fn export_with_hook(
         reader_limits.first_height == plan.first_height
             && reader_limits.last_height == plan.last_height
             && reader_limits.max_store_data_bytes <= limits.input_bytes
-            && reader_limits.max_merge_log_bytes <= limits.input_bytes
             && reader_limits.max_decode_allocation_bytes as u64 <= limits.admitted_proof_bytes * 2,
         "Core reader work differs from independent run scope"
     );
@@ -813,7 +803,6 @@ fn export_with_hook(
             plan,
             limits,
             block_store,
-            merge_log,
             reader_limits,
             &bindings,
             supplied,

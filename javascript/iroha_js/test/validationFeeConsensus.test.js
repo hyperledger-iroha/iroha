@@ -6,6 +6,7 @@ import { AccountAddress } from "../src/address.js";
 import {
   createValidationFeeConsensusApi,
   normalizeValidationFeeLedgerBindingV1,
+  normalizeValidationFeeCheckpointV1,
 } from "../src/validationFeeConsensus.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
@@ -17,8 +18,8 @@ const binding = Object.freeze({
   networkId: NetworkId.fromBytes(Buffer.from("13".repeat(32), "hex")),
   policyChainGenesisHash: "35".repeat(32),
   checkpoint: Object.freeze({
-    height: 100,
-    contextId: "57".repeat(32),
+    // Opaque transport tokens in mocked native-owner tests, not finality authority.
+    checkpointNorito: Buffer.from([100, 57]),
   }),
 });
 const proposalOperator = AccountAddress.fromAccount({
@@ -176,7 +177,7 @@ function completeVerifiedProjection() {
     head_policy_hash: "ab".repeat(32),
     current_policy: completeCurrentPolicy(),
     trusted_checkpoint_height: 100,
-    trusted_checkpoint_context_id: binding.checkpoint.contextId,
+    trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127,
     evaluated_context_id: "bd".repeat(32),
     evaluated_block_hash: "df".repeat(32),
@@ -192,15 +193,15 @@ function withNativeBinding(native, body) {
 }
 
 test("validation-fee consensus factories isolate immutable native runtimes", async () => {
-  const checkpoint = { height: 100, contextId: "03".repeat(32) };
+  const checkpoint = { checkpointNorito: Buffer.from([100, 3]) };
   const bindingA = {
-    connectNoritoBridgeAbiVersion: () => 24,
+    connectNoritoBridgeAbiVersion: () => 25,
     validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xa1]),
     validationFeeVerifyCurrentPolicyProofV1() {},
   };
   const apiA = createValidationFeeConsensusApi(createNativeRuntime(bindingA));
   const apiB = createValidationFeeConsensusApi(createNativeRuntime({
-    connectNoritoBridgeAbiVersion: () => 24,
+    connectNoritoBridgeAbiVersion: () => 25,
     validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xb2]),
     validationFeeVerifyCurrentPolicyProofV1() {},
   }));
@@ -217,15 +218,19 @@ test("validation-fee consensus factories isolate immutable native runtimes", asy
   assert.deepEqual(requestB, Buffer.from([0xb2]));
 });
 
+function nativePage(projection, promotedCheckpointNorito = Buffer.from([127, 189])) {
+  return { projectionJson: JSON.stringify(projection), promotedCheckpointNorito };
+}
+
 function verifyProjectionFixture(projection) {
   return withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 24;
+        return 25;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1() {
-        return JSON.stringify(projection);
+        return nativePage(projection);
       },
     },
     ({ verifyValidationFeeCurrentPolicyProofV1: verify }) =>
@@ -233,7 +238,7 @@ function verifyProjectionFixture(projection) {
         Buffer.from([9]),
         binding,
         binding.checkpoint, 753,
-      ),
+      ).projection,
   );
 }
 
@@ -241,7 +246,7 @@ test("immutable ledger binding requires marked Iroha hashes and rejects aliases"
   const normalized = normalizeValidationFeeLedgerBindingV1(binding);
   assert.equal(normalized.networkId, binding.networkId);
   assert.equal(normalized.policyChainGenesisHash, "35".repeat(32));
-  assert.equal(normalized.checkpoint.contextId, "57".repeat(32));
+  assert.deepEqual(normalized.checkpoint.checkpointNorito, binding.checkpoint.checkpointNorito);
   assert.throws(
     () =>
       normalizeValidationFeeLedgerBindingV1({
@@ -264,44 +269,31 @@ test("immutable ledger binding requires marked Iroha hashes and rejects aliases"
   );
 });
 
-test("request encoder delegates only after strict checkpoint validation", () => {
-  const checkpoint = Object.freeze({
-    height: binding.checkpoint.height,
-    contextId: "03".repeat(32),
-  });
+test("request encoder delegates only full independently retained checkpoint bytes", () => {
+  const bytes = Buffer.from([100, 3]);
+  const checkpoint = normalizeValidationFeeCheckpointV1({ checkpointNorito: bytes });
+  bytes.fill(0);
+  checkpoint.checkpointNorito.fill(0);
   withNativeBinding(
     {
-      connectNoritoBridgeAbiVersion() {
-        return 24;
-      },
-      validationFeeCurrentPolicyProofRequestV1(height, context) {
-        assert.equal(height, 100n);
-        assert.deepEqual(context, Buffer.from("03".repeat(32), "hex"));
+      connectNoritoBridgeAbiVersion: () => 25,
+      validationFeeCurrentPolicyProofRequestV1(checkpointNorito) {
+        assert.deepEqual(checkpointNorito, Buffer.from([100, 3]));
         return Buffer.from([1, 2, 3]);
       },
       validationFeeVerifyCurrentPolicyProofV1() {},
     },
     ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
-      assert.deepEqual(
-        encode(checkpoint),
-        Buffer.from([1, 2, 3]),
-      );
-      assert.throws(
-        () =>
-          encode({
-            ...checkpoint,
-            contextId: "00".repeat(32),
-          }),
-        /must be non-zero/u,
-      );
-      assert.throws(
-        () =>
-          encode({
-            ...checkpoint,
-            contextId: "02".repeat(32),
-          }),
-        /canonical Iroha hash marker/u,
-      );
+      assert.deepEqual(encode(checkpoint), Buffer.from([1, 2, 3]));
+      for (const malformed of [
+        { height: 100, contextId: "03".repeat(32) },
+        { ...checkpoint, height: 100 },
+        { checkpointNorito: "0303" },
+        { checkpointNorito: Buffer.alloc(0) },
+        { checkpointNorito: new Uint8Array(68 * 1024 * 1024 + 1) },
+      ]) assert.throws(() => encode(malformed), /must contain exactly|must be an ArrayBuffer|must contain 1/u);
+      const sliced = new Uint8Array([0, 100, 3, 0]).subarray(1, 3);
+      assert.deepEqual(encode({ checkpointNorito: sliced }), Buffer.from([1, 2, 3]));
     },
   );
 });
@@ -317,7 +309,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
     head_policy_hash: "9b".repeat(32),
     current_policy: null,
     trusted_checkpoint_height: 100,
-    trusted_checkpoint_context_id: binding.checkpoint.contextId,
+    trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127,
     evaluated_context_id: "bd".repeat(32),
     evaluated_block_hash: "df".repeat(32),
@@ -327,15 +319,15 @@ test("native verified projection remains bound to the release checkpoint", () =>
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 24;
+        return 25;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(
         proof,
         networkId,
         policyGenesis,
-        height,
-        context,
+        checkpointNorito,
+        networkPrefix,
       ) {
         assert.deepEqual(proof, Buffer.from([9]));
         assert.deepEqual(networkId, Buffer.from(binding.networkId.toBytes()));
@@ -343,17 +335,20 @@ test("native verified projection remains bound to the release checkpoint", () =>
           policyGenesis,
           Buffer.from(binding.policyChainGenesisHash, "hex"),
         );
-        assert.equal(height, 100n);
-        assert.deepEqual(context, Buffer.from(binding.checkpoint.contextId, "hex"));
-        return JSON.stringify(projection);
+        assert.deepEqual(checkpointNorito, binding.checkpoint.checkpointNorito);
+        assert.equal(networkPrefix, 753);
+        return nativePage(projection);
       },
     },
     ({ verifyValidationFeeCurrentPolicyProofV1: verify }) => {
-      const verified = verify(
+      const { projection: verified, promotedCheckpoint } = verify(
         Buffer.from([9]),
         binding,
         binding.checkpoint, 753,
       );
+      assert.deepEqual(promotedCheckpoint.checkpointNorito, Buffer.from([127, 189]));
+      promotedCheckpoint.checkpointNorito.fill(0);
+      assert.deepEqual(promotedCheckpoint.checkpointNorito, Buffer.from([127, 189]));
       assert.equal(verified.head_policy_version, 2n);
       assert.equal(verified.evaluated_block_height, 127n);
       assert.equal(verified.more_available, true);
@@ -576,7 +571,7 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
     ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
       assert.throws(
         () => encode(binding.checkpoint),
-        /ABI 24/u,
+        /ABI 25/u,
       );
     },
   );
@@ -584,15 +579,14 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
 
 test("Torii validation-fee proofs use the client native runtime", async () => {
   const native = {
-    connectNoritoBridgeAbiVersion: () => 24,
-    validationFeeCurrentPolicyProofRequestV1(height, contextId) {
-      assert.equal(height, 100n);
-      assert.deepEqual(contextId, Buffer.from(binding.checkpoint.contextId, "hex"));
+    connectNoritoBridgeAbiVersion: () => 25,
+    validationFeeCurrentPolicyProofRequestV1(checkpointNorito) {
+      assert.deepEqual(checkpointNorito, binding.checkpoint.checkpointNorito);
       return Buffer.from([1, 2, 3]);
     },
     validationFeeVerifyCurrentPolicyProofV1(proofNorito) {
       assert.deepEqual(proofNorito, Buffer.from([9]));
-      return JSON.stringify(completeVerifiedProjection());
+      return nativePage(completeVerifiedProjection());
     },
   };
   const client = new ToriiClient("https://torii.invalid", {
@@ -621,7 +615,7 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
     },
   );
   assert.equal(page.projection.evaluated_block_height, 127n);
-  assert.equal(page.promotedCheckpoint.height, 127n);
+  assert.deepEqual(page.promotedCheckpoint.checkpointNorito, Buffer.from([127, 189]));
 });
 
 test("proof catch-up promotes only consecutive locally verified pages", async () => {
@@ -636,18 +630,19 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
     normalizedBinding,
     checkpoint,
   ) => {
-    visited.push(checkpoint.height);
+    const height = BigInt(checkpoint.checkpointNorito[0]);
+    visited.push(height);
     assert.equal(normalizedBinding.networkId, binding.networkId);
-    const nextHeight = checkpoint.height === 100n ? 127n : 190n;
+    const nextHeight = height === 100n ? 127n : 190n;
     return Object.freeze({
       proofNorito: Buffer.from([Number(nextHeight % 256n)]),
       projection: Object.freeze({
+        trusted_checkpoint_height: height,
         evaluated_block_height: nextHeight,
         more_available: nextHeight !== 190n,
       }),
       promotedCheckpoint: Object.freeze({
-        height: nextHeight,
-        contextId: nextHeight === 127n ? "77".repeat(32) : "99".repeat(32),
+        checkpointNorito: Buffer.from([Number(nextHeight), 1]),
       }),
     });
   };
@@ -655,7 +650,7 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
   const result = await client.catchUpValidationFeeCurrentPolicyProof(binding, {});
   assert.deepEqual(visited, [100n, 127n]);
   assert.equal(result.pagesVerified, 2);
-  assert.equal(result.promotedCheckpoint.height, 190n);
+  assert.deepEqual(result.promotedCheckpoint.checkpointNorito, Buffer.from([190, 1]));
   assert.equal(Object.isFrozen(result), true);
 });
 
@@ -670,7 +665,8 @@ test("proof catch-up fails closed when a non-final page does not advance", async
     Object.freeze({
       proofNorito: Buffer.from([1]),
       projection: Object.freeze({
-        evaluated_block_height: checkpoint.height,
+        trusted_checkpoint_height: 100n,
+        evaluated_block_height: 100n,
         more_available: true,
       }),
       promotedCheckpoint: checkpoint,
@@ -698,4 +694,37 @@ test("ledger binding accepts only the first-release Iroha schema", () => {
       /binding.schema/u,
     );
   }
+});
+
+
+test("native promotion is required and cannot be synthesized from projection scalars", () => {
+  const projection = completeVerifiedProjection();
+  for (const result of [
+    JSON.stringify(projection),
+    { projectionJson: JSON.stringify(projection) },
+    { ...nativePage(projection), height: 127 },
+    nativePage(projection, Buffer.alloc(0)),
+  ]) {
+    withNativeBinding({
+      connectNoritoBridgeAbiVersion: () => 25,
+      validationFeeCurrentPolicyProofRequestV1() {},
+      validationFeeVerifyCurrentPolicyProofV1() { return result; },
+    }, ({ verifyValidationFeeCurrentPolicyProofV1: verify }) => {
+      assert.throws(() => verify(Buffer.of(9), binding, binding.checkpoint, 753),
+        /plain object|must contain exactly|must contain 1/u);
+    });
+  }
+});
+
+test("native fee projection metadata must remain coherent with its verified page", () => {
+  for (const changes of [
+    { trusted_checkpoint_context_id: "02".repeat(32) },
+    { network_id: NetworkId.fromBytes(Buffer.alloc(32, 7)).toString() },
+    { policy_chain_genesis_hash: "79".repeat(32) },
+    { evaluated_block_height: 99 },
+    { evaluated_block_height: 100 },
+    { observed_ledger_tip_height: 126 },
+    { more_available: false },
+  ]) assert.throws(() => verifyProjectionFixture({ ...completeVerifiedProjection(), ...changes }),
+    /canonical Iroha hash marker|immutable binding|did not advance/u);
 });

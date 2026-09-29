@@ -97,7 +97,6 @@ pub(in crate::kura::scaling_evidence::export) struct Fixture {
     originals: Vec<Zeroizing<Vec<u8>>>,
     pins: [[u8; 32]; 10],
     root: PathBuf,
-    log: PathBuf,
     output: PathBuf,
     chain_id: ChainId,
     network_id: NetworkId,
@@ -344,14 +343,12 @@ impl Fixture {
             store.append_block_to_chain(&height.block).unwrap();
         }
         drop(store);
-        let log = root.join("merge.log");
-        write_new(&log, &[]);
+
         for name in [
             "blocks.data",
             "blocks.index",
             "blocks.hashes",
             "blocks.count.norito",
-            "merge.log",
         ] {
             let path = root.join(name);
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -366,7 +363,7 @@ impl Fixture {
             originals,
             pins,
             root,
-            log,
+
             output,
             chain_id: manifest.chain_id().clone(),
             network_id,
@@ -427,8 +424,6 @@ impl Fixture {
             max_committed_blocks: 16,
             max_store_data_bytes: 16 * 1024 * 1024,
             max_carrier_bytes: 8 * 1024 * 1024,
-            max_merge_log_bytes: 16 * 1024 * 1024,
-            max_merge_frames: 8,
             max_output_bytes: 16 * 1024 * 1024,
             max_decode_allocation_bytes: 128 * 1024 * 1024,
             owner_uid: fs::metadata(&self.root).unwrap().uid(),
@@ -444,9 +439,6 @@ impl Fixture {
     }
     pub(in crate::kura::scaling_evidence::export) fn block_store(&self) -> &Path {
         &self.root
-    }
-    pub(in crate::kura::scaling_evidence::export) fn merge_log(&self) -> &Path {
-        &self.log
     }
     pub(in crate::kura::scaling_evidence::export) fn output_path(&self) -> PathBuf {
         self.output.clone()
@@ -481,7 +473,6 @@ impl Fixture {
             self.journal(),
             self.verification_limits(),
             &self.root,
-            &self.log,
             self.reader_limits(),
             self.caps(),
         )
@@ -1065,8 +1056,6 @@ mod generated {
             max_committed_blocks: 8,
             max_store_data_bytes: 2 * 1024 * 1024,
             max_carrier_bytes: 1024 * 1024,
-            max_merge_log_bytes: 2 * 1024 * 1024,
-            max_merge_frames: 8,
             max_output_bytes: 1024 * 1024,
             max_decode_allocation_bytes: 8 * 1024 * 1024,
             owner_uid: 0,
@@ -1130,7 +1119,6 @@ mod generated {
                     fixture.journal(),
                     fixture.verification_limits(),
                     fixture.block_store(),
-                    fixture.merge_log(),
                     fixture.reader_limits(),
                     fixture.caps(),
                 ),

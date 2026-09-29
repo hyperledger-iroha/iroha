@@ -32,6 +32,9 @@ use iroha_data_model::kagemusha::{
     KagemushaPairedProofV1, KagemushaReleaseAttestationV1, KagemushaReleaseAuthorityPolicyV1,
     KagemushaReleaseManifestV1, KagemushaReleasePurposeV1,
 };
+use iroha_data_model::sumeragi_finality::{
+    MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityVerifier,
+};
 use iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1;
 use libc::{c_int, c_uchar};
 
@@ -54,7 +57,7 @@ pub const KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1: usize = 256;
 /// Maximum original Torii JSON Applied top-up operation status at this diagnostic boundary.
 pub const KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1: usize =
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1;
-/// Exact length of each independently supplied finality network/context identifier.
+/// Exact length of the independently supplied finality network identifier.
 pub const KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1: usize = 32;
 /// Maximum canonical Norito diagnostic finalized-mint observation response.
 pub const KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1: usize = 512;
@@ -128,7 +131,9 @@ pub struct KagemushaTestnetValueAdmissionArchiveV1 {
     candidate_envelope_digest: [u8; 32],
     successor_state_commitment: [u8; 32],
     finality_block_height: u64,
-    finality_height_context_id: [u8; 32],
+    finality_block_hash: [u8; 32],
+    finality_core_hash: [u8; 32],
+    finality_result: [u8; 32],
 }
 
 struct KagemushaTestnetObservationInstallationV1 {
@@ -652,7 +657,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1
 ///
 /// `operation_id` names the exact private reservation already fsynced by the Rust owner. Its
 /// confidential opening never crosses this ABI. The caller supplies the original Torii status
-/// JSON, finality network/height/context that must match a Rust-only authenticated native pin,
+/// JSON, finality network and canonical checkpoint that must match a Rust-only authenticated native pin,
 /// and canonical State inputs and proof. The
 /// response is unsigned, non-authorizing diagnostic data with `hardware_qualified=false`.
 /// A missing durable native owner or reservation fails closed. As with the State observer,
@@ -672,9 +677,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     status_json_len: usize,
     anchor_network_id_ptr: *const c_uchar,
     anchor_network_id_len: usize,
-    anchor_height: u64,
-    anchor_context_id_ptr: *const c_uchar,
-    anchor_context_id_len: usize,
+    anchor_checkpoint_ptr: *const c_uchar,
+    anchor_checkpoint_len: usize,
     public_inputs_archive_ptr: *const c_uchar,
     public_inputs_archive_len: usize,
     paired_proof_archive_ptr: *const c_uchar,
@@ -695,7 +699,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
             (operation_id_ptr as usize, operation_id_len),
             (status_json_ptr as usize, status_json_len),
             (anchor_network_id_ptr as usize, anchor_network_id_len),
-            (anchor_context_id_ptr as usize, anchor_context_id_len),
+            (anchor_checkpoint_ptr as usize, anchor_checkpoint_len),
             (
                 public_inputs_archive_ptr as usize,
                 public_inputs_archive_len,
@@ -717,7 +721,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     if operation_id_ptr.is_null()
         || status_json_ptr.is_null()
         || anchor_network_id_ptr.is_null()
-        || anchor_context_id_ptr.is_null()
+        || anchor_checkpoint_ptr.is_null()
         || public_inputs_archive_ptr.is_null()
         || paired_proof_archive_ptr.is_null()
         || output_ptr.is_null()
@@ -728,8 +732,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
         || status_json_len == 0
         || status_json_len > KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1
         || anchor_network_id_len != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1
-        || anchor_context_id_len != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1
-        || anchor_height == 0
+        || anchor_checkpoint_len == 0
+        || anchor_checkpoint_len > MAX_FINALITY_CHECKPOINT_BYTES
         || public_inputs_archive_len == 0
         || public_inputs_archive_len > KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1
         || paired_proof_archive_len == 0
@@ -762,9 +766,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     let anchor_network_id: [u8; 32] = unsafe { slice::from_raw_parts(anchor_network_id_ptr, 32) }
         .try_into()
         .expect("fixed network ID length");
-    let anchor_context_id: [u8; 32] = unsafe { slice::from_raw_parts(anchor_context_id_ptr, 32) }
-        .try_into()
-        .expect("fixed context ID length");
+    let anchor_checkpoint =
+        unsafe { slice::from_raw_parts(anchor_checkpoint_ptr, anchor_checkpoint_len) }.to_vec();
     let public_archive =
         unsafe { slice::from_raw_parts(public_inputs_archive_ptr, public_inputs_archive_len) }
             .to_vec();
@@ -772,8 +775,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
         unsafe { slice::from_raw_parts(paired_proof_archive_ptr, paired_proof_archive_len) }
             .to_vec();
     let archive = catch_testnet_dispatch_panic_v1(&_publication, || {
-        let trust_anchor =
-            trusted_anchor(anchor_network_id, anchor_height, anchor_context_id).map_err(|_| ())?;
+        let trust_anchor = trusted_anchor(anchor_network_id, &anchor_checkpoint).map_err(|_| ())?;
         // Core rejects an absent native reservation or independently pinned finality
         // context before it validates the status certificate and its paired proofs.
         let status: KagemushaOperationStatusV1 =
@@ -906,7 +908,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
             .map_err(|_| ())?;
         let scope = admission.scope();
         let anchor = admission.finality_anchor();
-        let context_id: [u8; 32] = *anchor.height_context_id.0.as_ref();
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &anchor.checkpoint,
+            &anchor.network_id,
+            anchor.checkpoint.chain_id(),
+        )
+        .map_err(|_| ())?;
+        let decision = verifier
+            .verify_same_decision(anchor.checkpoint.tip(), anchor.checkpoint.tip())
+            .map_err(|_| ())?;
+        if decision.height() <= 1 {
+            return Err(());
+        }
         let record = KagemushaTestnetValueAdmissionArchiveV1 {
             version: 1,
             hardware_qualified: false,
@@ -923,8 +936,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
             mint_envelope_digest: admission.mint_envelope_digest(),
             candidate_envelope_digest: admission.candidate_envelope_digest(),
             successor_state_commitment: admission.successor_state_commitment(),
-            finality_block_height: anchor.block_height,
-            finality_height_context_id: context_id,
+            finality_block_height: decision.height(),
+            finality_block_hash: *decision.header().hash().as_ref(),
+            finality_core_hash: decision.core_hash().0,
+            finality_result: decision.result().0,
         };
         let archive = norito::encode_canonical(&record).map_err(|_| ())?;
         if archive.len() > KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 {
@@ -1019,7 +1034,6 @@ mod tests {
                 status_json_len,
                 input.as_ptr(),
                 32,
-                1,
                 input.as_ptr(),
                 32,
                 input.as_ptr(),
@@ -1065,7 +1079,6 @@ mod tests {
                     oversized_status.len(),
                     input.as_ptr(),
                     32,
-                    1,
                     input.as_ptr(),
                     32,
                     input.as_ptr(),
@@ -1112,6 +1125,38 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn finalized_mint_entry_rejects_oversized_checkpoint_before_reading_or_owner_lookup() {
+        let input = [1_u8; 32];
+        let mut output = [0x5a; KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1];
+        let mut output_len = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
+                    input.as_ptr(),
+                    32,
+                    input.as_ptr(),
+                    1,
+                    input.as_ptr(),
+                    32,
+                    input.as_ptr(),
+                    MAX_FINALITY_CHECKPOINT_BYTES + 1,
+                    input.as_ptr(),
+                    1,
+                    input.as_ptr(),
+                    1,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut output_len,
+                )
+            },
+            ERR_KAGEMUSHA_V1
+        );
+        assert_eq!(output_len, 0);
+        assert!(output.iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn finalized_mint_entry_rejects_aliased_length_before_any_write() {
         let input = [1_u8; 32];
         let mut output = [usize::MAX; KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1];
@@ -1125,7 +1170,6 @@ mod tests {
                     1,
                     input.as_ptr(),
                     32,
-                    1,
                     input.as_ptr(),
                     32,
                     input.as_ptr(),
@@ -1297,10 +1341,17 @@ mod tests {
             candidate_envelope_digest: [11; 32],
             successor_state_commitment: [12; 32],
             finality_block_height: 13,
-            finality_height_context_id: [14; 32],
+            finality_block_hash: [14; 32],
+            finality_core_hash: [15; 32],
+            finality_result: [16; 32],
         };
         let encoded = norito::encode_canonical(&record).expect("canonical value archive");
-        assert_eq!(encoded.len(), 480);
+        // 19 compact fields: 498 payload bytes plus the 40-byte header and eight-byte padding.
+        assert_eq!(encoded.len(), 546);
+        println!(
+            "NATIVE_KAGEMUSHA_VALUE_ADMISSION_FRAME_HEX={}",
+            hex::encode(&encoded)
+        );
         assert_eq!(&encoded[40..48], &[0; 8]);
         assert!(encoded.len() <= KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1);
         let decoded: KagemushaTestnetValueAdmissionArchiveV1 =

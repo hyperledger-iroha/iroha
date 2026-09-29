@@ -50,15 +50,11 @@ pub struct CanonicalKuraEvidenceLimits {
     pub max_store_data_bytes: u64,
     /// Maximum canonical SignedBlockWire bytes for one requested carrier (at most 32 MiB).
     pub max_carrier_bytes: usize,
-    /// Maximum complete merge-log bytes, including its length prefixes (at most 256 MiB).
-    pub max_merge_log_bytes: u64,
-    /// Maximum frames in the entire merge log, including unrequested epochs.
-    pub max_merge_frames: u64,
-    /// Cumulative returned carrier and requested canonical merge-entry bytes (at most 256 MiB).
+    /// Cumulative returned complete native carrier bytes (at most 256 MiB).
     pub max_output_bytes: u64,
     /// Maximum cumulative owned allocation per decoder invocation (at most 512 MiB).
     pub max_decode_allocation_bytes: usize,
-    /// Independently expected Unix uid of both supplied immediate directories and all five files.
+    /// Independently expected Unix uid of the supplied immediate directory and all four files.
     pub owner_uid: u32,
 }
 impl CanonicalKuraEvidenceLimits {
@@ -75,8 +71,6 @@ impl CanonicalKuraEvidenceLimits {
                 && self.max_store_data_bytes <= 2 * 1024 * 1024 * 1024
                 && self.max_carrier_bytes > 0
                 && self.max_carrier_bytes <= 32 * 1024 * 1024
-                && self.max_merge_log_bytes <= 256 * 1024 * 1024
-                && self.max_merge_frames <= self.max_committed_blocks
                 && self.max_output_bytes > 0
                 && self.max_output_bytes <= 256 * 1024 * 1024
                 && self.max_decode_allocation_bytes > 0
@@ -105,16 +99,7 @@ fn evidence_require(condition: bool, reason: &'static str) -> CanonicalKuraEvide
     }
 }
 
-/// One exact full-entry reference from an independently authenticated carrier.
-#[derive(Debug)]
-pub struct CanonicalKuraMergeRequest {
-    /// One-based height; requests must be unique and strictly increasing.
-    pub carrier_height: u64,
-    /// The full compact reference, including its canonical hash/length and merge QC.
-    pub reference: iroha_data_model::block::CertifiedMergeLedgerReference,
-}
-
-/// Consuming completion of disk admission, complete reads, full scan and final identity checks.
+/// Consuming completion of disk admission, complete reads and final identity checks.
 ///
 /// This non-serializable token is not an anchored finality or useful-effect proof.
 /// The downstream authenticator must independently complete before publishing evidence.
@@ -123,7 +108,6 @@ pub struct CanonicalKuraEvidenceComplete {
     sources: canonical_evidence_read_only_fs::Sources,
     committed_height: u64,
     carrier_count: u64,
-    merge_frames: u64,
     output_bytes: u64,
 }
 impl std::fmt::Debug for CanonicalKuraEvidenceComplete {
@@ -132,7 +116,6 @@ impl std::fmt::Debug for CanonicalKuraEvidenceComplete {
             .debug_struct("CanonicalKuraEvidenceComplete")
             .field("committed_height", &self.committed_height)
             .field("carrier_count", &self.carrier_count)
-            .field("merge_frames", &self.merge_frames)
             .field("output_bytes", &self.output_bytes)
             .finish()
     }
@@ -184,12 +167,7 @@ impl CanonicalKuraEvidenceComplete {
     pub fn carrier_count(&self) -> u64 {
         self.carrier_count
     }
-    /// Number of complete, canonical epochs scanned from the entire merge log.
-    #[must_use]
-    pub fn merge_frames(&self) -> u64 {
-        self.merge_frames
-    }
-    /// Sum of returned carrier and requested canonical merge-entry byte lengths.
+    /// Sum of returned complete native carrier wire byte lengths.
     #[must_use]
     pub fn output_bytes(&self) -> u64 {
         self.output_bytes
@@ -202,8 +180,8 @@ impl CanonicalKuraEvidenceComplete {
 /// the filesystem root. Redox, espidf and non-Unix targets fail closed. Only clean, nonempty, unpruned committed prefixes are
 /// admitted: exact index/hash counts and contiguous data, with no uncommitted suffix.
 /// The admitted journal images remain resident (at most 48 MB combined), bounded by
-/// `max_committed_blocks`; body and merge decoding remain frame bounded.
-/// Scan and carrier reads may occur in either order. Every failure, including a caught
+/// `max_committed_blocks`; native body decoding remains frame bounded.
+/// Every failure, including a caught
 /// consumer panic, poisons the session. Nothing is finally qualified before `finish`.
 #[derive(Debug)]
 pub struct CanonicalKuraEvidenceReader {
@@ -214,16 +192,12 @@ pub struct CanonicalKuraEvidenceReader {
     hash_bytes: Vec<u8>,
     next_height: u64,
     output_bytes: u64,
-    merge_frames: u64,
-    scanned: bool,
     poisoned: bool,
-    carrier_references: BTreeMap<u64, Hash>,
-    requested_references: BTreeMap<u64, Hash>,
     #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
     sources: canonical_evidence_read_only_fs::Sources,
 }
 impl CanonicalKuraEvidenceReader {
-    /// Admit explicit primary block and merge-log paths without discovery, creation or repair.
+    /// Admit an explicit native primary block store without discovery, creation or repair.
     ///
     /// Paths must be absolute, already normalized, bounded and free of symlink components.
     /// Every requested carrier must lie within the exact published commit marker.
@@ -231,21 +205,19 @@ impl CanonicalKuraEvidenceReader {
     /// Returns invalid-input, immutable-prefix, secure-I/O or unsupported-platform errors.
     pub fn open(
         block_store: &Path,
-        merge_log: &Path,
         limits: CanonicalKuraEvidenceLimits,
     ) -> CanonicalKuraEvidenceResult<Self> {
-        Self::open_after_admission(block_store, merge_log, limits, |_| {})
+        Self::open_after_admission(block_store, limits, |_| {})
     }
     fn open_after_admission(
         block_store: &Path,
-        merge_log: &Path,
         limits: CanonicalKuraEvidenceLimits,
         after_admission: impl FnMut(&Path),
     ) -> CanonicalKuraEvidenceResult<Self> {
         limits.validate()?;
         #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
         {
-            let _ = (block_store, merge_log, after_admission);
+            let _ = (block_store, after_admission);
             // TODO: add retained descriptor APIs on Redox/espidf and Windows relative non-reparse handles; never reopen paths as a fallback.
             return Err(CanonicalKuraEvidenceError::UnsupportedPlatform);
         }
@@ -253,7 +225,6 @@ impl CanonicalKuraEvidenceReader {
         {
             let sources = canonical_evidence_read_only_fs::Sources::open(
                 block_store,
-                merge_log,
                 limits,
                 after_admission,
             )?;
@@ -294,11 +265,7 @@ impl CanonicalKuraEvidenceReader {
                 hash_bytes,
                 next_height: limits.first_height,
                 output_bytes: 0,
-                merge_frames: 0,
-                scanned: false,
                 poisoned: true,
-                carrier_references: BTreeMap::new(),
-                requested_references: BTreeMap::new(),
                 sources,
             };
             let mut cursor = 0_u64;
@@ -347,30 +314,29 @@ impl CanonicalKuraEvidenceReader {
         self.output_bytes = next;
         Ok(())
     }
-    fn reference_digest(
-        reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
-    ) -> CanonicalKuraEvidenceResult<Hash> {
-        let size = norito::canonical_frame_len(reference)
-            .map_err(|_| CanonicalKuraEvidenceError::Invalid("reference encoding"))?;
-        evidence_require(
-            size <= MAX_MERGE_LEDGER_ENTRY_BYTES,
-            "reference frame bound",
-        )?;
-        let bytes = norito::encode_canonical(reference)
-            .map_err(|_| CanonicalKuraEvidenceError::Invalid("reference encoding"))?;
-        evidence_require(bytes.len() == size, "reference encoding changed")?;
-        Ok(Hash::new(bytes))
-    }
     /// Read exactly the next requested canonical carrier and bind its stored header association.
     ///
     /// Returned wire bytes still require the independently anchored finality verifier.
     /// # Errors
     /// Fails and poisons on skipped/repeated heights, bounds, codec or file identity errors.
     pub fn read_carrier(&mut self, height: u64) -> CanonicalKuraEvidenceResult<Vec<u8>> {
+        self.read_carrier_with(height, Ok)
+    }
+    /// Consume exact native wire bytes before the final source-identity recheck.
+    ///
+    /// The callback's effects remain provisional until this reader and the independently
+    /// anchored native verifier both finish. Its error or caught panic poisons this owner.
+    /// # Errors
+    /// Fails on the same storage checks as [`Self::read_carrier`] or consumer refusal.
+    pub fn read_carrier_with<T>(
+        &mut self,
+        height: u64,
+        consume: impl FnOnce(Vec<u8>) -> CanonicalKuraEvidenceResult<T>,
+    ) -> CanonicalKuraEvidenceResult<T> {
         self.begin()?;
         #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
         {
-            let _ = height;
+            let _ = (height, consume);
             Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
         }
         #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
@@ -414,14 +380,27 @@ impl CanonicalKuraEvidenceReader {
                 block.header().prev_block_hash() == previous,
                 "carrier parent journal association",
             )?;
-            if let Some(reference) = block
-                .execution_context()
-                .and_then(|context| context.merge_entry.as_ref())
-            {
-                self.carrier_references
-                    .insert(height, Self::reference_digest(reference)?);
-            }
+            let certificate =
+                block
+                    .commit_certificate()
+                    .ok_or(CanonicalKuraEvidenceError::Invalid(
+                        "native commit certificate is absent",
+                    ))?;
+            evidence_require(
+                !certificate.result_preimage().is_empty()
+                    && if height == 1 {
+                        certificate.consensus_header().is_empty()
+                            && certificate.commit_qc().is_empty()
+                    } else {
+                        !certificate.consensus_header().is_empty()
+                            && !certificate.commit_qc().is_empty()
+                    },
+                "native commit certificate shape",
+            )?;
+            // The exact three native artifact byte strings remain inside the unchanged wire.
+            // Presence/shape and disk association do not authenticate their signatures or result.
             self.add_output(wire.len())?;
+            let result = consume(wire)?;
             self.check_sources()?;
             self.next_height = height
                 .checked_add(1)
@@ -429,151 +408,17 @@ impl CanonicalKuraEvidenceReader {
                     "height successor overflow",
                 ))?;
             self.poisoned = false;
-            Ok(wire)
+            Ok(result)
         }
     }
-    /// Scan the entire admitted merge log once, yielding only exact requested full entries.
-    ///
-    /// Requests must cover every log carrier in the requested interval. The callback receives
-    /// canonical framed entry bytes, not the distinct headerless stored codec frame. Callback
-    /// effects remain provisional until this reader and the anchored consumer both finish.
-    /// Even zero requests require this complete scan; a trailing fragment is never repaired.
+    /// Consume this owner only after the complete requested native carrier interval.
     /// # Errors
-    /// Fails and poisons on order, missing/extra references, frame/codec/budget errors or callback failure.
-    pub fn scan_merge_entries(
-        &mut self,
-        requests: &[CanonicalKuraMergeRequest],
-        mut consume: impl FnMut(u64, &MergeLedgerEntry, &[u8]) -> CanonicalKuraEvidenceResult<()>,
-    ) -> CanonicalKuraEvidenceResult<()> {
-        self.begin()?;
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
-        {
-            let _ = (requests, consume);
-            Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
-        }
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
-        {
-            evidence_require(
-                !self.scanned
-                    && requests.len() as u64 <= self.limits.max_merge_frames
-                    && requests.len() as u64
-                        <= self.limits.last_height - self.limits.first_height + 1,
-                "request count or repeated scan",
-            )?;
-            let mut previous_height = 0;
-            let mut previous_epoch = 0;
-            let mut reference_bytes = 0_u64;
-            for request in requests {
-                let height = request.carrier_height;
-                evidence_require(
-                    height >= self.limits.first_height
-                        && height <= self.limits.last_height
-                        && height > previous_height
-                        && request.reference.epoch_id > previous_epoch
-                        && request.reference.merge_qc.carrier_height == height,
-                    "ordered exact merge requests",
-                )?;
-                let size = norito::canonical_frame_len(&request.reference)
-                    .map_err(|_| CanonicalKuraEvidenceError::Invalid("reference encoding"))?;
-                reference_bytes = reference_bytes.checked_add(size as u64).ok_or(
-                    CanonicalKuraEvidenceError::Invalid("reference size overflow"),
-                )?;
-                evidence_require(
-                    reference_bytes <= self.limits.max_output_bytes,
-                    "request allocation bound",
-                )?;
-                self.requested_references
-                    .insert(height, Self::reference_digest(&request.reference)?);
-                previous_height = height;
-                previous_epoch = request.reference.epoch_id;
-            }
-            let mut offset = 0_u64;
-            let mut found = 0_usize;
-            let mut last_carrier = 0_u64;
-            while offset < self.sources.merge.len() {
-                evidence_require(
-                    self.merge_frames < self.limits.max_merge_frames,
-                    "merge frame count",
-                )?;
-                let length_bytes = self.sources.merge.read(offset, 4)?;
-                let length = u32::from_le_bytes(
-                    length_bytes
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| CanonicalKuraEvidenceError::Invalid("merge length prefix"))?,
-                ) as usize;
-                evidence_require(
-                    length > 0 && length <= MAX_MERGE_LEDGER_ENTRY_BYTES,
-                    "merge frame byte bound",
-                )?;
-                let payload = offset
-                    .checked_add(4)
-                    .ok_or(CanonicalKuraEvidenceError::Invalid("merge offset overflow"))?;
-                let bytes = self.sources.merge.read(payload, length as u64)?;
-                let entry = norito::with_decode_limits(self.limits.decode_limits(length), || {
-                    MergeLedgerEntry::decode_all(&mut bytes.as_slice())
-                })
-                .map_err(|_| CanonicalKuraEvidenceError::Invalid("merge exact decode"))?;
-                let canonical_size = norito::canonical_frame_len(&entry)
-                    .map_err(|_| CanonicalKuraEvidenceError::Invalid("merge canonical length"))?;
-                evidence_require(
-                    entry.has_current_version() && canonical_size <= MAX_MERGE_LEDGER_ENTRY_BYTES,
-                    "merge version or canonical frame bound",
-                )?;
-                evidence_require(entry.encode() == bytes, "merge codec canonicality")?;
-                evidence_require(
-                    entry.epoch_id == self.merge_frames + 1
-                        && entry.merge_qc.carrier_height > last_carrier
-                        && entry.merge_qc.carrier_height <= self.marker.count,
-                    "contiguous merge epochs and carriers",
-                )?;
-                let carrier = entry.merge_qc.carrier_height;
-                if carrier >= self.limits.first_height && carrier <= self.limits.last_height {
-                    let request = requests
-                        .get(found)
-                        .ok_or(CanonicalKuraEvidenceError::Invalid("missing merge request"))?;
-                    evidence_require(
-                        request.carrier_height == carrier
-                            && request.reference.matches_entry(&entry),
-                        "merge request identity",
-                    )?;
-                    let canonical = norito::encode_canonical(&entry).map_err(|_| {
-                        CanonicalKuraEvidenceError::Invalid("merge canonical encoding")
-                    })?;
-                    evidence_require(
-                        canonical.len() == canonical_size,
-                        "merge canonical size changed",
-                    )?;
-                    self.add_output(canonical.len())?;
-                    consume(carrier, &entry, &canonical)?;
-                    self.check_sources()?;
-                    found += 1;
-                }
-                offset = payload
-                    .checked_add(length as u64)
-                    .ok_or(CanonicalKuraEvidenceError::Invalid("merge end overflow"))?;
-                self.merge_frames += 1;
-                last_carrier = carrier;
-            }
-            evidence_require(found == requests.len(), "unfulfilled merge requests")?;
-            self.check_sources()?;
-            self.scanned = true;
-            self.poisoned = false;
-            Ok(())
-        }
-    }
-    /// Consume this owner only after the complete carrier interval and complete merge scan.
-    /// # Errors
-    /// Fails on a missing phase, caught earlier error/panic, reference mismatch, or final source drift.
+    /// Fails on missing carriers, caught earlier errors or panics, or final source drift.
     pub fn finish(mut self) -> CanonicalKuraEvidenceResult<CanonicalKuraEvidenceComplete> {
         self.begin()?;
         evidence_require(
-            self.next_height == self.limits.last_height + 1 && self.scanned,
+            self.next_height == self.limits.last_height + 1,
             "incomplete evidence phases",
-        )?;
-        evidence_require(
-            self.carrier_references == self.requested_references,
-            "carrier and requested merge references differ",
         )?;
         self.check_sources()?;
         Ok(CanonicalKuraEvidenceComplete {
@@ -581,7 +426,6 @@ impl CanonicalKuraEvidenceReader {
             sources: self.sources,
             committed_height: self.marker.count,
             carrier_count: self.limits.last_height - self.limits.first_height + 1,
-            merge_frames: self.merge_frames,
             output_bytes: self.output_bytes,
         })
     }
@@ -882,18 +726,11 @@ mod canonical_evidence_read_only_fs {
         pub(super) index: Source,
         pub(super) hashes: Source,
         pub(super) marker: Source,
-        pub(super) merge: Source,
     }
     impl Sources {
         pub(super) fn ensure_publication_ancestry(&self, ancestry: &[(u64, u64)]) -> Result<()> {
             self.check()?;
-            for source in [
-                &self.data,
-                &self.index,
-                &self.hashes,
-                &self.marker,
-                &self.merge,
-            ] {
+            for source in [&self.data, &self.index, &self.hashes, &self.marker] {
                 let root = source
                     .chain
                     .last()
@@ -908,7 +745,6 @@ mod canonical_evidence_read_only_fs {
         }
         pub(super) fn open(
             store: &Path,
-            merge: &Path,
             limits: Limits,
             mut hook: impl FnMut(&Path),
         ) -> Result<Self> {
@@ -936,18 +772,11 @@ mod canonical_evidence_read_only_fs {
                 limits.owner_uid,
                 &mut hook,
             )?;
-            let merge = Source::open(
-                merge,
-                limits.max_merge_log_bytes,
-                limits.owner_uid,
-                &mut hook,
-            )?;
             let sources = Self {
                 data,
                 index,
                 hashes,
                 marker,
-                merge,
             };
             let mut objects = std::collections::BTreeSet::new();
             for source in [
@@ -955,7 +784,6 @@ mod canonical_evidence_read_only_fs {
                 &sources.index,
                 &sources.hashes,
                 &sources.marker,
-                &sources.merge,
             ] {
                 require(
                     objects.insert((source.identity.dev, source.identity.ino)),
@@ -966,13 +794,7 @@ mod canonical_evidence_read_only_fs {
             Ok(sources)
         }
         pub(super) fn check(&self) -> Result<()> {
-            for source in [
-                &self.data,
-                &self.index,
-                &self.hashes,
-                &self.marker,
-                &self.merge,
-            ] {
+            for source in [&self.data, &self.index, &self.hashes, &self.marker] {
                 source.check()?;
             }
             Ok(())

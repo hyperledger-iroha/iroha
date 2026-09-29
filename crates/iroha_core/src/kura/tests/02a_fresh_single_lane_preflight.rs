@@ -72,9 +72,17 @@ fn fresh_single_lane_constructor_provisions_a_missing_canonical_root() {
         .expect("initialize canonical fresh Kura");
     assert_eq!(block_count, 0);
     assert!(store_root.is_dir());
-    let (canonical_blocks, canonical_merge) = Kura::canonical_storage_paths(&store_root);
+    let canonical_blocks = Kura::canonical_storage_path(&store_root);
     assert!(canonical_blocks.is_dir());
-    assert!(canonical_merge.is_file());
+    for name in [
+        DATA_FILE_NAME,
+        INDEX_FILE_NAME,
+        HASHES_FILE_NAME,
+        COUNT_FILE_NAME,
+    ] {
+        assert!(canonical_blocks.join(name).is_file());
+    }
+    assert!(!store_root.join("merge_ledger").exists());
     assert!(
         _kura.lane_storage_entries.lock().is_empty(),
         "canonical startup grants no active lane authority"

@@ -19,7 +19,10 @@ COPY . /app/
 
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
-ARG FEATURES="external-software-signer-bin"
+ARG FEATURES="external-software-signer-bin,irohad/ivm-cuda"
+ARG IVM_CUDA_TRUSTED_KEY_SHA256
+ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}
+ENV IVM_CUDA_PTX_MODE=bundled
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
@@ -40,6 +43,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"; \
         done; \
     else \
+        case ",${FEATURES}," in *,irohad/ivm-cuda,*) ;; *) echo 'Shipping daemon requires irohad/ivm-cuda' >&2; exit 1 ;; esac; \
+        test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64; \
+        case "${IVM_CUDA_TRUSTED_KEY_SHA256}" in *[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000) exit 1 ;; esac; \
         regular_bins=""; \
         build_kagami=0; \
         for bin in ${BINARIES}; do \

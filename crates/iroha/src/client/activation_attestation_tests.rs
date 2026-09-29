@@ -5,166 +5,20 @@ fn current_finality_fixture() -> (
     iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier,
     KeyPair,
 ) {
-    use iroha_data_model::sumeragi_finality::*;
-    let mut keys: Vec<_> = (71..75)
-        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-        .collect();
-    keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
-    let validators: Vec<_> = keys
-        .iter()
-        .map(|key| FinalityValidator {
-            public_key: key.public_key().clone(),
-            proof_of_possession: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
-        })
-        .collect();
-    // Public multiples 1..4 of (-1, 2) on the two Pasta curves, shared with
-    // DataModel's authenticated epoch fixtures; these are public test points.
-    let pallas = [
-        "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
-        "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
-        "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
-        "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
-    ];
-    let vesta = [
-        "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
-        "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
-        "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
-        "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
-    ];
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
-        isi::{
-            InstructionBox, RegisterPeerWithPop, SetParameter,
-            kagemusha_v1::{
-                KagemushaMintFinalityAuthorityGenerationTemplateV1,
-                KagemushaMintFinalityGenesisParametersV1, KagemushaMintFinalityValidatorKeysV1,
-            },
-        },
-        parameter::{
-            CustomParameter, Parameter,
-            system::{
-                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
-                consensus_metadata,
-            },
-        },
-        transaction::FeePaymentIntent,
+        sumeragi_finality::SumeragiFinalityVerifier,
+        testing::native_finality::NativeFinalityFixture,
     };
-    let metadata = ConsensusHandshakeMetadata {
-        mode: SumeragiConsensusMode::Permissioned,
-        block_cadence_ms: NonZeroU64::new(1000).unwrap(),
-        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
-        consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
-        kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
-            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                version: 1,
-                generation: 0,
-                validators: validators
-                    .iter()
-                    .enumerate()
-                    .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                        validator: iroha_model_base::peer::PeerId::new(
-                            validator.public_key.clone(),
-                        ),
-                        eq_proof_public_key: hex::decode(pallas[index])
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                        ep_proof_public_key: hex::decode(vesta[index]).unwrap().try_into().unwrap(),
-                    })
-                    .collect(),
-            },
-        },
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-    };
-    let mut instructions = validators
-        .iter()
-        .map(|validator| {
-            InstructionBox::from(RegisterPeerWithPop::new(
-                iroha_model_base::peer::PeerId::new(validator.public_key.clone()),
-                validator.proof_of_possession.clone(),
-            ))
-        })
-        .collect::<Vec<_>>();
-    instructions.push(
-        SetParameter::new(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            iroha_primitives::json::Json::new(metadata),
-        )))
-        .into(),
-    );
-    let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
-    let mut transaction = TransactionBuilder::new_genesis(
-        AccountId::new(authority.public_key().clone()),
-        FeePaymentIntent::authority(vec![], None),
-    )
-    .with_instructions(instructions);
-    transaction.set_creation_time(Duration::from_millis(1));
-    let transaction = transaction.sign(authority.private_key());
-    let genesis =
-        SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap();
-    let epoch = genesis_epoch(&genesis).unwrap();
-    let mut block = genesis.clone();
-    let output = client_fixture_network_output(
-        0,
-        Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
-    );
-    attach_client_fixture_outputs(&mut block, vec![output], 1);
-    let params = ChainParamsRecord {
-        block_time_ms: 1000,
-        payload_retry_interval_ms: 1000,
-        exec_budget_ms: 100,
-        apply_budget_ms: 100,
-        max_block_bytes: 1024 * 1024,
-        epoch_length_blocks: 7200,
-    };
-    let slot = |height| {
-        ScheduledSlot::Ready(ScheduledConfig {
-            height,
-            epoch: epoch.clone(),
-            params,
-        })
-    };
-    let (len, hash) = block.executed_block_wire_identity().unwrap();
-    let (native_contexts, ordinary_root) =
-        NativeContextsProof::empty_for_testing(epoch.network_id, 1);
-    let result = ExecutionResultCommitment {
-        height: 1,
-        execution: ExecutionCommitment {
-            parent_state_root: Hash::new(b"parent"),
-            post_state_root: ordinary_root,
-            ordinary_writes_root: ordinary_root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
-            executed_block_wire_len: len,
-            executed_block_wire_hash: hash,
-            transaction_input_commitment: block.network_input_merkle_commitment(),
-            transaction_output_commitment: block.output_merkle_commitment(),
-        },
-        schedule: ScheduleOutcome {
-            height: 1,
-            current: epoch.clone(),
-            boundary: None,
-            next: slot(2),
-            after_next: slot(3),
-        },
-        beacon: None,
-        native_contexts,
-    };
-    block.set_commit_certificate(Some(
-        iroha_data_model::block::CommitCertificate::from_untrusted_parts(
-            vec![],
-            vec![],
-            result.preimage().unwrap(),
-        ),
-    ));
-    let proof = SumeragiFinalityProof {
-        block_header: block.header(),
-        block_wire: block.encode_wire().unwrap(),
-        committee: validators.clone(),
-    };
+    let native = NativeFinalityFixture::start("sdk-current-finality");
+    let proof = native.genesis_proof().clone();
     let verifier =
-        SumeragiFinalityVerifier::new(&genesis, "sdk-current-finality", validators).unwrap();
-    (proof, verifier, keys.remove(0))
+        SumeragiFinalityVerifier::new(native.genesis(), native.chain_id(), proof.committee.clone())
+            .unwrap();
+    let node = (1..=4)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .find(|key| key.public_key() == &proof.committee[0].public_key)
+        .unwrap();
+    (proof, verifier, node)
 }
 fn current_finality_client() -> Client {
     let mut client = client_with_base_url(base_url());
@@ -187,6 +41,9 @@ fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::Sumeragi
         genesis_block_hash: proof.block_header.hash(),
         genesis_finality_proof: proof.clone(),
         status: iroha_data_model::sumeragi::SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"config"),
+            beacon_horizon: None,
             instance: verifier.instance().0,
             height: 2,
             view: 0,
@@ -949,4 +806,72 @@ fn current_genesis_readiness_authenticates_selected_root_and_instance() {
         result.is_err(),
         "valid node signature cannot substitute the selected consensus instance"
     );
+}
+
+#[test]
+fn native_client_continues_real_h2_quorum_and_keeps_checkpoint_on_rejection() {
+    use iroha_data_model::{
+        block::CommitCertificate, sumeragi_finality::SumeragiFinalityVerifier,
+        testing::native_finality::NativeFinalityFixture,
+    };
+    // Real BLS certificates over protocol fixture outputs; no World execution claim.
+    let native = NativeFinalityFixture::new();
+    let first = native.genesis_proof().clone();
+    let second = native.latest().clone();
+    let mut verifier =
+        SumeragiFinalityVerifier::new(native.genesis(), native.chain_id(), first.committee.clone())
+            .unwrap();
+    let mut client = client_with_base_url(base_url());
+    client.network_id = native.network_id();
+    let returned = capture_request(norito_response(StatusCode::OK, &first), |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_next_sumeragi_finality_proof(first.block_header.height(), &mut verifier)
+    })
+    .0
+    .unwrap();
+    assert_eq!(returned, first);
+    let pinned = verifier
+        .export_checkpoint(&first)
+        .unwrap()
+        .encode_canonical()
+        .unwrap();
+    let mut altered = second.clone();
+    let mut block = decode_framed_signed_block(&altered.block_wire).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let mut qc: iroha_sumeragi::message::Qc =
+        norito::decode_canonical(certificate.commit_qc()).unwrap();
+    qc.agg_sig.0[0] ^= 1;
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        certificate.consensus_header().to_vec(),
+        norito::encode_canonical(&qc).unwrap(),
+        certificate.result_preimage().to_vec(),
+    )));
+    altered.block_wire = block.encode_wire().unwrap();
+    assert!(
+        capture_request(norito_response(StatusCode::OK, &altered), |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_next_sumeragi_finality_proof(second.block_header.height(), &mut verifier)
+        })
+        .0
+        .is_err()
+    );
+    assert_eq!(
+        verifier
+            .export_checkpoint(&first)
+            .unwrap()
+            .encode_canonical()
+            .unwrap(),
+        pinned
+    );
+    let returned = capture_request(norito_response(StatusCode::OK, &second), |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_next_sumeragi_finality_proof(second.block_header.height(), &mut verifier)
+    })
+    .0
+    .unwrap();
+    assert_eq!(returned, second);
+    assert_eq!(verifier.export_checkpoint(&second).unwrap().height(), 2);
 }

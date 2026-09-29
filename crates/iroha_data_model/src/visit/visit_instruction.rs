@@ -8,7 +8,6 @@ use crate::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
             CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
             PauseFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
-            RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators,
             StageFeeSponsorProgramRevision, UnenrollFeeSponsorBeneficiary,
             WithdrawFeeSponsorProgram,
         },
@@ -370,13 +369,6 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
         visitor.visit_activate_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExitPublicLaneValidator>() {
         visitor.visit_exit_public_lane_validator(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<SetLaneRelayEmergencyValidators>()
-    {
-        visitor.visit_set_lane_relay_emergency_validators(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterVerifiedLaneRelay>() {
-        visitor.visit_register_verified_lane_relay(v);
     } else if let Some(v) = isi
         .as_any()
         .downcast_ref::<RegisterVerifiedFeeSponsorVaultAllocation>()
@@ -850,8 +842,6 @@ macro_rules! instruction_visitors {
             visit_rebind_public_lane_validator_peer(&RebindPublicLaneValidatorPeer),
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
-            visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
-            visit_register_verified_lane_relay(&RegisterVerifiedLaneRelay),
             visit_register_verified_fee_sponsor_vault_allocation(&$crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation),
             visit_create_fee_sponsor_program(&$crate::isi::nexus::CreateFeeSponsorProgram),
             visit_stage_fee_sponsor_program_revision(&$crate::isi::nexus::StageFeeSponsorProgramRevision),

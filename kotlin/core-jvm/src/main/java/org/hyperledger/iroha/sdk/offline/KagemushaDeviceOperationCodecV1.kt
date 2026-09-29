@@ -387,7 +387,7 @@ sealed class KagemushaDeviceSenderRecoverySelectorV1(@JvmField val ordinal: Int)
     }
 }
 
-/** Compact Core-authenticated redemption settlement selected by sender operation 12. */
+/** Compact redemption selector for sender operation 12; decoding grants no release authority. */
 class KagemushaDeviceRedemptionTerminalReceiptV1(
     @JvmField val version: Int = VERSION,
     networkId: ByteArray,
@@ -398,7 +398,9 @@ class KagemushaDeviceRedemptionTerminalReceiptV1(
     reserveReceiptDigest: ByteArray,
     authenticatedStatusDigest: ByteArray,
     @JvmField val finalizedBlockHeight: Long,
-    heightContextId: ByteArray,
+    finalizedBlockHash: ByteArray,
+    finalizedCoreHash: ByteArray,
+    finalizedResult: ByteArray,
 ) {
     private val network = nonzeroDigest(networkId, "network_id")
     private val operation = nonzeroDigest(operationId, "operation_id")
@@ -407,11 +409,12 @@ class KagemushaDeviceRedemptionTerminalReceiptV1(
     private val envelope = nonzeroDigest(envelopeDigest, "envelope_digest")
     private val reserveReceipt = nonzeroDigest(reserveReceiptDigest, "reserve_receipt_digest")
     private val status = nonzeroDigest(authenticatedStatusDigest, "authenticated_status_digest")
-    private val heightContext = nonzeroDigest(heightContextId, "height_context_id")
+    private val blockHash = nonzeroDigest(finalizedBlockHash, "finalized_block_hash")
+    private val coreHash = nonzeroDigest(finalizedCoreHash, "finalized_core_hash")
+    private val result = nonzeroDigest(finalizedResult, "finalized_result")
 
     init {
-        require(version == VERSION && finalizedBlockHeight != 0L)
-        require(heightContext[31].toInt() and 1 == 1) { "height_context_id is not a marked hash" }
+        require(version == VERSION && finalizedBlockHeight != 0L && finalizedBlockHeight != 1L)
     }
 
     fun networkId(): ByteArray = network.copyOf()
@@ -421,7 +424,9 @@ class KagemushaDeviceRedemptionTerminalReceiptV1(
     fun envelopeDigest(): ByteArray = envelope.copyOf()
     fun reserveReceiptDigest(): ByteArray = reserveReceipt.copyOf()
     fun authenticatedStatusDigest(): ByteArray = status.copyOf()
-    fun heightContextId(): ByteArray = heightContext.copyOf()
+    fun finalizedBlockHash(): ByteArray = blockHash.copyOf()
+    fun finalizedCoreHash(): ByteArray = coreHash.copyOf()
+    fun finalizedResult(): ByteArray = result.copyOf()
 }
 
 /** Closed terminal receipt admitted by sender operation 12. */
@@ -628,7 +633,8 @@ object KagemushaDeviceOperationCodecV1 {
         frame("iroha.kagemusha.device.v1.redemption-terminal-receipt", 8, fields(
             u16(value.version), value.networkId(), digestArray(value.operationId()), digestArray(value.redemptionId()),
             digestArray(value.terminalNullifier()), digestArray(value.envelopeDigest()), digestArray(value.reserveReceiptDigest()),
-            digestArray(value.authenticatedStatusDigest()), u64(value.finalizedBlockHeight), fields(value.heightContextId()),
+            digestArray(value.authenticatedStatusDigest()), u64(value.finalizedBlockHeight),
+            digestArray(value.finalizedBlockHash()), digestArray(value.finalizedCoreHash()), digestArray(value.finalizedResult()),
         ), 1024)
 
     internal fun decodeCoordinatorRedemptionReceipt(bytes: ByteArray): KagemushaDeviceRedemptionTerminalReceiptV1 {
@@ -637,7 +643,7 @@ object KagemushaDeviceOperationCodecV1 {
         val value = KagemushaDeviceRedemptionTerminalReceiptV1(
             reader.u16Field(), reader.exactField(32), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()),
             decodeDigestArray(reader.field()), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()),
-            reader.u64Field(), decodeHeightContext(reader.field()),
+            reader.u64Field(), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()),
         )
         reader.finish()
         require(bytes.contentEquals(encodeCoordinatorRedemptionReceipt(value))) { "noncanonical redemption receipt archive" }
@@ -1268,7 +1274,9 @@ object KagemushaDeviceOperationCodecV1 {
                 digestArray(value.receipt.reserveReceiptDigest()),
                 digestArray(value.receipt.authenticatedStatusDigest()),
                 u64(value.receipt.finalizedBlockHeight),
-                fields(value.receipt.heightContextId()),
+                digestArray(value.receipt.finalizedBlockHash()),
+                digestArray(value.receipt.finalizedCoreHash()),
+                digestArray(value.receipt.finalizedResult()),
             ),
         )
     }
@@ -1428,7 +1436,9 @@ object KagemushaDeviceOperationCodecV1 {
                     decodeDigestArray(receipt.field()),
                     decodeDigestArray(receipt.field()),
                     receipt.u64Field(),
-                    decodeHeightContext(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
                 )
                 receipt.finish()
                 KagemushaDeviceSenderTerminalReceiptV1.RedemptionSettlement(value)
@@ -1651,11 +1661,6 @@ private fun decodeDigestArray(payload: ByteArray): ByteArray {
     require(payload.size == 64) { "invalid digest alias payload size" }
     val reader = DeviceReader(payload)
     return ByteArray(32) { reader.exactField(1)[0] }.also { reader.finish() }
-}
-
-private fun decodeHeightContext(payload: ByteArray): ByteArray {
-    val reader = DeviceReader(payload)
-    return reader.exactField(32).also { reader.finish() }
 }
 
 private fun pendingCreditWatermark(value: KagemushaPendingCreditWatermarkV1): ByteArray = fields(

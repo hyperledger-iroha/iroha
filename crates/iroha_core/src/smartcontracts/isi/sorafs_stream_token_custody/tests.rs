@@ -6,13 +6,13 @@ use crate::{
     state::{State, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
     block::{BlockHeader, builder::BlockBuilder},
     permission::Permissions,
 };
-use iroha_sccp::{SCCP_TAIRA_CHAIN_ID_V1, sccp_taira_finality_network_id_v1};
 use sorafs_manifest::signer::{
     custody::{
         SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyAuthorityV1,
@@ -52,6 +52,8 @@ fn fixture_world(authority: &AccountId, other: &AccountId, provider: ProviderId)
     world
 }
 fn fixture() -> Fixture {
+    // Select a disposable signed-genesis scope; these mutation tests grant no finality.
+    let native_scope = NativeFinalityFixture::start("sorafs-stream-token-custody-fixture");
     let authority = AccountId::new(key(1).public_key().clone());
     let other = AccountId::new(key(2).public_key().clone());
     let provider = ProviderId::new([3; 32]);
@@ -59,8 +61,8 @@ fn fixture() -> Fixture {
         fixture_world(&authority, &other, provider),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
-        sccp_taira_finality_network_id_v1(),
+        native_scope.chain_id().parse().expect("fixture chain"),
+        native_scope.network_id(),
     );
     let attester = key(7);
     let policy = SignerCustodyPolicyV1 {
@@ -130,7 +132,6 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
         )
         .expect("complete fixture block outputs");

@@ -1008,6 +1008,95 @@ pub enum Evidence {
     ConflictingCertificates(Qc, Qc),
 }
 
+/// Maximum canonical native evidence frame. Admission also applies a per-block aggregate
+/// bound; this limit is enforced before decoding any nested proof or attachment.
+pub const MAX_EVIDENCE_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+impl Evidence {
+    /// Encode this native signed report as one exact canonical Norito V1 frame.
+    /// This checks bounded structural shape, not authority or signatures.
+    ///
+    /// # Errors
+    /// Rejects oversized graphs, proposal payloads, or canonical serialization failure.
+    pub fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        self.check_limits()?;
+        let len = norito::canonical_frame_len(self)
+            .map_err(|error| CodecError::Norito(error.to_string()))?;
+        if len > MAX_EVIDENCE_FRAME_BYTES {
+            return Err(CodecError::TooLarge {
+                len,
+                max: MAX_EVIDENCE_FRAME_BYTES,
+            });
+        }
+        norito::encode_canonical(self).map_err(|error| CodecError::Norito(error.to_string()))
+    }
+
+    /// Decode exactly one bounded canonical native evidence frame. The frame's declared
+    /// schema and fixed V1 flags are mandatory. Decoding grants no signing or stake authority.
+    ///
+    /// # Errors
+    /// Rejects oversized, malformed, noncanonical, truncated or suffixed frames and invalid
+    /// bounded proof structure before any application consults a claimed signer.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        if bytes.len() > MAX_EVIDENCE_FRAME_BYTES {
+            return Err(CodecError::TooLarge {
+                len: bytes.len(),
+                max: MAX_EVIDENCE_FRAME_BYTES,
+            });
+        }
+        let value: Self = norito::decode_canonical(bytes)
+            .map_err(|error| CodecError::Norito(error.to_string()))?;
+        value.check_limits()?;
+        Ok(value)
+    }
+
+    /// Check native artifact bounds without accepting their claimed authority context.
+    /// Evidence never transports a proposal body: only the original signed header and
+    /// justification can establish the native signed-content offences.
+    ///
+    /// # Errors
+    /// A nested native proof exceeds its protocol bound or includes an unsigned payload.
+    pub fn check_limits(&self) -> Result<(), CodecError> {
+        let proposal = |value: &Proposal| {
+            if value.payload.is_some() {
+                return Err(CodecError::Limit("evidence proposal payload"));
+            }
+            check_proposal(value)
+        };
+        match self {
+            Self::ProposalEquivocation(first, second) => {
+                proposal(first)?;
+                proposal(second)
+            }
+            Self::VoteEquivocation(first, second) => {
+                check_attestation(
+                    first
+                        .attestation
+                        .as_ref()
+                        .map(|value| value.signature.as_slice()),
+                )?;
+                check_attestation(
+                    second
+                        .attestation
+                        .as_ref()
+                        .map(|value| value.signature.as_slice()),
+                )
+            }
+            Self::TimeoutEquivocation(first, second) => {
+                check_opt_qc(first.high_pqc.as_ref())?;
+                check_opt_qc(second.high_pqc.as_ref())
+            }
+            Self::InvalidProposal {
+                proposal: value, ..
+            } => proposal(value),
+            Self::ConflictingCertificates(first, second) => {
+                check_qc(first)?;
+                check_qc(second)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2011,5 +2100,37 @@ mod tests {
             message.check_limits(),
             Err(CodecError::Limit("empty application control"))
         );
+    }
+    #[test]
+    fn native_evidence_frame_is_exact_and_bounded() {
+        let report = Evidence::ConflictingCertificates(
+            sample_qc(VoteKind::Commit, 0),
+            sample_qc(VoteKind::Commit, 1),
+        );
+        let frame = report.encode().unwrap();
+        assert_eq!(Evidence::decode(&frame).unwrap(), report);
+        let mut suffixed = frame.clone();
+        suffixed.push(0);
+        assert!(Evidence::decode(&suffixed).is_err());
+        assert!(Evidence::decode(&frame[..frame.len() - 1]).is_err());
+        assert!(Evidence::decode(&vec![0; MAX_EVIDENCE_FRAME_BYTES + 1]).is_err());
+        let wire = WireMessage::Qc(sample_qc(VoteKind::Commit, 0))
+            .encode()
+            .unwrap();
+        assert!(
+            Evidence::decode(&wire).is_err(),
+            "message schema is not evidence schema"
+        );
+    }
+
+    #[test]
+    fn native_evidence_rejects_oversized_certificate_shape_before_encoding() {
+        let mut certificate = sample_qc(VoteKind::Commit, 0);
+        certificate.signers = Bitmap::new((MAX_BITMAP_BYTES + 1) * 8);
+        let report = Evidence::ConflictingCertificates(certificate, sample_qc(VoteKind::Commit, 1));
+        assert!(report.check_limits().is_err());
+        assert!(report.encode().is_err());
+        let bytes = norito::encode_canonical(&report).unwrap();
+        assert!(Evidence::decode(&bytes).is_err());
     }
 }

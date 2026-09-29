@@ -866,10 +866,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
             FeeRejectionCode, FeeSponsorEnrollmentKey, FeeSponsorNativeInstructionSelector,
             FeeSponsorProgramRevisionKey, FeeSponsorRuleSelector,
         },
-        transaction::{
-            FeePaymentIntent, TransactionAdmissionIntent, TransactionDomain,
-            signed::TransactionPayload,
-        },
+        transaction::{FeePaymentIntent, TransactionDomain, signed::TransactionPayload},
     };
     let fresh = |seed| {
         AccountId::new(
@@ -984,7 +981,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
             time_to_live_ms: NonZeroU64::new(60_000),
             nonce: None,
             fee_payment: FeePaymentIntent::sponsor(program_id.clone(), 1, Vec::new(), None),
-            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+
             metadata: Metadata::default(),
             attachments: None,
         };

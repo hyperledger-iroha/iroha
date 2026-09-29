@@ -424,7 +424,6 @@ pub(super) fn attach_outputs(
             Vec::new(),
             Default::default(),
             BTreeSet::new(),
-            Vec::new(),
             &iroha_data_model::block::output_budget::ExecutionOutputLimits {
                 max_outputs: 1024,
                 max_output_bytes: 1024 * 1024,

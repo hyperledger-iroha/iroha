@@ -352,6 +352,56 @@ fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
 }
 
 #[test]
+fn staking_and_reward_configuration_reject_registered_xor_lookalike() {
+    let state = setup_state();
+    let mut block = state.block(block_header_with_height(1));
+    let mut stx = block.transaction_for_callback_testing();
+    let (validator, _, _, committed_xor) = prepare_accounts(&mut stx);
+    let lookalike = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    assert_ne!(lookalike, committed_xor);
+    Register::asset_definition(AssetDefinition::numeric(
+        lookalike.clone(),
+        "XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap();
+    // An existing numeric asset with the same public name still has no network-currency
+    // authority. Both configuration entry points must resolve the exact committed identity.
+    for configured in [&committed_xor, &lookalike] {
+        stx.nexus.staking.stake_asset_id = configured.to_string();
+        stx.nexus.fees.fee_asset_id = configured.to_string();
+        let stake = stake_context(
+            &stx.world,
+            &stx.nexus.dataspace_catalog,
+            &stx.nexus.staking,
+            &validator,
+            stx.block_unix_timestamp_ms(),
+        );
+        let rewards = resolve_nexus_fee_asset_definition(&stx);
+        if configured == &committed_xor {
+            assert_eq!(stake.unwrap().asset_definition, committed_xor);
+            assert_eq!(rewards.unwrap(), committed_xor);
+        } else {
+            for error in [stake.unwrap_err(), rewards.unwrap_err()] {
+                assert!(error.to_string().contains("committed network XOR"));
+            }
+        }
+        assert_eq!(
+            stx.world
+                .sumeragi_npos_parameters()
+                .unwrap()
+                .xor_asset_definition_id,
+            committed_xor,
+        );
+    }
+}
+
+#[test]
 fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     let state = setup_state();
     let lane = LaneId::new(42);

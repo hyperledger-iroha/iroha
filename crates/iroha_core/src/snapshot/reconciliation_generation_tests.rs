@@ -1,5 +1,3 @@
-use crate::state::storage_transactions::TransactionsReadOnly;
-
 #[test]
 fn initial_snapshot_generation_owned_root_without_current_is_not_found() {
     let root = tempdir().expect("owned empty snapshot root");
@@ -212,6 +210,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         BlockCount(1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -254,436 +253,211 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     assert_eq!(reopened.block_hash_at_height(nonzero!(2_usize)), None);
 }
 #[tokio::test]
-async fn snapshot_read_validates_hashes_without_historical_block_body() {
-    let tmp_root = tempdir().unwrap();
-    let snapshot_store_dir = tmp_root.path().join("snapshot");
-    let kura_store_dir = tmp_root.path().join("kura");
-    let lane_config = LaneConfig::default();
-    let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
-        .expect("kura init");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let key_pair = checked_random_snapshot_keypair();
-    let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
-    let block2 =
-        signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-    let block3 =
-        signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
-    let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
-    let expected_network_id = state.network_id.clone();
-    store_complete_snapshot_commit_evidence_for_blocks(
-        &state,
-        &kura,
-        &[
-            Arc::clone(&block1),
-            Arc::clone(&block2),
-            Arc::clone(&block3),
-        ],
-    );
-    try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
-        .expect("snapshot write");
-    let lane_manifests = state.lane_manifests.read().clone();
-    drop(state);
-    drop(kura);
-    let (kura, block_count) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
-            .expect("kura reopen");
-    let historical_height = nonzero!(2_usize);
-    let payload_len = kura
-        .advertise_required_replicas_for_bench(historical_height)
-        .expect("historical payload length");
-    let freed = kura
-        .evict_block_bodies_for_bench(payload_len)
-        .expect("evict historical block body");
-    assert!(freed >= payload_len);
-    let historical_sidecar_path = Kura::canonical_storage_paths(&kura_store_dir)
-        .0
-        .join("da_blocks")
-        .join(format!("{:020}.norito", historical_height.get()));
-    assert!(
-        historical_sidecar_path.is_file(),
-        "expected evicted block sidecar at {}",
-        historical_sidecar_path.display()
-    );
-    std::fs::remove_file(&historical_sidecar_path).expect("remove historical sidecar");
-    assert!(
-        kura.block_hash_at_height(historical_height).is_some(),
-        "hash journal must still contain the historical block"
-    );
-    assert!(
-        kura.get_block(historical_height).is_none(),
-        "test fixture must make the historical block body unavailable"
-    );
-    let snapshot_state = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
+async fn signed_native_snapshot_cannot_replace_missing_historical_bodies() {
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let source = chain.kura();
+    let original_tip = source.block_hash_at_height(nonzero!(3_usize));
+    let original_path = Kura::canonical_storage_path(&source.store_root()).join("blocks.data");
+    let original_bytes = std::fs::read(&original_path).unwrap();
+    let target = Kura::blank_kura_for_testing();
+    let canonical = Kura::canonical_storage_path(&target.store_root());
+    let files = [
+        "blocks.data",
+        "blocks.index",
+        "blocks.hashes",
+        "blocks.count.norito",
+    ];
+    let before = files.map(|name| std::fs::read(canonical.join(name)).unwrap());
+    let root = tempdir().unwrap();
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(state, root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let pointer = std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
+    let error = try_read_snapshot(
+        &state.ivm_execution_budget(),
+        root.path(),
+        &target,
+        &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
-        block_count,
+        BlockCount(0),
         TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
+        key.public_key(),
+        &state.chain_id,
+        &state.network_id,
+        &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
         &crate::state::kagemusha_operation_indexes::default_budget(),
     )
-    .expect("snapshot read should validate historical hashes without block bodies");
+    .err()
+    .expect("a locally signed cache cannot replace original certified history");
+    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired));
+    assert_eq!(target.blocks_count(), 0);
+    assert_eq!(target.exact_durable_blocks_count().unwrap(), 0);
+    for height in 1..=3 {
+        let height = NonZeroUsize::new(height).unwrap();
+        assert!(target.block_hash_at_height(height).is_none());
+        assert!(target.get_block(height).is_none());
+        assert!(source.get_block(height).is_some());
+    }
+    for (name, bytes) in files.into_iter().zip(before) {
+        assert_eq!(std::fs::read(canonical.join(name)).unwrap(), bytes);
+    }
+    assert_eq!(source.block_hash_at_height(nonzero!(3_usize)), original_tip);
+    assert_eq!(std::fs::read(original_path).unwrap(), original_bytes);
     assert_eq!(
-        canonical_state_snapshot_bytes_for_tests(&snapshot_state),
-        expected_snapshot
+        std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
+        pointer
     );
 }
+
 #[tokio::test]
-async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journals() {
-    let tmp_root = tempdir().unwrap();
-    let snapshot_store_dir = tmp_root.path().join("snapshot");
-    let kura_store_dir = tmp_root.path().join("kura");
-    let lane_config = LaneConfig::default();
-    let mut kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
-        .expect("strict Kura init");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let signing_key = checked_random_snapshot_keypair();
-    let transaction = accepted_log_transaction("current");
-    let transaction_hash = transaction.hash_as_entrypoint();
-    let block = signed_block_after_transaction(transaction, None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let mut transaction_history = state.transactions.block();
-    transaction_history.insert_block_with_single_tx(transaction_hash, nonzero!(1_usize));
-    transaction_history
-        .commit()
-        .expect("commit snapshot transaction history fixture");
-    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[Arc::clone(&block)]);
-    try_write_snapshot(&state, &snapshot_store_dir, &signing_key, TEST_CHUNK_SIZE)
-        .expect("write current snapshot");
-    let expected_network_id = state.network_id.clone();
-    let lane_manifests = state.lane_manifests.read().clone();
-    drop(state);
-    drop(kura);
-
-    let merge_path = Kura::canonical_storage_paths(&kura_store_dir).1;
-    let query_index_path = kura_store_dir.join("query-index-status.norito");
-    let query_projection_path = kura_store_dir.join("query-projection-checkpoint.norito");
+async fn emergency_fast_rejects_native_snapshot_before_world_or_journal_restore() {
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let root = tempdir().unwrap();
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(state, root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let fast_kura = Kura::blank_kura_for_testing_in_emergency_fast_mode();
+    let read = |network: &NetworkId| {
+        try_read_snapshot(
+            &state.ivm_execution_budget(),
+            root.path(),
+            &fast_kura,
+            &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
+            LiveQueryStore::start_test,
+            BlockCount(0),
+            TEST_CHUNK_SIZE,
+            key.public_key(),
+            &state.chain_id,
+            network,
+            &state.zk_snapshot(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+        )
+        .err()
+        .expect("Fast manifest cannot authorize committed World recovery")
+    };
+    let journal_paths = [
+        "query-index-status.norito",
+        "query-projection-checkpoint.norito",
+    ]
+    .map(|name| fast_kura.store_root().join(name));
     let deferred_bytes = b"left for Strict recovery";
-    std::fs::write(&merge_path, deferred_bytes).expect("forge deferred merge journal");
-    std::fs::write(&query_index_path, deferred_bytes).expect("forge deferred query-index journal");
-    std::fs::write(&query_projection_path, deferred_bytes)
-        .expect("forge deferred query-projection journal");
-
-    kura_config.init_mode = iroha_config::kura::InitMode::Fast;
-    let (fast_kura, block_count) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
-            .expect("Fast Kura open must leave auxiliary journals deferred");
+    for path in &journal_paths {
+        std::fs::write(path, deferred_bytes).unwrap();
+    }
+    let canonical = Kura::canonical_storage_path(&fast_kura.store_root());
+    let files = [
+        "blocks.data",
+        "blocks.index",
+        "blocks.hashes",
+        "blocks.count.norito",
+    ];
+    let before = files.map(|name| std::fs::read(canonical.join(name)).unwrap());
+    let pointer = std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(0));
     SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| passes.set(0));
     SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| clones.set(0));
-    let restored = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .expect("Fast mode must restore its required current snapshot");
-    SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
-        assert_eq!(
-            passes.get(),
-            0,
-            "Fast restore must never read or hash snapshot.data"
-        );
-    });
-    SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| {
-        assert_eq!(
-            passes.get(),
-            0,
-            "Fast restore must defer Merkle, resource, and WSV validation"
-        );
-    });
-    SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| {
-        assert_eq!(
-            clones.get(),
-            0,
-            "Fast restore must bind height and tip without cloning the block-hash journal"
-        );
-    });
-    assert_eq!(restored.committed_height(), 1);
-    assert_eq!(
-        restored.latest_block_hash_fast(),
-        Some(block.hash()),
-        "Fast State must expose the zero-copy Kura hash mapping at its exact tip"
-    );
-    assert!(
-        restored
-            .transactions
-            .view()
-            .get(&transaction_hash)
-            .is_none(),
-        "Fast restore must discard the disabled transaction-membership history"
-    );
-    let state_view = restored.view();
-    let unbounded_blocks = crate::smartcontracts::ValidQuery::execute(
-        iroha_data_model::query::block::prelude::FindBlocks,
-        iroha_data_model::query::dsl::CompoundPredicate::PASS,
-        &state_view,
-    )
-    .err()
-    .expect("Fast mode must reject a full block-history materialization");
     assert!(matches!(
-        unbounded_blocks,
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+        read(&state.network_id),
+        TryReadError::NativeExecutionReplayRequired
     ));
-    let unbounded_transactions = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-        iroha_data_model::query::dsl::CompoundPredicate::PASS,
-        &state_view,
-    )
-    .err()
-    .expect("Fast mode must reject a full transaction-history materialization");
-    assert!(matches!(
-        unbounded_transactions,
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
-    ));
-    let bounded_blocks = crate::smartcontracts::ValidQuery::execute(
-        iroha_data_model::query::block::prelude::FindBlocks,
-        iroha_data_model::query::dsl::CompoundPredicate::<
-            iroha_data_model::block::SignedBlock,
-        >::build(|predicate| predicate.equals("height", 1_u64)),
-        &state_view,
-    )
-    .expect("an explicit bounded Fast block query remains available")
-    .collect::<Vec<_>>();
-    assert_eq!(bounded_blocks.len(), 1);
-    for path in [&merge_path, &query_index_path, &query_projection_path] {
-        assert_eq!(
-            std::fs::read(path).expect("deferred journal remains readable"),
-            deferred_bytes,
-            "Fast snapshot restore must not read-repair or rewrite {}",
-            path.display()
-        );
+    // Same-sized unread payloads and Merkle sidecars cannot turn refusal into State authority.
+    for artifact in [SNAPSHOT_FILE_NAME, SNAPSHOT_MERKLE_FILE_NAME] {
+        let path = current_generation_artifact(root.path(), artifact);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.is_empty());
+        std::fs::write(&path, vec![b'!'; bytes.len()]).unwrap();
+        assert!(matches!(
+            read(&state.network_id),
+            TryReadError::NativeExecutionReplayRequired
+        ));
+        std::fs::write(path, bytes).unwrap();
     }
-
-    let payload_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_FILE_NAME);
-    let payload_bytes = std::fs::read(&payload_path).expect("read deferred snapshot payload");
-    assert!(
-        !payload_bytes.is_empty(),
-        "snapshot fixture must be non-empty"
-    );
-    std::fs::write(&payload_path, vec![b'!'; payload_bytes.len()])
-        .expect("replace deferred snapshot payload without changing its size");
-    let restored_without_reading_payload = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .expect("Fast restore must not consume same-size deferred snapshot.data contents");
-    assert_eq!(restored_without_reading_payload.committed_height(), 1);
-    std::fs::write(&payload_path, payload_bytes).expect("restore signed snapshot payload");
-
-    let merkle_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_MERKLE_FILE_NAME);
-    let merkle_len = std::fs::metadata(&merkle_path)
-        .expect("read Merkle metadata")
-        .len();
-    std::fs::write(
-        &merkle_path,
-        vec![b'!'; usize::try_from(merkle_len).expect("Merkle length fits usize")],
-    )
-    .expect("replace deferred Merkle contents");
-    let restored_without_reading_merkle = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .expect("Fast restore must bind but never read the deferred Merkle sidecar");
-    assert_eq!(restored_without_reading_merkle.committed_height(), 1);
-
-    let wrong_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
-    let network_error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &wrong_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("Fast restore must retain exact network identity binding"),
-        Err(error) => error,
-    };
+    let wrong_network = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
     assert!(matches!(
-        network_error,
+        read(&wrong_network),
         TryReadError::NetworkIdMismatch { .. }
     ));
-
-    let manifest_path =
-        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_FAST_MANIFEST_FILE_NAME);
-    let manifest_bytes = std::fs::read(&manifest_path).expect("read signed Fast manifest");
-    let mut forged_manifest =
-        decode_emergency_fast_manifest(&manifest_bytes, &manifest_path).expect("decode manifest");
-    forged_manifest.sccp_policy_hash[0] ^= 0x01;
-    let forged_manifest_bytes = forged_manifest.encode();
-    assert_eq!(
-        forged_manifest_bytes.len(),
-        manifest_bytes.len(),
-        "fixed-width policy mutation must preserve the manifest bound"
-    );
-    std::fs::write(&manifest_path, forged_manifest_bytes).expect("replace Fast manifest");
-    let manifest_signature_error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("Fast restore must authenticate every manifest field"),
-        Err(error) => error,
-    };
+    let manifest_path = current_generation_artifact(root.path(), SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let manifest_bytes = std::fs::read(&manifest_path).unwrap();
+    let mut forged = decode_emergency_fast_manifest(&manifest_bytes, &manifest_path).unwrap();
+    forged.sccp_policy_hash[0] ^= 1;
+    let forged_bytes = forged.encode();
+    assert_eq!(forged_bytes.len(), manifest_bytes.len());
+    std::fs::write(&manifest_path, &forged_bytes).unwrap();
     assert!(matches!(
-        manifest_signature_error,
+        read(&state.network_id),
         TryReadError::SignatureInvalid(_)
     ));
-    std::fs::write(&manifest_path, manifest_bytes).expect("restore signed Fast manifest");
-
-    let bundle_digest = current_snapshot_bundle_auth_digest(&snapshot_store_dir);
-    let wrong_signing_key = checked_random_snapshot_keypair();
-    let wrong_signature = Signature::try_new(wrong_signing_key.private_key(), &bundle_digest)
-        .expect("wrong-key signature");
-    std::fs::write(
-        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
-        hex::encode(wrong_signature.payload()),
+    std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+    let signature_path = current_generation_artifact(root.path(), SNAPSHOT_SIGNATURE_FILE_NAME);
+    let signature_bytes = std::fs::read(&signature_path).unwrap();
+    let wrong_key = checked_random_snapshot_keypair();
+    let wrong_signature = Signature::try_new(
+        wrong_key.private_key(),
+        &current_snapshot_bundle_auth_digest(root.path()),
     )
-    .expect("replace snapshot signature");
-    let signature_error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("Fast restore must retain ordinary outer signature verification"),
-        Err(error) => error,
-    };
-    assert!(matches!(signature_error, TryReadError::SignatureInvalid(_)));
-
-    // A correctly re-signed manifest carrying a foreign SCCP policy input is still refused.
-    std::fs::write(&manifest_path, forged_manifest.encode()).expect("install forged Fast manifest");
-    let forged_digest = current_snapshot_bundle_auth_digest(&snapshot_store_dir);
-    let forged_signature = Signature::try_new(signing_key.private_key(), &forged_digest)
-        .expect("re-sign the forged bundle with the trusted key");
-    std::fs::write(
-        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
-        hex::encode(forged_signature.payload()),
+    .unwrap();
+    std::fs::write(&signature_path, hex::encode(wrong_signature.payload())).unwrap();
+    assert!(matches!(
+        read(&state.network_id),
+        TryReadError::SignatureInvalid(_)
+    ));
+    std::fs::write(&manifest_path, forged_bytes).unwrap();
+    let trusted_signature = Signature::try_new(
+        key.private_key(),
+        &current_snapshot_bundle_auth_digest(root.path()),
     )
-    .expect("install the re-signed snapshot signature");
-    let policy_error = match try_read_snapshot(
-        &restored.ivm_execution_budget(),
-        &snapshot_store_dir,
-        &fast_kura,
-        &lane_manifests,
-        &iroha_config::parameters::actual::Nexus::default(),
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("Fast restore must bind the fixed SCCP v1 policy input"),
-        Err(error) => error,
-    };
+    .unwrap();
+    std::fs::write(&signature_path, hex::encode(trusted_signature.payload())).unwrap();
+    let policy_error = read(&state.network_id);
     assert!(
-        matches!(
-            &policy_error,
-            TryReadError::SnapshotGenerationInvalid { reason, .. }
-                if reason.contains("foreign SCCP policy hash")
-        ),
-        "unexpected foreign-policy rejection: {policy_error:?}"
+        matches!(&policy_error, TryReadError::SnapshotGenerationInvalid { reason, .. }
+        if reason.contains("foreign SCCP policy hash")),
+        "{policy_error:?}"
     );
+    std::fs::write(manifest_path, manifest_bytes).unwrap();
+    std::fs::write(signature_path, signature_bytes).unwrap();
+    assert!(matches!(
+        read(&state.network_id),
+        TryReadError::NativeExecutionReplayRequired
+    ));
+    SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| assert_eq!(passes.get(), 0));
+    SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| assert_eq!(passes.get(), 0));
+    SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+    assert_eq!(fast_kura.blocks_count(), 0);
+    assert_eq!(fast_kura.exact_durable_blocks_count().unwrap(), 0);
+    assert!(fast_kura.get_block(nonzero!(1_usize)).is_none());
+    for path in journal_paths {
+        assert_eq!(std::fs::read(path).unwrap(), deferred_bytes);
+    }
+    for (name, bytes) in files.into_iter().zip(before) {
+        assert_eq!(std::fs::read(canonical.join(name)).unwrap(), bytes);
+    }
+    assert_eq!(
+        std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
+        pointer
+    );
+    assert_eq!(state.committed_height(), 2);
+    assert_eq!(chain.kura().exact_durable_blocks_count().unwrap(), 2);
 }
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
@@ -879,6 +653,7 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1438,6 +1213,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         BlockCount(15),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &ChainId::from("snapshot-test-chain"),
         &network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1470,6 +1246,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         BlockCount(15),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &ChainId::from("snapshot-test-chain"),
         &network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1506,6 +1283,7 @@ async fn checksum_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1526,6 +1304,7 @@ async fn network_id_mismatch_rejected() {
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
+    let expected_chain_id = state.chain_id.clone();
     let expected_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x42));
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let Err(error) = try_read_snapshot(
@@ -1540,6 +1319,7 @@ async fn network_id_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &expected_chain_id,
         &expected_network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1598,6 +1378,7 @@ async fn missing_checksum_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1636,6 +1417,7 @@ async fn missing_merkle_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1674,6 +1456,7 @@ async fn merkle_root_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1712,6 +1495,7 @@ async fn merkle_leaf_count_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1747,6 +1531,7 @@ async fn merkle_chunk_size_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1951,6 +1736,7 @@ async fn can_read_multiple_blocks() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -2018,6 +1804,7 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]

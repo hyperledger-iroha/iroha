@@ -449,20 +449,46 @@ fn cleanup_fixture(state: &State, reset: LaneId) -> PendingAutoscaleLaneLifecycl
 #[test]
 fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
     let (state, key) = fixture();
-    let retired = LaneId::new(7);
-    let inactive = LaneId::new(8);
-    let active = LaneId::SINGLE;
-    let validators = LaneRelayEmergencyValidatorSet {
-        peers: vec![PeerId::new(key.public_key().clone())],
-        expires_at_height: 100,
-        metadata: iroha_model_base::metadata::Metadata::default(),
-    };
+    let retired = LaneId::SINGLE;
+    let retained = LaneId::new(8);
+    let retired_intent = intent(&state, &key, 0, Some("retired-pin"));
+    let retained_intent = crate::da::signed_test_pin_intent(
+        crate::da::signed_test_ingest_authorization(
+            *state.network_id_ref(),
+            &key,
+            retained,
+            1,
+            1,
+            1,
+        ),
+        &key,
+        StorageTicketId::new([2; 32]),
+        ManifestDigest::new([66; 32]),
+        Some("retained-pin".into()),
+    );
     {
         let mut setup = state.world.block();
-        for lane in [retired, inactive, active] {
+        for intent in [&retired_intent, &retained_intent] {
+            let ticket = intent.storage_ticket;
+            setup.da_pin_intents_by_ticket.insert(
+                ticket,
+                DaPinIntentWithLocation {
+                    intent: intent.clone(),
+                    location: iroha_data_model::da::commitment::DaCommitmentLocation {
+                        block_height: 1,
+                        index_in_bundle: u32::try_from(intent.sequence).unwrap(),
+                    },
+                },
+            );
             setup
-                .lane_relay_emergency_validators
-                .insert(lane, validators.clone());
+                .da_pin_intents_by_manifest
+                .insert(intent.manifest_hash, ticket);
+            setup
+                .da_pin_intents_by_alias
+                .insert(intent.alias.clone().unwrap(), ticket);
+            setup
+                .da_pin_intents_by_lane_epoch
+                .insert((intent.lane_id, intent.epoch, intent.sequence), ticket);
         }
         setup.commit();
     }
@@ -480,25 +506,43 @@ fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
         Some(&pending),
     )
     .unwrap();
+    let world = prepared.world();
     assert!(
-        prepared
-            .world()
-            .lane_relay_emergency_validators
-            .get(&retired)
+        world
+            .da_pin_intents_by_ticket
+            .get(&retired_intent.storage_ticket)
             .is_none()
     );
     assert!(
-        prepared
-            .world()
-            .lane_relay_emergency_validators
-            .get(&inactive)
+        world
+            .da_pin_intents_by_manifest
+            .get(&retired_intent.manifest_hash)
+            .is_none()
+    );
+    assert!(world.da_pin_intents_by_alias.get("retired-pin").is_none());
+    assert!(
+        world
+            .da_pin_intents_by_lane_epoch
+            .get(&(retired, 1, 0))
             .is_none()
     );
     assert!(
-        prepared
-            .world()
-            .lane_relay_emergency_validators
-            .get(&active)
+        world
+            .da_pin_intents_by_ticket
+            .get(&retained_intent.storage_ticket)
+            .is_some()
+    );
+    assert!(
+        world
+            .da_pin_intents_by_manifest
+            .get(&retained_intent.manifest_hash)
+            .is_some()
+    );
+    assert!(world.da_pin_intents_by_alias.get("retained-pin").is_some());
+    assert!(
+        world
+            .da_pin_intents_by_lane_epoch
+            .get(&(retained, 1, 1))
             .is_some()
     );
     let next = prepared.baseline_after(&parent).unwrap();

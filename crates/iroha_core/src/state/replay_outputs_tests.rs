@@ -48,7 +48,6 @@ fn install(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
         .axt_transitioned_dataspaces()
         .cloned()
         .unwrap_or_default();
-    let statements = block.lane_finality_statements().to_vec();
     block
         .set_execution_outputs(
             outputs,
@@ -57,7 +56,6 @@ fn install(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
             envelopes,
             policy,
             transitions,
-            statements,
             &limits(),
         )
         .expect("structural output fixture fits explicit limits");

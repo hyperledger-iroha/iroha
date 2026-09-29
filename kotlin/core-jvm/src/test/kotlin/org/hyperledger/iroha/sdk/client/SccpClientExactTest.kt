@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.testing.RetiredTransactionWire
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.net.URI
@@ -22,7 +23,6 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -209,7 +209,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = feePayment,
-                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+
                 ),
             )
 
@@ -351,7 +351,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = bridgeFeePayment,
-                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+
                 ),
             ),
         )
@@ -1623,7 +1623,7 @@ class SccpClientExactTest {
                 creationTimeMs = 10,
                 executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+
             ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
@@ -1679,16 +1679,13 @@ class SccpClientExactTest {
         response["counterparty_domain"] = 2
         response["counterparty_chain"] = "bsc-mainnet"
 
-        val ordinaryTransactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-            .encodeTransaction(
-                NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-                    .decodeTransaction(transactionBytes)
-                    .copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
-            )
-        response["transaction_payload_b64"] = Base64.getEncoder().encodeToString(ordinaryTransactionBytes)
-        response["signing_message_b64"] = Base64.getEncoder().encodeToString(IrohaHash.prehash(ordinaryTransactionBytes))
-        assertFailsWith<IllegalArgumentException> {
-            SccpBridgeSubmitResponseParser.parse(jsonBytes(response))
+        for (tag in listOf(0, 1, 2)) {
+            val retired = RetiredTransactionWire.insertAdmissionSlot(transactionBytes, tag)
+            response["transaction_payload_b64"] = Base64.getEncoder().encodeToString(retired)
+            response["signing_message_b64"] = Base64.getEncoder().encodeToString(IrohaHash.prehash(retired))
+            assertFailsWith<IllegalArgumentException> {
+                SccpBridgeSubmitResponseParser.parse(jsonBytes(response))
+            }
         }
         response["transaction_payload_b64"] = transaction
         response["signing_message_b64"] = signing

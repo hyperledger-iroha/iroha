@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{NetworkId, block::consensus_v2::HeightContextId};
+use iroha_data_model::{NetworkId, sumeragi_finality::SumeragiFinalityCheckpoint};
 
 use crate::kagemusha_mobile_bootstrap_v1::{expired_test_bootstrap_v1, verified_test_bootstrap_v1};
 
@@ -15,16 +15,36 @@ use super::{
 };
 
 fn network(byte: u8) -> NetworkId {
+    if byte == 3 {
+        return checkpoint(1).network_id();
+    }
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
 }
 
-fn first_context(byte: u8) -> HeightContextId {
-    HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+fn checkpoint(height: u64) -> SumeragiFinalityCheckpoint {
+    let bytes: &[u8] = match height {
+        1 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+        )),
+        2 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+        )),
+        _ => panic!("fixture checkpoint height"),
+    };
+    SumeragiFinalityCheckpoint::decode_canonical(bytes).unwrap()
 }
 
 fn scope() -> KagemushaTestnetStateObservationScopeV1 {
     KagemushaTestnetStateObservationScopeV1::new(
-        [3; 32], [4; 32], [5; 32], 2, [6; 32], [7; 32], [8; 32],
+        *network(3).as_bytes(),
+        [4; 32],
+        [5; 32],
+        2,
+        [6; 32],
+        [7; 32],
+        [8; 32],
     )
     .expect("distinct native testnet pins")
 }
@@ -64,38 +84,38 @@ fn unconfigured_profile() -> KagemushaRecursiveVerifierProfileV1 {
 }
 
 #[test]
-fn native_mint_rejects_network_and_first_context_substitution() {
-    assert!(require_trusted_pins(scope(), network(3), first_context(5)).is_ok());
-    assert!(require_trusted_pins(scope(), network(9), first_context(5)).is_err());
-    assert!(require_trusted_pins(scope(), network(3), first_context(0)).is_err());
+fn native_mint_rejects_network_and_native_checkpoint_substitution() {
+    assert!(require_trusted_pins(scope(), network(3), &checkpoint(1)).is_ok());
+    assert!(require_trusted_pins(scope(), network(9), &checkpoint(1)).is_err());
+    assert!(SumeragiFinalityCheckpoint::decode_canonical(&[0; 32]).is_err());
 }
 
 #[test]
-fn recovered_finality_chain_must_use_the_native_first_context() {
+fn recovered_finality_chain_must_use_the_native_checkpoint() {
     assert!(
         require_matching_verified_chain_root(
             network(3),
-            first_context(5),
+            &checkpoint(1),
             network(3),
-            first_context(5)
+            &checkpoint(1)
         )
         .is_ok()
     );
     assert!(
         require_matching_verified_chain_root(
             network(3),
-            first_context(5),
+            &checkpoint(1),
             network(9),
-            first_context(5)
+            &checkpoint(1)
         )
         .is_err()
     );
     assert!(
         require_matching_verified_chain_root(
             network(3),
-            first_context(5),
+            &checkpoint(1),
             network(3),
-            first_context(9)
+            &checkpoint(2)
         )
         .is_err()
     );
@@ -109,7 +129,7 @@ fn native_mint_install_derives_all_pins_from_verified_bootstrap() {
         scope()
     );
     assert_eq!(bootstrap.network_id(), network(3));
-    assert_eq!(bootstrap.first_context_id(), first_context(5));
+    assert_eq!(bootstrap.finality_checkpoint(), &checkpoint(1));
     assert!(bootstrap.trusted_authority_policy().validate().is_ok());
 }
 
@@ -188,7 +208,7 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
     // after the owner has fsynced the exact native-only reservation.
     let runtime = KagemushaTestnetNativeMintRuntimeV1 {
         trusted_network_id: network(3),
-        trusted_first_context_id: first_context(5),
+        trusted_checkpoint: checkpoint(1),
         reservations: Mutex::new(BTreeMap::new()),
     };
     let token = KagemushaTestnetNativeMintReservationV1 {
@@ -234,7 +254,7 @@ fn native_mint_inherited_process_never_waits_for_the_private_reservation_mutex()
         crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::inherited_for_test();
     let runtime = KagemushaTestnetNativeMintRuntimeV1 {
         trusted_network_id: network(3),
-        trusted_first_context_id: first_context(5),
+        trusted_checkpoint: checkpoint(1),
         reservations: Mutex::new(BTreeMap::new()),
     };
     let token = KagemushaTestnetNativeMintReservationV1 {

@@ -53,8 +53,6 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    SumeragiDiagnosticsStatus,
-    SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     ToriiLocalSigningContext,
@@ -68,12 +66,6 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     contract_payload_digest_hex,
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
-from iroha_torii_client.native_amx import (  # noqa: E402
-    compute_native_amx_descriptor_hash,
-    compute_native_amx_participant_settlement_hash,
-    compute_native_amx_proposal_hash,
-    compute_native_amx_validator_set_hash,
-)
 from iroha_torii_client.norito_frame import encode_norito_frame  # noqa: E402
 
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
@@ -176,7 +168,6 @@ def _multisig_transaction_draft(
             b"\x01" + field((100_000).to_bytes(8, "little")),
             b"\x00",
             client_module._multisig_fee_payment_archive(normalized_fee),
-            (0).to_bytes(4, "little"),
             metadata,
             b"\x00",
         )
@@ -227,7 +218,7 @@ def _contract_call_draft(
     metadata: bytes = _CONTRACT_DRAFT_METADATA,
     creation_time_ms: int = 42,
     transaction_ttl_ms: Optional[int] = None,
-    admission_intent: int = 1,
+    retired_admission_tag: Optional[int] = None,
 ) -> Dict[str, Any]:
     def field(value: bytes) -> bytes:
         return client_module._multisig_norito_field(value)
@@ -254,7 +245,7 @@ def _contract_call_draft(
             + field((transaction_ttl_ms or 100_000).to_bytes(8, "little")),
             b"\x00",
             client_module._multisig_fee_payment_archive(normalized_fee),
-            admission_intent.to_bytes(4, "little"),
+            *((retired_admission_tag.to_bytes(4, "little"),) if retired_admission_tag is not None else ()),
             metadata,
             b"\x00",
         )
@@ -325,235 +316,12 @@ _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
 )
 
 
-def _sumeragi_v2_status_payload() -> Dict[str, Any]:
-    subject = {
-        "parent_block_hash": _canonical_hash(0x31),
-        "block_hash": _canonical_hash(0x32),
-        "payload_hash": _canonical_hash(0x33),
-    }
-    execution_commitment = {
-        "parent_state_root": _canonical_hash(0x34),
-        "post_state_root": _canonical_hash(0x35),
-        "ordinary_writes_root": _canonical_hash(0x36),
-        "kagemusha_top_up_root": None,
-        "kagemusha_top_up_count": 0,
-        "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
-        "native_amx_application_manifest_count": 0,
-        "lane_finality_manifest": None,
-        "merge_carrier": None,
-        "executed_block_wire_len": 123,
-        "executed_block_wire_hash": _canonical_hash(0x37),
-        "transaction_input_commitment": None,
-        "transaction_output_commitment": None,
-    }
-    return {
-        "protocol_version": 4,
-        "node_fingerprint": _canonical_hash(0x11),
-        "build_fingerprint": _canonical_hash(0x12),
-        "config_fingerprint": _canonical_hash(0x13),
-        "restart_required": False,
-        "height_context_id": [_canonical_hash(0x14)],
-        "height": 10,
-        "view": 2,
-        "phase": {"phase": "prepare", "details": None},
-        "leader": 1,
-        "locked_prepare_qc": None,
-        "highest_prepare_qc": None,
-        "last_timeout_certificate": None,
-        "body_state": {"state": "validated", "details": None},
-        "pending_persistence_id": None,
-        "last_committed_height": 9,
-        "last_committed_subject": subject,
-        "height_context": {
-            "epoch": 1,
-            "epoch_end_height": 20,
-            "mode": {"mode": "permissioned", "details": None},
-            "epoch_seed": bytes(range(32)).hex().upper(),
-            "validator_count": 4,
-            "quorum": {"min_signers": 3, "total_power": 4},
-        },
-        "last_commit_qc": {
-            "certificate": {
-                "round": {
-                    "context_id": [_canonical_hash(0x41)],
-                    "height": 9,
-                    "view": 1,
-                },
-                "proposal_round": {
-                    "context_id": [_canonical_hash(0x41)],
-                    "height": 9,
-                    "view": 1,
-                },
-                "phase": {"phase": "commit", "details": None},
-                "subject": dict(subject),
-                "execution_commitment": execution_commitment,
-            },
-            "validator_count": 4,
-            "signer_count": 3,
-            "min_signers": 3,
-            "signed_power": 3,
-            "total_power": 4,
-        },
-        "liveness": {
-            "generation": 2,
-            "prepare_quorums": [
-                {
-                    "round": {
-                        "context_id": [_canonical_hash(0x14)],
-                        "height": 10,
-                        "view": 1,
-                    },
-                    "proposal_round": {
-                        "context_id": [_canonical_hash(0x14)],
-                        "height": 10,
-                        "view": 1,
-                    },
-                    "subject": dict(subject),
-                    "execution_commitment": dict(execution_commitment),
-                    "signer_count": 2,
-                    "signed_power": 2,
-                    "min_signers": 3,
-                    "total_power": 4,
-                }
-            ],
-            "commit_quorums": [],
-            "timeout_quorums": [],
-            "outbound_intents": [
-                {
-                    "kind": {"kind": "proposal", "details": None},
-                    "round": {
-                        "context_id": [_canonical_hash(0x14)],
-                        "height": 10,
-                        "view": 1,
-                    },
-                    "proposal_round": {
-                        "context_id": [_canonical_hash(0x14)],
-                        "height": 10,
-                        "view": 1,
-                    },
-                    "subject": dict(subject),
-                    "stage": {"stage": "retained", "details": None},
-                }
-            ],
-            "work": {
-                "candidate": {"stage": "idle", "details": None},
-                "body_recovery": {"stage": "idle", "details": None},
-                "body_store": {"stage": "idle", "details": None},
-                "validation": {"stage": "complete", "details": None},
-                "application": {"stage": "idle", "details": None},
-                "successor_height": {"stage": "idle", "details": None},
-            },
-            "queues": [
-                {
-                    "queue": {"queue": "network_ingress", "details": None},
-                    "depth": 1,
-                    "capacity": 4,
-                    "oldest_age_ms": 17,
-                    "service_debt": 2,
-                }
-            ],
-            "last_progress": {
-                "generation": 2,
-                "round": {
-                    "context_id": [_canonical_hash(0x14)],
-                    "height": 10,
-                    "view": 1,
-                },
-                "transition": {
-                    "transition": "prepare_vote_admitted",
-                    "details": None,
-                },
-                "age_ms": 19,
-            },
-            "no_progress_age_ms": 19,
-            "blocker": {"blocker": "prepare_quorum_missing", "details": None},
-            "ignore_counts": [
-                {
-                    "reason": {"reason": "duplicate", "details": None},
-                    "count": 2,
-                }
-            ],
-        },
-        "beacon_horizon": None,
-    }
 
 
-def _sumeragi_diagnostics_payload() -> Dict[str, Any]:
-    return {
-        "pipeline_execution": {
-            "tx_vertices_total": 1,
-            "tx_edges_total": 0,
-            "overlay_count_total": 1,
-            "overlay_instr_total": 2,
-            "overlay_bytes_total": 128,
-            "rbc_chunks_total": 1,
-            "rbc_bytes_total": 256,
-            "detached_prepared_total": 1,
-            "detached_merged_total": 1,
-            "detached_fallback_total": 0,
-            "detached_fallback_fee_postprocessing_total": 0,
-            "detached_fallback_user_executor_total": 0,
-            "detached_fallback_durable_state_total": 0,
-            "detached_fallback_unsupported_instruction_total": 0,
-            "detached_fallback_rejected_eval_total": 0,
-            "detached_fallback_overlay_error_total": 0,
-            "quarantine_executed_total": 0,
-        },
-        "tx_queue_depth": 3,
-        "tx_queue_capacity": 32,
-        "tx_queue_retained_bytes": 4096,
-        "tx_queue_max_retained_bytes": 65536,
-        "tx_queue_saturated": False,
-        "tx_queue_saturated_by_count": False,
-        "tx_queue_saturated_by_bytes": False,
-        "tx_queue_saturated_by_age": False,
-        "tx_queue_oldest_queued_age_ms": 25,
-        "npos": None,
-        "lane_commitments": [],
-        "dataspace_commitments": [],
-        "lane_settlement_commitments": [],
-        "lane_relay_envelopes": [],
-        "lane_payload_ownerships": [],
-        "committed_lane_blocks": [],
-        "lane_block_sessions": [],
-        "lane_governance_sealed_total": 0,
-        "lane_governance_sealed_aliases": [],
-        "lane_governance": [],
-        "native_amx_participant_applications": [],
-        "autonomous_lane_executions": [],
-    }
 
 
-def _native_amx_participant_application_payload(
-    *,
-    lane_id: int = 3,
-    state: Any = "durably_applied",
-) -> Dict[str, Any]:
-    return {
-        "lane_id": lane_id,
-        "dataspace_id": 8,
-        "lane_incarnation": _canonical_hash(0x65),
-        "participant_height": 8,
-        "participant_view": 1,
-        "predecessor_height": 7,
-        "predecessor_descriptor_hash": _canonical_hash(0x68),
-        "descriptor_hash": _canonical_hash(0x73),
-        "proposal_hash": _canonical_hash(0x69),
-        "settlement_hash": _canonical_hash(0x6B),
-        "source_count": 2,
-        "application_block_height": 10,
-        "application_block_hash": _canonical_hash(0x79),
-        "state": state,
-    }
 
 
-def _set_native_amx_application_without_block(
-    row: Dict[str, Any], state: str
-) -> None:
-    row["state"] = state
-    row.pop("application_block_height")
-    row.pop("application_block_hash")
 
 
 def _autonomous_lane_execution_payload() -> Dict[str, Any]:
@@ -637,176 +405,14 @@ def _nexus_fee_receipt_payload() -> Dict[str, Any]:
     }
 
 
-def _seal_native_amx_receipt_payload(receipt: Dict[str, Any]) -> Dict[str, Any]:
-    for leg in receipt["legs"]:
-        descriptor = leg["participant_proposal"]["descriptor"]
-        descriptor["validator_set_hash"] = (
-            compute_native_amx_validator_set_hash(
-                descriptor["validator_set"]
-            )
-        )
-        descriptor["descriptor_hash"] = compute_native_amx_descriptor_hash(
-            descriptor
-        )
-        leg["participant_proposal"]["proposal_hash"] = (
-            compute_native_amx_proposal_hash(descriptor)
-        )
-        leg["participant_settlement_hash"] = (
-            compute_native_amx_participant_settlement_hash(
-                leg["participant_settlement"]
-            )
-        )
-        for qc in (leg["prepare_qc"], leg["commit_qc"]):
-            qc["validator_set_hash"] = descriptor["validator_set_hash"]
-            qc["body"]["participant_validator_set_hash"] = descriptor[
-                "validator_set_hash"
-            ]
-            qc["body"]["participant_proposal_hash"] = leg[
-                "participant_proposal"
-            ]["proposal_hash"]
-            qc["body"]["participant_settlement_commitment"] = leg[
-                "participant_settlement_hash"
-            ]
-    return receipt
 
 
-def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
-    transaction_hashes = [_canonical_hash(0x61), _canonical_hash(0x74)]
-    source_ids = ["AB" * 32, "CD" * 32]
-    transaction_hash = transaction_hashes[source_index]
-    source_id = source_ids[source_index]
-    previous_descriptor_hash = _canonical_hash(0x68)
-    participant_proposal_hash = _canonical_hash(0x69)
-    participant_settlement_hash = _canonical_hash(0x6B)
-    common_body = {
-        "round": {
-            "context_id": [_canonical_hash(0x62)],
-            "height": 10,
-            "view": 2,
-        },
-        "epoch": 1,
-        "network_id": _canonical_hash(0x63),
-        "source_id": source_id,
-        "tx_entrypoint_hash": transaction_hash,
-        "plan_digest": _canonical_hash(0x64),
-        "phase": {"phase": "prepare", "detail": None},
-        "coordinator_lane_id": 2,
-        "coordinator_dataspace_id": 7,
-        "coordinator_lane_incarnation": _canonical_hash(0x51),
-        "participant_lane_id": 3,
-        "participant_dataspace_id": 8,
-        "participant_lane_incarnation": _canonical_hash(0x65),
-        "participant_previous_block_height": 7,
-        "participant_previous_block_descriptor_hash": previous_descriptor_hash,
-        "participant_lane_block_height": 8,
-        "participant_lane_block_view": 1,
-        "participant_proposal_hash": participant_proposal_hash,
-        "participant_settlement_commitment": participant_settlement_hash,
-        "participant_validator_set_hash": _canonical_hash(0x66),
-        "participant_validator_count": 4,
-        "participant_min_quorum": 3,
-        "authority_context_height": 10,
-        "planned_coordinator_block_height": 9,
-        "coordinator_lane_block_view": 2,
-        "coordinator_proposal_hash": _canonical_hash(0x67),
-    }
-
-    def qc(phase: str) -> Dict[str, Any]:
-        body = json.loads(json.dumps(common_body))
-        body["phase"]["phase"] = phase
-        return {
-            "body": body,
-            "validator_set_hash_version": 1,
-            "validator_set_hash": _canonical_hash(0x66),
-            "validator_set": list(_NATIVE_AMX_VALIDATOR_SET),
-            "validator_set_pops": [[1] * 96 for _ in range(4)],
-            "signers_bitmap": [0x07],
-            "bls_aggregate_signature": [2] * 96,
-        }
-
-    return _seal_native_amx_receipt_payload({
-        "version": 2,
-        "source_id": source_id,
-        "network_id": _canonical_hash(0x63),
-        "plan_digest": _canonical_hash(0x64),
-        "lane_id": 2,
-        "dataspace_id": 7,
-        "lane_incarnation": _canonical_hash(0x51),
-        "authority_context_height": 10,
-        "lane_block_height": 9,
-        "lane_block_view": 2,
-        "coordinator_proposal_hash": _canonical_hash(0x67),
-        "legs": [
-            {
-                "lane_id": 3,
-                "dataspace_id": 8,
-                "participant_proposal": {
-                    "descriptor": {
-                        "lane_id": 3,
-                        "dataspace_id": 8,
-                        "lane_incarnation": _canonical_hash(0x65),
-                        "proposal_height": 10,
-                        "previous_lane_block_height": 7,
-                        "previous_lane_block_descriptor_hash": previous_descriptor_hash,
-                        "lane_block_height": 8,
-                        "lane_block_view": 1,
-                        "subject_hash": _canonical_hash(0x6D),
-                        "payload_ownership_hash": _canonical_hash(0x6F),
-                        "rbc_instance_hash": _canonical_hash(0x71),
-                        "accepted_candidate_indices": [0, 1],
-                        "accepted_transaction_hashes": transaction_hashes,
-                        "validator_set_hash_version": 1,
-                        "validator_set_hash": _canonical_hash(0x66),
-                        "validator_set": list(_NATIVE_AMX_VALIDATOR_SET),
-                        "validator_count": 4,
-                        "min_quorum": 3,
-                        "qc_mode_tag": "permissioned:native-amx-v2",
-                        "descriptor_hash": _canonical_hash(0x73),
-                    },
-                    "proposal_hash": participant_proposal_hash,
-                    "payload_block_hint": None,
-                },
-                "participant_settlement": {
-                    "lane_id": 3,
-                    "dataspace_id": 8,
-                    "lane_incarnation": _canonical_hash(0x65),
-                    "participant_lane_block_height": 8,
-                    "authority_context_height": 10,
-                    "previous_native_settlement_hash": None,
-                    "source_ids": list(source_ids),
-                },
-                "participant_settlement_hash": participant_settlement_hash,
-                "prepare_qc": qc("prepare"),
-                "commit_qc": qc("commit"),
-            }
-        ],
-    })
 
 
-def _native_amx_receipt_group() -> List[Dict[str, Any]]:
-    return [_native_amx_receipt_payload(0), _native_amx_receipt_payload(1)]
 
 
-def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=payload))
-    return ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    ).get_sumeragi_status()
 
 
-def _get_sumeragi_diagnostics(
-    payload: Mapping[str, Any],
-) -> SumeragiDiagnosticsStatus:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=payload))
-    return ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    ).get_sumeragi_diagnostics()
 
 
 def _canonical_signature_base64_fixture() -> str:
@@ -3477,8 +3083,8 @@ def test_call_contract_rejects_rehashed_unsigned_payload_substitution(
         )
 
 
-@pytest.mark.parametrize("admission_intent", [0, 2], ids=["ordinary", "unknown"])
-def test_call_contract_rejects_rehashed_non_queue_plan_admission(
+@pytest.mark.parametrize("admission_intent", [0, 1, 2], ids=["ordinary", "queue-plan", "unknown"])
+def test_call_contract_rejects_rehashed_retired_admission_slots(
     admission_intent: int,
 ) -> None:
     call_payload = {"value": 1}
@@ -3488,7 +3094,7 @@ def test_call_contract_rejects_rehashed_non_queue_plan_admission(
             payload=_contract_call_draft(
                 fee_payment=_authority_fee_payment(5000),
                 payload=call_payload,
-                admission_intent=admission_intent,
+                retired_admission_tag=admission_intent,
             )
         )
     )
@@ -3499,8 +3105,8 @@ def test_call_contract_rejects_rehashed_non_queue_plan_admission(
     )
 
     # The fixture recomputes the signing hash from the substituted payload.
-    # Hash consistency must not substitute for the required admission policy.
-    with pytest.raises(RuntimeError, match="caller-trusted admission_intent"):
+    # A matching prehash cannot authorize an obsolete wire layout.
+    with pytest.raises(RuntimeError, match="trailing bytes"):
         client.prepare_contract_call(
             canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
@@ -5756,20 +5362,17 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 4
-        assert payload["restart_required"] is False
-        assert payload["leader"] == 1
-        assert payload["height_context"]["validator_count"] == 4
-        assert payload["liveness"]["generation"] == 2
+        assert payload["protocol_version"] == 8
+        assert payload["leader"] is None
+        assert payload["height"] == 10
+        assert payload["view"] == 2
+        assert payload["footprint"]["pending_apply"] == 0
         assert "lane_settlement_commitments" not in payload
 
         diagnostics = requests.get(
             f"{server.base_url.rstrip('/')}/v1/sumeragi/diagnostics", timeout=5.0
         )
-        diagnostics.raise_for_status()
-        diagnostics_payload = diagnostics.json()
-        assert diagnostics_payload["tx_queue_capacity"] == 32
-        assert diagnostics_payload["committed_lane_blocks"] == []
+        assert diagnostics.status_code == 404
     finally:
         server.stop()
 
@@ -5779,8 +5382,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 4, "height": 42},
-            "diagnostics": {"tx_queue_depth": 3},
+            "status": {"protocol_version": 8, "height": 42},
             "leader": {"leader_index": 2},
         }
         response = requests.post(
@@ -5817,1631 +5419,96 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
         server.stop()
 
 
-def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
-    payload = _sumeragi_v2_status_payload()
-    status = _get_sumeragi_status(payload)
-
-    assert type(status) is SumeragiV2Status
-    assert SumeragiV2Status is not SumeragiDiagnosticsStatus
-    assert status.protocol_version == 4
-    assert status.restart_required is False
-    assert status.height == 10
-    assert status.phase == "prepare"
-    assert status.height_context.mode == "permissioned"
-    assert status.height_context.min_signers == 3
-    assert status.last_commit_qc is not None
-    assert status.last_commit_qc.certificate.round.height == 9
-    assert status.last_commit_qc.certificate.proposal_round.view == 1
-    assert (
-        status.last_commit_qc.certificate.execution_commitment
-        .native_amx_application_manifest_root
-        == _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-    )
-    assert status.last_commit_qc.signed_power == 3
-    assert status.liveness.generation == 2
-    assert status.liveness.work.validation == "complete"
-    assert status.liveness.prepare_quorums[0].signer_count == 2
-    assert (
-        status.liveness.prepare_quorums[0].proposal_round
-        == status.liveness.prepare_quorums[0].round
-    )
-    assert (
-        status.liveness.outbound_intents[0].proposal_round
-        == status.liveness.outbound_intents[0].round
-    )
-    assert status.liveness.outbound_intents[0].stage == "retained"
-    assert status.liveness.queues[0].queue == "network_ingress"
-    assert status.liveness.last_progress is not None
-    assert status.liveness.last_progress.transition == "prepare_vote_admitted"
-    assert status.liveness.blocker == "prepare_quorum_missing"
-    assert not hasattr(status, "lane_settlement_commitments")
-    assert not hasattr(status, "operator")
-
-
-def test_get_sumeragi_status_requires_exact_transaction_tree_commitments() -> None:
-    def commitment(payload: dict) -> dict:
-        return payload["last_commit_qc"]["certificate"]["execution_commitment"]
-
-    status = _get_sumeragi_status(_sumeragi_v2_status_payload())
-    parsed = status.last_commit_qc.certificate.execution_commitment
-    assert parsed.transaction_input_commitment is None
-    assert parsed.transaction_output_commitment is None
-
-    def trees(inputs, outputs) -> dict:
-        payload = _sumeragi_v2_status_payload()
-        commitment(payload)["transaction_input_commitment"] = (
-            None if inputs is None else {"root": _canonical_hash(0x3A), "leaf_count": inputs}
-        )
-        commitment(payload)["transaction_output_commitment"] = (
-            None if outputs is None else {"root": _canonical_hash(0x3B), "leaf_count": outputs}
-        )
-        return payload
-
-    carried = _get_sumeragi_status(trees(2, 3)).last_commit_qc.certificate
-    assert carried.execution_commitment.transaction_input_commitment.leaf_count == 2
-    assert carried.execution_commitment.transaction_output_commitment.root == (
-        _canonical_hash(0x3B)
-    )
-    _get_sumeragi_status(trees(None, 1))
-    for inputs, outputs in ((2, 1), (1, None), (0, 1)):
-        with pytest.raises(RuntimeError):
-            _get_sumeragi_status(trees(inputs, outputs))
-    for field in ("transaction_input_commitment", "transaction_output_commitment"):
-        missing = _sumeragi_v2_status_payload()
-        del commitment(missing)[field]
-        with pytest.raises(RuntimeError, match="is required"):
-            _get_sumeragi_status(missing)
-
-
-def test_get_sumeragi_status_parses_and_validates_beacon_horizon() -> None:
-    payload = _sumeragi_v2_status_payload()
-    assert _get_sumeragi_status(payload).beacon_horizon is None
-    payload["beacon_horizon"] = {
-        "epoch_length_blocks": 0,
-        "next_required_pulse_height": 15,
-        "active_session_id": "AB" * 32,
-        "session_covers_next_pulse": True,
-        "local_provider_ready": True,
-    }
-    horizon = _get_sumeragi_status(payload).beacon_horizon
-    assert horizon is not None
-    assert horizon.next_required_pulse_height == 15
-    assert horizon.active_session_id == "AB" * 32
-    assert horizon.session_covers_next_pulse is True
-    assert horizon.local_provider_ready is True
-
-    for field, value, message in (
-        ("epoch_length_blocks", 64, r"must be zero in permissioned mode"),
-        ("next_required_pulse_height", 9, r"must not precede the active height"),
-        ("active_session_id", None, r"coverage requires an active session"),
-        ("active_session_id", "ab" * 32, r"canonical uppercase 32-byte hex"),
-    ):
-        broken = _sumeragi_v2_status_payload()
-        broken["beacon_horizon"] = dict(payload["beacon_horizon"], **{field: value})
-        with pytest.raises(RuntimeError, match=message):
-            _get_sumeragi_status(broken)
-
-    npos = _sumeragi_v2_status_payload()
-    npos["height_context"]["mode"] = {"mode": "npos", "details": None}
-    npos["beacon_horizon"] = dict(payload["beacon_horizon"], epoch_length_blocks=64)
-    assert _get_sumeragi_status(npos).beacon_horizon.epoch_length_blocks == 64
-    npos["beacon_horizon"]["epoch_length_blocks"] = 0
-    with pytest.raises(RuntimeError, match=r"must be positive in NPoS mode"):
-        _get_sumeragi_status(npos)
-
-    extended = _sumeragi_v2_status_payload()
-    extended["beacon_horizon"] = dict(payload["beacon_horizon"], extra=True)
-    with pytest.raises(RuntimeError, match=r"unknown field extra"):
-        _get_sumeragi_status(extended)
-    missing = _sumeragi_v2_status_payload()
-    missing["beacon_horizon"] = {
-        key: value
-        for key, value in payload["beacon_horizon"].items()
-        if key != "local_provider_ready"
-    }
-    with pytest.raises(RuntimeError, match=r"missing field local_provider_ready"):
-        _get_sumeragi_status(missing)
-
-
-def test_get_sumeragi_status_rejects_sent_outbound_stage() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["liveness"]["outbound_intents"][0]["stage"] = {
-        "stage": "sent", "details": None,
-    }
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"outbound_intents\[0\]\.stage\.stage is not a supported v2 variant",
-    ):
-        _get_sumeragi_status(payload)
-
-
-def test_get_sumeragi_status_accepts_nonempty_native_manifest() -> None:
-    payload = _sumeragi_v2_status_payload()
-    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
-    commitment["native_amx_application_manifest_root"] = _canonical_hash(0x38)
-    commitment["native_amx_application_manifest_count"] = 1
-
-    status = _get_sumeragi_status(payload)
-
-    assert status.last_commit_qc is not None
-    assert (
-        status.last_commit_qc.certificate.execution_commitment
-        .native_amx_application_manifest_root
-        == _canonical_hash(0x38)
-    )
-    assert (
-        status.last_commit_qc.certificate.execution_commitment
-        .native_amx_application_manifest_count
-        == 1
-    )
-
-
-@pytest.mark.parametrize(
-    ("mutate", "error"),
-    [
-        (
-            lambda commitment: commitment.update(
-                native_amx_application_manifest_version=2
-            ),
-            "native_amx_application_manifest_version must equal 1",
-        ),
-        (
-            lambda commitment: commitment.update(
-                native_amx_application_manifest_count=1025
-            ),
-            "native_amx_application_manifest_count",
-        ),
-        (
-            lambda commitment: commitment.update(
-                native_amx_application_manifest_root=_canonical_hash(0x38)
-            ),
-            "must be zero exactly for the canonical empty root",
-        ),
-        (
-            lambda commitment: commitment.update(
-                native_amx_application_manifest_count=1
-            ),
-            "must be zero exactly for the canonical empty root",
-        ),
-    ],
-)
-def test_get_sumeragi_status_rejects_invalid_native_manifest(
-    mutate, error: str
-) -> None:
-    payload = _sumeragi_v2_status_payload()
-    mutate(payload["last_commit_qc"]["certificate"]["execution_commitment"])
-
-    with pytest.raises(RuntimeError, match=error):
-        _get_sumeragi_status(payload)
-
-
-def test_get_sumeragi_status_requires_exact_merge_carrier_projection() -> None:
-    payload = _sumeragi_v2_status_payload()
-    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
-    status = _get_sumeragi_status(payload)
-    assert status.last_commit_qc is not None
-    assert status.last_commit_qc.certificate.execution_commitment.merge_carrier is None
-
-    commitment["merge_carrier"] = {
-        "version": 1,
-        "entry_hash": _canonical_hash(0x39),
-    }
-    status = _get_sumeragi_status(payload)
-    assert status.last_commit_qc is not None
-    carrier = status.last_commit_qc.certificate.execution_commitment.merge_carrier
-    assert carrier is not None
-    assert carrier.version == 1
-    assert carrier.entry_hash == _canonical_hash(0x39)
-
-    invalid_carriers = [
-        "missing",
-        "malformed",
-        "wrong_version",
-        "missing_version",
-        "missing_entry_hash",
-        "bad_hash",
-        "unknown_field",
-    ]
-    for case in invalid_carriers:
-        candidate = _sumeragi_v2_status_payload()
-        candidate_commitment = candidate["last_commit_qc"]["certificate"][
-            "execution_commitment"
-        ]
-        if case == "missing":
-            del candidate_commitment["merge_carrier"]
-        elif case == "malformed":
-            candidate_commitment["merge_carrier"] = "carrier"
-        elif case == "wrong_version":
-            candidate_commitment["merge_carrier"] = {
-                "version": 2,
-                "entry_hash": _canonical_hash(0x39),
-            }
-        elif case == "missing_version":
-            candidate_commitment["merge_carrier"] = {
-                "entry_hash": _canonical_hash(0x39),
-            }
-        elif case == "missing_entry_hash":
-            candidate_commitment["merge_carrier"] = {"version": 1}
-        elif case == "bad_hash":
-            candidate_commitment["merge_carrier"] = {
-                "version": 1,
-                "entry_hash": "not-a-hash",
-            }
-        else:
-            candidate_commitment["merge_carrier"] = {
-                "version": 1,
-                "entry_hash": _canonical_hash(0x39),
-                "future": True,
-            }
-        with pytest.raises(RuntimeError):
-            _get_sumeragi_status(candidate)
-
-
-@pytest.mark.parametrize("invalid", [None, True, 0, -1, 1 << 64, "123"])
-def test_get_sumeragi_status_requires_exact_executed_wire_len(invalid: Any) -> None:
-    payload = _sumeragi_v2_status_payload()
-    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
-    status = _get_sumeragi_status(payload)
-    assert status.last_commit_qc is not None
-    assert (
-        status.last_commit_qc.certificate.execution_commitment.executed_block_wire_len
-        == 123
-    )
-
-    commitment["executed_block_wire_len"] = invalid
-    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
-        _get_sumeragi_status(payload)
-
-    del commitment["executed_block_wire_len"]
-    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
-        _get_sumeragi_status(payload)
-
-
-def test_get_sumeragi_status_preserves_exact_proposal_rounds() -> None:
-    payload = _sumeragi_v2_status_payload()
-    commit_quorum = copy.deepcopy(payload["liveness"]["prepare_quorums"][0])
-    commit_quorum["round"]["view"] = 2
-    commit_quorum["proposal_round"]["view"] = 2
-    payload["liveness"]["commit_quorums"] = [commit_quorum]
-
-    commit_intent = copy.deepcopy(payload["liveness"]["outbound_intents"][0])
-    commit_intent["kind"]["kind"] = "commit_vote"
-    commit_intent["round"]["view"] = 2
-    commit_intent["proposal_round"]["view"] = 2
-    commit_intent["execution_commitment"] = copy.deepcopy(
-        commit_quorum["execution_commitment"]
-    )
-    payload["liveness"]["outbound_intents"] = [commit_intent]
-    payload["last_commit_qc"]["certificate"]["round"]["view"] = 2
-    payload["last_commit_qc"]["certificate"]["proposal_round"]["view"] = 2
-
-    status = _get_sumeragi_status(payload)
-
-    assert status.liveness.commit_quorums[0].round.view == 2
-    assert status.liveness.commit_quorums[0].proposal_round.view == 2
-    assert status.liveness.outbound_intents[0].round.view == 2
-    assert status.liveness.outbound_intents[0].proposal_round is not None
-    assert status.liveness.outbound_intents[0].proposal_round.view == 2
-    assert status.last_commit_qc is not None
-    assert status.last_commit_qc.certificate.proposal_round.view == 2
-
-    later_commit_payload = _sumeragi_v2_status_payload()
-    later_commit_intent = later_commit_payload["liveness"]["outbound_intents"][0]
-    later_commit_intent["kind"]["kind"] = "commit_qc"
-    later_commit_intent["round"]["view"] = 3
-    later_commit_intent["proposal_round"]["view"] = 3
-    later_commit_intent["execution_commitment"] = copy.deepcopy(
-        later_commit_payload["last_commit_qc"]["certificate"][
-            "execution_commitment"
-        ]
-    )
-    later_commit_status = _get_sumeragi_status(later_commit_payload)
-    assert later_commit_status.liveness.outbound_intents[0].round.view == 3
-    assert (
-        later_commit_status.liveness.outbound_intents[0].proposal_round.view == 3
-    )
-
-    timeout_payload = _sumeragi_v2_status_payload()
-    timeout_intent = timeout_payload["liveness"]["outbound_intents"][0]
-    timeout_intent["kind"]["kind"] = "timeout_certificate"
-    del timeout_intent["proposal_round"]
-    del timeout_intent["subject"]
-    timeout_status = _get_sumeragi_status(timeout_payload)
-    assert timeout_status.liveness.outbound_intents[0].proposal_round is None
-
-
-def test_get_sumeragi_status_enforces_vote_quorum_proposal_geometry() -> None:
-    missing_origin = _sumeragi_v2_status_payload()
-    del missing_origin["liveness"]["prepare_quorums"][0]["proposal_round"]
-    with pytest.raises(RuntimeError, match="proposal_round"):
-        _get_sumeragi_status(missing_origin)
-
-    prepare_reproposal = _sumeragi_v2_status_payload()
-    prepare_reproposal["liveness"]["prepare_quorums"][0]["proposal_round"][
-        "view"
-    ] = 0
-    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
-        _get_sumeragi_status(prepare_reproposal)
-
-    future_commit_origin = _sumeragi_v2_status_payload()
-    commit_quorum = copy.deepcopy(
-        future_commit_origin["liveness"]["prepare_quorums"][0]
-    )
-    commit_quorum["proposal_round"]["view"] = 2
-    future_commit_origin["liveness"]["commit_quorums"] = [commit_quorum]
-    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
-        _get_sumeragi_status(future_commit_origin)
-
-    foreign_origin = _sumeragi_v2_status_payload()
-    foreign_origin["liveness"]["prepare_quorums"][0]["proposal_round"][
-        "context_id"
-    ] = [_canonical_hash(0x55)]
-    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
-        _get_sumeragi_status(foreign_origin)
-
-    wrong_height = _sumeragi_v2_status_payload()
-    wrong_height["liveness"]["prepare_quorums"][0]["proposal_round"]["height"] = 9
-    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
-        _get_sumeragi_status(wrong_height)
-
-
-def test_get_sumeragi_status_enforces_outbound_intent_proposal_geometry() -> None:
-    missing_origin = _sumeragi_v2_status_payload()
-    del missing_origin["liveness"]["outbound_intents"][0]["proposal_round"]
-    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
-        _get_sumeragi_status(missing_origin)
-
-    timeout_with_origin = _sumeragi_v2_status_payload()
-    timeout_intent = timeout_with_origin["liveness"]["outbound_intents"][0]
-    timeout_intent["kind"]["kind"] = "timeout_vote"
-    timeout_intent["subject"] = None
-    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
-        _get_sumeragi_status(timeout_with_origin)
-
-    prepare_reproposal = _sumeragi_v2_status_payload()
-    prepare_intent = prepare_reproposal["liveness"]["outbound_intents"][0]
-    prepare_intent["kind"]["kind"] = "prepare_vote"
-    prepare_intent["execution_commitment"] = copy.deepcopy(
-        prepare_reproposal["last_commit_qc"]["certificate"][
-            "execution_commitment"
-        ]
-    )
-    prepare_intent["round"]["view"] = 2
-    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
-        _get_sumeragi_status(prepare_reproposal)
-
-    future_commit_origin = _sumeragi_v2_status_payload()
-    commit_intent = future_commit_origin["liveness"]["outbound_intents"][0]
-    commit_intent["kind"]["kind"] = "commit_vote"
-    commit_intent["execution_commitment"] = copy.deepcopy(
-        future_commit_origin["last_commit_qc"]["certificate"][
-            "execution_commitment"
-        ]
-    )
-    commit_intent["proposal_round"]["view"] = 2
-    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
-        _get_sumeragi_status(future_commit_origin)
-
-    foreign_origin = _sumeragi_v2_status_payload()
-    foreign_origin["liveness"]["outbound_intents"][0]["proposal_round"][
-        "context_id"
-    ] = [_canonical_hash(0x55)]
-    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
-        _get_sumeragi_status(foreign_origin)
-
-
-def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["liveness"]["blocker"] = {
-        "blocker": "local_control_pending",
-        "details": None,
-    }
-
-    status = _get_sumeragi_status(payload)
-
-    assert status.liveness.blocker == "local_control_pending"
-
-
-def test_get_sumeragi_status_accepts_successor_activation_pending_liveness_blocker() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["liveness"]["blocker"] = {
-        "blocker": "successor_activation_pending",
-        "details": None,
-    }
-
-    status = _get_sumeragi_status(payload)
-
-    assert status.liveness.blocker == "successor_activation_pending"
-
-
-def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["liveness"]["ignore_counts"] = [
-        {
-            "reason": {"reason": "unsafe_proposal", "details": None},
-            "count": 3,
-        }
-    ]
-
-    status = _get_sumeragi_status(payload)
-
-    assert [(entry.reason, entry.count) for entry in status.liveness.ignore_counts] == [
-        ("unsafe_proposal", 3)
-    ]
-
-
-def test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound() -> None:
-    reasons = [
-        "wrong_height",
-        "wrong_view",
-        "stale_generation",
-        "busy",
-        "duplicate",
-        "no_matching_work",
-        "observer",
-        "view_closed",
-        "already_decided",
-        "recovery_pending",
-        "irrelevant_view",
-        "unsafe_proposal",
-    ]
-    payload = _sumeragi_v2_status_payload()
-    payload["liveness"]["ignore_counts"] = [
-        {
-            "reason": {"reason": reason, "details": None},
-            "count": index,
-        }
-        for index, reason in enumerate(reasons, start=1)
-    ]
-
-    status = _get_sumeragi_status(payload)
-
-    assert [entry.reason for entry in status.liveness.ignore_counts] == reasons
-
-    payload["liveness"]["ignore_counts"].append(
-        copy.deepcopy(payload["liveness"]["ignore_counts"][-1])
-    )
-    with pytest.raises(RuntimeError, match="ignore_counts exceeds its protocol item bound"):
-        _get_sumeragi_status(payload)
-
-
-def test_get_sumeragi_status_accepts_all_ten_liveness_queue_kinds() -> None:
-    payload = _sumeragi_v2_status_payload()
-    queue_template = payload["liveness"]["queues"][0]
-    queue_kinds = [
-        "ingress",
-        "deferred_normal",
-        "deferred_progress",
-        "deferred_completion",
-        "runtime_normal",
-        "runtime_progress",
-        "runtime_completion",
-        "effect_completion",
-        "network_ingress",
-        "effect_dispatch",
-    ]
-    payload["liveness"]["queues"] = [
-        {
-            **copy.deepcopy(queue_template),
-            "queue": {"queue": queue, "details": None},
-        }
-        for queue in queue_kinds
-    ]
-
-    status = _get_sumeragi_status(payload)
-    assert [queue.queue for queue in status.liveness.queues] == queue_kinds
-
-    payload["liveness"]["queues"].append(copy.deepcopy(queue_template))
-    with pytest.raises(RuntimeError, match="queues exceeds its protocol item bound"):
-        _get_sumeragi_status(payload)
-
-
-def test_get_sumeragi_status_rejects_operational_diagnostics_fields() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["lane_settlement_commitments"] = []
-    with pytest.raises(
-        RuntimeError, match="unknown field lane_settlement_commitments"
-    ):
-        _get_sumeragi_status(payload)
-
-
-def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
-    status_session = RecordingSession()
-    status_session.queue(StubResponse(payload=_sumeragi_diagnostics_payload()))
-    status_client = ToriiClient(
-        "http://node.test",
-        session=status_session,
-        operator_signing_context=_operator_context(),
-    )
-
-    with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
-        status_client.get_sumeragi_status()
-    assert status_session.calls[0]["url"].endswith("/v1/sumeragi/status")
-
-    diagnostics_session = RecordingSession()
-    diagnostics_session.queue(StubResponse(payload=_sumeragi_v2_status_payload()))
-    diagnostics_client = ToriiClient(
-        "http://node.test",
-        session=diagnostics_session,
-        operator_signing_context=_operator_context(),
-    )
-
-    with pytest.raises(
-        RuntimeError, match="sumeragi diagnostics contains unknown field"
-    ):
-        diagnostics_client.get_sumeragi_diagnostics()
-    assert diagnostics_session.calls[0]["url"].endswith(
-        "/v1/sumeragi/diagnostics"
-    )
-
-    for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
-        session = RecordingSession()
-        session.queue(response)
-        client = ToriiClient(
-            "http://node.test",
-            session=session,
-            operator_signing_context=_operator_context(),
-        )
-        with pytest.raises(error_type, match=message):
-            getattr(client, f"get_sumeragi_{endpoint}")()
-        assert response.was_closed is True, endpoint
-        assert session.calls[0]["url"].endswith(f"/v1/sumeragi/{endpoint}")
-        assert session.calls[0]["headers"]["Accept"] == "application/json"
-        for header in (
-            "X-Iroha-Operator-Public-Key",
-            "X-Iroha-Operator-Timestamp-Ms",
-            "X-Iroha-Operator-Nonce",
-            "X-Iroha-Operator-Signature",
-        ):
-            assert session.calls[0]["headers"][header]
-        assert session.calls[0]["allow_redirects"] is False
-        assert session.calls[0]["data"] is None
-        assert session.calls[0]["stream"] is True
-
-
-def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    settlement["nexus_fee_receipts"] = [_nexus_fee_receipt_payload()]
-    settlement["native_amx_receipts"] = _native_amx_receipt_group()
-    payload["lane_settlement_commitments"] = [settlement]
-
-    parsed = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0]
-
-    assert (
-        parsed["nexus_fee_receipts"][0]["fee_amount"]
-        == CANONICAL_LARGE_FRACTION
-    )
-    assert parsed["nexus_fee_receipts"][0]["schedule"]["per_byte_fee"] == "0.5"
-    native = parsed["native_amx_receipts"][0]
-    assert native["version"] == 2
-    assert native["legs"][0]["prepare_qc"]["body"]["phase"] == {
-        "phase": "prepare",
-        "detail": None,
-    }
-    assert len(native["legs"][0]["commit_qc"]["bls_aggregate_signature"]) == 96
-    leg = native["legs"][0]
-    assert (
-        leg["participant_proposal"]["proposal_hash"]
-        == leg["prepare_qc"]["body"]["participant_proposal_hash"]
-    )
-    assert leg["participant_proposal"]["payload_block_hint"] is None
-    assert (
-        leg["participant_settlement_hash"]
-        == leg["commit_qc"]["body"]["participant_settlement_commitment"]
-    )
-    assert leg["participant_settlement"]["participant_lane_block_height"] == 8
-    assert len(leg["participant_settlement"]["source_ids"]) == 2
-    assert leg["prepare_qc"]["body"]["source_id"] == "AB" * 32
-    assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
-
-
-def test_get_sumeragi_diagnostics_accepts_first_native_amx_participant_block() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    for native in native_group:
-        leg = native["legs"][0]
-        for qc in (leg["prepare_qc"], leg["commit_qc"]):
-            qc["body"]["participant_previous_block_height"] = 0
-            qc["body"]["participant_previous_block_descriptor_hash"] = None
-            qc["body"]["participant_lane_block_height"] = 1
-        descriptor = leg["participant_proposal"]["descriptor"]
-        descriptor["previous_lane_block_height"] = 0
-        del descriptor["previous_lane_block_descriptor_hash"]
-        descriptor["lane_block_height"] = 1
-        leg["participant_settlement"]["participant_lane_block_height"] = 1
-        _seal_native_amx_receipt_payload(native)
-    settlement["native_amx_receipts"] = native_group
-    payload["lane_settlement_commitments"] = [settlement]
-
-    parsed_leg = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0][
-        "native_amx_receipts"
-    ][0]["legs"][0]
-
-    assert parsed_leg["prepare_qc"]["body"]["participant_previous_block_descriptor_hash"] is None
-    assert (
-        "previous_lane_block_descriptor_hash"
-        not in parsed_leg["participant_proposal"]["descriptor"]
-    )
-
-
-def test_get_sumeragi_diagnostics_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    native = native_group[0]
-    leg = native["legs"][0]
-    descriptor = leg["participant_proposal"]["descriptor"]
-    descriptor["accepted_candidate_indices"] = [1]
-    descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x74)]
-    _seal_native_amx_receipt_payload(native)
-    settlement["native_amx_receipts"] = native_group
-    payload["lane_settlement_commitments"] = [settlement]
-
-    parsed_leg = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0][
-        "native_amx_receipts"
-    ][0]["legs"][0]
-
-    assert parsed_leg["requires_mixed_role_anchor_validation"] is True
-
-
-def test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift() -> None:
-    missing_outer_source = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    native_group.pop()
-    settlement["native_amx_receipts"] = native_group
-    missing_outer_source["lane_settlement_commitments"] = [settlement]
-    assert len(_get_sumeragi_diagnostics(missing_outer_source).lane_settlement_commitments[0]["native_amx_receipts"]) == 1
-
-    unordered_outer_sources = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    native_group.reverse()
-    settlement["native_amx_receipts"] = native_group
-    unordered_outer_sources["lane_settlement_commitments"] = [settlement]
-    parsed = _get_sumeragi_diagnostics(unordered_outer_sources).lane_settlement_commitments[0]["native_amx_receipts"]
-    assert [receipt["source_id"] for receipt in parsed] == ["CD" * 32, "AB" * 32]
-
-    unordered_participant_sources = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    native_group[0]["legs"][0]["participant_settlement"]["source_ids"].reverse()
-    settlement["native_amx_receipts"] = native_group
-    unordered_participant_sources["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="canonical commitment"):
-        _get_sumeragi_diagnostics(unordered_participant_sources)
-
-    oversized_outer_group = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    settlement["native_amx_receipts"] = [{}] * 4097
-    oversized_outer_group["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="native_amx_receipts exceeds"):
-        _get_sumeragi_diagnostics(oversized_outer_group)
-
-
-def test_get_sumeragi_diagnostics_rejects_same_route_native_identity_drift() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    leg = native_group[0]["legs"][0]
-    leg["lane_id"] = 2
-    leg["dataspace_id"] = 7
-    for qc in (leg["prepare_qc"], leg["commit_qc"]):
-        qc["body"]["participant_lane_id"] = 2
-        qc["body"]["participant_dataspace_id"] = 7
-        qc["body"]["participant_lane_incarnation"] = _canonical_hash(0x51)
-    descriptor = leg["participant_proposal"]["descriptor"]
-    descriptor["lane_id"] = 2
-    descriptor["dataspace_id"] = 7
-    descriptor["lane_incarnation"] = _canonical_hash(0x51)
-    leg["participant_settlement"]["lane_id"] = 2
-    leg["participant_settlement"]["dataspace_id"] = 7
-    leg["participant_settlement"]["lane_incarnation"] = _canonical_hash(0x51)
-    _seal_native_amx_receipt_payload(native_group[0])
-    settlement["native_amx_receipts"] = native_group
-    payload["lane_settlement_commitments"] = [settlement]
-
-    with pytest.raises(RuntimeError, match="mismatched signed identities"):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_keeps_global_and_coordinator_views_independent() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native_group = _native_amx_receipt_group()
-    for native in native_group:
-        native["lane_block_view"] = 9
-        for qc in (native["legs"][0]["prepare_qc"], native["legs"][0]["commit_qc"]):
-            assert qc["body"]["round"]["view"] == 2
-            qc["body"]["coordinator_lane_block_view"] = 9
-    settlement["native_amx_receipts"] = native_group
-    payload["lane_settlement_commitments"] = [settlement]
-
-    parsed = _get_sumeragi_diagnostics(payload)
-
-    body = parsed.lane_settlement_commitments[0]["native_amx_receipts"][0][
-        "legs"
-    ][0]["prepare_qc"]["body"]
-    assert body["round"]["view"] == 2
-    assert body["coordinator_lane_block_view"] == 9
-
-
-def test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    validators = native["legs"][0]["prepare_qc"]["validator_set"]
-    validators[0], validators[1] = validators[1], validators[0]
-    settlement["native_amx_receipts"] = [native]
-    payload["lane_settlement_commitments"] = [settlement]
-
-    with pytest.raises(
-        RuntimeError, match="strictly ordered by canonical validator id"
-    ):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    payload["native_amx_participant_applications"] = [
-        _native_amx_participant_application_payload()
-    ]
-
-    diagnostics = _get_sumeragi_diagnostics(payload)
-    applications = diagnostics.native_amx_participant_applications
-
-    assert type(diagnostics) is SumeragiDiagnosticsStatus
-    assert applications[0].participant_height == 8
-    assert applications[0].state == "durably_applied"
-
-
-@pytest.mark.parametrize(
-    ("state", "has_application_block"),
-    [
-        pytest.param("certified_pending_carrier", False, id="certified"),
-        pytest.param("committed_evidence_pending", True, id="committed"),
-        pytest.param("durably_applied", True, id="durably-applied"),
-        pytest.param("conflict", False, id="conflict"),
-    ],
-)
-def test_get_sumeragi_diagnostics_accepts_native_application_state_geometry(
-    state: str, has_application_block: bool
-) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    application = _native_amx_participant_application_payload(state=state)
-    if not has_application_block:
-        _set_native_amx_application_without_block(application, state)
-    payload["native_amx_participant_applications"] = [application]
-
-    parsed = _get_sumeragi_diagnostics(
-        payload
-    ).native_amx_participant_applications[0]
-
-    assert parsed.state == state
-    assert (parsed.application_block_height is not None) is has_application_block
-    assert (parsed.application_block_hash is not None) is has_application_block
-
-
-@pytest.mark.parametrize(
-    ("mutate", "error"),
-    [
-        pytest.param(
-            lambda row: row.update(state="applied"),
-            "state has an unknown variant",
-            id="unknown-state",
-        ),
-        pytest.param(
-            lambda row: row.update(state=" conflict "),
-            "state has an unknown variant",
-            id="padded-state",
-        ),
-        pytest.param(
-            lambda row: row.update(
-                state={"state": "durably_applied", "details": None}
-            ),
-            "state has an unknown variant",
-            id="status-style-tagged-state",
-        ),
-        pytest.param(
-            lambda row: row.pop("state"),
-            "missing required field state",
-            id="missing-state",
-        ),
-        pytest.param(
-            lambda row: row.update(legacy_phase="commit"),
-            "unknown field legacy_phase",
-            id="unknown-field",
-        ),
-        pytest.param(
-            lambda row: row.pop("application_block_hash"),
-            "application block height and hash must appear together",
-            id="unpaired-application-block",
-        ),
-        pytest.param(
-            lambda row: row.update(state="certified_pending_carrier"),
-            "state and application block identity disagree",
-            id="certified-with-application-block",
-        ),
-        pytest.param(
-            lambda row: row.update(state="conflict"),
-            "state and application block identity disagree",
-            id="conflict-with-application-block",
-        ),
-        pytest.param(
-            lambda row: _set_native_amx_application_without_block(
-                row, "committed_evidence_pending"
-            ),
-            "state and application block identity disagree",
-            id="committed-without-application-block",
-        ),
-        pytest.param(
-            lambda row: _set_native_amx_application_without_block(
-                row, "durably_applied"
-            ),
-            "state and application block identity disagree",
-            id="durably-applied-without-application-block",
-        ),
-        pytest.param(
-            lambda row: row.update(source_count="2"),
-            "source_count must be an integer",
-            id="quoted-source-count",
-        ),
-        pytest.param(
-            lambda row: row.update(source_count=4_097),
-            "source_count exceeds its protocol bound",
-            id="source-count-overflow",
-        ),
-        pytest.param(
-            lambda row: row.update(descriptor_hash="73" * 32),
-            "descriptor_hash must be a canonical hash literal",
-            id="malformed-hash",
-        ),
-    ],
-)
-def test_get_sumeragi_diagnostics_rejects_invalid_native_application_shapes(
-    mutate: Callable[[Dict[str, Any]], Any],
-    error: str,
-) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    application = _native_amx_participant_application_payload()
-    mutate(application)
-    payload["native_amx_participant_applications"] = [application]
-
-    with pytest.raises(RuntimeError, match=error):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order() -> None:
-    bounded = _sumeragi_diagnostics_payload()
-    bounded["native_amx_participant_applications"] = [
-        _native_amx_participant_application_payload(lane_id=lane_id)
-        for lane_id in range(1_024)
-    ]
-    bounded_applications = _get_sumeragi_diagnostics(
-        bounded
-    ).native_amx_participant_applications
-    assert len(bounded_applications) == 1_024
-
-    oversized = _sumeragi_diagnostics_payload()
-    oversized["native_amx_participant_applications"] = [None] * 1_025
-    with pytest.raises(
-        RuntimeError,
-        match="native_amx_participant_applications exceeds its protocol item bound",
-    ):
-        _get_sumeragi_diagnostics(oversized)
-
-    unordered = _sumeragi_diagnostics_payload()
-    unordered["native_amx_participant_applications"] = [
-        _native_amx_participant_application_payload(lane_id=4),
-        _native_amx_participant_application_payload(lane_id=3),
-    ]
-    with pytest.raises(RuntimeError, match="strictly ordered by route and incarnation"):
-        _get_sumeragi_diagnostics(unordered)
-
-    duplicate = _sumeragi_diagnostics_payload()
-    application = _native_amx_participant_application_payload()
-    duplicate["native_amx_participant_applications"] = [
-        application,
-        copy.deepcopy(application),
-    ]
-    with pytest.raises(RuntimeError, match="strictly ordered by route and incarnation"):
-        _get_sumeragi_diagnostics(duplicate)
-
-
-def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    row = _autonomous_lane_execution_payload()
-    payload["autonomous_lane_executions"] = [row]
-    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
-    assert parsed.merge_entry_hash == _canonical_hash(0x76)
-    assert parsed.application_block_height == 12
-    assert parsed.reservation_owner_hash == _canonical_hash(0x66)
-    assert parsed.proposal_identity_hash == _canonical_hash(0x67)
-    assert parsed.reservation_group_hash == _canonical_hash(0x68)
-
-    payload["autonomous_lane_executions"] = [row, dict(row)]
-    with pytest.raises(RuntimeError, match="strictly ordered"):
-        _get_sumeragi_diagnostics(payload)
-    payload["autonomous_lane_executions"] = [row]
-    row["reservation_count"] = 1
-    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
-        _get_sumeragi_diagnostics(payload)
-    row["highest_durable_stage"] = "conflict"
-    row["stuck_reason"] = "evidence_conflict"
-    assert _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0].stuck_reason == (
-        "evidence_conflict"
-    )
-    row["stuck_reason"] = "awaiting_merge_selection"
-    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
-        _get_sumeragi_diagnostics(payload)
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash"],
-)
-def test_get_sumeragi_diagnostics_requires_provisional_identity_hashes(
-    field: str,
-) -> None:
-    for mutation in ("missing", "zero", "type", "bare-lowercase"):
-        row = _autonomous_lane_execution_payload()
-        if mutation == "missing":
-            del row[field]
-        elif mutation == "zero":
-            row[field] = "hash:" + ("00" * 32) + "#6A0A"
-        elif mutation == "type":
-            row[field] = [1] * 32
-        else:
-            row[field] = "ab" * 32
-        payload = _sumeragi_diagnostics_payload()
-        payload["autonomous_lane_executions"] = [row]
-        with pytest.raises(RuntimeError, match=field):
-            _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_enforces_reservation_only_geometry() -> None:
-    row = _autonomous_lane_execution_payload()
-    row.update(
-        highest_durable_stage="reservations_durable",
-        stuck_reason="awaiting_executable_payload",
-    )
-    for field in (
-        "proposal_view",
-        "proposal_hash",
-        "descriptor_hash",
-        "executable_payload_hash",
-        "source_bundle_hash",
-        "merge_entry_hash",
-        "application_block_height",
-        "application_block_hash",
-    ):
-        del row[field]
-    payload = _sumeragi_diagnostics_payload()
-    payload["autonomous_lane_executions"] = [row]
-    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
-    assert parsed.proposal_hash is None
-    assert parsed.descriptor_hash is None
-    assert parsed.proposal_view is None
-    assert parsed.stuck_reason == "awaiting_executable_payload"
-
-    for field in (
-        "proposal_hash",
-        "executable_payload_hash",
-        "source_bundle_hash",
-        "merge_entry_hash",
-        "application_block_height",
-    ):
-        invalid = copy.deepcopy(row)
-        if field == "proposal_hash":
-            invalid["proposal_hash"] = _canonical_hash(0x79)
-            invalid["descriptor_hash"] = _canonical_hash(0x7A)
-        elif field == "application_block_height":
-            invalid[field] = 12
-            invalid["application_block_hash"] = _canonical_hash(0x7B)
-        else:
-            invalid[field] = _canonical_hash(0x7C)
-        payload["autonomous_lane_executions"] = [invalid]
-        with pytest.raises(RuntimeError, match="finalized identity|evidence"):
-            _get_sumeragi_diagnostics(payload)
-
-    wrong_reason = copy.deepcopy(row)
-    wrong_reason["stuck_reason"] = "awaiting_payload_availability"
-    payload["autonomous_lane_executions"] = [wrong_reason]
-    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
-        _get_sumeragi_diagnostics(payload)
-
-    mismatched_counts = copy.deepcopy(row)
-    mismatched_counts["reservation_count"] = 1
-    payload["autonomous_lane_executions"] = [mismatched_counts]
-    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
-        _get_sumeragi_diagnostics(payload)
-
-    null_view = copy.deepcopy(row)
-    null_view["proposal_view"] = None
-    payload["autonomous_lane_executions"] = [null_view]
-    assert _get_sumeragi_diagnostics(
-        payload
-    ).autonomous_lane_executions[0].proposal_view is None
-
-    present_view = copy.deepcopy(row)
-    present_view["proposal_view"] = 0
-    payload["autonomous_lane_executions"] = [present_view]
-    with pytest.raises(RuntimeError, match="proposal view disagrees"):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    for missing_field in ("proposal_hash", "descriptor_hash"):
-        row = _autonomous_lane_execution_payload()
-        del row[missing_field]
-        payload["autonomous_lane_executions"] = [row]
-        with pytest.raises(RuntimeError, match="must appear together"):
-            _get_sumeragi_diagnostics(payload)
-
-    row = _autonomous_lane_execution_payload()
-    row["proposal_hash"] = None
-    row["descriptor_hash"] = None
-    payload["autonomous_lane_executions"] = [row]
-    with pytest.raises(RuntimeError, match="finalized identity disagrees"):
-        _get_sumeragi_diagnostics(payload)
-
-    missing_view = _autonomous_lane_execution_payload()
-    del missing_view["proposal_view"]
-    payload["autonomous_lane_executions"] = [missing_view]
-    assert _get_sumeragi_diagnostics(
-        payload
-    ).autonomous_lane_executions[0].proposal_view is None
-
-    first = _autonomous_lane_execution_payload()
-    same_provisional_identity = copy.deepcopy(first)
-    same_provisional_identity["proposal_hash"] = _canonical_hash(0x7D)
-    same_provisional_identity["descriptor_hash"] = _canonical_hash(0x7E)
-    payload["autonomous_lane_executions"] = [first, same_provisional_identity]
-    with pytest.raises(RuntimeError, match="strictly ordered"):
-        _get_sumeragi_diagnostics(payload)
-
-    first["proposal_identity_hash"] = _canonical_hash(0x90)
-    ordering_drift = copy.deepcopy(first)
-    ordering_drift["proposal_identity_hash"] = _canonical_hash(0x80)
-    ordering_drift["proposal_hash"] = _canonical_hash(0x91)
-    ordering_drift["descriptor_hash"] = _canonical_hash(0x92)
-    payload["autonomous_lane_executions"] = [first, ordering_drift]
-    with pytest.raises(RuntimeError, match="strictly ordered"):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_parses_npos_epoch_and_byte_seed() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    payload["npos"] = {
-        "epoch_length_blocks": 100,
-        "epoch_seed": [1] * 32,
-        "prf_height": 10,
-        "prf_view": 2,
-    }
-
-    npos = _get_sumeragi_diagnostics(payload).npos
-
-    assert npos is not None
-    assert npos.epoch_seed == (1,) * 32
-
-    for retired in (
-        "vrf_commit_deadline_offset",
-        "vrf_reveal_deadline_offset",
-        "vrf_penalty_epoch",
-    ):
-        hostile = copy.deepcopy(payload)
-        hostile["npos"][retired] = 1
-        with pytest.raises(RuntimeError, match=f"contains unknown field {retired}"):
-            _get_sumeragi_diagnostics(hostile)
-
-
-def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering() -> None:
-    def extra_leg_field(leg: Dict[str, Any]) -> None:
-        leg["future_leg_field"] = 1
-
-    def missing_settlement_hash(leg: Dict[str, Any]) -> None:
-        del leg["participant_settlement_hash"]
-
-    def wrong_proposal_type(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"] = []
-
-    def wrong_settlement_hash_type(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement_hash"] = 7
-
-    def set_phase_string(leg: Dict[str, Any]) -> None:
-        leg["prepare_qc"]["body"]["phase"] = "prepare"
-
-    def missing_body_field(leg: Dict[str, Any]) -> None:
-        del leg["prepare_qc"]["body"]["participant_lane_block_height"]
-
-    def extra_body_field(leg: Dict[str, Any]) -> None:
-        leg["prepare_qc"]["body"]["future_participant_field"] = 1
-
-    def wrong_body_type(leg: Dict[str, Any]) -> None:
-        leg["prepare_qc"]["body"]["participant_lane_block_view"] = "1"
-
-    def mismatch_commit_identity(leg: Dict[str, Any]) -> None:
-        leg["commit_qc"]["body"]["participant_proposal_hash"] = _canonical_hash(0x75)
-
-    def mismatch_proposal_hash(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["proposal_hash"] = _canonical_hash(0x75)
-
-    def missing_payload_hint(leg: Dict[str, Any]) -> None:
-        del leg["participant_proposal"]["payload_block_hint"]
-
-    def nonnull_payload_hint(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["payload_block_hint"] = {}
-
-    def extra_proposal_field(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["future_proposal_field"] = None
-
-    def missing_descriptor_field(leg: Dict[str, Any]) -> None:
-        del leg["participant_proposal"]["descriptor"]["subject_hash"]
-
-    def extra_descriptor_field(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["descriptor"]["future_descriptor_field"] = 1
-
-    def missing_predecessor(leg: Dict[str, Any]) -> None:
-        del leg["participant_proposal"]["descriptor"]["previous_lane_block_descriptor_hash"]
-
-    def null_non_genesis_predecessor(leg: Dict[str, Any]) -> None:
-        for qc in (leg["prepare_qc"], leg["commit_qc"]):
-            qc["body"]["participant_previous_block_descriptor_hash"] = None
-
-    def nonnull_genesis_predecessor(leg: Dict[str, Any]) -> None:
-        for qc in (leg["prepare_qc"], leg["commit_qc"]):
-            qc["body"]["participant_previous_block_height"] = 0
-            qc["body"]["participant_lane_block_height"] = 1
-
-    def explicit_null_genesis_descriptor(leg: Dict[str, Any]) -> None:
-        for qc in (leg["prepare_qc"], leg["commit_qc"]):
-            qc["body"]["participant_previous_block_height"] = 0
-            qc["body"]["participant_previous_block_descriptor_hash"] = None
-            qc["body"]["participant_lane_block_height"] = 1
-        descriptor = leg["participant_proposal"]["descriptor"]
-        descriptor["previous_lane_block_height"] = 0
-        descriptor["previous_lane_block_descriptor_hash"] = None
-        descriptor["lane_block_height"] = 1
-        leg["participant_settlement"]["participant_lane_block_height"] = 1
-
-    def mismatch_proposal_route(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["descriptor"]["lane_id"] = 99
-
-    def mismatch_proposal_height(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["descriptor"]["proposal_height"] = 11
-
-    def mismatch_settlement_hash(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement_hash"] = _canonical_hash(0x79)
-
-    def mismatch_settlement_route(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["lane_id"] = 99
-
-    def nonzero_participant_effect(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["total_local_amount"] = "1"
-
-    def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["source_ids"][0] = "EF" * 32
-
-    def duplicate_settlement_source(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["source_ids"][1] = "AB" * 32
-
-    def wrong_settlement_tx_count(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["tx_count"] = 1
-
-    def empty_settlement(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["source_ids"] = []
-
-    def oversized_settlement(leg: Dict[str, Any]) -> None:
-        receipt = copy.deepcopy(leg["participant_settlement"]["source_ids"][0])
-        leg["participant_settlement"]["source_ids"] = [receipt] * 4097
-
-    def empty_recursive_settlement(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["native_amx_receipts"] = []
-
-    def recursive_settlement(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["native_amx_receipts"] = [{}]
-
-    mutations = (
-        extra_leg_field,
-        missing_settlement_hash,
-        wrong_proposal_type,
-        wrong_settlement_hash_type,
-        set_phase_string,
-        missing_body_field,
-        extra_body_field,
-        wrong_body_type,
-        mismatch_commit_identity,
-        mismatch_proposal_hash,
-        missing_payload_hint,
-        nonnull_payload_hint,
-        extra_proposal_field,
-        missing_descriptor_field,
-        extra_descriptor_field,
-        missing_predecessor,
-        null_non_genesis_predecessor,
-        nonnull_genesis_predecessor,
-        explicit_null_genesis_descriptor,
-        mismatch_proposal_route,
-        mismatch_proposal_height,
-        mismatch_settlement_hash,
-        mismatch_settlement_route,
-        nonzero_participant_effect,
-        mismatch_settlement_source,
-        duplicate_settlement_source,
-        wrong_settlement_tx_count,
-        empty_settlement,
-        oversized_settlement,
-        empty_recursive_settlement,
-        recursive_settlement,
-    )
-    for mutate in mutations:
-        payload = _sumeragi_diagnostics_payload()
-        settlement = _lane_settlement_payload()
-        native = _native_amx_receipt_payload()
-        mutate(native["legs"][0])
-        settlement["native_amx_receipts"] = [native]
-        payload["lane_settlement_commitments"] = [settlement]
-        with pytest.raises(RuntimeError, match="."):
-            _get_sumeragi_diagnostics(payload)
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        7,
-        True,
-        "01",
-        "1.0",
-        "1.",
-        "-1",
-        "1e3",
-        "not-a-quantity",
-        "0.00000000000000000000000000001",
-        str(1 << 511),
-        "1" * 156,
-    ],
-)
-def test_get_sumeragi_diagnostics_rejects_noncanonical_quantity_json(invalid: Any) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    settlement["total_local_amount"] = invalid
-    payload["lane_settlement_commitments"] = [settlement]
-
-    with pytest.raises(
-        RuntimeError,
-        match="total_local_amount.*(?:quantity|canonical|length|512-bit)",
-    ):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_preserves_exact_quantity_boundaries() -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    maximum = str((1 << 511) - 1)
-    scale_28_maximum = f"{maximum[:126]}.{maximum[126:]}"
-    assert len(scale_28_maximum) == 155
-    settlement["total_local_amount"] = scale_28_maximum
-    settlement["total_xor_due"] = "0.0000000000000000000000000001"
-    settlement["total_xor_after_haircut"] = "123.000000001"
-    settlement["total_xor_variance"] = "0"
-    settlement["receipts"][0].update(
-        {
-            "local_amount": maximum,
-            "xor_due": "0.0000000000000000000000000001",
-            "xor_after_haircut": "123.000000001",
-            "xor_variance": "0",
-        }
-    )
-    payload["lane_settlement_commitments"] = [settlement]
-
-    parsed = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0]
-
-    assert parsed["total_local_amount"] == scale_28_maximum
-    assert parsed["total_xor_due"] == "0.0000000000000000000000000001"
-    assert parsed["receipts"][0]["xor_after_haircut"] == "123.000000001"
-
-
-@pytest.mark.parametrize(
-    "retired_field",
-    [
-        "total_local_micro",
-        "total_xor_due_micro",
-        "total_xor_after_haircut_micro",
-        "total_xor_variance_micro",
-    ],
-)
-def test_get_sumeragi_diagnostics_rejects_retired_settlement_fields(
-    retired_field: str,
-) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    settlement[retired_field] = "0"
-    payload["lane_settlement_commitments"] = [settlement]
-
-    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
-        _get_sumeragi_diagnostics(payload)
-
-
-@pytest.mark.parametrize(
-    "retired_field",
-    [
-        "local_amount_micro",
-        "xor_due_micro",
-        "xor_after_haircut_micro",
-        "xor_variance_micro",
-    ],
-)
-def test_get_sumeragi_diagnostics_rejects_retired_settlement_receipt_fields(
-    retired_field: str,
-) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    settlement["receipts"][0][retired_field] = "0"
-    payload["lane_settlement_commitments"] = [settlement]
-
-    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
-        _get_sumeragi_diagnostics(payload)
-
-
-def test_get_sumeragi_diagnostics_rejects_noncanonical_fixed_hex_and_nested_unknown_fields() -> None:
-    lowercase = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    fee = _nexus_fee_receipt_payload()
-    fee["source_id"] = "ab" * 32
-    settlement["nexus_fee_receipts"] = [fee]
-    lowercase["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="source_id.*uppercase"):
-        _get_sumeragi_diagnostics(lowercase)
-
-    unknown_fee = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    fee = _nexus_fee_receipt_payload()
-    fee["schedule"]["legacy_rate"] = "1"
-    settlement["nexus_fee_receipts"] = [fee]
-    unknown_fee["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="schedule contains unknown field legacy_rate"):
-        _get_sumeragi_diagnostics(unknown_fee)
-
-    overflowing = "9" * 155
-    for invalid in [
-        1,
-        1.5,
-        "+1",
-        "01",
-        "1.0",
-        "1.2300",
-        " 1",
-        "1 ",
-        "-1",
-        overflowing,
-    ]:
-        invalid_fee = _sumeragi_diagnostics_payload()
-        settlement = _lane_settlement_payload()
-        fee = _nexus_fee_receipt_payload()
-        fee["fee_amount"] = invalid
-        settlement["nexus_fee_receipts"] = [fee]
-        invalid_fee["lane_settlement_commitments"] = [settlement]
-        with pytest.raises(RuntimeError, match="fee_amount.*(?:quantity|512-bit)"):
-            _get_sumeragi_diagnostics(invalid_fee)
-
-    invalid_schedule = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    fee = _nexus_fee_receipt_payload()
-    fee["schedule"]["base_fee"] = "2.0"
-    settlement["nexus_fee_receipts"] = [fee]
-    invalid_schedule["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="base_fee.*quantity"):
-        _get_sumeragi_diagnostics(invalid_schedule)
-
-    unknown_amx = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    native["legs"][0]["prepare_qc"]["body"]["legacy_round"] = 1
-    settlement["native_amx_receipts"] = [native]
-    unknown_amx["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="body contains unknown field legacy_round"):
-        _get_sumeragi_diagnostics(unknown_amx)
-
-
-def test_get_sumeragi_diagnostics_rejects_nested_receipt_coordinate_and_qc_tampering() -> None:
-    wrong_coordinate = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    fee = _nexus_fee_receipt_payload()
-    fee["block_height"] = 8
-    settlement["nexus_fee_receipts"] = [fee]
-    wrong_coordinate["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="receipt coordinates do not match"):
-        _get_sumeragi_diagnostics(wrong_coordinate)
-    for bitmap in ([0x03], [0x0F]):
-        invalid_quorum = _sumeragi_diagnostics_payload()
-        settlement = _lane_settlement_payload()
-        native = _native_amx_receipt_payload()
-        native["legs"][0]["prepare_qc"]["signers_bitmap"] = bitmap
-        settlement["native_amx_receipts"] = [native]
-        invalid_quorum["lane_settlement_commitments"] = [settlement]
-        with pytest.raises(RuntimeError, match="signers_bitmap does not carry the exact quorum"):
-            _get_sumeragi_diagnostics(invalid_quorum)
-    malformed_pop = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    native["legs"][0]["commit_qc"]["validator_set_pops"][0] = [1] * 95
-    settlement["native_amx_receipts"] = [native]
-    malformed_pop["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match=r"validator_set_pops\[0\].*96"):
-        _get_sumeragi_diagnostics(malformed_pop)
-
-    mismatched_phase_identity = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    native["legs"][0]["commit_qc"]["body"]["plan_digest"] = _canonical_hash(0x70)
-    settlement["native_amx_receipts"] = [native]
-    mismatched_phase_identity["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="prepare and commit identities differ"):
-        _get_sumeragi_diagnostics(mismatched_phase_identity)
-
-
-def test_get_sumeragi_diagnostics_rejects_bounded_vector_overflow_before_nested_decode() -> None:
-    too_many_settlements = _sumeragi_diagnostics_payload()
-    too_many_settlements["lane_settlement_commitments"] = [{}] * 129
-    with pytest.raises(RuntimeError, match="lane_settlement_commitments exceeds"):
-        _get_sumeragi_diagnostics(too_many_settlements)
-
-    too_many_relays = _sumeragi_diagnostics_payload()
-    too_many_relays["lane_relay_envelopes"] = [{}] * 65
-    with pytest.raises(RuntimeError, match="lane_relay_envelopes exceeds"):
-        _get_sumeragi_diagnostics(too_many_relays)
-
-    too_many_legs = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    native["legs"] = native["legs"] * 256
-    settlement["native_amx_receipts"] = [native]
-    too_many_legs["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="legs exceeds"):
-        _get_sumeragi_diagnostics(too_many_legs)
-
-
-def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> None:
-    legacy_field = _sumeragi_v2_status_payload()
-    legacy_field["mode_tag"] = "retired"
-    with pytest.raises(RuntimeError, match="unknown field mode_tag"):
-        _get_sumeragi_status(legacy_field)
-
-    wrong_version = _sumeragi_v2_status_payload()
-    wrong_version["protocol_version"] = 3
-    with pytest.raises(RuntimeError, match="protocol_version must equal 4"):
-        _get_sumeragi_status(wrong_version)
-
-    missing_restart_required = _sumeragi_v2_status_payload()
-    del missing_restart_required["restart_required"]
-    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
-        _get_sumeragi_status(missing_restart_required)
-
-    invalid_restart_required = _sumeragi_v2_status_payload()
-    invalid_restart_required["restart_required"] = 0
-    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
-        _get_sumeragi_status(invalid_restart_required)
-
-    quoted_height = _sumeragi_v2_status_payload()
-    quoted_height["height"] = "10"
-    with pytest.raises(RuntimeError, match="height must be an integer"):
-        _get_sumeragi_status(quoted_height)
-
-    wrong_quorum = _sumeragi_v2_status_payload()
-    wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
-    with pytest.raises(RuntimeError, match="quorum is not canonical"):
-        _get_sumeragi_status(wrong_quorum)
-
-    missing_enum_details = _sumeragi_v2_status_payload()
-    del missing_enum_details["phase"]["details"]
-    with pytest.raises(RuntimeError, match="phase.details must be explicitly null"):
-        _get_sumeragi_status(missing_enum_details)
-
-    wrong_leader = _sumeragi_v2_status_payload()
-    wrong_leader["leader"] = 4
-    with pytest.raises(RuntimeError, match="leader must index"):
-        _get_sumeragi_status(wrong_leader)
-
-    wrong_subject = _sumeragi_v2_status_payload()
-    wrong_subject["last_commit_qc"]["certificate"]["subject"]["block_hash"] = (
-        _canonical_hash(0x77)
-    )
-    with pytest.raises(RuntimeError, match="does not certify the committed subject"):
-        _get_sumeragi_status(wrong_subject)
-
-    missing_proposal_round = _sumeragi_v2_status_payload()
-    del missing_proposal_round["last_commit_qc"]["certificate"]["proposal_round"]
-    with pytest.raises(RuntimeError, match="proposal_round"):
-        _get_sumeragi_status(missing_proposal_round)
-
-    foreign_proposal_round = _sumeragi_v2_status_payload()
-    foreign_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
-        "context_id"
-    ] = [_canonical_hash(0x42)]
-    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
-        _get_sumeragi_status(foreign_proposal_round)
-
-    wrong_proposal_height = _sumeragi_v2_status_payload()
-    wrong_proposal_height["last_commit_qc"]["certificate"]["proposal_round"][
-        "height"
-    ] = 8
-    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
-        _get_sumeragi_status(wrong_proposal_height)
-
-    future_proposal_round = _sumeragi_v2_status_payload()
-    future_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
-        "view"
-    ] = 2
-    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
-        _get_sumeragi_status(future_proposal_round)
-    underpowered = _sumeragi_v2_status_payload()
-    underpowered["last_commit_qc"]["signed_power"] = 2
-    with pytest.raises(RuntimeError, match="exact frozen certificate quorum"):
-        _get_sumeragi_status(underpowered)
-    overcomplete = _sumeragi_v2_status_payload()
-    overcomplete["last_commit_qc"].update(signer_count=4, signed_power=4)
-    with pytest.raises(RuntimeError, match="exact frozen certificate quorum"):
-        _get_sumeragi_status(overcomplete)
-    weighted_npos = _sumeragi_v2_status_payload()
-    weighted_npos["height_context"]["mode"] = {"mode": "npos", "details": None}
-    weighted_npos["height_context"]["quorum"]["total_power"] = 5
-    with pytest.raises(RuntimeError, match="quorum is not canonical"):
-        _get_sumeragi_status(weighted_npos)
-    invalid_geometry = _sumeragi_v2_status_payload()
-    invalid_geometry["height_context"]["validator_count"] = 5
-    invalid_geometry["height_context"]["quorum"]["min_signers"] = 4
-    invalid_geometry["height_context"]["quorum"]["total_power"] = 5
-    with pytest.raises(RuntimeError, match="quorum is not canonical"):
-        _get_sumeragi_status(invalid_geometry)
-
-
-def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
-    payload = _sumeragi_v2_status_payload()
-    payload["last_committed_subject"] = None
-    payload["last_commit_qc"] = None
-
-    status = _get_sumeragi_status(payload)
-
-    assert status.last_committed_height == 9
-    assert status.last_committed_subject is None
-    assert status.last_commit_qc is None
-
-
-def test_get_sumeragi_diagnostics_rejects_impossible_queue_bounds() -> None:
-    depth_overflow = _sumeragi_diagnostics_payload()
-    depth_overflow["tx_queue_depth"] = 33
-    with pytest.raises(RuntimeError, match="queue depth exceeds capacity"):
-        _get_sumeragi_diagnostics(depth_overflow)
-
-    byte_overflow = _sumeragi_diagnostics_payload()
-    byte_overflow["tx_queue_retained_bytes"] = 65537
-    with pytest.raises(RuntimeError, match="retained queue bytes exceed"):
-        _get_sumeragi_diagnostics(byte_overflow)
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "lane_settlement_commitments",
-        "lane_relay_envelopes",
-        "lane_payload_ownerships",
-        "committed_lane_blocks",
-        "lane_block_sessions",
-        "autonomous_lane_executions",
-    ],
-)
-def test_get_sumeragi_diagnostics_requires_all_canonical_lane_arrays(
-    field: str,
-) -> None:
-    payload = _sumeragi_diagnostics_payload()
-    del payload[field]
-
-    with pytest.raises(RuntimeError, match=rf"missing required field {field}"):
-        _get_sumeragi_diagnostics(payload)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @pytest.mark.parametrize(
@@ -7987,66 +6054,10 @@ def test_get_configuration_returns_snapshot() -> None:
     assert transport.norito_rpc.canary_allowlist_size == 3
 
 
-def test_get_sumeragi_qc_parses_authoritative_v2_references() -> None:
-    highest = copy.deepcopy(_sumeragi_v2_status_payload()["last_commit_qc"]["certificate"])
-    highest["phase"] = {"phase": "prepare", "details": None}
-    locked = copy.deepcopy(highest)
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "highest_prepare_qc": highest,
-                "locked_prepare_qc": locked,
-            }
-        )
-    )
-    client = ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    )
-
-    snapshot = client.get_sumeragi_qc()
-
-    assert snapshot.highest_prepare_qc is not None
-    assert snapshot.highest_prepare_qc.round.height == 9
-    assert snapshot.highest_prepare_qc.phase == "prepare"
-    assert snapshot.locked_prepare_qc is not None
-    assert snapshot.locked_prepare_qc.subject.block_hash == _canonical_hash(0x32)
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/qc")
 
 
-def test_get_sumeragi_qc_rejects_pre_release_snapshot_shape() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "highest_qc": {"height": 10, "view": 2, "subject_block_hash": "aa11"},
-                "locked_qc": {"height": 9, "view": 1, "subject_block_hash": None},
-            }
-        )
-    )
-    client = ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    )
-
-    with pytest.raises(RuntimeError, match="unknown field highest_qc"):
-        client.get_sumeragi_qc()
 
 
-def test_get_sumeragi_qc_requires_both_nullable_slots() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"highest_prepare_qc": None}))
-    client = ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    )
-
-    with pytest.raises(RuntimeError, match=r"locked_prepare_qc is required"):
-        client.get_sumeragi_qc()
 
 
 def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
@@ -9436,13 +7447,13 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
     assert snapshot.status.consensus_caps.rbc_chunk_max_bytes == 1024
 
 
-def test_contract_prepare_rejects_ordinary_payload_before_returning_signable_draft() -> None:
+def test_contract_prepare_rejects_retired_extra_slot_before_returning_signable_draft() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=200, payload=_contract_call_draft(
-        fee_payment=_authority_fee_payment(5000), admission_intent=0,
+        fee_payment=_authority_fee_payment(5000), retired_admission_tag=0,
     )))
     client = ToriiClient("https://node.test", session=session, local_signing_context=_local_signing_context())
-    with pytest.raises(RuntimeError, match="admission_intent"):
+    with pytest.raises(RuntimeError, match="trailing bytes"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER, contract_alias="router::universal", entrypoint="ping",
             fee_payment=_authority_fee_payment(5000), draft_intent=_contract_draft_intent(),
@@ -9495,19 +7506,17 @@ def test_mock_contract_prepare_requires_explicit_exact_payload_fixture() -> None
             timeout=5.0,
         )
         assert response.status_code == 503
-        assert "QueuePlanSynced" in response.json()["error"]
+        assert "canonical contract draft fixture" in response.json()["error"]
         assert "transaction_payload_b64" not in response.json()
     finally:
         server.stop()
 
 
-@pytest.mark.parametrize("expected_intent,accepted_tag,rejected_tag", [
-    ("queue_plan_synced", 1, 0), ("ordinary", 0, 1),
-])
-def test_unsigned_admission_binding_is_specific_to_the_selected_api(
-    monkeypatch: pytest.MonkeyPatch, expected_intent: str, accepted_tag: int, rejected_tag: int,
+@pytest.mark.parametrize("retired_tag", [0, 1, 2])
+def test_unsigned_canonical_layout_rejects_every_retired_admission_slot(
+    monkeypatch: pytest.MonkeyPatch, retired_tag: int,
 ) -> None:
-    # This unit isolates the admission field comparison; native AccountId codec
+    # This unit isolates exact canonical field count; native AccountId codec
     # and authenticated HTTP boundaries are exercised by their separate tests.
     authority_archive = bytes.fromhex("000000000100")
     monkeypatch.setattr(client_module, "_multisig_account_id_archive", lambda _: authority_archive)
@@ -9519,19 +7528,19 @@ def test_unsigned_admission_binding_is_specific_to_the_selected_api(
         authority_archive, (42).to_bytes(8, "little"), _CONTRACT_DRAFT_EXECUTABLE,
         b"\x01" + field((100_000).to_bytes(8, "little")), b"\x00",
         client_module._multisig_fee_payment_archive(fee_payment),
-        accepted_tag.to_bytes(4, "little"), _CONTRACT_DRAFT_METADATA, b"\x00",
+        _CONTRACT_DRAFT_METADATA, b"\x00",
     ]
     kwargs = dict(signing_context=context, authority=CANONICAL_OWNER, creation_time_ms=42,
                   fee_payment=fee_payment, executable_b64=base64.b64encode(_CONTRACT_DRAFT_EXECUTABLE).decode(),
                   metadata_b64=base64.b64encode(_CONTRACT_DRAFT_METADATA).decode(),
-                  expected_admission_intent=expected_intent, context="fixture")
+                  context="fixture")
     accepted = b"".join(field(value) for value in parts)
     client_module._validate_exact_unsigned_transaction_intent(
         client_module._transaction_payload_bindings(accepted), **kwargs,
     )
-    parts[7] = rejected_tag.to_bytes(4, "little")
+    parts.insert(7, retired_tag.to_bytes(4, "little"))
     rejected = b"".join(field(value) for value in parts)
-    with pytest.raises(RuntimeError, match="admission_intent"):
+    with pytest.raises(RuntimeError, match="trailing bytes"):
         client_module._validate_exact_unsigned_transaction_intent(
             client_module._transaction_payload_bindings(rejected), **kwargs,
         )

@@ -144,11 +144,6 @@ max_window_slots = 16
 [nexus.commit]
 window_slots = 2
 
-[nexus.lane_relay_emergency]
-enabled = false
-multisig_threshold = 3
-multisig_members = 5
-
 [nexus.da]
 q_in_slot_total = 2048
 q_in_slot_per_ds_min = 8

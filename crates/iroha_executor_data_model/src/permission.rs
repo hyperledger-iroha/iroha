@@ -42,11 +42,6 @@ pub mod peer {
         #[derive(Copy)]
         pub struct CanManagePeers;
     }
-    permission! {
-        /// Permission allowing a multisig operator to manage lane-relay emergency rosters.
-        #[derive(Copy)]
-        pub struct CanManageLaneRelayEmergency;
-    }
 }
 /// Permission tokens scoped to domains.
 pub mod domain {

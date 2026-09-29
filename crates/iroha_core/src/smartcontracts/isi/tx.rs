@@ -565,11 +565,11 @@ impl FinalizedExecutionCarrier {
     pub fn block(&self) -> &std::sync::Arc<SignedBlock> {
         &self.block
     }
-    /// Exact QC-authenticated wire bytes charged before body I/O.
+    /// Aggregate native source bytes charged before body I/O, including genesis and H2.
     pub fn wire_bytes(&self) -> u64 {
         self.wire_bytes
     }
-    /// Complete source/output work, with one unit for an empty carrier.
+    /// Native source frames plus complete target validation work, including empty carriers.
     pub fn work_items(&self) -> u64 {
         self.work_items
     }
@@ -579,41 +579,66 @@ impl FinalizedExecutionCarrier {
     }
 }
 
-/// Read one exact finalized carrier within explicit finite work and wire limits.
+/// Read a complete native execution from an independently configured, immutable State cut.
 ///
-/// Full source/output/cache validation finishes before returning any row. The
-/// expected height/hash must come from the caller's canonical history owner.
+/// This is an offchain boundary: every native prefix frame is admitted before reading and
+/// verified from signed genesis. Source frames/bytes count against the same finite caller
+/// budget as output validation; a genesis result requires its actual H2 successor.
+/// Deterministic instructions use their original State history owner, not this local QC path.
 /// # Errors
-/// Rejects zero/exceeded bounds, absent/corrupt finality or wire, retired context,
-/// and invalid complete source/output ownership or cache.
-pub fn read_finalized_execution_carrier(
+/// Rejects zero/exceeded bounds, unavailable or changed source frames, invalid native
+/// authority and inconsistent complete outputs. No partial carrier escapes on refusal.
+pub(crate) fn read_finalized_execution_carrier(
     kura: &crate::kura::Kura,
+    chain_id: &iroha_model_base::chain::ChainId,
+    network: iroha_data_model::NetworkId,
+    hashes: &dyn crate::state::BlockHashRead,
     height: NonZeroUsize,
     expected_hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
 ) -> Result<FinalizedExecutionCarrier, QueryExecutionFail> {
+    use crate::sumeragi::certified_chain::{
+        NativeExecutionReadError, NativeExecutionReadLimits, read_authenticated_execution,
+    };
     if max_work == 0 || max_bytes == 0 {
         return Err(QueryExecutionFail::GasBudgetExceeded);
     }
-    let (durable_height, wire_len) = kura
-        .durable_block_payload_len_by_hash(expected_hash)
-        .map_err(canonical_transaction_history_error)?
-        .ok_or_else(|| canonical_transaction_history_error("finalized carrier is unavailable"))?;
-    if usize::try_from(durable_height).ok() != Some(height.get()) {
+    let height_u64 =
+        u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    if hashes.hash_at(height.get() - 1).copied() != Some(expected_hash) {
         return Err(canonical_transaction_history_error(
-            "carrier height differs from its canonical binding",
+            "requested execution is outside its original State hash cut",
         ));
     }
-    if wire_len > max_bytes {
+    // Admit the exact target before the prefix's first body read. Occupied metadata is
+    // untrusted until the actual native certificates authenticate all these same frames.
+    let target = kura
+        .native_frame_read(height_u64, expected_hash)
+        .map_err(canonical_transaction_history_error)?
+        .ok_or_else(|| canonical_transaction_history_error("native carrier is unavailable"))?;
+    let target_wire_bytes = target.wire_len();
+    if target_wire_bytes > max_bytes {
         return Err(QueryExecutionFail::GasBudgetExceeded);
     }
-    let block = kura
-        .read_block_body_with_wire_bound(height, expected_hash, wire_len)
-        .map_err(canonical_transaction_history_error)?
-        .ok_or_else(|| {
-            canonical_transaction_history_error("finalized carrier body is unavailable")
-        })?;
+    let verified = read_authenticated_execution(
+        kura,
+        chain_id,
+        network,
+        hashes,
+        height_u64,
+        NativeExecutionReadLimits {
+            admitted_target_wire_bytes: target_wire_bytes,
+            max_source_blocks: max_work,
+            max_source_wire_bytes: max_bytes,
+            max_frame_wire_bytes: max_bytes,
+        },
+    )
+    .map_err(|error| match error {
+        NativeExecutionReadError::Capacity { .. } => QueryExecutionFail::GasBudgetExceeded,
+        error => canonical_transaction_history_error(error),
+    })?;
+    let block = std::sync::Arc::clone(verified.authority.block());
     let work = u64::try_from(
         block
             .network_entrypoint_count()
@@ -621,6 +646,9 @@ pub fn read_finalized_execution_carrier(
             .max(1),
     )
     .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    let work = work
+        .checked_add(verified.source_blocks)
+        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
     if work > max_work {
         return Err(QueryExecutionFail::GasBudgetExceeded);
     }
@@ -637,7 +665,7 @@ pub fn read_finalized_execution_carrier(
         .map_err(canonical_transaction_history_error)?;
     Ok(FinalizedExecutionCarrier {
         block,
-        wire_bytes: wire_len,
+        wire_bytes: verified.source_wire_bytes,
         work_items: work,
     })
 }
@@ -649,15 +677,19 @@ pub fn read_finalized_execution_carrier(
 /// # Errors
 /// Propagates complete finalized-carrier admission and validation failures.
 pub fn visit_finalized_network_transactions(
-    kura: &crate::kura::Kura,
+    state: &crate::state::State,
     height: NonZeroUsize,
     expected_hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
     mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
 ) -> Result<BlockHeader, QueryExecutionFail> {
-    let carrier =
-        read_finalized_execution_carrier(kura, height, expected_hash, max_work, max_bytes)?;
+    let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
+    if carrier.block().hash() != expected_hash {
+        return Err(canonical_transaction_history_error(
+            "native carrier differs from the caller's exact committed binding",
+        ));
+    }
     let block = carrier.block();
     for index in 0..block.network_entrypoint_count() {
         let entrypoint = block
@@ -982,15 +1014,16 @@ pub fn indexed_kaigi_signal_candidates_page(
                 .and_then(NonZeroUsize::new)
                 .ok_or(QueryExecutionFail::CursorMismatch)?;
             let loaded = (|| {
-                let block = state_ro
-                    .canonical_history()
-                    .executed_block(height, |wire_bytes| {
-                        if work.try_charge(limits, wire_bytes, 0, 1) {
+                let block = state_ro.canonical_history().executed_block(
+                    height,
+                    |source_blocks, wire_bytes| {
+                        if work.try_charge(limits, wire_bytes, 0, source_blocks) {
                             Ok(())
                         } else {
                             Err(QueryExecutionFail::GasBudgetExceeded)
                         }
-                    })?;
+                    },
+                )?;
                 if block.hash() != position.block_hash() {
                     return Err(QueryExecutionFail::Expired);
                 }
@@ -1133,7 +1166,9 @@ pub(crate) fn visit_committed_transactions(
     for height in heights {
         let block = state_ro
             .canonical_history()
-            .executed_block(height, |wire_len| before_project(1, wire_len))?;
+            .executed_block(height, |source_blocks, wire_len| {
+                before_project(source_blocks, wire_len)
+            })?;
         let work = block
             .network_entrypoint_count()
             .max(block.execution_outputs().len())
@@ -1547,7 +1582,6 @@ pub(crate) mod tests {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();
@@ -1779,22 +1813,15 @@ pub(crate) mod tests {
     }
     #[test]
     fn finalized_carrier_reader_and_state_wrapper_admit_exact_wire_and_work() {
-        let fixture = canonical_query_fixture();
-        let height = fixture.target_height;
-        let expected = &fixture.store.blocks[height.get() - 1];
-        let bytes = fixture.store.wire_bytes([height.get()]);
-        let work = u64::try_from(
-            expected
-                .network_entrypoint_count()
-                .max(expected.execution_outputs().len())
-                .max(1),
-        )
-        .unwrap();
-        let kura = &fixture.store.kura;
+        let chain = super::native_carrier_reader_tests::chain();
+        let height = NonZeroUsize::new(2).unwrap();
+        let expected_receipt = chain.committed(2);
+        let expected = expected_receipt.block();
+        let (work, bytes) = super::native_carrier_reader_tests::bounds(&chain, 2);
+        let kura = chain.kura();
         kura.reset_canonical_query_reads_for_test();
-        let read = fixture
-            .sandbox
-            .state
+        let read = chain
+            .state()
             .read_finalized_execution_carrier(height, work, bytes)
             .unwrap();
         assert_eq!(read.wire_bytes(), bytes);
@@ -1803,10 +1830,10 @@ pub(crate) mod tests {
             read.block().canonical_wire().unwrap().as_framed(),
             expected.canonical_wire().unwrap().as_framed()
         );
-        assert_eq!(kura.canonical_query_reads_for_test().0, 1);
+        assert_eq!(kura.canonical_query_reads_for_test(), (2, bytes));
         let mut actual = Vec::new();
         visit_finalized_network_transactions(
-            kura,
+            chain.state(),
             height,
             expected.hash(),
             work,
@@ -1835,79 +1862,83 @@ pub(crate) mod tests {
 
     #[test]
     fn finalized_carrier_reader_denies_before_body_io_and_returns_no_partial_rows() {
-        let fixture = canonical_query_fixture();
-        let height = fixture.target_height;
-        let bytes = fixture.store.wire_bytes([height.get()]);
-        let kura = &fixture.store.kura;
-        for (work, limit) in [(0, bytes), (2, 0), (2, bytes - 1)] {
+        let chain = super::native_carrier_reader_tests::chain();
+        let height = NonZeroUsize::new(2).unwrap();
+        let expected = chain.committed(2);
+        let (work, bytes) = super::native_carrier_reader_tests::bounds(&chain, 2);
+        let target_bytes = expected.block().encode_wire().unwrap().len() as u64;
+        let kura = chain.kura();
+        for (work, limit) in [(0, bytes), (work, 0), (work, target_bytes - 1)] {
             kura.reset_canonical_query_reads_for_test();
             assert!(matches!(
-                fixture
-                    .sandbox
-                    .state
+                chain
+                    .state()
                     .read_finalized_execution_carrier(height, work, limit),
                 Err(QueryExecutionFail::GasBudgetExceeded)
             ));
-            assert_eq!(kura.canonical_query_reads_for_test().0, 0);
+            assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
         }
         let mut visits = 0;
         assert!(matches!(
             visit_finalized_network_transactions(
-                kura,
+                chain.state(),
                 height,
-                fixture.target_block_hash,
+                expected.block_hash(),
                 1,
                 bytes,
-                |_, _| {
-                    visits += 1;
-                }
+                |_, _| visits += 1
             ),
             Err(QueryExecutionFail::GasBudgetExceeded)
         ));
         assert_eq!(visits, 0);
         kura.reset_canonical_query_reads_for_test();
         assert!(
-            fixture
-                .sandbox
-                .state
-                .read_finalized_execution_carrier(NonZeroUsize::new(999).unwrap(), 2, bytes)
+            chain
+                .state()
+                .read_finalized_execution_carrier(NonZeroUsize::new(999).unwrap(), work, bytes)
                 .is_err()
         );
-        assert_eq!(kura.canonical_query_reads_for_test().0, 0);
+        assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
     }
 
     #[test]
     fn finalized_carrier_reader_refuses_corrupt_exact_wire_even_with_warm_body() {
-        let fixture = canonical_query_fixture();
-        let height = fixture.target_height;
-        let bytes = fixture.store.wire_bytes([height.get()]);
-        fixture
-            .sandbox
-            .state
-            .read_finalized_execution_carrier(height, 2, bytes)
+        let chain = super::native_carrier_reader_tests::chain();
+        let height = NonZeroUsize::new(2).unwrap();
+        let expected = chain.committed(2);
+        let (work, bytes) = super::native_carrier_reader_tests::bounds(&chain, 2);
+        chain
+            .state()
+            .read_finalized_execution_carrier(height, work, bytes)
             .unwrap();
-        fixture.store.corrupt_body(height);
+        chain.kura().corrupt_native_frame_for_test(height);
         let mut visits = 0;
         assert!(
             visit_finalized_network_transactions(
-                &fixture.store.kura,
+                chain.state(),
                 height,
-                fixture.target_block_hash,
-                2,
+                expected.block_hash(),
+                work,
                 bytes,
-                |_, _| {
-                    visits += 1;
-                }
+                |_, _| visits += 1
             )
             .is_err()
         );
         assert_eq!(visits, 0);
         assert!(
-            fixture
-                .sandbox
-                .state
-                .read_finalized_execution_carrier(height, 2, bytes)
+            chain
+                .state()
+                .read_finalized_execution_carrier(height, work, bytes)
                 .is_err()
+        );
+        assert_eq!(
+            expected.block().encode_wire().unwrap().len() as u64,
+            chain
+                .kura()
+                .native_frame_read(2, expected.block_hash())
+                .unwrap()
+                .unwrap()
+                .wire_len()
         );
     }
 
@@ -2500,3 +2531,6 @@ pub(crate) mod tests {
 #[cfg(test)]
 #[path = "tx_canonical_network_query_tests.rs"]
 mod canonical_network_query_tests;
+
+#[cfg(test)]
+mod native_carrier_reader_tests;

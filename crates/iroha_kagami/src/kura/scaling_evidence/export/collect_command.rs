@@ -57,9 +57,6 @@ pub(crate) struct Args {
     /// Exact stopped canonical Kura store root
     #[arg(long)]
     block_store: PathBuf,
-    /// Exact stopped canonical merge log path
-    #[arg(long)]
-    merge_log: PathBuf,
     /// New complete carrier/context vector destination
     #[arg(long)]
     carrier_out: PathBuf,
@@ -114,7 +111,6 @@ impl<W: Write> RunArgs<W> for Args {
             self.network_id,
             self.genesis_epoch_context_id.into(),
             &self.block_store,
-            &self.merge_log,
             self.reader.into_limits()?,
             limits,
             outputs,
@@ -256,7 +252,6 @@ mod tests {
             ("context-sha256", "05".repeat(32)),
             ("context-max-bytes", "65536".into()),
             ("block-store", "/original/kura".into()),
-            ("merge-log", "/original/kura/merge.log".into()),
             ("carrier-out", "/output/carrier.nrt".into()),
             ("queries-out", "/output/queries.nrt".into()),
             ("carrier-max-bytes", "65536".into()),
@@ -270,8 +265,6 @@ mod tests {
             ("max-committed-blocks", "100".into()),
             ("max-store-data-bytes", "8388608".into()),
             ("max-carrier-bytes", "65536".into()),
-            ("max-merge-log-bytes", "65536".into()),
-            ("max-merge-frames", "100".into()),
             ("reader-max-output-bytes", "65536".into()),
             ("max-decode-allocation-bytes", "65536".into()),
             ("owner-uid", "501".into()),

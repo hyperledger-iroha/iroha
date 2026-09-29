@@ -90,6 +90,7 @@
 
 pub mod api;
 pub mod crypto;
+pub mod evidence;
 mod machine;
 pub mod message;
 pub mod pacemaker;

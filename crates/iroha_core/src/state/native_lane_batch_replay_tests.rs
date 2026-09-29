@@ -55,7 +55,6 @@ fn attach_actual_native_prefix_results_for_test(
             prepared.overlay().axt_envelopes().to_vec(),
             prepared.overlay().axt_policy_snapshot(),
             prepared.overlay().axt_authorization_transitioned().clone(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("actual native outputs join their source positions");

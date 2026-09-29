@@ -48,7 +48,7 @@ pub(super) fn authenticated_native_execution(
             "catalog route committee differs from the independently pinned four validators"
         );
     }
-    let mut blocks = BlockStore::open_read_only(Kura::canonical_storage_paths(store).0)?;
+    let mut blocks = BlockStore::open_read_only(Kura::canonical_storage_path(store))?;
     let mut index = BlockIndex::default();
     blocks.read_block_indices(
         height

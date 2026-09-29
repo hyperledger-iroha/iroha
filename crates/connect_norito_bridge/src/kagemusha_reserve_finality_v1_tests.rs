@@ -19,37 +19,48 @@ fn pending_json() -> Vec<u8> {
     .expect("pending status JSON")
 }
 
+fn checkpoint_bytes() -> &'static [u8] {
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+    ))
+}
+
 fn anchor() -> KagemushaFinalityTrustAnchorV1 {
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(checkpoint_bytes()).unwrap();
     KagemushaFinalityTrustAnchorV1 {
-        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
-            Hash::prehashed([3; 32]),
-        )),
-        block_height: 7,
-        height_context_id: HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-            Hash::prehashed([5; 32]),
-        )),
+        network_id: checkpoint.network_id(),
+        checkpoint,
     }
 }
 
 #[test]
-fn trusted_coordinates_are_preserved_exactly_with_full_unsigned_height() {
-    let value = trusted_anchor([3; 32], u64::MAX, [5; 32]).expect("exact marked hashes");
-    assert_eq!(value.network_id.as_bytes(), &[3; 32]);
-    assert_eq!(value.height_context_id.0.as_ref(), &[5; 32]);
-    assert_eq!(value.block_height, u64::MAX);
+fn trusted_checkpoint_preserves_exact_original_native_pin() {
+    let expected = anchor();
+    let value = trusted_anchor(*expected.network_id.as_bytes(), checkpoint_bytes()).unwrap();
+    assert_eq!(value, expected);
+    assert_eq!(
+        value.checkpoint.encode_canonical().unwrap(),
+        checkpoint_bytes()
+    );
+    assert_eq!(value.checkpoint.height(), 2);
 }
 
 #[test]
-fn trusted_coordinates_reject_unmarked_hashes_without_normalization() {
-    for invalid in [[0; 32], [4; 32]] {
-        assert!(trusted_anchor(invalid, 7, [5; 32]).is_err());
-        assert!(trusted_anchor([3; 32], 7, invalid).is_err());
+fn trusted_checkpoint_rejects_unmarked_and_foreign_networks_without_normalization() {
+    for invalid in [[0; 32], [4; 32], [5; 32]] {
+        assert!(trusted_anchor(invalid, checkpoint_bytes()).is_err());
     }
 }
 
 #[test]
-fn trusted_coordinates_reject_zero_height() {
-    assert!(trusted_anchor([3; 32], 0, [5; 32]).is_err());
+fn trusted_checkpoint_rejects_empty_scalar_and_noncanonical_frames() {
+    let network = *anchor().network_id.as_bytes();
+    let mut trailing = checkpoint_bytes().to_vec();
+    trailing.push(0);
+    for invalid in [&[][..], &[5; 32], &trailing] {
+        assert!(trusted_anchor(network, invalid).is_err());
+    }
 }
 
 #[test]
@@ -87,7 +98,7 @@ fn pending_status_cannot_be_promoted_to_verified_value() {
 }
 
 #[test]
-fn zero_or_different_external_anchor_cannot_release_value() {
+fn different_external_checkpoint_or_network_cannot_release_value() {
     let anchor = anchor();
     let expected = ExpectedRequest {
         kind: KagemushaOperationKindV1::TopUp,
@@ -95,10 +106,14 @@ fn zero_or_different_external_anchor_cannot_release_value() {
         network_id: anchor.network_id,
         canonical: b"unused",
     };
-    let mut wrong = anchor;
-    wrong.block_height = 0;
+    let mut wrong = anchor.clone();
+    wrong.checkpoint = SumeragiFinalityCheckpoint::decode_canonical(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+    )))
+    .unwrap();
     assert!(verified_payload(&pending_json(), &expected, &wrong).is_err());
-    wrong = anchor;
+    wrong = anchor.clone();
     wrong.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
         Hash::prehashed([9; 32]),
     ));
@@ -192,7 +207,6 @@ fn verifier_ffi_rejects_invalid_kind_and_clears_output_before_input_access() {
             0,
             ptr::null(),
             0,
-            0,
             ptr::null(),
             0,
             &mut output,
@@ -208,8 +222,8 @@ fn verifier_ffi_rejects_invalid_kind_and_clears_output_before_input_access() {
 fn verifier_ffi_rejects_reserved_anchor_before_request_decode() {
     let response = pending_json();
     let request = b"{}";
-    let network = [3u8; 32];
-    let context = [5u8; 32];
+    let network = *anchor().network_id.as_bytes();
+    let checkpoint = checkpoint_bytes();
     let mut output = ptr::without_provenance_mut(1);
     let mut length = 99;
     let status = unsafe {
@@ -221,8 +235,7 @@ fn verifier_ffi_rejects_reserved_anchor_before_request_decode() {
             request.len() as c_ulong,
             network.as_ptr(),
             32,
-            0,
-            context.as_ptr(),
+            checkpoint.as_ptr(),
             32,
             &mut output,
             &mut length,
@@ -237,8 +250,8 @@ fn verifier_ffi_rejects_reserved_anchor_before_request_decode() {
 fn verifier_ffi_rejects_invalid_request_and_never_returns_pending_result() {
     let response = pending_json();
     let request = b"{}";
-    let network = [3u8; 32];
-    let context = [5u8; 32];
+    let network = *anchor().network_id.as_bytes();
+    let checkpoint = checkpoint_bytes();
     let mut output = ptr::without_provenance_mut(1);
     let mut length = 99;
     let status = unsafe {
@@ -250,14 +263,41 @@ fn verifier_ffi_rejects_invalid_request_and_never_returns_pending_result() {
             request.len() as c_ulong,
             network.as_ptr(),
             32,
-            7,
-            context.as_ptr(),
-            32,
+            checkpoint.as_ptr(),
+            checkpoint.len() as c_ulong,
             &mut output,
             &mut length,
         )
     };
     assert_ne!(status, 0);
+    assert!(output.is_null());
+    assert_eq!(length, 0);
+}
+
+#[test]
+fn verifier_ffi_rejects_oversized_checkpoint_before_reading_or_request_decode() {
+    let response = pending_json();
+    let request = b"{}";
+    let network = *anchor().network_id.as_bytes();
+    let one_byte = [0_u8];
+    let mut output = ptr::without_provenance_mut(1);
+    let mut length = 99;
+    let code = unsafe {
+        connect_norito_kagemusha_reserve_finality_verify_v1(
+            response.as_ptr(),
+            response.len() as c_ulong,
+            0,
+            request.as_ptr(),
+            request.len() as c_ulong,
+            network.as_ptr(),
+            32,
+            one_byte.as_ptr(),
+            (MAX_FINALITY_CHECKPOINT_BYTES + 1) as c_ulong,
+            &mut output,
+            &mut length,
+        )
+    };
+    assert_ne!(code, 0);
     assert!(output.is_null());
     assert_eq!(length, 0);
 }
@@ -277,7 +317,7 @@ mod top_up_submission_binding_tests {
         kagemusha::*,
         nexus::AxtAssetIncarnationV1,
         testing::kagemusha::KagemushaFixtureSignerV1,
-        transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_model_base::domain::DomainId;
     const FIXTURE_TOP_UP_PUBLIC_KEY_HEX: &str = "04209c317b637935dd3da1c54f63495dfb31f97d293df085710320595c9aacb83fdde4c69fc17a0c74c20cc692662f049892ba37a4ba47d2c70cd8a99986391f9b";
@@ -468,10 +508,7 @@ mod top_up_submission_binding_tests {
     fn request_bytes(value: &KagemushaTopUpRequestV1) -> Vec<u8> {
         norito::encode_canonical(value).expect("canonical reviewed intent")
     }
-    fn signed_request(
-        value: &KagemushaTopUpRequestV1,
-        admission: TransactionAdmissionIntent,
-    ) -> Vec<u8> {
+    fn signed_request(value: &KagemushaTopUpRequestV1) -> Vec<u8> {
         let key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
         TransactionBuilder::new(
             value.network_id,
@@ -479,7 +516,6 @@ mod top_up_submission_binding_tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([TopUpKagemushaV1::new(value.clone()).expect("instruction")])
-        .with_admission_intent(admission)
         .try_sign(key.private_key())
         .expect("sign")
         .encode_wire_v1()
@@ -488,7 +524,7 @@ mod top_up_submission_binding_tests {
     #[test]
     fn canonical_signed_request_is_bound_before_dispatch() {
         let expected = top_up_request();
-        let signed = signed_request(&expected, TransactionAdmissionIntent::QueuePlanSynced);
+        let signed = signed_request(&expected);
         validate_top_up_submission(&signed, &request_bytes(&expected))
             .expect("native bound submission");
         assert_eq!(
@@ -506,7 +542,7 @@ mod top_up_submission_binding_tests {
     #[test]
     fn different_valid_reviewed_requests_cannot_authorize_signed_bytes() {
         let expected = top_up_request();
-        let signed = signed_request(&expected, TransactionAdmissionIntent::QueuePlanSynced);
+        let signed = signed_request(&expected);
         for change in 0..5 {
             let mut other = expected.clone();
             match change {
@@ -551,12 +587,6 @@ mod top_up_submission_binding_tests {
         }
     }
     #[test]
-    fn ordinary_admission_cannot_prepare_a_top_up() {
-        let request = top_up_request();
-        let signed = signed_request(&request, TransactionAdmissionIntent::Ordinary);
-        assert!(validate_top_up_submission(&signed, &request_bytes(&request)).is_err());
-    }
-    #[test]
     fn invalid_signature_cannot_prepare_a_top_up() {
         let request = top_up_request();
         let transaction = TransactionBuilder::new(
@@ -565,7 +595,6 @@ mod top_up_submission_binding_tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([TopUpKagemushaV1::new(request.clone()).unwrap()])
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .build_with_signature(Signature::from_bytes(&[]));
         assert!(
             validate_top_up_submission(
@@ -600,7 +629,6 @@ mod top_up_submission_binding_tests {
                 FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([TopUpKagemushaV1::new(request.clone()).unwrap()])
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .try_sign(key.private_key())
             .unwrap()
             .encode_wire_v1()
@@ -620,7 +648,6 @@ mod top_up_submission_binding_tests {
                 FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([topup.clone(), topup])
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .try_sign(key.private_key())
             .unwrap(),
             TransactionBuilder::new(
@@ -629,7 +656,6 @@ mod top_up_submission_binding_tests {
                 FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "not a top-up".to_owned())])
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .try_sign(key.private_key())
             .unwrap(),
         ];
@@ -647,7 +673,7 @@ mod top_up_submission_binding_tests {
     fn malformed_noncanonical_and_oversized_wire_cannot_pass() {
         let request = top_up_request();
         let expected = request_bytes(&request);
-        let mut signed = signed_request(&request, TransactionAdmissionIntent::QueuePlanSynced);
+        let mut signed = signed_request(&request);
         signed.push(0);
         for bytes in [
             vec![],

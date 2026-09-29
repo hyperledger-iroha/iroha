@@ -155,13 +155,13 @@ pub(crate) mod kagemusha_top_up_admission_tests {
         authority: AccountId,
         keypair: &KeyPair,
         request: KagemushaTopUpRequestV1,
-        admission_intent: TransactionAdmissionIntent,
+
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
         request
             .validate_shape()
             .expect("fixture must be a structurally valid top-up request");
-        accepted_tx_with_attachments_and_intent(
+        accepted_tx_with_attachments(
             authority,
             keypair,
             time_source,
@@ -170,7 +170,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             )],
             Metadata::default(),
             None,
-            admission_intent,
         )
     }
 
@@ -178,7 +177,7 @@ pub(crate) mod kagemusha_top_up_admission_tests {
         authority: AccountId,
         keypair: &KeyPair,
         executable: Executable,
-        admission_intent: TransactionAdmissionIntent,
+
         time_source: &TimeSource,
     ) -> SignedTransaction {
         let gas_limit = executable
@@ -191,7 +190,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             FeePaymentIntent::authority(Vec::new(), gas_limit),
         )
         .with_executable(executable)
-        .with_admission_intent(admission_intent)
         .sign(keypair.private_key())
     }
 
@@ -237,7 +235,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             foreign_authority,
             &foreign_keypair,
             fixture_top_up_request(payer, queue_test_network_id()),
-            TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
 
@@ -254,39 +251,13 @@ pub(crate) mod kagemusha_top_up_admission_tests {
     }
 
     #[test]
-    fn queue_rejects_top_up_with_ordinary_admission_intent() {
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let (payer, payer_keypair) = fixture_account(0x43);
-        let transaction = accepted_top_up(
-            payer.clone(),
-            &payer_keypair,
-            fixture_top_up_request(payer, queue_test_network_id()),
-            TransactionAdmissionIntent::Ordinary,
-            &time_source,
-        );
-
-        let error = Queue::classify_pending_kagemusha_operation(
-            &CheckedTransaction::new_unchecked(transaction),
-        )
-        .expect_err("ordinary admission cannot claim a KAGEMUSHA top-up operation id");
-
-        assert!(matches!(
-            error,
-            Error::KagemushaV1OperationCarrierRejected { reason }
-                if reason
-                    == "KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission"
-        ));
-    }
-
-    #[test]
-    fn queue_classifies_payer_signed_queue_plan_top_up() {
+    fn queue_classifies_exact_native_payer_signed_top_up() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let (payer, payer_keypair) = fixture_account(0x44);
         let transaction = accepted_top_up(
             payer.clone(),
             &payer_keypair,
             fixture_top_up_request(payer.clone(), queue_test_network_id()),
-            TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
 
@@ -302,41 +273,20 @@ pub(crate) mod kagemusha_top_up_admission_tests {
     }
 
     #[test]
-    fn stateful_block_admission_rechecks_top_up_payer_and_intent() {
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let (payer, payer_keypair) = fixture_account(0x45);
+    fn stateful_block_admission_rechecks_top_up_payer() {
+        let (_, time_source) = TimeSource::new_mock(Duration::default());
+        let (payer, _) = fixture_account(0x45);
         let (foreign_authority, foreign_keypair) = fixture_account(0x46);
         let foreign = accepted_top_up(
             foreign_authority,
             &foreign_keypair,
-            fixture_top_up_request(payer.clone(), queue_test_network_id()),
-            TransactionAdmissionIntent::QueuePlanSynced,
-            &time_source,
-        );
-        let ordinary = accepted_top_up(
-            payer.clone(),
-            &payer_keypair,
             fixture_top_up_request(payer, queue_test_network_id()),
-            TransactionAdmissionIntent::Ordinary,
             &time_source,
         );
-        for (transaction, expected_reason) in [
-            (
-                foreign,
-                "KAGEMUSHA V1 top-up authority must equal the embedded payer",
-            ),
-            (
-                ordinary,
-                "KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission",
-            ),
-        ] {
-            assert_stateful_top_up_rejection(
-                transaction
-                    .external()
-                    .expect("fixture is a direct signed transaction"),
-                expected_reason,
-            );
-        }
+        assert_stateful_top_up_rejection(
+            foreign.external().expect("direct signed transaction"),
+            "KAGEMUSHA V1 top-up authority must equal the embedded payer",
+        );
     }
 
     #[test]
@@ -360,7 +310,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
                 ]
                 .into(),
             ),
-            TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
 
@@ -394,7 +343,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
                 ]
                 .into(),
             ),
-            TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
 
@@ -426,7 +374,6 @@ pub(crate) mod kagemusha_top_up_admission_tests {
                 events_commitment: Hash::new(b"KAGEMUSHA top-up carrier events"),
                 gas_policy_commitment: Hash::new(b"KAGEMUSHA top-up carrier gas policy"),
             }),
-            TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
 
@@ -434,5 +381,31 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             "KAGEMUSHA V1 top-up cannot be carried by batch, proved, overlay, or opaque execution";
         assert_queue_top_up_rejection(transaction.clone(), expected_reason);
         assert_stateful_top_up_rejection(&transaction, expected_reason);
+    }
+    #[test]
+    fn native_top_up_requires_original_commit_attestation() {
+        let (_, time) = TimeSource::new_mock(Duration::default());
+        let (payer, key) = fixture_account(0x51);
+        let top_up = TopUpKagemushaV1::new(fixture_top_up_request(
+            payer.clone(),
+            queue_test_network_id(),
+        ))
+        .unwrap();
+        let signed = signed_top_up_carrier(
+            payer,
+            &key,
+            Executable::Instructions(vec![InstructionBox::from(top_up)].into()),
+            &time,
+        );
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+            nonzero!(2_u64),
+            None,
+            None,
+            1,
+            0,
+        ));
+        builder.push_transaction(signed);
+        let block = builder.build(BTreeSet::new());
+        assert!(crate::sumeragi::executor::attestation_required(&block));
     }
 }

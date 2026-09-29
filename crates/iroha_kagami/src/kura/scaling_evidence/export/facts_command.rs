@@ -63,9 +63,6 @@ pub(crate) struct Args {
     /// Exact absolute stopped validator directory containing canonical block journals
     #[arg(long)]
     block_store: PathBuf,
-    /// Exact absolute original canonical merge log
-    #[arg(long)]
-    merge_log: PathBuf,
     /// New absolute canonical facts output; existing stage or destination fails
     #[arg(long)]
     facts_output: PathBuf,
@@ -279,7 +276,6 @@ struct AdmittedArgs {
     reader: CanonicalKuraEvidenceLimits,
     caps: FactsAssemblyCaps,
     block_store: PathBuf,
-    merge_log: PathBuf,
     output: PathBuf,
     invocation_id: [u8; 32],
     reply_max_bytes: u64,
@@ -338,7 +334,6 @@ impl Args {
                 decode_bytes: self.assembly_decode_max_bytes,
             },
             block_store: self.block_store,
-            merge_log: self.merge_log,
             output: self.facts_output,
             invocation_id: self.invocation_id,
             reply_max_bytes: self.reply_max_bytes,
@@ -572,7 +567,6 @@ impl<T: Write> RunArgs<T> for Args {
             args.journal,
             args.verification,
             &args.block_store,
-            &args.merge_log,
             args.reader,
             args.caps,
         )?;

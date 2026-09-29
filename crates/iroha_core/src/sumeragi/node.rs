@@ -49,7 +49,7 @@ use crate::{
     EventsSender, IrohaNetwork,
     kura::Kura,
     queue::Queue,
-    state::{State, WorldReadOnly},
+    state::{State, StateReadOnly, WorldReadOnly},
 };
 
 /// Where the instance keeps its files, and the operator's startup choices.
@@ -664,6 +664,10 @@ impl Prepared {
             observer,
             driver,
         } = inputs;
+        let node_gate = state.view().kura().native_consensus_gate();
+        let _startup = node_gate.enter().ok_or_else(|| {
+            NodeError::Driver("canonical storage is closed; restart is required".into())
+        })?;
         executor.attach_queue(Arc::clone(&queue));
         let shared: SharedCrypto = crypto.clone();
         // Records of the node's keys.
@@ -812,11 +816,15 @@ impl Prepared {
             blocks,
             Arc::new(SystemClock::new()),
             executor,
-            observer,
+            Arc::new(NativeEvidenceObserver {
+                state: Arc::clone(&state),
+                downstream: observer,
+            }),
         )
         .spawn(
             driver,
             DriverStart {
+                node_gate: state.view().kura().native_consensus_gate(),
                 allocation_budget: budget,
                 local: local_params(n, &config.local),
                 init,
@@ -897,6 +905,33 @@ impl NetworkedNode {
         self.node.lanes.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
+    }
+}
+
+/// Retains independently authenticated observations for the next original global candidate.
+/// TODO(S8): lane instances need their own authenticated native history admission route.
+struct NativeEvidenceObserver {
+    state: Arc<State>,
+    downstream: Arc<dyn Observer>,
+}
+impl Observer for NativeEvidenceObserver {
+    fn evidence(&self, evidence: &iroha_sumeragi::message::Evidence) {
+        if let Err(error) = super::evidence::observe(&self.state, evidence) {
+            iroha_logger::warn!(%error, "sumeragi: native evidence observation was not retained");
+        }
+        self.downstream.evidence(evidence);
+    }
+    fn fault(&self, fault: &iroha_sumeragi::api::LocalFault) {
+        self.downstream.fault(fault);
+    }
+    fn halt(&self, reason: &iroha_sumeragi::api::HaltReason) {
+        self.downstream.halt(reason);
+    }
+    fn stopped(&self, worker: super::driver::Worker) {
+        self.downstream.stopped(worker);
+    }
+    fn frame_limit(&self, exceeded: &super::driver::FrameLimitExceeded) {
+        self.downstream.frame_limit(exceeded);
     }
 }
 

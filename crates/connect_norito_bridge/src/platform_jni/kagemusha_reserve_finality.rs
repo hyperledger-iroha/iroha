@@ -79,8 +79,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaRe
     kind: jni::sys::jint,
     request: jni::objects::JByteArray<'_>,
     network: jni::objects::JByteArray<'_>,
-    height_bits: jni::sys::jlong,
-    context: jni::objects::JByteArray<'_>,
+    checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let maximum = match kind {
@@ -101,7 +100,11 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaRe
         let Some(network) = read_java_reserve_finality_bytes(&mut env, &network, 32) else {
             return ptr::null_mut();
         };
-        let Some(context) = read_java_reserve_finality_bytes(&mut env, &context, 32) else {
+        let Some(checkpoint) = read_java_reserve_finality_bytes(
+            &mut env,
+            &checkpoint,
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
+        ) else {
             return ptr::null_mut();
         };
         java_reserve_finality_output(
@@ -112,8 +115,6 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaRe
                 iroha_data_model::kagemusha::KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1
             },
             |out, len| unsafe {
-                // Kotlin validates an unsigned 64-bit BigInteger and passes its exact low-64-bit
-                // representation. Negative JNI longs represent heights above i64::MAX, not errors.
                 connect_norito_kagemusha_reserve_finality_verify_v1(
                     response.as_ptr(),
                     response.len() as c_ulong,
@@ -122,9 +123,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaRe
                     request.len() as c_ulong,
                     network.as_ptr(),
                     network.len() as c_ulong,
-                    height_bits as u64,
-                    context.as_ptr(),
-                    context.len() as c_ulong,
+                    checkpoint.as_ptr(),
+                    checkpoint.len() as c_ulong,
                     out,
                     len,
                 )

@@ -16,18 +16,66 @@ mod canonical_output_inclusion_tests {
         let committed = fixture::committed(&block, 0);
         (block, committed)
     }
-    fn commitment(block: &SignedBlock) -> crate::block::consensus_v2::ExecutionCommitment {
+    fn commitment(block: &SignedBlock) -> crate::sumeragi_finality::ExecutionCommitment {
         let wire = block.encode_wire().unwrap();
-        // Supplied trusted execution projection for the query join test; BLS verification belongs to proofs.rs.
-        crate::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"parent"),
-            Hash::new(b"post"),
-            Hash::new(b"writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        )
-        .with_transaction_commitments_from_block(block)
-        .unwrap()
+        // A selected structural execution projection, not self-authenticating finality.
+        crate::sumeragi_finality::ExecutionCommitment {
+            parent_state_root: Hash::new(b"parent"),
+            post_state_root: Hash::new(b"post"),
+            ordinary_writes_root: Hash::new(b"writes"),
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
+            executed_block_wire_len: wire.len() as u64,
+            executed_block_wire_hash: Hash::new(&wire),
+            transaction_input_commitment: block.network_input_merkle_commitment(),
+            transaction_output_commitment: block.output_merkle_commitment(),
+        }
+    }
+    #[test]
+    fn native_execution_commitment_rejects_a_retired_extra_carrier_slot() {
+        #[derive(norito::codec::Encode)]
+        struct RetiredExecution {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            kagemusha_top_up_root: Option<Hash>,
+            kagemusha_top_up_count: u32,
+            executed_block_wire_len: u64,
+            executed_block_wire_hash: Hash,
+            transaction_input_commitment:
+                Option<iroha_crypto::MerkleTreeCommitment<TransactionEntrypoint>>,
+            transaction_output_commitment: Option<
+                iroha_crypto::MerkleTreeCommitment<
+                    crate::block::execution_output::ExecutionOutputV1,
+                >,
+            >,
+            merge_carrier: Option<()>,
+        }
+        let (block, _) = execution_fixture();
+        let current = commitment(&block);
+        let old = RetiredExecution {
+            parent_state_root: current.parent_state_root,
+            post_state_root: current.post_state_root,
+            ordinary_writes_root: current.ordinary_writes_root,
+            kagemusha_top_up_root: current.kagemusha_top_up_root,
+            kagemusha_top_up_count: current.kagemusha_top_up_count,
+            executed_block_wire_len: current.executed_block_wire_len,
+            executed_block_wire_hash: current.executed_block_wire_hash,
+            transaction_input_commitment: current.transaction_input_commitment,
+            transaction_output_commitment: current.transaction_output_commitment,
+            merge_carrier: None,
+        };
+        assert_eq!(
+            crate::sumeragi_finality::ExecutionCommitment::decode_all(
+                &mut current.encode().as_slice()
+            )
+            .unwrap(),
+            current
+        );
+        assert!(
+            crate::sumeragi_finality::ExecutionCommitment::decode_all(&mut old.encode().as_slice())
+                .is_err()
+        );
     }
     #[test]
     fn selective_inclusion_binds_both_qc_roots_counts_network_and_source_join() {
@@ -99,15 +147,6 @@ mod canonical_output_inclusion_tests {
             &foreign_header,
             &expected
         ));
-        let mut merge = expected;
-        merge.merge_carrier = Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-            HashOf::from_untyped_unchecked(Hash::new(b"merge is not ordinary inclusion")),
-        ));
-        assert!(!committed.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &merge
-        ));
         // Both substituted rows carry VALID proofs under the same output root.
         // Row 1 is another input's Network output; row 2 is an internal output.
         // Neither may be joined to this external signed input.
@@ -152,27 +191,18 @@ mod canonical_output_inclusion_tests {
 
     #[test]
     fn selective_commitments_reject_incomplete_and_substituted_native_carriers() {
-        let (block, _) = execution_fixture();
+        let (block, committed) = execution_fixture();
         let expected = commitment(&block);
-        assert!(
-            expected
-                .with_transaction_commitments_from_block(&block)
-                .is_ok()
-        );
-        assert!(
-            expected
-                .with_transaction_commitments_from_block(&block.canonical_resultless_proposal())
-                .is_err()
-        );
+        assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
+        assert!(!committed.verify_inclusion_in_authenticated_execution(
+            &block.canonical_resultless_proposal(),
+            &expected
+        ));
         let mut other = block.clone();
         let mut header = other.header();
         header.creation_time_ms += 1;
         other.replace_header_for_testing(header);
-        assert!(
-            expected
-                .with_transaction_commitments_from_block(&other)
-                .is_err()
-        );
+        assert!(!committed.verify_inclusion_in_authenticated_execution(&other, &expected));
         let mut value = norito::json::to_value(&block).unwrap();
         value
             .as_object_mut()
@@ -189,11 +219,7 @@ mod canonical_output_inclusion_tests {
                 .unwrap(),
             );
         let stale: SignedBlock = norito::json::from_value(value).unwrap();
-        assert!(
-            expected
-                .with_transaction_commitments_from_block(&stale)
-                .is_err()
-        );
+        assert!(!committed.verify_inclusion_in_authenticated_execution(&stale, &expected));
     }
     #[test]
     fn ordinary_committed_transaction_verifies_against_exact_carrier_block() {
@@ -212,7 +238,7 @@ mod canonical_output_inclusion_tests {
         assert!(!committed.verify_inclusion_in_block(&foreign));
     }
     #[test]
-    fn authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority() {
+    fn authenticated_execution_inclusion_binds_complete_carrier_and_output_geometry() {
         let (block, committed) = execution_fixture();
         let expected = commitment(&block);
         assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
@@ -225,10 +251,7 @@ mod canonical_output_inclusion_tests {
                 0 => wrong.executed_block_wire_len += 1,
                 1 => wrong.executed_block_wire_hash = Hash::new(b"foreign"),
                 _ => {
-                    wrong.merge_carrier =
-                        Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-                            HashOf::from_untyped_unchecked(Hash::new(b"old merge authority")),
-                        ))
+                    wrong.transaction_output_commitment = None;
                 }
             }
             assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong));
@@ -260,9 +283,7 @@ mod canonical_output_inclusion_tests {
         assert!(!committed.verify_inclusion_in_block(&rewritten));
         let mut unbound = original.clone();
         let mut header = unbound.header();
-        header.set_execution_context_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"foreign bundle",
-        ))));
+        header.creation_time_ms += 1;
         unbound.replace_header_for_testing(header);
         let mut evidence = committed.clone();
         evidence.block_hash = unbound.hash();
@@ -334,7 +355,7 @@ mod canonical_output_inclusion_tests {
             result_hash: HashOf<crate::transaction::TransactionResult>,
             result_proof: MerkleProof<crate::transaction::TransactionResult>,
             result: crate::transaction::TransactionResult,
-            merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
+            merge_inclusion: Option<()>,
         }
         let result = committed.result().clone();
         let old = RetiredCommitted {

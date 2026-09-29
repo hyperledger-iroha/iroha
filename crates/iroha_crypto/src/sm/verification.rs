@@ -23,7 +23,7 @@ use crate::{Error, ParseError};
 
 /// Fixed rejection before the ordinary public diagnostic adapter allocates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeyRejection {
+pub enum KeyRejection {
     MissingPrefix,
     TruncatedIdentity,
     IdentityUtf8,
@@ -54,7 +54,7 @@ impl KeyRejection {
     }
 }
 
-pub(crate) fn identity_bits(distid: &str) -> Result<u16, KeyRejection> {
+pub fn identity_bits(distid: &str) -> Result<u16, KeyRejection> {
     let bits = distid
         .len()
         .checked_mul(8)
@@ -62,7 +62,7 @@ pub(crate) fn identity_bits(distid: &str) -> Result<u16, KeyRejection> {
     u16::try_from(bits).map_err(|_| KeyRejection::IdentityTooLong)
 }
 
-pub(crate) fn split_payload(payload: &[u8]) -> Result<(&str, &[u8]), KeyRejection> {
+pub fn split_payload(payload: &[u8]) -> Result<(&str, &[u8]), KeyRejection> {
     let prefix = payload.get(..2).ok_or(KeyRejection::MissingPrefix)?;
     let length = usize::from(u16::from_be_bytes([prefix[0], prefix[1]]));
     // A u16 byte length plus this fixed prefix fits every supported std target.
@@ -73,7 +73,7 @@ pub(crate) fn split_payload(payload: &[u8]) -> Result<(&str, &[u8]), KeyRejectio
     Ok((distid, &payload[end..]))
 }
 
-pub(crate) fn parse_point(distid: &str, bytes: &[u8]) -> Result<PublicKey, KeyRejection> {
+pub fn parse_point(distid: &str, bytes: &[u8]) -> Result<PublicKey, KeyRejection> {
     identity_bits(distid)?;
     if !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0) {
         return Err(KeyRejection::ZeroKey);
@@ -87,7 +87,7 @@ pub(crate) fn parse_point(distid: &str, bytes: &[u8]) -> Result<PublicKey, KeyRe
     PublicKey::from_sec1_bytes(bytes).map_err(|_| KeyRejection::InvalidPoint)
 }
 
-pub(crate) fn identity_hash(distid: &str, point: &AffinePoint) -> Result<[u8; 32], KeyRejection> {
+pub fn identity_hash(distid: &str, point: &AffinePoint) -> Result<[u8; 32], KeyRejection> {
     let bits = identity_bits(distid)?;
     let encoded = point.to_encoded_point(false);
     let Coordinates::Uncompressed { x, y } = encoded.coordinates() else {
@@ -107,7 +107,7 @@ pub(crate) fn identity_hash(distid: &str, point: &AffinePoint) -> Result<[u8; 32
 
 /// Parsed fixed point plus original borrowed canonical payload and identity.
 #[derive(Clone, Copy)]
-pub(crate) struct BorrowedKey<'a> {
+pub struct BorrowedKey<'a> {
     payload: &'a [u8],
     point: PublicKey,
     identity_hash: [u8; 32],
@@ -149,7 +149,7 @@ impl<'a> BorrowedKey<'a> {
 /// The same checked r/s parser and lincomb/reduction primitives are used by the
 /// pinned dependency. Infinity is rejected before affine-coordinate extraction.
 /// There is no ECDSA, backend-specific or cache-based verdict.
-pub(crate) fn verify(
+pub fn verify(
     point: &AffinePoint,
     identity_hash: &[u8; 32],
     message: &[u8],
@@ -167,7 +167,7 @@ pub(crate) fn verify(
         .into();
     // SM3 and the pinned curve use different fixed-array container versions.
     // Bridge their identical 32 bytes on the stack before scalar reduction.
-    let e = Scalar::reduce_bytes(&digest.into());
+    let digest_scalar = Scalar::reduce_bytes(&digest.into());
     let combined = ProjectivePoint::lincomb(
         &ProjectivePoint::generator(),
         &s,
@@ -179,8 +179,8 @@ pub(crate) fn verify(
     if bool::from(combined.is_identity()) {
         return Err(Error::BadSignature);
     }
-    let x = combined.to_affine().x();
-    if *r == e + Scalar::reduce_bytes(&x) {
+    let x_coordinate = combined.to_affine().x();
+    if *r == digest_scalar + Scalar::reduce_bytes(&x_coordinate) {
         Ok(())
     } else {
         Err(Error::BadSignature)

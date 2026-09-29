@@ -64,14 +64,17 @@ enum class ParliamentTimedOvnBallotChoiceV1(internal val code: Int) {
  */
 class ParliamentTimedOvnCastingTrustAnchorV1(
     networkId: ByteArray,
-    /** Exact nonzero finalized checkpoint height in the complete u64 protocol domain. */
+    /** Positive request-height hint; native verification authenticates the complete checkpoint. */
     val trustedCheckpointHeight: BigInteger,
-    trustedCheckpointContextId: ByteArray,
+    trustedCheckpointNorito: ByteArray,
     expectedBallotAttemptId: ByteArray,
 ) {
     private val networkId = exactAnchor("networkId", networkId)
-    private val trustedCheckpointContextId =
-        exactAnchor("trustedCheckpointContextId", trustedCheckpointContextId)
+    private val trustedCheckpointNorito = trustedCheckpointNorito.clone().also {
+        require(it.size in 1..ParliamentTimedOvnWalletV1.MAXIMUM_CHECKPOINT_BYTES) {
+            "trustedCheckpointNorito must contain a bounded complete canonical checkpoint"
+        }
+    }
     private val expectedBallotAttemptId =
         exactAnchor("expectedBallotAttemptId", expectedBallotAttemptId)
 
@@ -88,12 +91,12 @@ class ParliamentTimedOvnCastingTrustAnchorV1(
     constructor(
         networkId: ByteArray,
         trustedCheckpointHeight: Long,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
         expectedBallotAttemptId: ByteArray,
     ) : this(
         networkId,
         BigInteger.valueOf(trustedCheckpointHeight),
-        trustedCheckpointContextId,
+        trustedCheckpointNorito,
         expectedBallotAttemptId,
     )
 
@@ -101,15 +104,15 @@ class ParliamentTimedOvnCastingTrustAnchorV1(
         ParliamentTimedOvnCastingTrustAnchorSnapshotV1(
             networkId.clone(),
             trustedCheckpointHeight,
-            trustedCheckpointContextId.clone(),
+            trustedCheckpointNorito.clone(),
             expectedBallotAttemptId.clone(),
         )
 
     /** Defensive copy of the raw genesis-derived network id. */
     fun networkId(): ByteArray = networkId.clone()
 
-    /** Defensive copy of the trusted `HeightContextId`. */
-    fun trustedCheckpointContextId(): ByteArray = trustedCheckpointContextId.clone()
+    /** Defensive copy of the independently selected complete canonical checkpoint. */
+    fun trustedCheckpointNorito(): ByteArray = trustedCheckpointNorito.clone()
 
     /** Defensive copy of the expected `BallotAttemptId`. */
     fun expectedBallotAttemptId(): ByteArray = expectedBallotAttemptId.clone()
@@ -121,7 +124,7 @@ class ParliamentTimedOvnCastingTrustAnchorV1(
         ParliamentTimedOvnCastingTrustAnchorV1(
             networkId,
             verification.evaluatedBlockHeight,
-            verification.evaluatedContextId(),
+            verification.promotedCheckpointNorito(),
             expectedBallotAttemptId,
         )
 
@@ -138,17 +141,25 @@ class ParliamentTimedOvnCastingTrustAnchorV1(
 internal class ParliamentTimedOvnCastingTrustAnchorSnapshotV1(
     private val networkId: ByteArray,
     val trustedCheckpointHeight: BigInteger,
-    private val trustedCheckpointContextId: ByteArray,
+    private val trustedCheckpointNorito: ByteArray,
     private val expectedBallotAttemptId: ByteArray,
 ) {
     fun networkIdBytes(): ByteArray = networkId.clone()
 
-    fun checkpointContextIdBytes(): ByteArray = trustedCheckpointContextId.clone()
+    fun checkpointNoritoBytes(): ByteArray = trustedCheckpointNorito.clone()
 
     fun ballotAttemptIdBytes(): ByteArray = expectedBallotAttemptId.clone()
 
-    /** Raw two's-complement jlong carrying the exact low 64 bits of the protocol u64. */
-    fun trustedCheckpointHeightJniBits(): Long = trustedCheckpointHeight.toLong()
+}
+
+/** A public wallet record and its exact native-authenticated checkpoint promotion. */
+class ParliamentTimedOvnPublicRecordV1 internal constructor(record: ByteArray, checkpoint: ByteArray) {
+    private val recordBytes = record.clone()
+    private val checkpointBytes = checkpoint.clone()
+    /** Canonical registration or masked-ballot bytes for submission. */
+    fun record(): ByteArray = recordBytes.clone()
+    /** Complete canonical checkpoint to persist with the operation's public state. */
+    fun promotedCheckpointNorito(): ByteArray = checkpointBytes.clone()
 }
 
 /**
@@ -165,7 +176,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
     private val seedVault: SeedVault,
     private val endpoint: Endpoint?,
 ) {
-    /** Whether the exact ABI-24 proof-gated native casting corridor is available. */
+    /** Whether the exact ABI-25 proof-gated native casting corridor is available. */
     val isAvailable: Boolean
         get() = endpoint != null
 
@@ -190,7 +201,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
         trustAnchor: ParliamentTimedOvnCastingTrustAnchorV1,
         authority: String,
         handle: ParliamentTimedOvnSeedHandleV1,
-    ): ByteArray = publicRecord(castingProofResponseNorito, trustAnchor, authority, handle, null)
+    ): ParliamentTimedOvnPublicRecordV1 = publicRecord(castingProofResponseNorito, trustAnchor, authority, handle, null)
 
     /**
      * Reconstruct the registered secret and generate one survivor-bound 2,858-byte ballot.
@@ -204,7 +215,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
         authority: String,
         handle: ParliamentTimedOvnSeedHandleV1,
         choice: ParliamentTimedOvnBallotChoiceV1,
-    ): ByteArray = publicRecord(
+    ): ParliamentTimedOvnPublicRecordV1 = publicRecord(
         castingProofResponseNorito,
         trustAnchor,
         authority,
@@ -215,8 +226,8 @@ class ParliamentTimedOvnWalletV1 private constructor(
     /**
      * Authenticate one bounded proof page without opening any seed handle.
      *
-     * Only the exact ABI-24 41-byte result is admitted: big-endian u64 height, 32-byte context id,
-     * and canonical 0/1 `more_available`.
+     * The native result contains diagnostic height/context/flag bytes and the separate complete
+     * canonical checkpoint required for durable promotion.
      */
     fun verifyCastingProofPageV1(
         castingProofResponseNorito: ByteArray,
@@ -249,7 +260,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
                     "Parliament timed-OVN native verifier returned a noncanonical page result",
                 )
             } finally {
-                nativeResult.fill(0)
+                nativeResult.forEach { it.fill(0) }
             }
         } finally {
             proofSnapshot.fill(0)
@@ -262,7 +273,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
         authority: String,
         handle: ParliamentTimedOvnSeedHandleV1,
         choice: ParliamentTimedOvnBallotChoiceV1?,
-    ): ByteArray {
+    ): ParliamentTimedOvnPublicRecordV1 {
         val nativeEndpoint = endpoint
             ?: throw IllegalStateException(NATIVE_UNAVAILABLE_MESSAGE)
         require(castingProofResponseNorito.size in 1..MAXIMUM_CASTING_PROOF_RESPONSE_BYTES) {
@@ -281,14 +292,16 @@ class ParliamentTimedOvnWalletV1 private constructor(
 
         val proofSnapshot = castingProofResponseNorito.clone()
         try {
-            val verified = try {
-                nativeEndpoint.verifyCastingProof(proofSnapshot.clone(), trustAnchor.snapshot())
+            val verifiedCheckpoint = try {
+                nativeEndpoint.verifyCastingProof(proofSnapshot.clone(), trustAnchor.snapshot())?.clone()
             } catch (_: RuntimeException) {
-                false
+                null
             } catch (_: LinkageError) {
                 throw IllegalStateException(NATIVE_UNAVAILABLE_MESSAGE)
             }
-            check(verified) { "Parliament timed-OVN casting proof was rejected" }
+            check(verifiedCheckpoint != null && verifiedCheckpoint.size in 1..MAXIMUM_CHECKPOINT_BYTES) {
+                "Parliament timed-OVN casting proof was rejected"
+            }
 
             return seedVault.withSeed(handle) { seed ->
                 val output = try {
@@ -320,10 +333,12 @@ class ParliamentTimedOvnWalletV1 private constructor(
                 )
                 val expectedBytes =
                     if (choice == null) REGISTRATION_RECORD_BYTES else BALLOT_RECORD_BYTES
-                check(output.size == expectedBytes) {
+                check(output.size == 2 && output[0].size == expectedBytes &&
+                    output[1].size in 1..MAXIMUM_CHECKPOINT_BYTES &&
+                    MessageDigest.isEqual(output[1], verifiedCheckpoint)) {
                     "Parliament timed-OVN native wallet returned a noncanonical public record"
                 }
-                output
+                ParliamentTimedOvnPublicRecordV1(output[0], output[1])
             }
         } finally {
             proofSnapshot.fill(0)
@@ -334,19 +349,19 @@ class ParliamentTimedOvnWalletV1 private constructor(
         fun verifyCastingProofPage(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-        ): ByteArray? = null
+        ): Array<ByteArray>? = null
 
         fun verifyCastingProof(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-        ): Boolean
+        ): ByteArray?
 
         fun registration(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
             authority: String,
             seed: ByteArray,
-        ): ByteArray?
+        ): Array<ByteArray>?
 
         fun ballot(
             proofResponse: ByteArray,
@@ -354,7 +369,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
             authority: String,
             seed: ByteArray,
             choice: Int,
-        ): ByteArray?
+        ): Array<ByteArray>?
     }
 
     internal interface SeedVault {
@@ -369,13 +384,16 @@ class ParliamentTimedOvnWalletV1 private constructor(
 
     companion object {
         /** Exact connect_norito_bridge ABI required by this first-release wallet boundary. */
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 24
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 25
 
         /** Maximum complete framed `ParliamentTimedOvnCastingProofResponseV1`. */
         const val MAXIMUM_CASTING_PROOF_RESPONSE_BYTES: Int = 8 * 1024 * 1024
 
-        /** Exact native page-verification result width. */
-        const val CASTING_PROOF_PAGE_VERIFICATION_BYTES: Int = 41
+        /** Diagnostic summary width, accompanied by a complete native checkpoint. */
+        const val CASTING_PROOF_PAGE_SUMMARY_BYTES: Int = 41
+
+        /** Canonical native checkpoint cap: two bounded carriers plus verifier state. */
+        const val MAXIMUM_CHECKPOINT_BYTES: Int = 68 * 1024 * 1024
 
         /** Exact public registration-record width. */
         const val REGISTRATION_RECORD_BYTES: Int = 3_624
@@ -385,7 +403,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
 
         private const val MAXIMUM_AUTHORITY_BYTES = 8 * 1024
         private const val NATIVE_UNAVAILABLE_MESSAGE =
-            "ABI-24 connect_norito_bridge with proof-gated Parliament wallet symbols is required"
+            "ABI-25 connect_norito_bridge with proof-gated Parliament wallet symbols is required"
 
         /** Create a production wallet backed by Android Keystore and the packaged native bridge. */
         @JvmStatic
@@ -403,9 +421,13 @@ class ParliamentTimedOvnWalletV1 private constructor(
         ): ParliamentTimedOvnWalletV1 = ParliamentTimedOvnWalletV1(seedVault, endpoint)
 
         private fun decodeCastingProofPageVerification(
-            encoded: ByteArray,
+            components: Array<ByteArray>,
         ): ParliamentTimedOvnCastingProofPageVerificationV1 {
-            require(encoded.size == CASTING_PROOF_PAGE_VERIFICATION_BYTES) {
+            require(components.size == 2 && components[1].size in 1..MAXIMUM_CHECKPOINT_BYTES) {
+                "native casting-proof page result requires a complete canonical checkpoint"
+            }
+            val encoded = components[0]
+            require(encoded.size == CASTING_PROOF_PAGE_SUMMARY_BYTES) {
                 "native casting-proof page result must contain exactly 41 bytes"
             }
             val moreAvailable = when (encoded[40].toInt() and 0xFF) {
@@ -422,6 +444,7 @@ class ParliamentTimedOvnWalletV1 private constructor(
                     height,
                     context,
                     moreAvailable,
+                    components[1],
                 )
             } finally {
                 context.fill(0)
@@ -445,21 +468,18 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
                 val verifyProbe = nativeVerifyCastingProofV1(
                     ByteArray(0),
                     ByteArray(0),
-                    0,
                     ByteArray(0),
                     ByteArray(0),
                 )
                 val pageVerifyProbe = nativeVerifyCastingProofPageV1(
                     ByteArray(0),
                     ByteArray(0),
-                    0,
                     ByteArray(0),
                     ByteArray(0),
                 )
                 val registrationProbe = nativeRegistrationFromProofV1(
                     ByteArray(0),
                     ByteArray(0),
-                    0,
                     ByteArray(0),
                     ByteArray(0),
                     "",
@@ -468,7 +488,6 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
                 val ballotProbe = nativeBallotFromProofV1(
                     ByteArray(0),
                     ByteArray(0),
-                    0,
                     ByteArray(0),
                     ByteArray(0),
                     "",
@@ -477,7 +496,7 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
                 )
                 try {
                     if (
-                        !verifyProbe && pageVerifyProbe == null &&
+                        verifyProbe == null && pageVerifyProbe == null &&
                         registrationProbe == null && ballotProbe == null
                     ) {
                         this
@@ -485,9 +504,10 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
                         null
                     }
                 } finally {
-                    pageVerifyProbe?.fill(0)
-                    registrationProbe?.fill(0)
-                    ballotProbe?.fill(0)
+                    verifyProbe?.fill(0)
+                    pageVerifyProbe?.forEach { it.fill(0) }
+                    registrationProbe?.forEach { it.fill(0) }
+                    ballotProbe?.forEach { it.fill(0) }
                 }
             }
         } catch (_: RuntimeException) {
@@ -500,22 +520,20 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
     override fun verifyCastingProof(
         proofResponse: ByteArray,
         trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-    ): Boolean = nativeVerifyCastingProofV1(
+    ): ByteArray? = nativeVerifyCastingProofV1(
         proofResponse,
         trustAnchor.networkIdBytes(),
-        trustAnchor.trustedCheckpointHeightJniBits(),
-        trustAnchor.checkpointContextIdBytes(),
+        trustAnchor.checkpointNoritoBytes(),
         trustAnchor.ballotAttemptIdBytes(),
     )
 
     override fun verifyCastingProofPage(
         proofResponse: ByteArray,
         trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-    ): ByteArray? = nativeVerifyCastingProofPageV1(
+    ): Array<ByteArray>? = nativeVerifyCastingProofPageV1(
         proofResponse,
         trustAnchor.networkIdBytes(),
-        trustAnchor.trustedCheckpointHeightJniBits(),
-        trustAnchor.checkpointContextIdBytes(),
+        trustAnchor.checkpointNoritoBytes(),
         trustAnchor.ballotAttemptIdBytes(),
     )
 
@@ -524,11 +542,10 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
         trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
         authority: String,
         seed: ByteArray,
-    ): ByteArray? = nativeRegistrationFromProofV1(
+    ): Array<ByteArray>? = nativeRegistrationFromProofV1(
         proofResponse,
         trustAnchor.networkIdBytes(),
-        trustAnchor.trustedCheckpointHeightJniBits(),
-        trustAnchor.checkpointContextIdBytes(),
+        trustAnchor.checkpointNoritoBytes(),
         trustAnchor.ballotAttemptIdBytes(),
         authority,
         seed,
@@ -540,11 +557,10 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
         authority: String,
         seed: ByteArray,
         choice: Int,
-    ): ByteArray? = nativeBallotFromProofV1(
+    ): Array<ByteArray>? = nativeBallotFromProofV1(
         proofResponse,
         trustAnchor.networkIdBytes(),
-        trustAnchor.trustedCheckpointHeightJniBits(),
-        trustAnchor.checkpointContextIdBytes(),
+        trustAnchor.checkpointNoritoBytes(),
         trustAnchor.ballotAttemptIdBytes(),
         authority,
         seed,
@@ -558,42 +574,38 @@ private object ParliamentTimedOvnNativeEndpointV1 : ParliamentTimedOvnWalletV1.E
     private external fun nativeVerifyCastingProofV1(
         proofResponse: ByteArray,
         networkId: ByteArray,
-        trustedCheckpointHeight: Long,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
         expectedBallotAttemptId: ByteArray,
-    ): Boolean
+    ): ByteArray?
 
     @JvmStatic
     private external fun nativeVerifyCastingProofPageV1(
         proofResponse: ByteArray,
         networkId: ByteArray,
-        trustedCheckpointHeight: Long,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
         expectedBallotAttemptId: ByteArray,
-    ): ByteArray?
+    ): Array<ByteArray>?
 
     @JvmStatic
     private external fun nativeRegistrationFromProofV1(
         proofResponse: ByteArray,
         networkId: ByteArray,
-        trustedCheckpointHeight: Long,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
         expectedBallotAttemptId: ByteArray,
         authority: String,
         seed: ByteArray,
-    ): ByteArray?
+    ): Array<ByteArray>?
 
     @JvmStatic
     private external fun nativeBallotFromProofV1(
         proofResponse: ByteArray,
         networkId: ByteArray,
-        trustedCheckpointHeight: Long,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
         expectedBallotAttemptId: ByteArray,
         authority: String,
         seed: ByteArray,
         choice: Int,
-    ): ByteArray?
+    ): Array<ByteArray>?
 }
 
 private class AndroidSeedVault(context: Context) : ParliamentTimedOvnWalletV1.SeedVault {

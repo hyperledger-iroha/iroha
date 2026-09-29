@@ -16,10 +16,10 @@ use iroha_core::zk::{
     },
     kagemusha_v1_state::MintInboxReservationV1,
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
-    NetworkId, block::consensus_v2::HeightContextId,
+    NetworkId,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
+    sumeragi_finality::{SumeragiFinalityCheckpoint, SumeragiFinalityVerifier},
 };
 
 use crate::{
@@ -84,11 +84,11 @@ impl KagemushaTestnetNativeMintReservationV1 {
 /// One process-local handle to the signed-release durable testnet observation owner.
 ///
 /// This is a Rust-host integration prerequisite, not a mobile SDK or production mint backend.
-/// It retains the independent first finality context privately and accepts only a signed chain
+/// It retains the independent complete native checkpoint privately and accepts only a signed chain
 /// for a previously persisted reservation. The owner itself is installed once process-wide.
 pub(crate) struct KagemushaTestnetNativeMintRuntimeV1 {
     trusted_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: SumeragiFinalityCheckpoint,
     reservations: Mutex<BTreeMap<[u8; 32], [u8; 32]>>,
 }
 
@@ -97,7 +97,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     pub(crate) fn for_test(bootstrap: &KagemushaVerifiedMobileBootstrapV1) -> Self {
         Self {
             trusted_network_id: bootstrap.network_id(),
-            trusted_first_context_id: bootstrap.first_context_id(),
+            trusted_checkpoint: bootstrap.finality_checkpoint().clone(),
             reservations: Mutex::new(BTreeMap::new()),
         }
     }
@@ -105,7 +105,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     /// Authenticate and install one durable experimental observer using trusted native pins.
     ///
     /// # Errors
-    /// Rejects an invalid native network/context pin, unauthenticated release, changed journal,
+    /// Rejects an invalid native network/checkpoint pin, unauthenticated release, changed journal,
     /// failed replay, or an already installed owner.
     pub(crate) fn install(
         publication: &TestnetPublicationPermitV1<'_>,
@@ -115,14 +115,14 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
         inputs.bootstrap.require_unexpired()?;
         let scope = authenticated_observation_scope(inputs.bootstrap)?;
         let trusted_network_id = inputs.bootstrap.network_id();
-        let trusted_first_context_id = inputs.bootstrap.first_context_id();
-        require_trusted_pins(scope, trusted_network_id, trusted_first_context_id)?;
+        let trusted_checkpoint = inputs.bootstrap.finality_checkpoint();
+        require_trusted_pins(scope, trusted_network_id, trusted_checkpoint)?;
         for verified in inputs.independent_anchors.values() {
             require_matching_verified_chain_root(
                 trusted_network_id,
-                trusted_first_context_id,
+                trusted_checkpoint,
                 verified.anchor().network_id,
-                verified.first_context_id(),
+                verified.first_checkpoint(),
             )?;
         }
         load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
@@ -139,7 +139,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
         )?;
         Ok(Self {
             trusted_network_id,
-            trusted_first_context_id,
+            trusted_checkpoint: trusted_checkpoint.clone(),
             reservations: Mutex::new(BTreeMap::new()),
         })
     }
@@ -181,10 +181,10 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
         })
     }
 
-    /// Verify a signed finality chain from the retained first context and pin its last context.
+    /// Verify a signed finality chain from the retained checkpoint and pin the resulting checkpoint.
     ///
     /// The chain may be obtained from an untrusted network response; its validator signatures,
-    /// contiguous heights, network, and first context are checked before the durable owner pins
+    /// contiguous heights, network, and initial checkpoint are checked before the durable owner pins
     /// the result. This method accepts neither raw anchor coordinates nor a status-derived trust
     /// root. The private reservation token must belong to this runtime.
     ///
@@ -213,7 +213,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
             publication,
             reservation.operation_id,
             self.trusted_network_id,
-            self.trusted_first_context_id,
+            &self.trusted_checkpoint,
             chain_json,
         )
     }
@@ -222,28 +222,27 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
 fn require_trusted_pins(
     scope: KagemushaTestnetStateObservationScopeV1,
     network_id: NetworkId,
-    first_context_id: HeightContextId,
+    checkpoint: &SumeragiFinalityCheckpoint,
 ) -> Result<(), String> {
     if scope.network_id() != *network_id.as_bytes() {
         return Err("testnet mint native network differs from signed-release scope".to_owned());
     }
-    // Hash::prehashed marks the final bit, so an all-zero input becomes this
-    // canonical placeholder rather than an all-zero HashOf value.
-    if first_context_id.0.as_ref() == Hash::prehashed([0; 32]).as_ref() {
-        return Err("testnet mint first finality context is unpinned".to_owned());
-    }
+    SumeragiFinalityVerifier::from_trusted_checkpoint(
+        checkpoint,
+        &network_id,
+        checkpoint.chain_id(),
+    )
+    .map_err(|error| format!("invalid testnet mint native checkpoint: {error}"))?;
     Ok(())
 }
 
 fn require_matching_verified_chain_root(
     trusted_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: &SumeragiFinalityCheckpoint,
     verified_network_id: NetworkId,
-    verified_first_context_id: HeightContextId,
+    verified_checkpoint: &SumeragiFinalityCheckpoint,
 ) -> Result<(), String> {
-    if verified_network_id != trusted_network_id
-        || verified_first_context_id != trusted_first_context_id
-    {
+    if verified_network_id != trusted_network_id || verified_checkpoint != trusted_checkpoint {
         return Err("recovered testnet finality chain differs from native trust root".to_owned());
     }
     Ok(())

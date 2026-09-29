@@ -902,7 +902,8 @@ mod tests {
         let (state, context, _) = fixture_with_epoch_end_height(80);
         assert_eq!(context.mode, wire::ConsensusMode::Npos);
         assert!(
-            crate::sumeragi::v2_npos::committed_epoch_length_blocks(&state.world_view()).is_err(),
+            crate::sumeragi::epoch::parameters::committed_epoch_length_blocks(&state.world_view())
+                .is_err(),
             "the fixture has no committed NPoS parameters"
         );
         assert_eq!(frozen_epoch_length_blocks(&context), 40);

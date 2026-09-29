@@ -535,14 +535,6 @@ final class TxBuilderTests: XCTestCase {
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
-        var admissionIntentReader = CanonicalNoritoReader(
-            data: try payloadReader.readCompactField()
-        )
-        XCTAssertEqual(
-            try admissionIntentReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.ordinary.rawValue
-        )
-        XCTAssertEqual(admissionIntentReader.remaining(), 0)
         var metadataReader = CanonicalNoritoReader(
             data: try payloadReader.readCompactField()
         )

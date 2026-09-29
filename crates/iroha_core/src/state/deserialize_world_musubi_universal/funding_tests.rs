@@ -33,7 +33,8 @@ fn complete_projection_budget(world: &World) -> AllocationBudget {
 fn universal_scratch_retains_exact_backing_until_the_complete_check_returns() {
     let empty = AllocationBudget::new(0);
     let empty_world = World::default();
-    validate_musubi_universal_projection_cut(&empty_world.view(), "current", &empty).unwrap();
+    validate_musubi_universal_projection_cut(&empty_world.view(), ProjectionCut::Current, &empty)
+        .unwrap();
     assert!(matches!(
         validate_musubi_universal_projection_cuts(&empty_world, &empty),
         Err(StateRestoreError::Admission(
@@ -64,7 +65,8 @@ fn universal_capacity_refusal_keeps_only_the_original_release_owner() {
     let complete_limit = budget.limit_bytes();
     let held = budget.try_reserve_bytes(complete_limit).unwrap();
     let ExecutionAttemptError::Deferred(reason) =
-        validate_musubi_universal_projection_cut(&world.view(), "current", &budget).unwrap_err()
+        validate_musubi_universal_projection_cut(&world.view(), ProjectionCut::Current, &budget)
+            .unwrap_err()
     else {
         panic!("capacity refusal must remain local")
     };
@@ -109,9 +111,10 @@ fn malformed_package_is_rejected_before_universal_scratch_admission() {
     world.musubi_packages.insert(release.package, package);
     let budget = AllocationBudget::new(0);
     let error =
-        validate_musubi_universal_projection_cut(&world.view(), "current", &budget).unwrap_err();
+        validate_musubi_universal_projection_cut(&world.view(), ProjectionCut::Current, &budget)
+            .unwrap_err();
     assert!(
-        matches!(&error, ExecutionAttemptError::Rejected(json::Error::InvalidField { field, message })
+        matches!(&error.clone().map_rejection(ProjectionRejection::into_json), ExecutionAttemptError::Rejected(json::Error::InvalidField { field, message })
         if field == "world.musubi_public_directory" && message == "current World cut: package lookup key differs from its canonical identity"),
         "unexpected semantic result: {error:?}"
     );
@@ -143,10 +146,14 @@ fn universal_source_and_directory_failures_release_all_accumulator_credit() {
             world.musubi_resolver_index.insert(release, row);
         }
         let before = json::to_json(&world).unwrap();
-        let error = validate_musubi_universal_projection_cut(&world.view(), "current", &budget)
-            .unwrap_err();
+        let error = validate_musubi_universal_projection_cut(
+            &world.view(),
+            ProjectionCut::Current,
+            &budget,
+        )
+        .unwrap_err();
         assert!(
-            matches!(&error, ExecutionAttemptError::Rejected(json::Error::InvalidField { field, .. })
+            matches!(&error.clone().map_rejection(ProjectionRejection::into_json), ExecutionAttemptError::Rejected(json::Error::InvalidField { field, .. })
             if field == if directory { "world.musubi_public_directory" } else { "world.musubi_resolver_index" }),
             "unexpected semantic result: {error:?}"
         );
@@ -202,10 +209,14 @@ fn shared_selector_cannot_satisfy_a_second_package_identity() {
             .musubi_packages
             .insert(duplicate.package.clone(), duplicate);
         let budget = AllocationBudget::new(scratch_bytes(&world));
-        let error = validate_musubi_universal_projection_cut(&world.view(), "current", &budget)
-            .unwrap_err();
+        let error = validate_musubi_universal_projection_cut(
+            &world.view(),
+            ProjectionCut::Current,
+            &budget,
+        )
+        .unwrap_err();
         assert!(
-            matches!(&error, ExecutionAttemptError::Rejected(json::Error::InvalidField { field, message })
+            matches!(&error.clone().map_rejection(ProjectionRejection::into_json), ExecutionAttemptError::Rejected(json::Error::InvalidField { field, message })
             if field == "world.musubi_public_directory" && message == "current World cut: package is missing its exact public-directory entry"),
             "unexpected semantic result: {error:?}"
         );

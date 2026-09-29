@@ -152,7 +152,7 @@ public sealed class ValidationFeeHijiriQuoteV1
 public static class ValidationFeeHijiriQuoteNative
 {
     /// <summary>Native bridge ABI carrying the additive quote symbols.</summary>
-    public const uint RequiredBridgeAbiVersion = 24;
+    public const uint RequiredBridgeAbiVersion = 25;
 
     private const string LibraryName = "connect_norito_bridge";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -304,7 +304,7 @@ public static class ValidationFeeHijiriQuoteNative
                 || NativeBridgeAbiVersion() != RequiredBridgeAbiVersion)
             {
                 throw new InvalidOperationException(
-                    "ABI-24 connect_norito_bridge with Hijiri quote symbols is required.");
+                    "ABI-25 connect_norito_bridge with Hijiri quote symbols is required.");
             }
         }
         catch (Exception error) when (
@@ -313,7 +313,7 @@ public static class ValidationFeeHijiriQuoteNative
             or BadImageFormatException)
         {
             throw new InvalidOperationException(
-                "ABI-24 connect_norito_bridge with Hijiri quote symbols is required.",
+                "ABI-25 connect_norito_bridge with Hijiri quote symbols is required.",
                 error);
         }
         finally

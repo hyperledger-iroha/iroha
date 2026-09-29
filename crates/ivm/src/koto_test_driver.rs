@@ -1313,6 +1313,14 @@ fn execute_test(
     let started = Instant::now();
     let outcome = vm.run_with_host(&mut host);
     let elapsed = started.elapsed();
+    if let Err(error) = &outcome
+        && error.execution_deferral().is_some()
+    {
+        return Err(format!(
+            "Kotodama test `{}` execution deferred: {error:?}",
+            test.name
+        ));
+    }
     let passed = outcome.is_ok();
     let failure = outcome
         .err()
@@ -1791,15 +1799,17 @@ impl KotoTestHost {
                 },
             )
         } else {
-            let alias = Self::decode_alias_arg(vm, 10, "actor")
-                .map_err(|_| crate::VMError::NoritoInvalid)?;
+            let alias = Self::decode_alias_arg(vm, 10, "actor").map_err(|error| {
+                crate::error::preserve_execution_deferral(error, crate::VMError::NoritoInvalid)
+            })?;
             let Some(actor) = self.actors.get(&alias).cloned() else {
                 return self.fail_test(format!("unknown actor `{alias}`"));
             };
             (alias, actor)
         };
-        let entrypoint =
-            Self::decode_alias_arg(vm, 11, "kotoage").map_err(|_| crate::VMError::NoritoInvalid)?;
+        let entrypoint = Self::decode_alias_arg(vm, 11, "kotoage").map_err(|error| {
+            crate::error::preserve_execution_deferral(error, crate::VMError::NoritoInvalid)
+        })?;
         let payload = Self::decode_json_arg(vm, 12)?;
         let result_table = if expect_reject { 0 } else { vm.register(13) };
         let return_arity = if expect_reject {
@@ -1891,15 +1901,14 @@ impl KotoTestHost {
             );
         }
         let mut nested_vm = IVM::try_new(u64::MAX)?;
-        nested_vm.reset();
+        nested_vm.reset()?;
         let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
-        nested_vm
-            .memory
-            .preload_input(0, &clear)
-            .map_err(|_| crate::VMError::DecodeError)?;
-        nested_vm
-            .load_prepared(program)
-            .map_err(|_| crate::VMError::DecodeError)?;
+        nested_vm.memory.preload_input(0, &clear).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, crate::VMError::DecodeError)
+        })?;
+        nested_vm.load_prepared(program).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, crate::VMError::DecodeError)
+        })?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
@@ -1940,6 +1949,12 @@ impl KotoTestHost {
                 self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
                 Ok(0)
+            }
+            Err(err) if err.execution_deferral().is_some() => {
+                self.inner.restore(rollback.as_ref())?;
+                self.inner.clear_contract_runtime_context(previous_caller);
+                self.restore_public_inputs();
+                Err(err)
             }
             Err(err) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;

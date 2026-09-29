@@ -180,11 +180,9 @@ impl Kura {
             // pending canonical blocks, terminal outcomes, carrier components
             // or prune recovery. One no-clobber temporary adds the same bytes
             // as the final object; an exact retry adds no physical payload.
-            self.validate_configured_autonomous_mutation_disk_peak_locked(
+            self.validate_publication_disk_peak_locked(
                 pending_canonical_bytes,
                 reference.byte_len,
-                false,
-                false,
                 &path,
             )?;
             if !self.publish_bound_noclobber_file_locked(
@@ -207,7 +205,7 @@ impl Kura {
             KIND,
         )?;
         sync_artifact_file(&file).map_err(|error| Error::IO(error, path.clone()))?;
-        self.sync_native_amx_evidence_namespace(&namespace, KIND)?;
+        self.sync_bound_evidence_namespace(&namespace, KIND)?;
         self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
             &namespace,
             &path,
@@ -439,7 +437,7 @@ impl Kura {
         // based solely on their presence or apparent proof structure.
         Self::remove_bound_progress_file_if_matches(namespace, &path, &file, &metadata)
             .map_err(|error| Error::IO(error, path))?;
-        self.sync_native_amx_evidence_namespace(namespace, KIND)
+        self.sync_bound_evidence_namespace(namespace, KIND)
     }
 }
 
@@ -1039,7 +1037,6 @@ mod tests {
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: policy,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: defaults::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: defaults::FSYNC_MODE,
             fsync_interval: defaults::FSYNC_INTERVAL,
         }

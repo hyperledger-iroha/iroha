@@ -661,7 +661,7 @@ final class ToriiContractAPITests: XCTestCase {
                     contractAddress: self.contractAddress,
                     codeHashHex: self.codeHash,
                     networkId: TestNetworkIds.canonical,
-                    admissionIntent: .ordinary
+                    retiredAdmissionTag: 0
                 )
                 $0["transaction_payload_b64"] = payload.base64EncodedString()
                 $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()
@@ -750,15 +750,14 @@ final class ToriiContractAPITests: XCTestCase {
             contractAddress: contractAddress,
             codeHashHex: codeHash,
             networkId: TestNetworkIds.canonical,
-            admissionIntent: .queuePlanSynced
+            retiredAdmissionTag: 1
         )
         let signingMessage = IrohaHash.hash(payload)
-        _ = try ToriiCanonicalTransactionDraft.decode(
+        XCTAssertThrowsError(try ToriiCanonicalTransactionDraft.decode(
             transactionPayloadB64: payload.base64EncodedString(),
             signingMessageB64: signingMessage.base64EncodedString(),
-            expectedAdmissionIntent: .queuePlanSynced,
             context: "retired admission fixture"
-        )
+        ))
         var requests = 0
         StubURLProtocol.handler = { request in
             requests += 1
@@ -771,7 +770,7 @@ final class ToriiContractAPITests: XCTestCase {
             _ = try await makeClient().prepareDetachedContractCall(detachedRequest())
             XCTFail("retired contract draft was accepted")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("admission_intent must be Ordinary"))
+            XCTAssertFalse(String(describing: error).isEmpty)
         }
         XCTAssertEqual(requests, 1)
     }

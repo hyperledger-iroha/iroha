@@ -414,7 +414,7 @@ impl State {
                     &mut hydrated.shard_cursors,
                     lane_config,
                     height_u64.get(),
-                    &active_commitments,
+                    active_commitments.iter(),
                 ) {
                     warn!(
                         ?err,
@@ -425,7 +425,7 @@ impl State {
                 if let Err(err) = self.advance_da_receipt_cursors_into(
                     &mut hydrated.receipt_cursors,
                     height_u64.get(),
-                    &active_commitments,
+                    active_commitments.iter(),
                 ) {
                     warn!(
                         ?err,

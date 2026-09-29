@@ -51,7 +51,7 @@ fn shifts_rtype_property_random() {
         let val = rng.next();
         let shamt_rand = rng.next() & 0x7F; // up to 127 to exercise masking
         let shamt_masked = (shamt_rand & 0x3F) as u32; // VM masks to low 6 bits
-        vm.reset();
+        vm.reset().expect("private lifecycle cleanup succeeds");
         vm.set_gas_limit(50_000);
         vm.registers.set(1, val);
         vm.registers.set(3, shamt_rand);

@@ -416,8 +416,8 @@ impl KagemushaTopUpIssuanceIntentV1 {
 
 /// Derived local mint result cached after consensus finalizes the top-up receipt.
 ///
-/// `verified_anchor_identity` records which locally authenticated context admitted
-/// the result. It cannot authenticate itself during snapshot hydration.
+/// The canonical checkpoint bytes identify the external context used at admission.
+/// Decoding those bytes cannot authenticate their selection during snapshot hydration.
 /// This attachment model exercises finality binding in reserve unit tests.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -432,8 +432,10 @@ pub struct KagemushaMintFinalityAttachmentV1 {
     pub result: KagemushaTopUpResultV1,
     /// Domain-separated digest of the canonical result bytes.
     pub result_wire_digest: [u8; 32],
-    /// Identity of the external canonical context used at admission.
-    pub verified_anchor_identity: KagemushaFinalityTrustAnchorV1,
+    /// Network selected by the external context at admission.
+    pub verified_network_id: NetworkId,
+    /// Bounded canonical checkpoint bytes; these persisted claims are not authority.
+    pub verified_checkpoint: Vec<u8>,
 }
 
 /// Durable record of one atomic online debit and reserve top-up.
@@ -503,7 +505,8 @@ pub struct KagemushaRedemptionRecordV1 {
 }
 
 impl KagemushaTopUpRecordV1 {
-    fn validate_basic(&self) -> Result<(), KagemushaReserveErrorV1> {
+    /// Check every retained request, pool, amount and original receipt binding before proof work.
+    pub(crate) fn validate_basic(&self) -> Result<(), KagemushaReserveErrorV1> {
         require_version(self.version)?;
         require_nonzero_operation(self.operation_id)?;
         self.pool.validate()?;
@@ -861,7 +864,8 @@ impl VerifiedKagemushaTopUpIntentV1 {
     }
 }
 
-/// Fully admitted mint result and canonical finality identity used to verify it.
+/// Test-local portable result and externally selected finality identity used to verify it.
+/// The recursive monetary admission is mocked separately; this type never grants production authority.
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct VerifiedKagemushaMintFinalizationV1 {
@@ -897,8 +901,8 @@ impl VerifiedKagemushaMintFinalizationV1 {
 
     /// Return the canonical finality identity used at admission.
     #[must_use]
-    pub fn trusted_anchor_identity(&self) -> KagemushaFinalityTrustAnchorV1 {
-        self.trusted_anchor_identity
+    pub fn trusted_anchor_identity(&self) -> &KagemushaFinalityTrustAnchorV1 {
+        &self.trusted_anchor_identity
     }
 }
 
@@ -1887,7 +1891,12 @@ pub(in crate::smartcontracts::isi) fn finalize_mint_credit_record(
             TOP_UP_RESULT_WIRE_DIGEST_DOMAIN_V1,
             &verified.result,
         )?,
-        verified_anchor_identity: verified.trusted_anchor_identity,
+        verified_network_id: verified.trusted_anchor_identity.network_id,
+        verified_checkpoint: verified
+            .trusted_anchor_identity
+            .checkpoint
+            .encode_canonical()
+            .map_err(map_chain_value_error)?,
     };
     validate_mint_finality_attachment(existing, &attachment)?;
     if let Some(committed) = existing_attachment {
@@ -1918,12 +1927,13 @@ pub fn validate_mint_finality_attachment_with_anchor(
 ) -> Result<(), KagemushaReserveErrorV1> {
     record.validate_basic()?;
     validate_mint_finality_attachment(record, attachment)?;
-    let canonical = resolver
-        .resolve(&attachment.verified_anchor_identity)
-        .ok_or(KagemushaReserveErrorV1::FinalityAnchorUnavailable {
+    let persisted_identity = attachment_anchor_identity(attachment)?;
+    let canonical = resolver.resolve(&persisted_identity).ok_or(
+        KagemushaReserveErrorV1::FinalityAnchorUnavailable {
             operation_id: record.operation_id,
-        })?;
-    if canonical != attachment.verified_anchor_identity {
+        },
+    )?;
+    if canonical != persisted_identity {
         return Err(KagemushaReserveErrorV1::InvalidFinalityEvidence {
             reason: "persisted_anchor_identity_is_not_canonical",
         });
@@ -2167,12 +2177,12 @@ fn validate_mint_finality_attachment(
         .receipt
         .validate()
         .map_err(map_chain_value_error)?;
-    attachment
-        .verified_anchor_identity
-        .validate()
-        .map_err(|_| KagemushaReserveErrorV1::InvalidFinalityEvidence {
+    let persisted_identity = attachment_anchor_identity(attachment)?;
+    persisted_identity.validate().map_err(|_| {
+        KagemushaReserveErrorV1::InvalidFinalityEvidence {
             reason: "invalid_persisted_anchor_identity",
-        })?;
+        }
+    })?;
     let result = &attachment.result;
     let receipt = &result.finality.reserve_receipt_witness.receipt;
     let expected_statement = mint_statement_from_request(&result.request, receipt.committed_at_ms)?;
@@ -2183,17 +2193,32 @@ fn validate_mint_finality_attachment(
         || result.mint_credit.artifact_manifest_digest != result.request.artifact_manifest_digest
         || attachment.result_wire_digest
             != canonical_wire_digest(TOP_UP_RESULT_WIRE_DIGEST_DOMAIN_V1, result)?
-        || attachment.verified_anchor_identity.network_id != record.pool.network_id
-        || attachment.verified_anchor_identity.block_height
-            != result.finality.finality_artifact.height
-        || attachment.verified_anchor_identity.height_context_id
-            != result.finality.finality_artifact.context_id()
+        || persisted_identity.network_id != record.pool.network_id
+        || result.validate_against(&persisted_identity).is_err()
     {
         return Err(KagemushaReserveErrorV1::MintFinalizationMismatch {
             operation_id: record.operation_id,
         });
     }
     Ok(())
+}
+
+/// Decode a cache identity claim without treating it as an independently selected root.
+#[cfg(test)]
+fn attachment_anchor_identity(
+    attachment: &KagemushaMintFinalityAttachmentV1,
+) -> Result<KagemushaFinalityTrustAnchorV1, KagemushaReserveErrorV1> {
+    let checkpoint =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            &attachment.verified_checkpoint,
+        )
+        .map_err(|_| KagemushaReserveErrorV1::InvalidFinalityEvidence {
+            reason: "invalid_persisted_checkpoint_frame",
+        })?;
+    Ok(KagemushaFinalityTrustAnchorV1 {
+        network_id: attachment.verified_network_id,
+        checkpoint,
+    })
 }
 
 #[cfg(test)]
@@ -2242,26 +2267,19 @@ mod tests {
     };
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature,
-        bls_normal_aggregate_signatures, bls_normal_pop_prove,
+        bls_normal_aggregate_signatures,
     };
     use iroha_data_model::{
         IntoKeyValue,
         asset::Asset,
         block::{
-            BlockHeader,
-            consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-                QuorumCertificate, ValidatorPower, Vote,
-                encode_kagemusha_consensus_signature_envelope_v1, finality::V2FinalityArtifact,
-            },
+            BlockHeader, CommitCertificate,
+            consensus::{ExecKv, ExecWitness},
+            decode_versioned_signed_block,
         },
         isi::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1,
-            KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
-            KagemushaMintFinalityValidatorSealV1, KagemushaOperationFinalityV1,
-            KagemushaPastaSchnorrSignatureV1, KagemushaReserveReceiptWitnessV1,
-            KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationFinalityV1,
+            KagemushaReserveReceiptWitnessV1, kagemusha_mint_finality_root_v1,
         },
         kagemusha::{
             KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
@@ -2276,10 +2294,17 @@ mod tests {
             KagemushaTrustedCommitTimeV1, kagemusha_credit_opening_canonical_len_v1,
             kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
         },
+        sumeragi_finality::{
+            ExecutionCommitment, ExecutionResultCommitment, NativeLaneStateProof,
+            SUMERAGI_LANE_STATE_WITNESS_KEY, SumeragiLaneStateCommitment,
+        },
+        sumeragi_lanes::SumeragiLaneState,
+        testing::native_finality::NativeFinalityFixture,
     };
     use iroha_model_base::domain::DomainId;
-    use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_sumeragi::{message::Qc, types::AggregateSignature};
+    use mv::allocation::AllocationBudget;
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};
 
@@ -2294,9 +2319,9 @@ mod tests {
     }
 
     fn network() -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-            b"kagemusha-v1-reserve",
-        )))
+        static NETWORK: std::sync::OnceLock<NetworkId> = std::sync::OnceLock::new();
+        *NETWORK
+            .get_or_init(|| NativeFinalityFixture::start("portable-native-fixture").network_id())
     }
 
     fn other_network() -> NetworkId {
@@ -2770,6 +2795,52 @@ mod tests {
         ));
     }
 
+    // Independently derive the receipt's complete path from the actual ordinary write set.
+    fn receipt_path(writes: &[ExecKv], key: &[u8]) -> Vec<Hash> {
+        let empty = Hash::new([]);
+        let mut nodes: BTreeMap<[u8; 32], Hash> = writes
+            .iter()
+            .map(|write| {
+                let path = Hash::new(&write.key);
+                let value = Hash::new(&write.value);
+                (
+                    path.into(),
+                    Hash::new_from_chunks(&[&[0], path.as_ref(), value.as_ref()]),
+                )
+            })
+            .collect();
+        let mut target: [u8; 32] = Hash::new(key).into();
+        let mut siblings = Vec::new();
+        for bit in (0..256).rev() {
+            let byte = bit / 8;
+            let mask = 1 << (bit % 8);
+            let mut sibling = target;
+            sibling[byte] ^= mask;
+            siblings.push(nodes.get(&sibling).copied().unwrap_or(empty));
+            let mut parents = BTreeMap::new();
+            for (path, hash) in &nodes {
+                let mut other_path = *path;
+                other_path[byte] ^= mask;
+                let other = nodes.get(&other_path).copied().unwrap_or(empty);
+                let (left, right) = if path[byte] & mask == 0 {
+                    (*hash, other)
+                } else {
+                    (other, *hash)
+                };
+                let mut parent = *path;
+                parent[byte] &= !mask;
+                parents.insert(
+                    parent,
+                    Hash::new_from_chunks(&[&[1], left.as_ref(), right.as_ref()]),
+                );
+            }
+            nodes = parents;
+            target[byte] &= !mask;
+        }
+        assert_eq!(nodes.len(), 1);
+        siblings
+    }
+
     fn finality_fixture(
         book: &KagemushaReserveBookV1,
         verified: &VerifiedKagemushaTopUpIntentV1,
@@ -2784,61 +2855,114 @@ mod tests {
             .mint_statement(record.reserve_receipt.committed_at_ms)
             .expect("authoritative mint statement");
         let proof = paired_proof(statement.canonical_digest().expect("mint statement digest"));
-        let witness = KagemushaReserveReceiptWitnessV1 {
-            key: KagemushaReserveReceiptWitnessV1::expected_key(request.operation_id),
-            receipt: record.reserve_receipt.clone(),
-            siblings: vec![Hash::new([nonce]); KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1],
+        let fixture = NativeFinalityFixture::new();
+        assert_eq!(request.network_id, fixture.network_id());
+        let key = KagemushaReserveReceiptWitnessV1::expected_key(request.operation_id);
+        let lane_state = SumeragiLaneStateCommitment::from_state(
+            fixture.network_id(),
+            2,
+            &SumeragiLaneState::default(),
+        )
+        .expect("native lane state");
+        // Synthetic execution for portable finality/accounting tests, never monetary authority.
+        // A nonce write changes the genuinely signed result, preserving conflict coverage.
+        let writes = ExecWitness {
+            writes: vec![
+                ExecKv {
+                    key: SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
+                    value: norito::encode_canonical(&lane_state).unwrap(),
+                },
+                ExecKv {
+                    key: key.clone(),
+                    value: norito::encode_canonical(&record.reserve_receipt).unwrap(),
+                },
+                ExecKv {
+                    key: b"reserve-finality-test-nonce".to_vec(),
+                    value: vec![nonce],
+                },
+            ],
+            ..ExecWitness::default()
         };
-        let ordinary_writes_root = witness.reconstructed_root().expect("receipt root");
+        let witness = KagemushaReserveReceiptWitnessV1 {
+            siblings: receipt_path(&writes.writes, &key),
+            key,
+            receipt: record.reserve_receipt.clone(),
+        };
+        let native_lanes =
+            NativeLaneStateProof::from_witness(&writes, &AllocationBudget::new(100_000))
+                .expect("actual native lane SMT path");
+        let ordinary_writes_root = native_lanes.computed_root().unwrap();
+        assert!(witness.verify(ordinary_writes_root));
         let top_up_leaf = crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
             &record.reserve_receipt,
         )
         .expect("top-up leaf");
-        let top_up_membership_witness = KagemushaTopUpMembershipWitnessV1 {
-            leaf: top_up_leaf,
-            leaf_index: 0,
-            root: iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
-                eq: [0x31; 32],
-                ep: [0x32; 32],
-            },
-            siblings: vec![
-                iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1::ZERO;
-                iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1
-            ],
-        };
+        let tree =
+            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![top_up_leaf])
+                .expect("actual Poseidon top-up tree");
+        let top_up_membership_witness = tree.witness(request.operation_id).unwrap();
+        crate::zk::kagemusha_v1_recursion::verify_kagemusha_top_up_membership_v1(
+            &top_up_membership_witness,
+            1,
+        )
+        .expect("actual paired Poseidon membership");
         let top_up_root = kagemusha_mint_finality_root_v1(top_up_membership_witness.root);
-
-        let mut validators = (1_u8..=4)
-            .map(|index| {
-                KeyPair::try_from_seed(
-                    vec![nonce.wrapping_add(index).wrapping_add(80); 32],
-                    Algorithm::BlsNormal,
-                )
-                .expect("BLS finality key")
-            })
-            .collect::<Vec<_>>();
-        validators.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let roster = validators
-            .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            request.network_id,
-            0,
-            &roster,
-        );
-        let mint_finality_authorization =
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &mint_finality_authority,
-                u64::MAX,
-            )
-            .expect("genesis scheduling authorization");
-        let mint_finality_authorization_id = mint_finality_authorization
+        let mut block = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let header = certificate.consensus_header().to_vec();
+        let mut commitment =
+            ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+        let mint_finality_authorization_id = commitment
+            .schedule
+            .current
+            .authorization
             .authorization_id()
-            .expect("complete genesis authorization identity");
+            .expect("original genesis authorization identity");
+        commitment.native_lanes = native_lanes;
+        commitment.execution.ordinary_writes_root = ordinary_writes_root;
+        commitment.execution.kagemusha_top_up_root = Some(top_up_root);
+        commitment.execution.kagemusha_top_up_count = 1;
+        commitment.execution.post_state_root =
+            ExecutionCommitment::kagemusha_post_state_root(1, ordinary_writes_root, top_up_root);
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        qc.result = commitment.result().unwrap();
+        let mut validators: Vec<_> = (1..=4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect();
+        validators.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+        for (key, original) in validators.iter().zip(&fixture.latest().committee) {
+            assert_eq!(key.public_key(), &original.public_key);
+        }
+        let shares: Vec<_> = validators[..3]
+            .iter()
+            .map(|key| IrohaSignature::try_new(key.private_key(), &qc.preimage()).unwrap())
+            .collect();
+        qc.agg_sig = AggregateSignature(
+            bls_normal_aggregate_signatures(
+                &shares
+                    .iter()
+                    .map(IrohaSignature::payload)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        );
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            header,
+            norito::encode_canonical(&qc).unwrap(),
+            commitment.preimage().unwrap(),
+        )));
+        let mut finality_proof = fixture.latest().clone();
+        finality_proof.block_wire = block.encode_wire().unwrap();
+        let mut verifier = NativeFinalityFixture::start(fixture.chain_id()).verifier();
+        verifier
+            .verify(&finality_proof)
+            .expect("genuine native three-of-four certificate");
+        let anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: request.network_id,
+            checkpoint: verifier.export_checkpoint(&finality_proof).unwrap(),
+        };
         let _eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)
             .expect("canonical Eq mint-authority history");
         let _ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)
@@ -2857,139 +2981,13 @@ mod tests {
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
         };
-        // Each nonce creates an independent first-height finality context; a later height
-        // would require an actual parent CommitQC or an authenticated snapshot anchor.
-        let height = 1_u64;
-        let context = HeightContext {
-            network_id: request.network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height,
-            epoch: 0,
-            kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: mint_finality_authority,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("four-validator quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new([nonce, 1]),
-            execution_policy_hash: Hash::new([nonce, 2]),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [nonce; 32],
-        };
-        context.validate().expect("canonical first-height context");
-        let subject = BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new([nonce, 3])),
-            payload_hash: Hash::new([nonce, 4]),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height,
-            view: 0,
-        };
-        let post_state_root =
-            ExecutionCommitment::kagemusha_post_state_root_v1(1, ordinary_writes_root, top_up_root);
-        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
-            Hash::new([nonce, 5]),
-            post_state_root,
-            ordinary_writes_root,
-            Some(top_up_root),
-            1,
-            1,
-            Hash::new([nonce, 7]),
-        )
-        .expect("top-up execution commitment");
-        let preimage = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let shares = validators[..3]
-            .iter()
-            .map(|key| {
-                IrohaSignature::new(key.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let mint_finality_message = KagemushaMintFinalitySealMessageV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch_authorization: mint_finality_authorization,
-            validator_count: 4,
-            network_id: request.network_id,
-            block_height: height,
-            height_context_id: context.id(),
-            subject_digest: [0x41; 32],
-            execution_commitment_digest: [0x42; 32],
-            kagemusha_top_up_root: top_up_root,
-            kagemusha_top_up_count: 1,
-            next_epoch_authorization: None,
-        };
-        let mint_finality_bundle = KagemushaMintFinalitySealBundleV1 {
-            message: mint_finality_message,
-            seals: (0..3)
-                .map(|validator_index| KagemushaMintFinalityValidatorSealV1 {
-                    validator_index,
-                    eq_proof_signature: KagemushaPastaSchnorrSignatureV1 {
-                        nonce_commitment: [0x51_u8.wrapping_add(validator_index as u8); 32],
-                        response: [0x61_u8.wrapping_add(validator_index as u8); 32],
-                    },
-                    ep_proof_signature: KagemushaPastaSchnorrSignatureV1 {
-                        nonce_commitment: [0x71_u8.wrapping_add(validator_index as u8); 32],
-                        response: [0x81_u8.wrapping_add(validator_index as u8); 32],
-                    },
-                })
-                .collect(),
-        };
-        let aggregate_signature =
-            bls_normal_aggregate_signatures(&share_refs).expect("aggregate CommitQC");
-        let commit_qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: encode_kagemusha_consensus_signature_envelope_v1(
-                iroha_data_model::block::consensus_v2::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
-                &aggregate_signature,
-                &mint_finality_bundle.encode(),
-            )
-            .expect("Kagemusha V1 CommitQC envelope"),
-        };
-        let validator_set_pops = validators
-            .iter()
-            .map(|key| bls_normal_pop_prove(key.private_key()).expect("validator PoP"))
-            .collect();
-        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-        artifact.verify().expect("valid finality artifact");
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: request.network_id,
-            block_height: height,
-            height_context_id: artifact.context_id(),
-        };
         let result = KagemushaTopUpResultV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            request,
+            request: request.clone(),
             finality: KagemushaOperationFinalityV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                finality_artifact: artifact,
+                network_id: request.network_id,
+                finality_proof,
                 reserve_receipt_witness: witness,
                 top_up_membership_witness: Some(top_up_membership_witness),
             },
@@ -3009,6 +3007,80 @@ mod tests {
         let (result, anchor) = finality_fixture(book, verified, nonce);
         VerifiedKagemushaMintFinalizationV1::after_full_verification(result, anchor)
             .expect("verified finalization")
+    }
+
+    #[test]
+    fn native_finality_and_cache_shape_do_not_replace_an_installed_recursive_verifier() {
+        use super::super::{
+            AuthenticatedKagemushaV1RuntimeVerifier, KagemushaV1RuntimeVerifier,
+            KagemushaVerifierReleaseLifecycleV1, RejectAllKagemushaV1RuntimeVerifier,
+        };
+        use crate::zk::kagemusha_v1_recursion::{
+            KagemushaMintAuthorityCheckpointV1, KagemushaMintAuthorityStepV1,
+        };
+
+        let mut book = KagemushaReserveBookV1::new();
+        let top_up = verified_top_up(1, 1, 80);
+        commit_top_up(&mut book, &top_up, 1);
+        let (result, anchor) = finality_fixture(&book, &top_up, 2);
+        let record = match book.operation(&top_up.operation_id()) {
+            Some(KagemushaReserveOperationRecordV1::TopUp(record)) => record,
+            _ => panic!("original retained top-up"),
+        };
+        record.validate_basic().unwrap();
+        let authorization = result
+            .finality
+            .finality_proof
+            .decode_checked()
+            .unwrap()
+            .commitment()
+            .schedule
+            .current
+            .authorization;
+        let credit = &result.mint_credit;
+        let checkpoint = KagemushaMintAuthorityCheckpointV1 {
+            step: KagemushaMintAuthorityStepV1::Bootstrap,
+            statement: credit.statement.clone(),
+            certificate_binding: credit.finality_certificate_binding,
+            authority_head: credit.finality_authority_head,
+            release_id: credit.statement.lifecycle.release_id,
+            genesis_authorization_id: credit.finality_genesis_authorization_id,
+            proof_binding_digest: credit.finality_proof_binding_digest,
+            proof: credit.proof.clone(),
+        };
+        // Native BLS finality is genuine; recursive proof bytes are deliberately mock framing.
+        // Neither a portable-valid result nor a shape-valid cache can grant mint authority.
+        result.validate_against(&anchor).unwrap();
+        checkpoint.validate_shape().unwrap();
+        let unavailable = RejectAllKagemushaV1RuntimeVerifier;
+        let empty = AuthenticatedKagemushaV1RuntimeVerifier {
+            releases: BTreeMap::new(),
+            lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
+        };
+        for runtime in [&unavailable as &dyn KagemushaV1RuntimeVerifier, &empty] {
+            assert!(
+                runtime
+                    .verify_mint_authority_checkpoint(
+                        checkpoint.release_id,
+                        &authorization,
+                        &checkpoint,
+                    )
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .verify_finalized_top_up(record, &result, &anchor)
+                    .is_err()
+            );
+        }
+        let mut rebound_record = record.clone();
+        rebound_record.reserve_receipt.amount += 1;
+        assert!(rebound_record.validate_basic().is_err());
+        assert!(
+            empty
+                .verify_finalized_top_up(&rebound_record, &result, &anchor)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3304,7 +3376,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_finality_fails_under_different_network_or_height_context_anchor() {
+    fn valid_finality_fails_under_foreign_network_height_or_native_decision() {
         let mut book = KagemushaReserveBookV1::new();
         let top_up = verified_top_up(1, 1, 100);
         commit_top_up(&mut book, &top_up, 1);
@@ -3313,16 +3385,22 @@ mod tests {
             .validate_against(&anchor)
             .expect("fixture is otherwise valid");
 
-        let mut wrong_network = anchor;
+        let mut wrong_network = anchor.clone();
         wrong_network.network_id = other_network();
         assert!(result.validate_against(&wrong_network).is_err());
-        let mut wrong_height = anchor;
-        wrong_height.block_height += 1;
+        let wrong_height = KagemushaFinalityTrustAnchorV1 {
+            network_id: anchor.network_id,
+            checkpoint: NativeFinalityFixture::start("portable-native-fixture").checkpoint(),
+        };
+        wrong_height
+            .validate()
+            .expect("genuine signed genesis checkpoint");
         assert!(result.validate_against(&wrong_height).is_err());
-        let mut wrong_context = anchor;
-        wrong_context.height_context_id.0 =
-            HashOf::from_untyped_unchecked(Hash::new(b"foreign height context"));
-        assert!(result.validate_against(&wrong_context).is_err());
+        let (_, different_decision) = finality_fixture(&book, &top_up, 4);
+        different_decision
+            .validate()
+            .expect("different genuinely certified result");
+        assert!(result.validate_against(&different_decision).is_err());
     }
 
     #[test]
@@ -3361,7 +3439,7 @@ mod tests {
         let top_up = verified_top_up(1, 1, 80);
         commit_top_up(&mut book, &top_up, 1);
         let finalization = verified_finalization(&book, &top_up, 4);
-        let anchor = finalization.trusted_anchor_identity();
+        let anchor = finalization.trusted_anchor_identity().clone();
         let record = match book.operation(&top_up.operation_id()) {
             Some(KagemushaReserveOperationRecordV1::TopUp(record)) => record,
             _ => panic!("top-up record"),
@@ -3388,11 +3466,44 @@ mod tests {
         validate_mint_finality_attachment_with_anchor(
             record,
             &decoded,
-            &move |identity: &KagemushaFinalityTrustAnchorV1| {
-                (*identity == anchor).then_some(anchor)
+            &|identity: &KagemushaFinalityTrustAnchorV1| {
+                (identity == &anchor).then(|| anchor.clone())
             },
         )
         .expect("canonical anchor re-authenticates result");
+        let (_, different_anchor) = finality_fixture(&book, &top_up, 5);
+        assert_eq!(
+            validate_mint_finality_attachment_with_anchor(
+                record,
+                &decoded,
+                &|_: &KagemushaFinalityTrustAnchorV1| Some(different_anchor.clone()),
+            ),
+            Err(KagemushaReserveErrorV1::InvalidFinalityEvidence {
+                reason: "persisted_anchor_identity_is_not_canonical",
+            })
+        );
+        let mut malformed = decoded.clone();
+        malformed.verified_checkpoint.push(0);
+        assert!(matches!(
+            validate_mint_finality_attachment_with_anchor(
+                record,
+                &malformed,
+                &|_: &KagemushaFinalityTrustAnchorV1| Some(anchor.clone()),
+            ),
+            Err(KagemushaReserveErrorV1::InvalidFinalityEvidence {
+                reason: "invalid_persisted_checkpoint_frame",
+            })
+        ));
+        let mut foreign = decoded;
+        foreign.verified_network_id = other_network();
+        assert!(
+            validate_mint_finality_attachment_with_anchor(
+                record,
+                &foreign,
+                &|_: &KagemushaFinalityTrustAnchorV1| Some(anchor.clone()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

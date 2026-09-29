@@ -370,7 +370,7 @@ mod tests {
         vm.set_register(11, 8192);
         assert_eq!(vm.call_result_word_count(), Ok(1));
         assert_eq!(vm.public_call_result_word(0), Ok(1));
-        vm.reset();
+        vm.reset().expect("private lifecycle cleanup succeeds");
         assert!(vm.call_result_word_count().is_err());
         assert!(vm.public_call_result_word(0).is_err());
     }
@@ -534,7 +534,8 @@ mod tests {
     fn private_numeric_call_checks_use_fixed_type_cost_and_preserve_privacy() {
         use iroha_primitives::{bigint::BigInt, numeric_abi::MAX_INT_FRAME_BYTES_V1};
         let mut vm = IVM::new(100_000);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         let slot = vm.memory.stack_top() - 8;
         let mut costs = Vec::new();
         for value in [BigInt::from(0), BigInt::pow10(120).unwrap()] {

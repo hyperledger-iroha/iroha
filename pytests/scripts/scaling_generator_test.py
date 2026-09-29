@@ -360,3 +360,14 @@ def test_live_generation_validation_allows_writes_after_initial_admission(genera
         (peer.state_root / 'snapshot').mkdir(mode=0o700)
     result.validate()
     assert len(result.receipt.peers) == 4
+
+
+def test_retired_merge_path_is_rejected_in_original_peer_receipt(generator_setup):
+    c = generator_setup
+    owner = c.create()
+    def alter(root, value):
+        value['peers'][0]['primary_merge_log'] = str(root / 'storage/peer0/kura/merge.log')
+    c.factory.change_files = alter
+    with pytest.raises(generator.GeneratorError):
+        owner.generate(SEED)
+    assert owner._generated is None and len(c.factory.calls) == 1

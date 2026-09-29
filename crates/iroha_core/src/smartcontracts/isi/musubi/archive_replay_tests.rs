@@ -1128,12 +1128,11 @@ fn seed_retention_archive(
         },
     );
     let shortfall = *world.musubi_replication_shortfall_releases.view().get();
-    world.musubi_replication_shortfall_releases =
-        crate::state::scalar_cell_custody::fixture(
-            shortfall
-                .checked_add(release_count)
-                .expect("retention fixture shortfall count fits u64"),
-        );
+    world.musubi_replication_shortfall_releases = crate::state::scalar_cell_custody::fixture(
+        shortfall
+            .checked_add(release_count)
+            .expect("retention fixture shortfall count fits u64"),
+    );
     archive_id
 }
 fn archive_location_replay_fixture(
@@ -1473,17 +1472,27 @@ fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::
         .external_entrypoints_cloned()
         .map(|entrypoint| entrypoint.hash())
         .collect::<Vec<_>>();
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&genesis, &entrypoints, vec![Ok(
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &genesis,
+            &entrypoints,
+            vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )]);
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-genesis.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("retain the successful log-only genesis result");
+            )],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        genesis.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("retain the successful log-only genesis result");
     let signature = iroha_data_model::block::BlockSignature::new(
         0,
         SignatureOf::try_from_hash(key.private_key(), genesis.hash())
@@ -1497,7 +1506,11 @@ Vec::new(),
         std::time::Duration::from_millis(creation_time_ms)
     );
     assert_eq!(genesis.output_results().len(), 1);
-    assert!(genesis.output_results().all(|result| result.as_ref().is_ok()));
+    assert!(
+        genesis
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
     genesis
         .validate_proposal_commitments()
         .expect("canonical genesis entrypoints");

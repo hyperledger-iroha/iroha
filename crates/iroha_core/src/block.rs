@@ -47,8 +47,8 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{
-            LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            LaneBlockProposalV1, NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase,
+            NativeAmxReceipt,
         },
         *,
     },
@@ -78,6 +78,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
+#[cfg(test)]
 use iroha_primitives::numeric::Quantity;
 #[cfg(test)]
 use iroha_primitives::small::SmallVec;
@@ -96,21 +97,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
-/// Return the first ordinary external entrypoint which illegally claims the
-/// autonomous-only QueuePlan-synchronized admission intent.
-///
-/// QueuePlan-synchronized payloads enter a block only through authenticated
-/// autonomous lane ownership and a certified merge carrier. Keeping this
-/// predicate outside the block-validation state machine lets locked/recovered
-/// body ingress reject the same role conflict before it persists ownership or
-/// retires a competing autonomous reservation.
-pub(crate) fn external_queue_plan_synced_entrypoint_index(block: &SignedBlock) -> Option<usize> {
-    block.external_entrypoints_cloned().position(|entrypoint| {
-        entrypoint.admission_intent()
-            == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    })
-}
 
 fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
@@ -392,84 +378,12 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 pub(crate) use self::event::EventProducer;
 pub(crate) use self::event::WithEvents;
 pub use self::{chained::Chained, commit::CommittedBlock, new::NewBlock, valid::ValidBlock};
-use crate::{
-    da::{
-        DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
-        receipts::DaReceiptCursorError,
-    },
-    fees::SwapEvidence,
+use crate::da::{
+    DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
+    receipts::DaReceiptCursorError,
 };
-#[cfg(feature = "telemetry")]
-use settlement_router::haircut::LiquidityProfile;
 use settlement_router::{XorQuantity, policy::BufferStatus};
 use thiserror::Error;
-#[derive(Default)]
-struct LaneSummary {
-    tx_vertices: u64,
-    rbc_bytes_total: u64,
-}
-#[derive(Default)]
-struct LaneSettlementBuilder {
-    tx_count: u64,
-    total_local_amount: Quantity,
-    total_xor_due: Quantity,
-    total_xor_after_haircut: Quantity,
-    total_xor_variance: Quantity,
-    swap_evidence: Option<SwapEvidence>,
-    receipts: Vec<LaneSettlementReceipt>,
-    nexus_fee_receipts: Vec<crate::settlement::PendingNexusFeeReceipt>,
-    native_amx_receipts: Vec<NativeAmxReceipt>,
-    buffer_snapshot: Option<SettlementBufferSnapshot>,
-    source_counts: BTreeMap<AssetDefinitionId, u64>,
-}
-fn lane_relay_envelopes_for_block(
-    block_header: &BlockHeader,
-    da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
-    lane_settlement_commitments: &[LaneBlockCommitment],
-    lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-    lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
-) -> Result<Vec<LaneRelayEnvelope>, BlockValidationError> {
-    lane_settlement_commitments
-        .iter()
-        .map(|commitment| {
-            let rbc_bytes_total = lane_summaries
-                .get(&commitment.lane_id)
-                .map_or(0, |summary| summary.rbc_bytes_total);
-            let coordinate = lane_payload_coordinates
-                .get(&(commitment.lane_id, commitment.dataspace_id))
-                .ok_or_else(|| {
-                    BlockValidationError::ExecutionContextInvalid(format!(
-                        "settled lane {} dataspace {} has no exact lane payload ownership",
-                        commitment.lane_id.as_u32(),
-                        commitment.dataspace_id.as_u64()
-                    ))
-                })?;
-            LaneRelayEnvelope::new(
-                *block_header,
-                da_commitment_hash,
-                commitment.clone(),
-                rbc_bytes_total,
-            )
-            .map_err(|err| {
-                BlockValidationError::ExecutionContextInvalid(format!(
-                    "settled lane relay envelope is invalid: {err}"
-                ))
-            })
-            .map(|envelope| {
-                envelope
-                    .with_lane_block_descriptor_hash(Some(coordinate.lane_block_descriptor_hash))
-            })
-        })
-        .collect()
-}
-fn attach_manifest_roots_to_relays(
-    envelopes: &mut [LaneRelayEnvelope],
-    manifest_roots: &BTreeMap<DataSpaceId, [u8; 32]>,
-) {
-    for envelope in envelopes {
-        envelope.manifest_root = manifest_roots.get(&envelope.dataspace_id).copied();
-    }
-}
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 #[derive(Clone)]
 pub(crate) struct SettlementBufferSnapshot {
@@ -489,105 +403,6 @@ impl SettlementBufferSnapshot {
         self.status
     }
 }
-fn compute_settlement_buffer_snapshot(
-    state_block: &StateBlock,
-    lane_id: LaneId,
-) -> Result<Option<SettlementBufferSnapshot>, String> {
-    let lane = lane_metadata_by_id(state_block, lane_id)
-        .ok_or_else(|| format!("unknown settlement lane {}", lane_id.as_u32()))?;
-    let Some(config) = lane.settlement_buffer.clone() else {
-        return Ok(None);
-    };
-    let asset_id = AssetId::new(
-        config.asset_definition_id.clone(),
-        config.account_id.clone(),
-    );
-    let assets = state_block.world.assets();
-    let remaining = assets.get(&asset_id).map_or_else(
-        || Ok(XorQuantity::zero()),
-        |value| {
-            XorQuantity::try_from_quantity(value.as_ref().clone()).map_err(|error| {
-                format!(
-                    "settlement buffer asset `{asset_id}` violates the XOR quantity domain: {error}"
-                )
-            })
-        },
-    )?;
-    let status = state_block
-        .settlement_engine()
-        .evaluate_buffer(&remaining, &config.capacity)
-        .map_err(|error| format!("invalid settlement buffer policy: {error}"))?;
-    Ok(Some(SettlementBufferSnapshot {
-        config,
-        remaining,
-        status,
-    }))
-}
-fn lane_metadata_by_id<'state>(
-    state_block: &'state StateBlock<'state>,
-    lane_id: LaneId,
-) -> Option<&'state LaneConfig> {
-    state_block
-        .nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == lane_id)
-}
-#[cfg(feature = "telemetry")]
-fn liquidity_profile_label(profile: LiquidityProfile) -> &'static str {
-    match profile {
-        LiquidityProfile::Tier1 => "tier1-deep",
-        LiquidityProfile::Tier2 => "tier2-medium",
-        LiquidityProfile::Tier3 => "tier3-thin",
-    }
-}
-#[cfg(feature = "telemetry")]
-fn record_lane_settlement_metrics(
-    telemetry: &crate::telemetry::StateTelemetry,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    builder: &LaneSettlementBuilder,
-) {
-    let xor_due_micro =
-        crate::settlement::quantity_to_micro_units_saturating_for_telemetry(&builder.total_xor_due);
-    let xor_variance_micro = crate::settlement::quantity_to_micro_units_saturating_for_telemetry(
-        &builder.total_xor_variance,
-    );
-    let swapline = builder
-        .swap_evidence
-        .as_ref()
-        .map(|e| (liquidity_profile_label(e.liquidity_profile), xor_due_micro));
-    let haircut_bps = builder.swap_evidence.as_ref().map_or(0, |e| e.epsilon_bps);
-    telemetry.record_lane_settlement_snapshot_metrics(
-        lane_id,
-        dataspace_id,
-        xor_due_micro,
-        xor_variance_micro,
-        haircut_bps,
-        swapline,
-        builder.buffer_snapshot.as_ref(),
-    );
-    let lane_label = lane_id.as_u32().to_string();
-    let dataspace_label = dataspace_id.as_u64().to_string();
-    telemetry.inc_settlement_haircut_total(
-        lane_label.as_str(),
-        dataspace_label.as_str(),
-        xor_variance_micro,
-    );
-    for (asset_id, count) in &builder.source_counts {
-        if *count == 0 {
-            continue;
-        }
-        let asset_label = asset_id.to_string();
-        telemetry.inc_settlement_conversion_total(
-            lane_label.as_str(),
-            dataspace_label.as_str(),
-            asset_label.as_str(),
-            *count,
-        );
-    }
-}
 #[cfg(test)]
 use crate::{
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
@@ -596,15 +411,12 @@ use crate::{
 };
 use crate::{
     prelude::*,
-    queue::{
-        reconcile_execution_routing_plan, resolve_routing_decision,
-        routing_plan_from_execution_context,
-    },
+    queue::{resolve_routing_decision, routing_plan_from_execution_context},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
     },
-    sumeragi::{network_topology::Topology, v2_candidate::candidate_block_has_proposal_work},
+    sumeragi::network_topology::Topology,
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
 };
 use std::sync::Arc;
@@ -3384,7 +3196,7 @@ pub(crate) mod valid {
 
         fn sccp_height_source(
             &self,
-        ) -> crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_> {
+        ) -> crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1 {
             use crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1;
             self.sumeragi_schedule()
                 .map_or(SccpHeightSourceV1::Unauthenticated, |genesis_height| {
@@ -4187,6 +3999,7 @@ pub(crate) mod valid {
         state: &'state State,
         generation: u64,
         header: BlockHeader,
+        staking: crate::sumeragi::evidence::PreparedStakingEffects<'state>,
     }
     include!("block/native_header_source.rs");
     include!("block/native_genesis_policy.rs");
@@ -4789,6 +4602,15 @@ pub(crate) mod valid {
                                 )
                                 .map_err(BlockValidationError::from)?;
                         }
+                        source
+                            .staking
+                            .apply(overlay, block, source.state, source.generation)
+                            .map_err(|error| {
+                                BlockValidationError::from_npos_application_error(
+                                    error,
+                                    "native pristine staking application",
+                                )
+                            })?;
                         Ok(())
                     },
                     Self::execution_context_error,
@@ -4798,14 +4620,11 @@ pub(crate) mod valid {
 
         fn validate_staged_execution_controls(
             block: &SignedBlock,
-            _state: &StateBlock<'_>,
+            state: &StateBlock<'_>,
         ) -> Result<(), BlockValidationError> {
+            Self::validate_native_fee_settlement_mode(state)?;
             Self::checked_execution_context_header(block)?;
-            if external_queue_plan_synced_entrypoint_index(block).is_some() {
-                return Err(Self::execution_context_error(
-                    "retired QueuePlanSynced input",
-                ));
-            }
+
             Ok(())
         }
 
@@ -4845,15 +4664,7 @@ pub(crate) mod valid {
                         timings.total_ms = to_ms(total_start.elapsed());
                     }
                 };
-            if let Some(index) = external_queue_plan_synced_entrypoint_index(&block) {
-                let stateless_elapsed = stateless_start.elapsed();
-                record_timings(&mut timings, stateless_elapsed, None);
-                let error = Self::execution_context_error(format!(
-                    "retired QueuePlanSynced external entrypoint at index {index}"
-                ));
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
+
             let static_state_start = Instant::now();
             let static_data = {
                 let view = state.query_view();
@@ -4934,12 +4745,17 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let consensus_effects =
-                Self::validate_sumeragi_consensus_effects(&block).map(|()| PristineNativeSource {
-                    state,
-                    generation: validation_profile
+                Self::validate_sumeragi_consensus_effects(&block).and_then(|()| {
+                    let generation = validation_profile
                         .source_generation()
-                        .unwrap_or_else(|| state.state_view_generation()),
-                    header: block.header(),
+                        .unwrap_or_else(|| state.state_view_generation());
+                    let staking = crate::sumeragi::evidence::prepare(state, &block, generation)?;
+                    Ok(PristineNativeSource {
+                        state,
+                        generation,
+                        header: block.header(),
+                        staking,
+                    })
                 });
             let penalty_index = match consensus_effects {
                 Ok(index) => index,
@@ -5492,11 +5308,13 @@ pub(crate) mod valid {
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
         ) -> Result<(), BlockValidationError> {
-            if block.header().npos_effects_hash().is_some()
-                || block.npos_consensus_effects().is_some()
+            if block.header().npos_effects_hash() != block.npos_consensus_effects().map(HashOf::new)
+                || block
+                    .npos_consensus_effects()
+                    .is_some_and(NposConsensusEffects::is_empty)
             {
                 return Err(Self::npos_effects_error(
-                    "current Sumeragi blocks reject retired NPoS consensus effects",
+                    "native staking effects require one nonempty exactly header-bound bundle",
                 ));
             }
             if block.global_beacon_pulse().is_some()
@@ -6315,383 +6133,6 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        /// Static checks for a strict Sumeragi-v2 test fixture.
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        #[allow(
-            clippy::too_many_arguments,
-            clippy::too_many_lines,
-            clippy::explicit_iter_loop,
-            clippy::collapsible_else_if
-        )]
-
-        /// Drain transaction-scoped settlement evidence and derive canonical
-        /// post-execution statements bound to each transaction's exact route,
-        /// lane-payload coordinate, and final result-bearing block header.
-        ///
-        /// Both the DAG and live-sequential execution paths must pass through this
-        /// function after all deterministic effects. Relay/status publication is
-        /// deliberately deferred until the accepted commit is durable.
-        #[allow(clippy::too_many_lines)]
-        fn finalize_lane_settlement_evidence(
-            block: &SignedBlock,
-            state_block: &mut StateBlock<'_>,
-            routed_transactions: &[(HashOf<SignedTransaction>, crate::queue::RoutingDecision)],
-            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
-        {
-            let mut native_amx_receipts_by_hash = BTreeMap::new();
-            if let Some(bundle) = block.execution_context() {
-                for (entrypoint, context) in block
-                    .external_entrypoints_cloned()
-                    .zip(bundle.external.iter())
-                {
-                    let Some(receipt) = context.native_amx_receipt.clone() else {
-                        continue;
-                    };
-                    let Some(signed) = Self::signed_transaction_from_entrypoint(&entrypoint) else {
-                        return Err(Self::execution_context_error(
-                            "native AMX receipt is attached to an entrypoint without a signed transaction",
-                        ));
-                    };
-                    let tx_hash = signed.hash();
-                    if native_amx_receipts_by_hash
-                        .insert(tx_hash, receipt)
-                        .is_some()
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "duplicate native AMX receipt for routed transaction {tx_hash}"
-                        )));
-                    }
-                }
-            }
-            let mut lane_payload_coordinates = BTreeMap::new();
-            if let Some(bundle) = block.execution_context() {
-                for (ownership_idx, ownership) in bundle.lane_payload_ownerships.iter().enumerate()
-                {
-                    let lane_block_descriptor_hash = ownership
-                        .lane_block_descriptor_hash
-                        .ok_or_else(|| {
-                            Self::execution_context_error(format!(
-                                "lane payload ownership {ownership_idx} has no descriptor hash during settlement finalization"
-                            ))
-                        })?;
-                    let previous = lane_payload_coordinates.insert(
-                        (ownership.lane_id, ownership.dataspace_id),
-                        LanePayloadCoordinate {
-                            lane_incarnation: ownership.lane_incarnation,
-                            lane_block_height: ownership.lane_block_height,
-                            lane_block_descriptor_hash,
-                        },
-                    );
-                    if previous.is_some() {
-                        return Err(Self::execution_context_error(format!(
-                            "duplicate exact lane payload ownership for lane {} dataspace {} during settlement finalization",
-                            ownership.lane_id.as_u32(),
-                            ownership.dataspace_id.as_u64()
-                        )));
-                    }
-                }
-            }
-            let mut pending_settlements = state_block.drain_settlement_records();
-            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
-            let mut seen_transactions = BTreeSet::new();
-            for (tx_hash, _) in routed_transactions {
-                if !seen_transactions.insert(*tx_hash) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate routed transaction {tx_hash} is not canonical"
-                    )));
-                }
-            }
-            let nexus_fee_receipts_active = state_block.nexus.fees.settlement_mode
-                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            let mut lane_settlement_builders: BTreeMap<
-                (LaneId, DataSpaceId),
-                LaneSettlementBuilder,
-            > = BTreeMap::new();
-            for (tx_hash, decision) in routed_transactions {
-                let mut counted_settlement_tx = false;
-                if let Some(record) = pending_settlements.remove(tx_hash) {
-                    lane_payload_coordinates
-                        .get(&(decision.lane_id, decision.dataspace_id))
-                        .ok_or_else(|| {
-                            Self::execution_context_error(format!(
-                                "settled lane {} dataspace {} has no exact lane payload ownership",
-                                decision.lane_id.as_u32(),
-                                decision.dataspace_id.as_u64()
-                            ))
-                        })?;
-                    let builder = lane_settlement_builders
-                        .entry((decision.lane_id, decision.dataspace_id))
-                        .or_default();
-                    builder.tx_count = builder.tx_count.saturating_add(1);
-                    counted_settlement_tx = true;
-                    builder.total_local_amount = builder
-                        .total_local_amount
-                        .try_add(&record.local_amount)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "lane settlement local total overflow: {error}"
-                            ))
-                        })?;
-                    builder.total_xor_due = builder
-                        .total_xor_due
-                        .try_add(&record.xor_due)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "lane settlement XOR due total overflow: {error}"
-                            ))
-                        })?;
-                    builder.total_xor_after_haircut = builder
-                        .total_xor_after_haircut
-                        .try_add(&record.xor_after_haircut)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "lane settlement post-haircut total overflow: {error}"
-                            ))
-                        })?;
-                    builder.total_xor_variance = builder
-                        .total_xor_variance
-                        .try_add(&record.xor_variance)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "lane settlement variance total overflow: {error}"
-                            ))
-                        })?;
-                    builder
-                        .source_counts
-                        .entry(record.asset_definition_id.clone())
-                        .and_modify(|count| *count = count.saturating_add(1))
-                        .or_insert(1);
-                    let evidence = SwapEvidence {
-                        epsilon_bps: record.epsilon_bps,
-                        twap_window_seconds: record.twap_window_seconds,
-                        liquidity_profile: record.liquidity_profile,
-                        twap_local_per_xor: record.twap_local_per_xor.clone(),
-                        volatility_bucket: record.volatility_bucket,
-                    };
-                    if builder
-                        .swap_evidence
-                        .as_ref()
-                        .is_some_and(|existing| existing != &evidence)
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "lane {} dataspace {} produced inconsistent settlement swap metadata",
-                            decision.lane_id.as_u32(),
-                            decision.dataspace_id.as_u64()
-                        )));
-                    }
-                    builder.swap_evidence.get_or_insert(evidence);
-                    builder.receipts.push(record.into_lane_receipt());
-                }
-                if let Some(record) = pending_nexus_fee_receipts.remove(tx_hash) {
-                    if !nexus_fee_receipts_active {
-                        iroha_logger::warn!(
-                            height = block.header().height().get(),
-                            tx = %tx_hash,
-                            "dropping staged Nexus fee receipt before fee receipt activation height"
-                        );
-                    } else {
-                        lane_payload_coordinates
-                            .get(&(decision.lane_id, decision.dataspace_id))
-                            .ok_or_else(|| {
-                                Self::execution_context_error(format!(
-                                    "fee-settled lane {} dataspace {} has no exact lane payload ownership",
-                                    decision.lane_id.as_u32(),
-                                    decision.dataspace_id.as_u64()
-                                ))
-                            })?;
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        if !counted_settlement_tx {
-                            builder.tx_count = builder.tx_count.saturating_add(1);
-                            counted_settlement_tx = true;
-                        }
-                        builder.nexus_fee_receipts.push(record);
-                    }
-                }
-                if let Some(receipt) = native_amx_receipts_by_hash.remove(tx_hash) {
-                    let coordinate = lane_payload_coordinates
-                        .get(&(decision.lane_id, decision.dataspace_id))
-                        .ok_or_else(|| {
-                            Self::execution_context_error(format!(
-                                "native AMX lane {} dataspace {} has no exact lane payload ownership",
-                                decision.lane_id.as_u32(),
-                                decision.dataspace_id.as_u64()
-                            ))
-                        })?;
-                    if receipt.lane_incarnation != coordinate.lane_incarnation
-                        || receipt.lane_block_height != coordinate.lane_block_height
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "native AMX receipt coordinates do not match exact lane payload ownership for lane {} dataspace {}",
-                            decision.lane_id.as_u32(),
-                            decision.dataspace_id.as_u64()
-                        )));
-                    }
-                    let builder = lane_settlement_builders
-                        .entry((decision.lane_id, decision.dataspace_id))
-                        .or_default();
-                    if !counted_settlement_tx {
-                        builder.tx_count = builder.tx_count.saturating_add(1);
-                    }
-                    builder.native_amx_receipts.push(receipt);
-                }
-            }
-            if !pending_settlements.is_empty()
-                || !pending_nexus_fee_receipts.is_empty()
-                || !native_amx_receipts_by_hash.is_empty()
-            {
-                return Err(Self::execution_context_error(format!(
-                    "unbound settlement evidence remains after lane routing (settlement={}, nexus_fee={}, native_amx={})",
-                    pending_settlements.len(),
-                    pending_nexus_fee_receipts.len(),
-                    native_amx_receipts_by_hash.len()
-                )));
-            }
-            for ((lane_id, _), builder) in &mut lane_settlement_builders {
-                if builder.buffer_snapshot.is_none() {
-                    builder.buffer_snapshot =
-                        compute_settlement_buffer_snapshot(state_block, *lane_id)
-                            .map_err(Self::execution_context_error)?;
-                }
-                if let Some(snapshot) = &builder.buffer_snapshot
-                    && let Some(metadata) = lane_metadata_by_id(state_block, *lane_id)
-                {
-                    match snapshot.status {
-                        BufferStatus::Normal => {}
-                        BufferStatus::Alert => iroha_logger::warn!(
-                            lane = %metadata.alias,
-                            "settlement buffer for lane {} dipped below the alert threshold (<{}%)",
-                            metadata.alias,
-                            state_block.settlement_engine().buffer_policy().alert
-                        ),
-                        BufferStatus::Throttle => iroha_logger::warn!(
-                            lane = %metadata.alias,
-                            "settlement buffer for lane {} entered throttle state (<{}%); reduce subsidised inclusion",
-                            metadata.alias,
-                            state_block.settlement_engine().buffer_policy().throttle
-                        ),
-                        BufferStatus::XorOnly => iroha_logger::warn!(
-                            lane = %metadata.alias,
-                            "settlement buffer for lane {} entered XOR-only state (<{}%); force XOR-denominated inclusion",
-                            metadata.alias,
-                            state_block.settlement_engine().buffer_policy().xor_only
-                        ),
-                        BufferStatus::Halt => iroha_logger::error!(
-                            lane = %metadata.alias,
-                            "settlement buffer for lane {} hit the halt threshold (<{}%); pause settlement until refilled",
-                            metadata.alias,
-                            state_block.settlement_engine().buffer_policy().halt
-                        ),
-                    }
-                }
-            }
-            let lane_settlement_commitments = lane_settlement_builders
-                .into_iter()
-                .map(|((lane_id, dataspace_id), builder)| {
-                    #[cfg(feature = "telemetry")]
-                    record_lane_settlement_metrics(
-                        state_block.metrics(),
-                        lane_id,
-                        dataspace_id,
-                        &builder,
-                    );
-                    let coordinate = lane_payload_coordinates
-                        .get(&(lane_id, dataspace_id))
-                        .ok_or_else(|| {
-                            Self::execution_context_error(format!(
-                                "settled lane {} dataspace {} has no exact lane payload ownership during commitment finalization",
-                                lane_id.as_u32(),
-                                dataspace_id.as_u64()
-                            ))
-                        })?;
-                    Ok(LaneBlockCommitment {
-                        block_height: coordinate.lane_block_height,
-                        lane_id,
-                        lane_incarnation: coordinate.lane_incarnation,
-                        dataspace_id,
-                        tx_count: builder.tx_count,
-                        total_local_amount: builder.total_local_amount,
-                        total_xor_due: builder.total_xor_due,
-                        total_xor_after_haircut: builder.total_xor_after_haircut,
-                        total_xor_variance: builder.total_xor_variance,
-                        swap_metadata: builder
-                            .swap_evidence
-                            .map(SwapEvidence::into_lane_metadata),
-                        receipts: builder.receipts,
-                        nexus_fee_receipts: builder
-                            .nexus_fee_receipts
-                            .into_iter()
-                            .map(|receipt| {
-                                receipt.into_lane_receipt(
-                                    coordinate.lane_block_height,
-                                    lane_id,
-                                    dataspace_id,
-                                )
-                            })
-                            .collect(),
-                        native_amx_receipts: builder.native_amx_receipts,
-                    })
-                })
-                .collect::<Result<Vec<_>, BlockValidationError>>()?;
-            Self::finalize_lane_settlement_commitments(
-                block,
-                state_block,
-                &lane_settlement_commitments,
-                lane_summaries,
-                &lane_payload_coordinates,
-            )
-        }
-
-        fn finalize_lane_settlement_commitments(
-            block: &SignedBlock,
-            state_block: &StateBlock<'_>,
-            lane_settlement_commitments: &[LaneBlockCommitment],
-            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-            lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
-        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
-        {
-            if lane_settlement_commitments.is_empty() {
-                return Ok(Vec::new());
-            }
-            let block_header = block.header();
-            let manifest_roots = state_block
-                .axt_policy_snapshot()
-                .entries
-                .iter()
-                .filter_map(|entry| {
-                    (!entry.policy.manifest_root.iter().all(|byte| *byte == 0))
-                        .then_some((entry.dsid, entry.policy.manifest_root))
-                })
-                .collect::<BTreeMap<_, _>>();
-            let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
-                &block_header,
-                block_header.da_commitments_hash(),
-                &lane_settlement_commitments,
-                lane_summaries,
-                &lane_payload_coordinates,
-            )?;
-            attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-            let mut lane_finality_statements = lane_relay_envelopes
-                .iter()
-                .map(LaneRelayEnvelope::lane_finality_statement)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "settled lane finality statement is incomplete: {error}"
-                    ))
-                })?;
-            lane_finality_statements.sort_unstable_by_key(|statement| {
-                (
-                    statement.lane_id,
-                    statement.dataspace_id,
-                    statement.lane_incarnation,
-                    statement.block_height,
-                )
-            });
-            Ok(lane_finality_statements)
-        }
 
         fn validated_committed_fragment_count(
             state_block: &StateBlock<'_>,
@@ -6731,14 +6172,14 @@ pub(crate) mod valid {
         }
         /// Execute and seal ordinary outputs. `sccp_height` names the authenticated consensus
         /// inputs of the block's height that the SCCP post-execution hook consumes
-        /// (`specs/sccp.md` §4.3.2); `Unauthenticated` is reserved for component fixtures and
-        /// v2 signed genesis, whose height-one context is frozen from the staged genesis.
+        /// (`specs/sccp.md` §4.3.2); `Unauthenticated` is reserved for component fixtures.
+        /// Production genesis uses its independently authenticated native schedule.
         fn execute_and_record_canonical_outputs_in_context(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
             genesis: Option<&AuthenticatedGenesisOutputSource>,
-            sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_>,
+            sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1,
         ) -> Result<(), BlockValidationError> {
             let start = Instant::now();
             let mut timings = timings;
@@ -7124,7 +6565,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     Default::default(),
                     Default::default(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("empty structural block has complete execution metadata");
@@ -8191,9 +7631,6 @@ pub(crate) mod valid {
                 Level::INFO,
                 "autonomous anchor control-only".to_owned(),
             )])
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
             .sign(signer.private_key());
             let entrypoints = gas_limits.map_or_else(
                 || vec![TransactionEntrypoint::External(signed.clone())],
@@ -8216,9 +7653,7 @@ pub(crate) mod valid {
                                 arguments: None,
                             },
                         ))
-                        .with_admission_intent(
-                            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-                        )
+
                         .sign(signer.private_key()))
                     }).collect::<Vec<_>>()
                 },
@@ -8576,7 +8011,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     axt_snapshot,
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("attach the canonical predecessor result and AXT policy snapshot");
@@ -9456,7 +8890,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     policy_snapshot,
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("attach canonical predecessor results and policy snapshot");
@@ -9645,60 +9078,6 @@ pub(crate) mod valid {
                 Err(BlockValidationError::ExecutionContextInvalid(message))
                     if message.contains("repeats entrypoint hash")
             ));
-        }
-        #[test]
-        fn settlement_finalization_rejects_unbound_evidence() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = ValidBlock::new_dummy(leader.private_key());
-            let mut state_block = state.block(block.as_ref().header());
-            let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
-                b"unbound sequential settlement transaction",
-            ));
-            let mut source_id = [0; Hash::LENGTH];
-            source_id.copy_from_slice(tx_hash.as_ref());
-            state_block.record_settlement_receipt(
-                tx_hash,
-                crate::settlement::PendingSettlement {
-                    source_id,
-                    asset_definition_id:
-                        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                            DomainId::try_new("wonderland", "universal").expect("domain id"),
-                            "settlement".parse().expect("asset name"),
-                        ),
-                    local_amount: crate::settlement::quantity_from_micro_units(11),
-                    xor_due: crate::settlement::quantity_from_micro_units(7),
-                    xor_after_haircut: crate::settlement::quantity_from_micro_units(6),
-                    xor_variance: crate::settlement::quantity_from_micro_units(1),
-                    timestamp_ms: 1,
-                    liquidity_profile: settlement_router::LiquidityProfile::Tier1,
-                    volatility_bucket: crate::settlement::VolatilityBucket::Stable,
-                    twap_local_per_xor: Numeric::one(),
-                    epsilon_bps: 25,
-                    twap_window_seconds: 60,
-                    oracle_timestamp_ms: 1,
-                },
-            );
-            let error = ValidBlock::finalize_lane_settlement_evidence(
-                block.as_ref(),
-                &mut state_block,
-                &[],
-                &BTreeMap::new(),
-            )
-            .expect_err("settlement evidence without a routed transaction must fail closed");
-            assert!(
-                matches!(
-                    error,
-                    BlockValidationError::ExecutionContextInvalid(ref message)
-                        if message.contains("unbound settlement evidence")
-                            && message.contains("settlement=1")
-                ),
-                "unexpected unbound settlement rejection: {error}"
-            );
         }
         fn lane_payload_context_fixture() -> (State, Arc<Kura>, Topology, TimeSource, Vec<KeyPair>)
         {
@@ -9919,8 +9298,8 @@ pub(crate) mod valid {
                 "contextless routing must not fabricate a lane-0/dataspace-0 context"
             );
             assert!(
-                block.lane_finality_statements().is_empty(),
-                "failed routing must not fabricate lane finality metadata"
+                !block.has_results(),
+                "failed routing must not attach unauthenticated execution outputs"
             );
         }
         #[test]
@@ -11068,9 +10447,6 @@ pub(crate) mod valid {
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-            )
             .with_instructions([ApplyThresholdKeyLifecycleCertificateV1 { certificate }])
             .sign(signer.private_key());
             let entrypoint = TransactionEntrypoint::External(signed);
@@ -11273,7 +10649,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     policy_snapshot,
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("attach canonical first-artifact results and AXT policy snapshot");
@@ -11371,7 +10746,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     policy_snapshot,
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("attach canonical predecessor results and AXT policy snapshot");
@@ -14175,7 +13549,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     AxtPolicySnapshot::default(),
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("fixture result roots match external entrypoint");
@@ -14249,7 +13622,6 @@ pub(crate) mod valid {
                     Vec::new(),
                     AxtPolicySnapshot::default(),
                     BTreeSet::new(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("fixture result roots match external entrypoint");
@@ -14273,376 +13645,6 @@ pub(crate) mod valid {
                     actual: 0,
                 }
             ));
-        }
-        #[derive(Clone, Copy)]
-        enum QueuePlanTtlBindingFixture {
-            Missing,
-            Exact,
-            Conflict,
-            Stale,
-        }
-        struct QueuePlanTtlFixture {
-            state: State,
-            topology: Topology,
-            block_time_source: TimeSource,
-            block: SignedBlock,
-            stateless_cache_key: crate::tx::StatelessValidationCacheKey,
-        }
-        #[allow(clippy::too_many_arguments)]
-        fn queue_plan_ttl_fixture(
-            label: &str,
-            intent: iroha_data_model::transaction::TransactionAdmissionIntent,
-            binding_fixture: QueuePlanTtlBindingFixture,
-            creation_time_ms: u64,
-            ttl_ms: u64,
-            enqueue_timestamp_ms: u64,
-            block_time_ms: u64,
-            invalidate_signature: bool,
-        ) -> QueuePlanTtlFixture {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let validator_keys = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            let leader = &validator_keys[0];
-            let topology = test_topology_with_keys(&validator_keys);
-            let (authority, signer) = gen_account_in(label);
-            let domain_id = DomainId::try_new(label, "universal").expect("fixture domain id");
-            let account = Account::new(authority.clone()).build(&authority);
-            let domain = Domain::new(domain_id).build(&authority);
-            let mut world = World::with([domain], [account], []);
-            let mut parameters = Parameters::default();
-            parameters.set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ));
-            world.parameters = Cell::new(parameters);
-            insert_active_consensus_keys(&mut world, &validator_keys);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let parent = ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                header.set_height(nonzero!(1_u64));
-                header.set_prev_block_hash(None);
-                header.creation_time_ms = 1;
-            });
-            let mut parent: SignedBlock = parent.into();
-            parent
-                .set_execution_outputs(
-                    crate::execution_output_test_support::structural_network_outputs(
-                        &parent,
-                        &[],
-                        Vec::new(),
-                    ),
-                    0,
-                    BTreeMap::new(),
-                    Vec::new(),
-                    AxtPolicySnapshot::default(),
-                    BTreeSet::new(),
-                    Vec::new(),
-                    &crate::execution_output_test_support::structural_output_limits(),
-                )
-                .expect("QueuePlan TTL parent carries the canonical empty AXT snapshot");
-            let parent = ValidBlock::new_unverified_for_tests(parent)
-                .commit_unchecked()
-                .unpack(|_| {});
-            let predecessor_hash = parent.as_ref().hash();
-            {
-                let mut state_block = state.block(parent.as_ref().header());
-                state_block.block_hashes.push(predecessor_hash);
-                state_block.transactions.insert_block(
-                    std::collections::HashSet::new(),
-                    NonZeroUsize::new(1).expect("parent height is non-zero"),
-                );
-                state_block
-                    .commit()
-                    .expect("commit QueuePlan TTL parent metadata");
-            }
-            kura.store_block(parent)
-                .expect("store QueuePlan TTL parent");
-            let mut tx_builder = TransactionBuilder::new(
-                state.network_id,
-                authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, label.to_owned())])
-            .with_admission_intent(intent);
-            tx_builder.set_creation_time(Duration::from_millis(creation_time_ms));
-            tx_builder.set_ttl(Duration::from_millis(ttl_ms));
-            let mut signed = tx_builder.sign(signer.private_key());
-            if invalidate_signature {
-                let (forged_authority, _) = gen_account_in(&format!("{label}-forged"));
-                signed = signed.with_authority(forged_authority);
-            }
-            let stateless_cache_key = crate::tx::StatelessValidationCacheKey::new(&signed);
-            let entrypoint = TransactionEntrypoint::External(signed.clone());
-            let routing_plan = crate::queue::RoutingPlan::single(
-                crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            );
-            if !matches!(binding_fixture, QueuePlanTtlBindingFixture::Missing) {
-                let validator_set = state
-                    .resolve_lane_committee_at_height(
-                        crate::state::LaneAuthorityRoute::new(
-                            LaneId::SINGLE,
-                            DataSpaceId::UNIVERSAL,
-                        ),
-                        2,
-                    )
-                    .expect("resolve exact QueuePlan TTL lane authority")
-                    .into_validators();
-                let lane_incarnation =
-                    if matches!(binding_fixture, QueuePlanTtlBindingFixture::Stale) {
-                        Hash::new(b"retired-queue-plan-ttl-lane-incarnation")
-                    } else {
-                        state
-                            .lane_incarnation_at_height(LaneId::SINGLE, 2)
-                            .expect("default lane is active at candidate height")
-                    };
-                let admission_context = crate::queue::QueuePlanAdmissionContextV1 {
-                    version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
-                    authority_height: 1,
-                    proposal_height: 2,
-                    predecessor_block_hash: Some(predecessor_hash),
-                    routing_plan_digest: routing_plan.digest(),
-                    route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 {
-                        leg: routing_plan.coordinator_leg(),
-                        lane_incarnation,
-                        validator_set_hash_version:
-                            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                        validator_set_hash: HashOf::new(&validator_set),
-                        validator_count: u16::try_from(validator_set.len())
-                            .expect("fixture validator count fits u16"),
-                        durability_threshold: u16::try_from(validator_set.len().div_ceil(3))
-                            .expect("fixture threshold fits u16"),
-                        validator_set,
-                    }],
-                };
-                let binding = crate::torii_proxy::new_queue_plan_admission_binding(
-                    state.network_id_ref(),
-                    &entrypoint,
-                    &routing_plan,
-                    admission_context,
-                    enqueue_timestamp_ms,
-                )
-                .expect("canonical QueuePlan TTL binding");
-                state
-                    .install_queue_plan_pending_binding_for_test(&binding)
-                    .expect("install pending QueuePlan TTL binding");
-                if matches!(binding_fixture, QueuePlanTtlBindingFixture::Conflict) {
-                    state
-                        .replace_queue_plan_registry_owner_for_test(
-                            &binding,
-                            Hash::new(b"conflicting-queue-plan-ttl-owner"),
-                        )
-                        .expect("replace exact registry owner for conflict fixture");
-                }
-            }
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(block_time_ms));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone())
-                    .chain(0, state.view().latest_block().as_deref());
-            let execution_validator_set = state
-                .resolve_lane_committee_at_height(
-                    crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    2,
-                )
-                .expect("resolve exact execution-context lane authority")
-                .into_validators();
-            let ownership = sample_lane_payload_ownership_for_context_at_slot(
-                2,
-                0,
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-                state
-                    .lane_incarnation_at_height(LaneId::SINGLE, 2)
-                    .expect("default lane is active at candidate height"),
-                1,
-                0,
-                vec![0],
-                vec![Hash::from(entrypoint.hash())],
-                &execution_validator_set,
-            );
-            let execution_context =
-                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                    entrypoint.hash(),
-                    LaneId::SINGLE,
-                    DataSpaceId::UNIVERSAL,
-                )])
-                .with_lane_payload_ownerships(vec![ownership]);
-            let block = with_current_state_da_sidecars(
-                builder.with_execution_context(Some(execution_context)),
-                &state,
-            )
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-            QueuePlanTtlFixture {
-                state,
-                topology,
-                block_time_source,
-                block,
-                stateless_cache_key,
-            }
-        }
-        fn validate_queue_plan_ttl_fixture(
-            fixture: &QueuePlanTtlFixture,
-        ) -> Result<(ValidBlock, Box<StateBlock<'_>>), Error> {
-            // External QueuePlan roles are rejected before height-context validation.
-            validate_voting_test_block!(without_authenticated_context;
-                fixture.block.clone(),
-                &fixture.topology,
-                &fixture.block_time_source,
-                &fixture.state,
-                Duration::from_millis(1)
-            )
-            .unpack(|_| {})
-        }
-        fn assert_external_queue_plan_role_rejected(error: &BlockValidationError) {
-            assert!(
-                matches!(
-                    error,
-                    BlockValidationError::ExecutionContextInvalid(message)
-                        if message.contains("must use autonomous lane ownership")
-                ),
-                "unexpected external QueuePlan rejection: {error:?}"
-            );
-        }
-        #[test]
-        fn exact_parent_queue_plan_admission_rejects_ordinary_external_execution() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            let fixture = queue_plan_ttl_fixture(
-                "queue-plan-ordinary-external-follower",
-                TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Exact,
-                10,
-                10,
-                10,
-                100,
-                false,
-            );
-            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
-                panic!("QueuePlanSynced external execution must be rejected before voting");
-            };
-            assert_external_queue_plan_role_rejected(error.as_ref());
-            assert!(
-                !fixture
-                    .state
-                    .stateless_validation_cache()
-                    .lock()
-                    .contains_key(&fixture.stateless_cache_key),
-                "rejected QueuePlan authority must not become a generic cache entry"
-            );
-        }
-        #[test]
-        fn unbound_external_queue_plan_rejects_before_block_time_expiry() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            let fixture = queue_plan_ttl_fixture(
-                "queue-plan-expired-without-binding",
-                TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Missing,
-                10,
-                10,
-                10,
-                100,
-                false,
-            );
-            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
-                panic!("unbound external QueuePlan transaction must be rejected");
-            };
-            assert_external_queue_plan_role_rejected(error.as_ref());
-        }
-        #[test]
-        fn queue_plan_enqueue_time_must_itself_be_within_signed_ttl() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            let fixture = queue_plan_ttl_fixture(
-                "queue-plan-expired-before-enqueue",
-                TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Exact,
-                10,
-                10,
-                21,
-                100,
-                false,
-            );
-            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
-                panic!("exact ownership cannot waive expiry at the certified enqueue time");
-            };
-            assert_external_queue_plan_role_rejected(error.as_ref());
-        }
-        #[test]
-        fn conflicting_or_stale_queue_plan_parent_binding_fails_closed() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            for (label, binding_fixture) in [
-                (
-                    "queue-plan-conflicting-parent-owner",
-                    QueuePlanTtlBindingFixture::Conflict,
-                ),
-                (
-                    "queue-plan-stale-parent-owner",
-                    QueuePlanTtlBindingFixture::Stale,
-                ),
-            ] {
-                let fixture = queue_plan_ttl_fixture(
-                    label,
-                    TransactionAdmissionIntent::QueuePlanSynced,
-                    binding_fixture,
-                    10,
-                    10,
-                    10,
-                    100,
-                    false,
-                );
-                let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
-                    panic!("non-exact QueuePlan parent authority must fail closed");
-                };
-                assert_external_queue_plan_role_rejected(error.as_ref());
-            }
-        }
-        #[test]
-        fn queue_plan_enqueue_time_still_runs_signature_and_governed_limit_checks() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            let invalid_signature = queue_plan_ttl_fixture(
-                "queue-plan-invalid-signature",
-                TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Exact,
-                10,
-                10,
-                10,
-                100,
-                true,
-            );
-            let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_signature) else {
-                panic!("QueuePlan time authority must not bypass signature validation");
-            };
-            assert_external_queue_plan_role_rejected(error.as_ref());
-
-            let max_ttl_ms = invalid_signature
-                .state
-                .view()
-                .world()
-                .parameters()
-                .transaction()
-                .max_time_to_live_ms()
-                .get();
-            let invalid_limit = queue_plan_ttl_fixture(
-                "queue-plan-invalid-governed-ttl",
-                TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Exact,
-                10,
-                max_ttl_ms.saturating_add(1),
-                10,
-                100,
-                false,
-            );
-            let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_limit) else {
-                panic!("QueuePlan time authority must not bypass governed limits");
-            };
-            assert_external_queue_plan_role_rejected(error.as_ref());
         }
         #[test]
         fn transaction_signature_validation_has_no_bypass_terms() {
@@ -16143,10 +15145,8 @@ pub(crate) mod tests {
     fn historical_native_amx_source_bundle_fixture() -> HistoricalNativeAmxSourceBundleFixture {
         let paynet = DataSpaceId::new(7);
         let cbuae = DataSpaceId::new(8);
-        let (tx, _tx_hash) = signed_domain_registration_tx_with_admission_intent(
-            &[("merchant", "paynet"), ("treasury", "cbuae")],
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-        );
+        let (tx, _tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
         let entrypoint = TransactionEntrypoint::External(tx);
         let entrypoint_hash = entrypoint.hash();
         let routing_plan = crate::queue::RoutingPlan::native_amx(
@@ -16347,15 +15347,6 @@ pub(crate) mod tests {
     fn signed_domain_registration_tx(
         domains: &[(&str, &str)],
     ) -> (SignedTransaction, HashOf<SignedTransaction>) {
-        signed_domain_registration_tx_with_admission_intent(
-            domains,
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-        )
-    }
-    fn signed_domain_registration_tx_with_admission_intent(
-        domains: &[(&str, &str)],
-        admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent,
-    ) -> (SignedTransaction, HashOf<SignedTransaction>) {
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instructions = domains
             .iter()
@@ -16371,7 +15362,6 @@ pub(crate) mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
-        .with_admission_intent(admission_intent)
         .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)
@@ -18528,7 +17518,6 @@ seiyaku DynamicTarget {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();
@@ -18685,240 +17674,6 @@ seiyaku DynamicTarget {
         );
         assert_eq!(time_source.route, FastpqSourceRouteV1::Unrouted);
         assert_eq!(time_source.dataspace_id, DataSpaceId::UNIVERSAL);
-    }
-    #[test]
-    fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
-        let _guard = crate::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus status test lock");
-        crate::status::set_lane_settlement_commitments(Vec::new());
-        crate::status::set_lane_relay_envelopes(Vec::new());
-        let chain_id = ChainId::from("sequential-pipeline-triggers");
-        let network_id = deterministic_test_network_id(0x0D);
-        let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
-        let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([domain], [account], []);
-        let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
-        let tx_key = Name::from_str("sequential_tx_pipeline_trigger").expect("metadata key");
-        let external_signed = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "external".to_owned())])
-        .sign(keypair.private_key());
-        let external_hash = external_signed.hash();
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sequential_block_approved",
-            block_key.clone(),
-            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sequential_external_approved",
-            tx_key.clone(),
-            PipelineEventFilterBox::from(
-                TransactionEventFilter::new()
-                    .for_hash(external_hash)
-                    .for_status(TransactionStatus::Approved),
-            ),
-        );
-        let fixture_triggers = std::mem::take(&mut world.triggers);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            kura,
-            query_handle,
-            chain_id.clone(),
-            network_id,
-        );
-        install_test_lane_manifests(&state);
-        state
-            .seed_genesis_for_testing()
-            .expect("authenticate Pipeline fixture predecessor");
-        // Install component callback fixtures after the actual genesis owner has completed.
-        state.world.triggers = fixture_triggers;
-        // Settlement finality binds the exact dataspace proof policy as well as lane status.
-        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
-            version: iroha_data_model::nexus::ManifestVersion::default(),
-            uaid: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
-                b"sequential-pipeline-trigger-manifest-owner",
-            )),
-            dataspace: DataSpaceId::UNIVERSAL,
-            issued_ms: 0,
-            activation_epoch: 1,
-            expiry_epoch: None,
-            entries: Vec::new(),
-        };
-        let manifest_record =
-            crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
-        let mut manifest_root = [0_u8; 32];
-        manifest_root.copy_from_slice(manifest_record.manifest_hash.as_ref());
-        state.set_axt_policy(
-            DataSpaceId::UNIVERSAL,
-            iroha_data_model::nexus::AxtPolicyEntry {
-                manifest_root,
-                target_lane: LaneId::SINGLE,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            },
-        );
-        let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
-        let (commitment_entrypoint, _reveal_entrypoint) =
-            sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 3, 4, metadata_key);
-        let commitment_entrypoint_hash = commitment_entrypoint.hash();
-        let external_entrypoint_hash = external_signed.hash_as_entrypoint();
-        let lane_incarnation = Hash::new(b"sequential-settlement-lane-incarnation");
-        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
-        let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
-            proposal_height: 2,
-            proposal_view: 0,
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_incarnation,
-            lane_block_height: 1,
-            lane_block_view: 0,
-            subject_hash: Hash::new(b"sequential settlement subject placeholder"),
-            qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-                chain_id.as_str(),
-            ),
-            accepted_candidate_indices: vec![0, 1],
-            accepted_transaction_hashes: vec![
-                Hash::from(external_entrypoint_hash),
-                Hash::from(commitment_entrypoint_hash),
-            ],
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_descriptor_hash: Some(Hash::new(
-                b"sequential settlement descriptor placeholder",
-            )),
-            lane_block_descriptor_validator_set: validator_set,
-            lane_block_descriptor_validator_count: 1,
-            lane_block_descriptor_min_quorum: 1,
-            payload_ownership_hash: Hash::new(b"sequential settlement ownership placeholder"),
-            rbc_instance_hash: Hash::new(b"sequential settlement rbc placeholder"),
-        };
-        let replay_hashes = ownership
-            .compute_replay_hashes()
-            .expect("sequential settlement ownership replay hashes");
-        ownership.subject_hash = replay_hashes.subject_hash;
-        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-        let execution_context = BlockExecutionContextBundle::new(vec![
-            ExternalExecutionContext::new(
-                external_entrypoint_hash,
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-            ),
-            ExternalExecutionContext::new(
-                commitment_entrypoint_hash,
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-            ),
-        ])
-        .with_lane_payload_ownerships(vec![ownership]);
-        let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
-        let accepted_commitment =
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
-        let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
-            .chain(0, state.view().latest_block().as_deref())
-            .with_execution_context(Some(execution_context))
-            .sign(keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(block.header());
-        let mut source_id = [0; Hash::LENGTH];
-        source_id.copy_from_slice(external_hash.as_ref());
-        state_block.record_settlement_receipt(
-            external_hash,
-            crate::settlement::PendingSettlement {
-                source_id,
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    domain_id,
-                    "settlement".parse().expect("asset name"),
-                ),
-                local_amount: crate::settlement::quantity_from_micro_units(11),
-                xor_due: crate::settlement::quantity_from_micro_units(7),
-                xor_after_haircut: crate::settlement::quantity_from_micro_units(6),
-                xor_variance: crate::settlement::quantity_from_micro_units(1),
-                timestamp_ms: 1,
-                liquidity_profile: settlement_router::LiquidityProfile::Tier1,
-                volatility_bucket: crate::settlement::VolatilityBucket::Stable,
-                twap_local_per_xor: Numeric::one(),
-                epsilon_bps: 25,
-                twap_window_seconds: 60,
-                oracle_timestamp_ms: 1,
-            },
-        );
-        let valid_block = block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        assert!(
-            valid_block
-                .as_ref()
-                .network_entrypoints()
-                .enumerate()
-                .map(|(index, entrypoint)| {
-                    let (output_index, output) = valid_block
-                        .as_ref()
-                        .network_output_at(
-                            u32::try_from(index).expect("fixture Network index fits u32"),
-                        )
-                        .expect("every queried input has its explicit Network output");
-                    assert_eq!(usize::try_from(output_index).unwrap(), index);
-                    (index, entrypoint, &output.result)
-                })
-                .all(|(_, _, result)| result.0.is_ok()),
-            "mixed sequential block should validate successfully"
-        );
-        let (block_value, tx_value) = state_block
-            .world
-            .map_account(&authority, |account| {
-                (
-                    account.value().metadata().get(&block_key).cloned(),
-                    account.value().metadata().get(&tx_key).cloned(),
-                )
-            })
-            .expect("authority account exists");
-        assert_eq!(block_value, Some(Json::new("ok")));
-        assert_eq!(tx_value, Some(Json::new("ok")));
-        let statements = valid_block.as_ref().lane_finality_statements();
-        assert_eq!(statements.len(), 1);
-        let statement = &statements[0];
-        assert_eq!(statement.manifest_root, manifest_root);
-        assert_eq!(
-            statement.block_header_hash,
-            valid_block.as_ref().hash(),
-            "lane finality must bind the header after result and trigger finalization"
-        );
-        let settlement = &statement.settlement_commitment;
-        assert_eq!(settlement.lane_id, LaneId::SINGLE);
-        assert_eq!(settlement.dataspace_id, DataSpaceId::UNIVERSAL);
-        assert_eq!(settlement.lane_incarnation, lane_incarnation);
-        assert_eq!(
-            settlement.block_height, 1,
-            "settlement binds the lane-local slot"
-        );
-        assert_eq!(settlement.tx_count, 1);
-        assert_eq!(settlement.receipts.len(), 1);
-        assert_eq!(settlement.receipts[0].source_id, source_id);
-        let snapshot = crate::status::snapshot();
-        assert!(
-            snapshot.lane_settlement_commitments.is_empty()
-                && snapshot.lane_relay_envelopes.is_empty(),
-            "successful execution is still only a candidate and must not publish relay evidence"
-        );
-        crate::status::set_lane_settlement_commitments(Vec::new());
-        crate::status::set_lane_relay_envelopes(Vec::new());
     }
     #[test]
     fn block_validation_sealed_only_entrypoint_executes_only_block_pipeline_trigger() {

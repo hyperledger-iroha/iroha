@@ -28,7 +28,6 @@ pub(crate) fn install_network_index_test_outputs(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &limits,
         )
         .expect("canonical bounded storage-fixture outputs");

@@ -1,6 +1,8 @@
 //! Support types for SM2/SM3/SM4 primitives.
 #[cfg(feature = "sm-ffi-openssl")]
 pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
+#[cfg(feature = "sm-ffi-openssl")]
+mod openssl_dispatch;
 pub(crate) mod verification;
 
 use crate::Algorithm;
@@ -55,36 +57,6 @@ fn distid_len_prefix(distid: &str) -> Result<[u8; SM2_DISTID_LEN_BYTES], ParseEr
 }
 fn split_sm2_payload(payload: &[u8]) -> Result<(&str, &[u8]), ParseError> {
     verification::split_payload(payload).map_err(verification::KeyRejection::into_parse_error)
-}
-#[cfg(feature = "sm-ffi-openssl")]
-fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
-    match err {
-        OpenSslSmError::OpenSsl(inner) => Error::Other(format!("{context}: {inner}")),
-        OpenSslSmError::PreviewDisabled => {
-            Error::Other(format!("{context}: OpenSSL SM preview is disabled"))
-        }
-        OpenSslSmError::InvalidGcmTagLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 GCM tag length {len} (expected 16 bytes)"
-        )),
-        OpenSslSmError::InvalidKeyLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 key length {len} (expected 16 bytes)"
-        )),
-        OpenSslSmError::InvalidNonceLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 nonce length {len} (expected 12 bytes)"
-        )),
-        OpenSslSmError::InvalidCcmTagLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 CCM tag length {len} (expected one of 4, 6, 8, 10, 12, 14, 16 bytes)"
-        )),
-        OpenSslSmError::InvalidCcmNonceLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 CCM nonce length {len} (expected between 7 and 13 bytes)"
-        )),
-        OpenSslSmError::Sm4GcmNotImplemented => Error::Other(format!(
-            "{context}: SM4 GCM unavailable from OpenSSL provider"
-        )),
-        OpenSslSmError::Sm4CcmNotImplemented => Error::Other(format!(
-            "{context}: SM4 CCM unavailable from OpenSSL provider"
-        )),
-    }
 }
 fn encode_pem(label: &str, der: &[u8]) -> String {
     const PEM_WRAP: usize = 64;
@@ -1772,7 +1744,11 @@ mod sm4_ccm_compat {
         }
     }
 }
-/// Zeroizing SM4 key wrapper for block operations.
+/// Zeroizing SM4 key wrapper for block operations and authenticated encryption.
+///
+/// Configured OpenSSL operations preserve the Rust result on backend failure.
+/// A backend error on valid input quarantines that operation until process restart;
+/// authentication and parameter rejection retain the canonical Rust error.
 #[derive(Clone, TypeId)]
 pub struct Sm4Key(Secret<Zeroizing<[u8; 16]>>);
 impl Sm4Key {
@@ -1806,27 +1782,37 @@ impl Sm4Key {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, [u8; 16]), Error> {
+        let canonical = || {
+            let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
+                .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
+            let mut output = sm4_gcm_aad_encrypt(&sm4_key, nonce, aad, plaintext);
+            if output.len() < 16 {
+                return Err(Error::Other("SM4-GCM output truncated".into()));
+            }
+            let tag_vec = output.split_off(output.len() - 16);
+            let mut tag = [0u8; 16];
+            tag.copy_from_slice(&tag_vec);
+            Ok((output, tag))
+        };
         #[cfg(feature = "sm-ffi-openssl")]
-        match OpenSslSmBackend::sm4_gcm_encrypt(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            plaintext,
-        ) {
-            Ok(result) => return Ok(result),
-            Err(OpenSslSmError::Sm4GcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
-            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM encrypt", err)),
+        {
+            openssl_dispatch::execute(
+                openssl_dispatch::Operation::GcmEncrypt,
+                || {
+                    OpenSslSmBackend::sm4_gcm_encrypt(
+                        self.0.expose_secret().as_ref(),
+                        nonce,
+                        aad,
+                        plaintext,
+                    )
+                },
+                canonical,
+            )
         }
-        let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
-            .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
-        let mut output = sm4_gcm_aad_encrypt(&sm4_key, nonce, aad, plaintext);
-        if output.len() < 16 {
-            return Err(Error::Other("SM4-GCM output truncated".into()));
+        #[cfg(not(feature = "sm-ffi-openssl"))]
+        {
+            canonical()
         }
-        let tag_vec = output.split_off(output.len() - 16);
-        let mut tag = [0u8; 16];
-        tag.copy_from_slice(&tag_vec);
-        Ok((output, tag))
     }
     /// Decrypt a message with SM4-GCM, returning the plaintext.
     ///
@@ -1839,25 +1825,35 @@ impl Sm4Key {
         ciphertext: &[u8],
         tag: &[u8; 16],
     ) -> Result<Vec<u8>, Error> {
+        let canonical = || {
+            let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
+                .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
+            let mut combined = Vec::with_capacity(ciphertext.len() + tag.len());
+            combined.extend_from_slice(ciphertext);
+            combined.extend_from_slice(tag);
+            sm4_gcm_aad_decrypt(&sm4_key, nonce, aad, &combined)
+                .map_err(|err| Error::Other(format!("SM4-GCM decryption failed: {err}")))
+        };
         #[cfg(feature = "sm-ffi-openssl")]
-        match OpenSslSmBackend::sm4_gcm_decrypt(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            ciphertext,
-            tag,
-        ) {
-            Ok(result) => return Ok(result),
-            Err(OpenSslSmError::Sm4GcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
-            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM decrypt", err)),
+        {
+            openssl_dispatch::execute(
+                openssl_dispatch::Operation::GcmDecrypt,
+                || {
+                    OpenSslSmBackend::sm4_gcm_decrypt(
+                        self.0.expose_secret().as_ref(),
+                        nonce,
+                        aad,
+                        ciphertext,
+                        tag,
+                    )
+                },
+                canonical,
+            )
         }
-        let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
-            .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
-        let mut combined = Vec::with_capacity(ciphertext.len() + tag.len());
-        combined.extend_from_slice(ciphertext);
-        combined.extend_from_slice(tag);
-        sm4_gcm_aad_decrypt(&sm4_key, nonce, aad, &combined)
-            .map_err(|err| Error::Other(format!("SM4-GCM decryption failed: {err}")))
+        #[cfg(not(feature = "sm-ffi-openssl"))]
+        {
+            canonical()
+        }
     }
     #[cfg(feature = "sm-ccm")]
     fn encrypt_ccm_for_tag<const TAG_LEN: usize>(
@@ -1886,24 +1882,34 @@ impl Sm4Key {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        let canonical = || {
+            sm4_ccm_compat::encrypt::<TAG_LEN, NONCE_LEN>(
+                self.0.expose_secret().as_ref(),
+                nonce,
+                aad,
+                plaintext,
+            )
+        };
         #[cfg(feature = "sm-ffi-openssl")]
-        match OpenSslSmBackend::sm4_ccm_encrypt(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            plaintext,
-            TAG_LEN,
-        ) {
-            Ok(result) => return Ok(result),
-            Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
-            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM encrypt", err)),
+        {
+            openssl_dispatch::execute(
+                openssl_dispatch::Operation::CcmEncrypt,
+                || {
+                    OpenSslSmBackend::sm4_ccm_encrypt(
+                        self.0.expose_secret().as_ref(),
+                        nonce,
+                        aad,
+                        plaintext,
+                        TAG_LEN,
+                    )
+                },
+                canonical,
+            )
         }
-        sm4_ccm_compat::encrypt::<TAG_LEN, NONCE_LEN>(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            plaintext,
-        )
+        #[cfg(not(feature = "sm-ffi-openssl"))]
+        {
+            canonical()
+        }
     }
     #[cfg(feature = "sm-ccm")]
     fn decrypt_ccm_for_tag<const TAG_LEN: usize>(
@@ -1934,25 +1940,35 @@ impl Sm4Key {
         ciphertext: &[u8],
         tag: &[u8],
     ) -> Result<Vec<u8>, Error> {
+        let canonical = || {
+            sm4_ccm_compat::decrypt::<TAG_LEN, NONCE_LEN>(
+                self.0.expose_secret().as_ref(),
+                nonce,
+                aad,
+                ciphertext,
+                tag,
+            )
+        };
         #[cfg(feature = "sm-ffi-openssl")]
-        match OpenSslSmBackend::sm4_ccm_decrypt(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            ciphertext,
-            tag,
-        ) {
-            Ok(result) => return Ok(result),
-            Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
-            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM decrypt", err)),
+        {
+            openssl_dispatch::execute(
+                openssl_dispatch::Operation::CcmDecrypt,
+                || {
+                    OpenSslSmBackend::sm4_ccm_decrypt(
+                        self.0.expose_secret().as_ref(),
+                        nonce,
+                        aad,
+                        ciphertext,
+                        tag,
+                    )
+                },
+                canonical,
+            )
         }
-        sm4_ccm_compat::decrypt::<TAG_LEN, NONCE_LEN>(
-            self.0.expose_secret().as_ref(),
-            nonce,
-            aad,
-            ciphertext,
-            tag,
-        )
+        #[cfg(not(feature = "sm-ffi-openssl"))]
+        {
+            canonical()
+        }
     }
     /// Encrypt a message with SM4-CCM.
     ///
@@ -2224,7 +2240,9 @@ mod intrinsic_policy_tests {
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview metadata and guard rails for the optional OpenSSL-backed SM provider.
 pub mod openssl_provider {
-    #[cfg(ossl300)]
+    // The optional provider uses the pinned OpenSSL 3 API. Dependency-private
+    // cfg flags do not propagate here; query the actual runtime capabilities.
+    use super::openssl_dispatch::Operation;
     use openssl::cipher::Cipher;
     use openssl::{
         hash::{Hasher, MessageDigest},
@@ -2232,7 +2250,7 @@ pub mod openssl_provider {
     };
     use std::sync::{
         OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     };
     use thiserror::Error;
     /// Errors that can occur while initialising or querying the OpenSSL provider preview.
@@ -2252,15 +2270,36 @@ pub mod openssl_provider {
     /// Preview provider exposing OpenSSL metadata and SM capability checks.
     #[derive(Debug, Clone, Copy)]
     pub struct OpenSslProvider;
-    fn preview_flag() -> &'static AtomicBool {
-        static FLAG: OnceLock<AtomicBool> = OnceLock::new();
-        FLAG.get_or_init(|| AtomicBool::new(false))
+    /// Process-lifetime configuration and health for the linked provider.
+    #[derive(Default)]
+    pub(super) struct RuntimeState {
+        enabled: AtomicBool,
+        quarantined: AtomicU8,
+    }
+    impl RuntimeState {
+        pub(super) fn set_enabled(&self, enabled: bool) {
+            self.enabled.store(enabled, Ordering::SeqCst);
+        }
+        fn is_enabled(&self) -> bool {
+            self.enabled.load(Ordering::SeqCst)
+        }
+        pub(super) fn can_attempt(&self, operation: Operation) -> bool {
+            self.is_enabled() && self.quarantined.load(Ordering::SeqCst) & operation.mask() == 0
+        }
+        pub(super) fn quarantine(&self, operation: Operation) {
+            self.quarantined
+                .fetch_or(operation.mask(), Ordering::SeqCst);
+        }
+    }
+    pub(super) fn runtime_state() -> &'static RuntimeState {
+        static STATE: OnceLock<RuntimeState> = OnceLock::new();
+        STATE.get_or_init(RuntimeState::default)
     }
     impl OpenSslProvider {
         /// Attempt to load the OpenSSL-backed provider.
         ///
         /// The loader enforces the preview guard and validates that the linked OpenSSL build
-        /// exposes the SM3 digest and (when available) the SM4-GCM cipher before
+        /// exposes the SM3 digest and SM4-GCM cipher before
         /// returning success. Deployments lacking these capabilities surface `NotImplemented`
         /// so callers can fall back to the pure-Rust implementation.
         ///
@@ -2278,21 +2317,21 @@ pub mod openssl_provider {
                 ));
             }
             Hasher::new(MessageDigest::sm3()).map_err(|_| OpenSslProviderError::NotImplemented)?;
-            #[cfg(ossl300)]
-            {
-                let cipher = Cipher::fetch(None, "SM4-GCM", None)
-                    .map_err(|_| OpenSslProviderError::NotImplemented)?;
-                drop(cipher);
-            }
+            let cipher = Cipher::fetch(None, "SM4-GCM", None)
+                .map_err(|_| OpenSslProviderError::NotImplemented)?;
+            drop(cipher);
             Ok(Self)
         }
         /// Enable or disable the OpenSSL preview backend explicitly.
+        ///
+        /// This changes configuration only. Operations quarantined after an operational
+        /// failure remain on the canonical Rust path until the process restarts.
         pub fn set_preview_enabled(enabled: bool) {
-            preview_flag().store(enabled, Ordering::SeqCst);
+            runtime_state().set_enabled(enabled);
         }
         /// Returns `true` when the preview backend is toggled on via configuration.
         pub fn is_enabled() -> bool {
-            preview_flag().load(Ordering::SeqCst)
+            runtime_state().is_enabled()
         }
         /// Returns `true` when OpenSSL runtime symbols are available.
         pub fn is_available() -> bool {
@@ -2348,6 +2387,14 @@ pub mod openssl_provider {
             );
         }
         #[test]
+        fn load_matches_linked_provider_capabilities() {
+            let _guard = PreviewFlagGuard::enable();
+            let expected = version::number() != 0
+                && Hasher::new(MessageDigest::sm3()).is_ok()
+                && Cipher::fetch(None, "SM4-GCM", None).is_ok();
+            assert_eq!(OpenSslProvider::load().is_ok(), expected);
+        }
+        #[test]
         fn load_validates_backend_capabilities_when_enabled() {
             let _guard = PreviewFlagGuard::enable();
             match OpenSslProvider::load() {
@@ -2375,7 +2422,7 @@ pub use openssl_provider::{OpenSslProvider, OpenSslProviderError};
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview OpenSSL-backed implementations for SM primitives.
 pub mod openssl_sm {
-    use super::{OpenSslProvider, Sm3Digest};
+    use super::OpenSslProvider;
     use openssl::{
         cipher::{Cipher, CipherRef},
         cipher_ctx::CipherCtx,
@@ -2418,26 +2465,12 @@ pub mod openssl_sm {
     #[derive(Debug, Clone, Copy)]
     pub struct OpenSslSmBackend;
     fn fetch_sm4_gcm_cipher() -> Result<Cipher, OpenSslSmError> {
-        #[cfg(ossl300)]
-        {
-            Cipher::fetch(None, "SM4-GCM", None).map_err(|_| OpenSslSmError::Sm4GcmNotImplemented)
-        }
-        #[cfg(not(ossl300))]
-        {
-            Err(OpenSslSmError::Sm4GcmNotImplemented)
-        }
+        Cipher::fetch(None, "SM4-GCM", None).map_err(|_| OpenSslSmError::Sm4GcmNotImplemented)
     }
     #[cfg(feature = "sm-ccm")]
     #[allow(dead_code)]
     fn fetch_sm4_ccm_cipher() -> Result<Cipher, OpenSslSmError> {
-        #[cfg(ossl300)]
-        {
-            Cipher::fetch(None, "SM4-CCM", None).map_err(|_| OpenSslSmError::Sm4CcmNotImplemented)
-        }
-        #[cfg(not(ossl300))]
-        {
-            Err(OpenSslSmError::Sm4CcmNotImplemented)
-        }
+        Cipher::fetch(None, "SM4-CCM", None).map_err(|_| OpenSslSmError::Sm4CcmNotImplemented)
     }
     fn validate_sm4_gcm_params(
         key: &[u8],
@@ -2722,30 +2755,6 @@ mod tests {
         fn drop(&mut self) {
             OpenSslProvider::set_preview_enabled(self.previous);
         }
-    }
-    #[cfg(feature = "sm-ffi-openssl")]
-    #[test]
-    fn openssl_sm4_ccm_error_mapping_describes_ccm_lengths() {
-        assert_eq!(
-            map_openssl_sm_error(
-                "OpenSSL SM4-CCM encrypt",
-                OpenSslSmError::InvalidCcmTagLength(5),
-            ),
-            Error::Other(
-                "OpenSSL SM4-CCM encrypt: invalid SM4 CCM tag length 5 (expected one of 4, 6, 8, 10, 12, 14, 16 bytes)"
-                    .into(),
-            )
-        );
-        assert_eq!(
-            map_openssl_sm_error(
-                "OpenSSL SM4-CCM decrypt",
-                OpenSslSmError::InvalidCcmNonceLength(6),
-            ),
-            Error::Other(
-                "OpenSSL SM4-CCM decrypt: invalid SM4 CCM nonce length 6 (expected between 7 and 13 bytes)"
-                    .into(),
-            )
-        );
     }
     #[test]
     fn sm_intrinsic_policy_parse_accepts_aliases() {

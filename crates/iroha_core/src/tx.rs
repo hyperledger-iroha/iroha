@@ -71,27 +71,6 @@ type StateTelemetry = crate::telemetry::StateTelemetry;
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_model_base::topology::DataSpaceId;
 type NexusLaneId = iroha_model_base::topology::LaneId;
-#[cfg(test)]
-/// Recovered lane execution distinguishes malformed input from local admission.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum LaneExecutionInputError {
-    /// Authenticated lane input is invalid.
-    #[error("{0}")]
-    Invalid(&'static str),
-    /// Original local State storage pool refused this attempt.
-    #[error(transparent)]
-    Storage(#[from] crate::state::StateStorageAdmissionError),
-    /// Original local execution pool refused this attempt before settlement.
-    #[error(transparent)]
-    Deferred(#[from] ExecutionDeferred),
-}
-
-#[cfg(test)]
-impl From<&'static str> for LaneExecutionInputError {
-    fn from(reason: &'static str) -> Self {
-        Self::Invalid(reason)
-    }
-}
 /// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
@@ -291,9 +270,7 @@ pub(crate) fn validate_kagemusha_top_up_admission_invariants_v1(
     if tx.authority() != &request.payer {
         return Err("KAGEMUSHA V1 top-up authority must equal the embedded payer");
     }
-    if tx.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err("KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission");
-    }
+
     Ok(())
 }
 /// Project a hash known to identify an external signed transaction into its entrypoint identity.
@@ -1859,8 +1836,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::InvalidFeePaymentIntent(_)
             | TransactionSignatureError::MissingTimeToLive
             | TransactionSignatureError::GenesisDomainNotAllowed
-            | TransactionSignatureError::GenesisDomainRequired
-            | TransactionSignatureError::GenesisAdmissionIntentRequired => {
+            | TransactionSignatureError::GenesisDomainRequired => {
                 SignatureRejectionCode::MalformedSignature
             }
             TransactionSignatureError::UnexpectedMultisigSignatures
@@ -3168,162 +3144,6 @@ impl StateBlock<'_> {
             validation_fee_credit,
             faucet_claim_to_commit,
         })
-    }
-    /// Execute one immutable accepted entrypoint under the bounded component owner.
-    ///
-    /// Tests and benchmarks share the production attempt/apply/rejection implementation.
-    /// This fixture owner grants no carrier publication authority; a real consuming
-    /// output seal rejects its unjoined invocation journal.
-    ///
-    /// # Errors
-    /// Local execution deferral leaves the attempt unfinished and cannot become a wire rejection.
-    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-    pub fn validate_transaction(
-        &mut self,
-        tx: AcceptedTransaction<'_>,
-        ivm_cache: &mut IvmCache,
-    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
-        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
-    }
-    #[cfg(test)]
-    /// Validate and apply a transaction with both its original block entrypoint index and routing context.
-    ///
-    /// Returns the hash and the result of the transaction.
-    pub(crate) fn validate_transaction_with_entrypoint_index_and_routing_context(
-        &mut self,
-        tx: AcceptedTransaction<'_>,
-        ivm_cache: &mut IvmCache,
-        entrypoint_index: usize,
-        routing: crate::queue::RoutingDecision,
-    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
-        self.validate_transaction_at_entrypoint_index_and_routing(
-            tx,
-            ivm_cache,
-            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX)),
-            Some(routing),
-        )
-    }
-    /// Validate recovered standalone lane-block execution input in descriptor order.
-    ///
-    /// Successful transactions stage their state effects in this [`StateBlock`] using the
-    /// lane/dataspace routing context and the original fetched-batch entrypoint indices from the
-    /// lane descriptor. The caller owns the commit boundary: dropping the block reverts the staged
-    /// effects, while committing the block must use a real consensus-approved block context.
-    #[cfg(test)]
-    pub(crate) fn validate_lane_block_execution_input_with_routing_context(
-        &mut self,
-        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
-        ivm_cache: &mut IvmCache,
-    ) -> core::result::Result<
-        Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
-        LaneExecutionInputError,
-    > {
-        self.require_storage_admission()?;
-        Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;
-        crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
-        let descriptor = &artifact.proposal.descriptor;
-        let routing =
-            crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id);
-        let mut results = Vec::with_capacity(artifact.entrypoints.len());
-        for (position, (raw_entrypoint_index, entrypoint)) in descriptor
-            .accepted_candidate_indices
-            .iter()
-            .copied()
-            .zip(artifact.entrypoints.iter())
-            .enumerate()
-        {
-            let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
-            let plan = if let Some(bound) = artifact.routing_plans.get(position) {
-                // Autonomous payloads carry a producer-authenticated plan bound
-                // to the proposal-height incarnation. Recomputing against the
-                // current catalog would make valid delayed merges depend on
-                // unrelated scale-out or policy drift.
-                bound.clone()
-            } else {
-                evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                    &self.nexus,
-                    &accepted,
-                    &self.world,
-                    u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
-                    descriptor.proposal_height,
-                )
-                .map_err(|_| "execution input routing cannot be resolved")?
-            };
-            if plan.coordinator_route() != routing {
-                return Err(LaneExecutionInputError::Invalid(
-                    "execution input route does not match recomputed coordinator route",
-                ));
-            }
-            let (entrypoint_hash, result) = self
-                .validate_transaction_at_entrypoint_index_and_routing(
-                    accepted,
-                    ivm_cache,
-                    Some(raw_entrypoint_index),
-                    Some(routing),
-                )?;
-            self.require_storage_admission()?;
-            results.push((raw_entrypoint_index, entrypoint_hash, result));
-        }
-        Ok(results)
-    }
-    #[cfg(test)]
-    fn validate_lane_block_execution_input_unique_entrypoints(
-        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
-    ) -> core::result::Result<(), &'static str> {
-        let mut seen_entrypoint_hashes = BTreeSet::new();
-        let mut seen_signed_hashes = BTreeSet::new();
-        let mut seen_sealed_commitments = BTreeSet::new();
-        for entrypoint in &artifact.entrypoints {
-            if !seen_entrypoint_hashes.insert(entrypoint.hash()) {
-                return Err("execution input contains duplicate entrypoints");
-            }
-            match entrypoint {
-                TransactionEntrypoint::External(signed) => {
-                    let signed_hash =
-                        AcceptedTransaction::prepare_signed_metadata(signed).signed_hash;
-                    if !seen_signed_hashes.insert(signed_hash) {
-                        return Err("execution input contains duplicate signed transactions");
-                    }
-                }
-                TransactionEntrypoint::SealedReveal(reveal) => {
-                    let signed_hash =
-                        AcceptedTransaction::prepare_signed_metadata(reveal.signed_transaction())
-                            .signed_hash;
-                    if !seen_signed_hashes.insert(signed_hash) {
-                        return Err("execution input contains duplicate signed transactions");
-                    }
-                }
-                TransactionEntrypoint::SealedCommitment(commitment) => {
-                    if !seen_sealed_commitments.insert(*commitment.commitment()) {
-                        return Err("execution input contains duplicate sealed commitments");
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-    fn validate_transaction_at_entrypoint_index_and_routing(
-        &mut self,
-        tx: AcceptedTransaction<'_>,
-        ivm_cache: &mut IvmCache,
-        entrypoint_index: Option<u64>,
-        routing_decision: Option<crate::queue::RoutingDecision>,
-    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
-        let hash = tx.hash_as_entrypoint();
-        let result = match self.execute_component_network_source(
-            tx,
-            ivm_cache,
-            entrypoint_index,
-            routing_decision,
-        ) {
-            Ok(result) => result,
-            Err(ExecutionAttemptError::Rejected(reason)) => Err(
-                TransactionRejectionReason::Validation(ValidationFail::InternalError(reason)),
-            ),
-            Err(ExecutionAttemptError::Deferred(reason)) => return Err(reason),
-        };
-        Ok((hash, result))
     }
     /// Execute admission, business logic and callbacks in the caller's overlay.
     ///
@@ -6210,11 +6030,12 @@ pub mod tests {
                 .build(&multisig_id),
         ];
         let world = World::with([domain], accounts, []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             multisig_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6226,21 +6047,24 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
                 assert!(
@@ -6349,11 +6173,12 @@ pub mod tests {
             crate::role::RoleIdWithOwner::new(authority_id.clone(), role_id),
             (),
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6365,21 +6190,24 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         assert!(
             result.is_ok(),
             "single-key signatories with multisig roles should keep ordinary direct-signing rights: {result:?}"
@@ -6419,30 +6247,21 @@ pub mod tests {
         let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
         let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
         let world = World::with([home, target], [signer1_account, signer2_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut setup_block = state.block(setup_header);
-        let mut setup_tx = setup_block.transaction();
-        crate::executor::Executor::Initial
-            .execute_instruction(
-                &mut setup_tx,
-                &signer1_id,
-                InstructionBox::from(MultisigRegister::with_account(
-                    AccountId::new(checked_random_tx_keypair().public_key().clone()),
-                    home_domain.clone(),
-                    spec,
-                )),
-            )
-            .expect("register canonical multisig account");
-        setup_tx.apply();
-        setup_block
-            .commit_world_overlay_for_testing()
-            .expect("commit multisig setup");
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        config.genesis_key = signer1.clone();
+        config
+            .genesis_instructions
+            .push(InstructionBox::from(MultisigRegister::with_account(
+                AccountId::new(checked_random_tx_keypair().public_key().clone()),
+                home_domain.clone(),
+                spec,
+            )));
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("register canonical multisig through the original signed genesis");
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             signer1_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6455,21 +6274,24 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("signed multisig envelope has a certified execution result")
+            .1
+            .result
+            .clone();
         assert!(
             result.is_ok(),
             "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
@@ -7045,11 +6867,12 @@ pub mod tests {
         let chain: ChainId = "missing-authority-regular".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7058,21 +6881,24 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         match result {
             Err(TransactionRejectionReason::AccountDoesNotExist(FindError::Account(id))) => {
                 assert_eq!(id, authority, "unexpected missing-account id");
@@ -7126,11 +6952,12 @@ pub mod tests {
         let chain: ChainId = "missing-authority-self-register".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7142,24 +6969,33 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         assert!(result.is_ok(), "self-register flow should pass: {result:?}");
         assert!(
-            block.world.accounts.get(&authority).is_some(),
+            chain
+                .state()
+                .view()
+                .world()
+                .accounts()
+                .get(&authority)
+                .is_some(),
             "authority account should be created by the first transaction"
         );
     }
@@ -7169,11 +7005,12 @@ pub mod tests {
         let (authority, keypair) = gen_account_in("wonderland");
         let existing = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [existing], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7185,22 +7022,31 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let account_before = block.world.accounts.get(&authority).cloned();
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        let account_before = chain
+            .state()
+            .view()
+            .world()
+            .accounts()
+            .get(&authority)
+            .cloned();
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         assert!(
             matches!(&result,
                 Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
@@ -7211,7 +7057,13 @@ pub mod tests {
             "duplicate self-register must reject its exact existing identity: {result:?}"
         );
         assert_eq!(
-            block.world.accounts.get(&authority).cloned(),
+            chain
+                .state()
+                .view()
+                .world()
+                .accounts()
+                .get(&authority)
+                .cloned(),
             account_before
         );
     }
@@ -7222,11 +7074,12 @@ pub mod tests {
         let multisig_account = AccountId::new(checked_random_tx_keypair().public_key().clone());
         let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
         let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply original signed four-validator genesis");
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             missing_authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7238,21 +7091,24 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has an authenticated execution row")
+            .1
+            .result
+            .clone();
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::Find(FindError::Account(
@@ -10977,26 +10833,27 @@ pub mod tests {
         use iroha_logger::Level;
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
         use std::time::Duration;
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
-        let mut params = iroha_data_model::parameter::system::Parameters::default();
-        params.transaction = params.transaction.with_ingress_enforcement(false, true);
-        world.parameters = mv::cell::Cell::new(params);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
+
         let chain: ChainId = "seq-check-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        config
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Transaction(
+                iroha_data_model::parameter::system::TransactionParameter::RequireSequence(true),
+            ));
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply signed genesis with sequence enforcement");
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(5_u64),
         );
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11015,19 +10872,24 @@ pub mod tests {
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let time_source = TimeSource::new_fixed(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("stateless sequence checks should pass when metadata present");
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has a certified execution result")
+            .1
+            .result
+            .clone();
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
@@ -11039,6 +10901,11 @@ pub mod tests {
                 "expected Validation::NotPermitted for non-increasing sequence, got {other:?}"
             ),
         }
+        assert_eq!(
+            chain.state().view().world().tx_sequences.get(&authority_id),
+            Some(&5),
+            "a rejected signed transaction must not advance the committed sequence"
+        );
     }
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
@@ -11046,26 +10913,27 @@ pub mod tests {
         use iroha_logger::Level;
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
         use std::time::Duration;
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
-        let mut params = iroha_data_model::parameter::system::Parameters::default();
-        params.transaction = params.transaction.with_ingress_enforcement(false, true);
-        world.parameters = mv::cell::Cell::new(params);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
+
         let chain: ChainId = "seq-accept-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = chain;
+        config
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Transaction(
+                iroha_data_model::parameter::system::TransactionParameter::RequireSequence(true),
+            ));
+        let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("apply signed genesis with sequence enforcement");
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(6_u64),
         );
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11084,22 +10952,29 @@ pub mod tests {
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let time_source = TimeSource::new_fixed(tx.creation_time());
-        let accepted = AcceptedTransaction::accept_with_time_source(
-            tx,
-            &test_network_id(),
+        let _accepted = AcceptedTransaction::accept_with_time_source(
+            tx.clone(),
+            &chain.network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("stateless sequence checks should pass when metadata present");
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        chain.commit(vec![tx]);
+        let committed = chain.committed(2);
+        let result = committed
+            .block()
+            .network_output_at(0)
+            .expect("original transaction has a certified execution result")
+            .1
+            .result
+            .clone();
         result.expect("sequence should be accepted");
-        let updated = block
-            .world
+        let updated = chain
+            .state()
+            .view()
+            .world()
             .tx_sequences
             .get(&authority_id)
             .copied()

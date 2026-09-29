@@ -1,125 +1,116 @@
-// Exact-wire proof transport fixtures. These certificates authenticate test outputs;
-// they do not claim State execution or native producer activation.
+// Actual State execution, native paired attestations, original Kura publication, and portable
+// independently selected H1 checkpoint -> H2 verification. The fixture signs the four-seat
+// committee's votes itself; it does not qualify a running distributed consensus network.
 
-use crate::test_utils::torii_proof_finality_for_block;
-
-fn committed_network_proof_app_for_test() -> (SharedAppState, Arc<SignedBlock>, V2FinalityArtifact)
-{
-    use iroha_data_model::{
-        block::{
-            builder::BlockBuilder as ModelBlockBuilder, execution_output::*,
-            output_budget::ExecutionOutputLimits,
+fn committed_network_proof_app_for_test() -> (
+    SharedAppState,
+    Arc<SignedBlock>,
+    iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+) {
+    use iroha_core::{
+        state::World,
+        sumeragi::{
+            finality::{build_checkpoint, build_proof},
+            test_chain::{CertifiedTestChain, TestChainConfig},
         },
-        events::{
-            time::{TimeEvent, TimeInterval},
-            trigger_completed::TriggerCompletedOutcome,
-        },
-        transaction::signed::{ExecutionStep, TransactionResult},
-        trigger::{DataTriggerStep, TriggerId},
     };
-    let app = mk_app_state_for_tests();
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        events::{
+            pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
+            time::{ExecutionTime, TimeEventFilter},
+        },
+        isi::{InstructionBox, Log, Register, Unregister},
+        level::Level,
+        sumeragi_finality::SumeragiFinalityVerifier,
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
+    };
     let key = checked_torii_test_ed25519_keypair(0x39, "proof fixture input signer");
     let authority = AccountId::new(key.public_key().clone());
-    let mut builder = ModelBlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        1,
-        0,
-    ));
-    for millis in [1_u64, 2] {
-        let mut tx = TransactionBuilder::new(
-            *app.state.network_id_ref(),
+    let account = Account::new(authority.clone()).build(&authority);
+    let mut config = TestChainConfig::new(World::with([], [account], []), 1_000);
+    let instructions =
+        |label: &str| vec![InstructionBox::from(Log::new(Level::INFO, label.into()))];
+    // Normal signed-genesis registration supplies lifecycle markers. Both invocations become
+    // eligible at H2 and are executed by the same production owner as the two Network inputs.
+    let pipeline = Trigger::new(
+        "torii_proof_pipeline".parse().unwrap(),
+        Action::new(
+            instructions("proof pipeline callback"),
+            Repeats::Exactly(1),
+            authority.clone(),
+            PipelineEventFilterBox::from(
+                BlockEventFilter::new()
+                    .for_height(NonZeroU64::new(2).unwrap())
+                    .for_status(BlockStatus::Approved),
+            ),
+        )
+        .unwrap(),
+    );
+    let timer = Trigger::new(
+        "torii_proof_timer".parse().unwrap(),
+        Action::new(
+            instructions("proof timer callback"),
+            Repeats::Exactly(1),
+            authority.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        )
+        .unwrap(),
+    );
+    config.genesis_instructions.extend([
+        InstructionBox::from(Register::trigger(pipeline)),
+        InstructionBox::from(Register::trigger(timer)),
+    ]);
+    let chain_id = config.chain_id.to_string();
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    let mut transactions = Vec::new();
+    for work in [
+        instructions("successful proof input"),
+        vec![InstructionBox::from(Unregister::domain(
+            iroha_data_model::domain::DomainId::try_new("missing_proof_domain", "universal")
+                .unwrap(),
+        ))],
+    ] {
+        let mut builder = TransactionBuilder::new(
+            chain.network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        tx.set_creation_time(std::time::Duration::from_millis(millis));
-        builder.push_transaction(checked_torii_test_transaction(
-            tx,
-            &key,
-            "proof fixture input",
-        ));
+        builder.set_creation_time(std::time::Duration::from_millis(1_001));
+        transactions.push(builder.with_instructions(work).sign(key.private_key()));
     }
-    let mut block = builder.build_with_signature(0, key.private_key());
-    let proposal = block.canonical_resultless_proposal();
-    block.validate_proposal_commitments().unwrap();
-    let mut outputs = (0..2).map(|input_index| ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-        input_index,
-        result: if input_index == 0 { TransactionResult::new(Ok(Vec::new())) } else {
-            TransactionResult::new(Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::NotPermitted("transport fixture rejection".into()))))
-        }, completions: Vec::new(),
-    })).collect::<Vec<_>>();
-    let action = |id: &str| TriggerUseV1 {
-        trigger_id: id.parse().unwrap(),
-        registered_at_height: 0,
-        action_hash: Hash::new(id.as_bytes()),
-    };
-    let trace = |id: &TriggerId| {
-        TransactionResult::new(Ok(vec![DataTriggerStep {
-            id: id.clone(),
-            instructions: ExecutionStep(Vec::new().into()),
-        }]))
-    };
-    let completion = |id: &TriggerId| {
-        vec![InvocationCompletionV1 {
-            callback_index: 0,
-            trigger_id: id.clone(),
-            outcome: TriggerCompletedOutcome::Success,
-        }]
-    };
-    let pipeline = action("torii_proof_pipeline");
-    outputs.push(ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
-        result: trace(&pipeline.trigger_id),
-        completions: completion(&pipeline.trigger_id),
-        invocation: PipelineInvocationV1 {
-            event: PipelineEventPositionV1::BlockApproved,
-            candidate_index: 0,
-            trigger: pipeline,
-        },
-        failure_root: None,
-    }));
-    let timer = action("torii_proof_timer");
-    outputs.push(ExecutionOutputV1::Time(TimeExecutionOutputV1 {
-        result: trace(&timer.trigger_id),
-        completions: completion(&timer.trigger_id),
-        invocation: TimeInvocationV1 {
-            schedule_index: 0,
-            trigger: timer,
-            event: TimeEvent {
-                interval: TimeInterval {
-                    since_ms: 0,
-                    length_ms: 1,
-                },
-            },
-        },
-        failure_root: None,
-    }));
-    let limits = ExecutionOutputLimits {
-        max_outputs: 8,
-        max_output_bytes: 1024 * 1024,
-        max_total_output_bytes: 2 * 1024 * 1024,
-        max_executed_wire_bytes: 4 * 1024 * 1024,
-    };
-    block
-        .set_execution_outputs(
-            outputs,
-            3,
-            Default::default(),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            Vec::new(),
-            &limits,
-        )
-        .unwrap();
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
-    let artifact = torii_proof_finality_for_block(&block, *app.state.network_id_ref(), None);
-    let block = Arc::new(block);
-    app.kura.store_block(Arc::clone(&block)).unwrap();
-    let receipt = app.kura.store_v2_finality_artifact(&artifact).unwrap();
-    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
-    assert_eq!(receipt.context_id(), artifact.context_id());
-    record_committed_block_hash_for_test(&app, block.header(), block.hash());
-    (app, block, artifact)
+    assert_eq!(chain.commit(transactions), vec![true, false]);
+    let block = chain.committed(2).block().clone();
+    assert_eq!(block.network_entrypoint_count(), 2);
+    assert_eq!(block.execution_outputs().len(), 4);
+    assert!(matches!(
+        block.execution_outputs()[2],
+        iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(_)
+    ));
+    assert!(matches!(
+        block.execution_outputs()[3],
+        iroha_data_model::block::execution_output::ExecutionOutputV1::Time(_)
+    ));
+    let view = chain.state().view();
+    let checkpoint = build_checkpoint(&view, 1).unwrap();
+    let proof = build_proof(&view, 2).unwrap();
+    let verified = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &checkpoint,
+        &chain.network_id(),
+        &chain_id,
+    )
+    .unwrap()
+    .verify(&proof)
+    .unwrap();
+    assert_eq!(verified.block(), block.as_ref());
+    drop(view);
+    let mut app = mk_app_state_for_tests();
+    let unique = Arc::get_mut(&mut app).unwrap();
+    unique.state = chain.state().clone();
+    unique.kura = chain.kura().clone();
+    (app, block, verified)
 }

@@ -6360,7 +6360,10 @@ mod tests {
                 "preparation must not mutate registers"
             );
             assert!(
-                vm.memory.read_set().is_empty(),
+                vm.memory
+                    .try_read_log_snapshot()
+                    .expect("allocate read-log snapshot")
+                    .is_empty(),
                 "preparation must not mutate memory access tracking"
             );
             assert_eq!(
@@ -6793,7 +6796,8 @@ mod tests {
         let mut host =
             DefaultHost::with_private_inputs(vec![record]).expect("construct bounded host");
         let mut vm = IVM::new(u64::MAX);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         vm.set_register(10, 0);
         vm.set_register(11, PrivateInputKindV1::Int.tag());
         assert_eq!(

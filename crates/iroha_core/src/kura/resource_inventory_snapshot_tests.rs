@@ -141,10 +141,8 @@ fn resource_snapshot_rejects_every_deferred_or_unresolved_owner_state_after_init
 #[test]
 fn canonical_read_poison_invalidates_physical_generation_after_closing_consensus() {
     let kura = snapshot_owner_fixture();
-    let guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    kura.bind_consensus_output_guard(Arc::clone(&guard))
-        .unwrap();
-    assert!(guard.acquire().is_some());
+    let guard = kura.native_consensus_gate();
+    assert!(guard.enter().is_some());
     let generation = kura.resource_inventory.reconciliation_generation().unwrap();
     let scope = kura.physical_resource_scope().unwrap();
     let counts = scope.observe(kura.evidence_resource_limits()).unwrap();
@@ -158,8 +156,8 @@ fn canonical_read_poison_invalidates_physical_generation_after_closing_consensus
         .unwrap();
     let result: Result<()> = kura.consensus_storage_read(Err(Error::CanonicalStoragePoisoned));
     assert!(matches!(result, Err(Error::CanonicalStoragePoisoned)));
-    assert!(guard.restart_required());
-    assert!(guard.acquire().is_none());
+    assert!(guard.is_closed());
+    assert!(guard.enter().is_none());
     assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
     assert!(matches!(
         kura.resource_inventory_snapshot(),

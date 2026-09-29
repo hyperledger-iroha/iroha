@@ -44,7 +44,7 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     response
 }
 /// Batch preflight is side-effect free. After dispatch starts, every input has
-/// an explicit result; no aggregate rejection may conceal durable acceptance.
+/// an explicit result; no aggregate rejection may conceal queue acceptance.
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -52,7 +52,7 @@ async fn handler_post_transactions_batch(
 ) -> Result<Response, Error> {
     use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
     // This deadline stops new dispatch and bounds cancellable transport waits.
-    // A physical journal write already in progress cannot be preempted: retain
+    // Physical queue admission already in progress cannot be preempted: retain
     // its completed result, then decline to dispatch further fresh entries.
     #[cfg(feature = "connect")]
     let deadline = tokio::time::Instant::now() + TORII_PROXY_EXECUTION_BUDGET;
@@ -80,23 +80,9 @@ async fn handler_post_transactions_batch(
             );
             let mut prepared = Vec::with_capacity(transactions.len());
             // Authenticate the entire batch before any route selection or mutation.
-            // Canonical retries check their actual signature but not fresh TTL/limits.
+            // Every input retains its signature-bound original expiry and limits.
             for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
-                require_current_transaction_admission(transaction.signed().admission_intent())?;
                 let hash = transaction.hash();
-                #[cfg(feature = "connect")]
-                if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
-                    worker_app.state.network_id_ref(),
-                    transaction.signed(),
-                )? && let Some(response) = canonical_queue_plan_submission_response(
-                    &worker_app,
-                    &authenticated,
-                    true,
-                    ResponseFormat::Json,
-                ) {
-                    prepared.push((hash, PreparedTransactionIngress::Canonical(response)));
-                    continue;
-                }
                 let accepted =
                     routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
                         worker_app.state.clone(),
@@ -107,34 +93,25 @@ async fn handler_post_transactions_batch(
                     )?;
                 prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));
             }
-            // Keep route/policy preflight before the first durable write. Ordinary
+            // Keep route/policy preflight before the first queue mutation. Ordinary
             // inputs must be single-route; lifecycle controls need their own QC.
             prepared
                 .into_iter()
                 .map(|(hash, prepared)| {
                     let prepared = match prepared {
-                        #[cfg(feature = "connect")]
-                        PreparedTransactionIngress::Canonical(response) => {
-                            PreparedBatchEntry::Canonical(response)
-                        }
                         PreparedTransactionIngress::Fresh(transaction) => {
                             let prepared =
                                 prepare_fresh_transaction_ingress(&worker_app, transaction)?;
-                            #[cfg(feature = "connect")]
-                            if prepared.transaction.entrypoint().admission_intent()
-                                != TransactionAdmissionIntent::QueuePlanSynced
-                            {
-                                ordinary_transaction_ingress::authenticate(
-                                    &worker_app,
-                                    prepared.transaction.entrypoint(),
-                                    &prepared.routing_plan,
-                                )
-                                .map_err(|message| {
-                                    Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                                        message,
-                                    ))
-                                })?;
-                            }
+                            ordinary_transaction_ingress::authenticate(
+                                &worker_app,
+                                prepared.transaction.entrypoint(),
+                                &prepared.routing_plan,
+                            )
+                            .map_err(|message| {
+                                Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                                    message,
+                                ))
+                            })?;
                             PreparedBatchEntry::Fresh(prepared)
                         }
                     };
@@ -148,8 +125,6 @@ async fn handler_post_transactions_batch(
     let mut outcomes = Vec::with_capacity(prepared.len());
     for (hash, entry) in prepared {
         let response = match entry {
-            #[cfg(feature = "connect")]
-            PreparedBatchEntry::Canonical(response) => response,
             PreparedBatchEntry::Fresh(prepared) => {
                 #[cfg(feature = "connect")]
                 {
@@ -173,7 +148,7 @@ async fn handler_post_transactions_batch(
                         .await
                         {
                             Ok(result) => result.unwrap_or_else(IntoResponse::into_response),
-                            Err(_) => queue_plan_outcome_unknown_response(
+                            Err(_) => transaction_dispatch_outcome_unknown_response(
                                 entrypoint_hash,
                                 Some(hash),
                                 "batch deadline elapsed after this entry was dispatched",
@@ -211,8 +186,6 @@ async fn handler_post_transactions_batch(
 }
 
 enum PreparedBatchEntry {
-    #[cfg(feature = "connect")]
-    Canonical(Response),
     Fresh(PreparedFreshTransactionIngress),
 }
 
@@ -1087,11 +1060,10 @@ fn canonical_transaction_anchor(
 }
 fn canonical_transaction_outcome(
     state: &CoreState,
-    kura: &Kura,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<CanonicalTransactionOutcome>, Error> {
     canonical_transaction_outcome_with_authenticator(state, hash, |anchor| {
-        authenticate_canonical_transaction_outcome(kura, hash, anchor)
+        authenticate_canonical_transaction_outcome(state, hash, anchor)
     })
 }
 fn canonical_transaction_outcome_with_authenticator(
@@ -1117,7 +1089,7 @@ fn canonical_transaction_outcome_with_authenticator(
 // State captures and rechecks membership; Kura authenticates the exact finalized
 // execution wire without retaining a world-state read guard across storage I/O.
 fn authenticate_canonical_transaction_outcome(
-    kura: &Kura,
+    state: &CoreState,
     hash: &HashOf<SignedTransaction>,
     anchor: CanonicalTransactionAnchor,
 ) -> Result<CanonicalTransactionOutcome, Error> {
@@ -1125,7 +1097,7 @@ fn authenticate_canonical_transaction_outcome(
     let mut duplicate = false;
     let work = routing::app_query_limits().max_fetch_size;
     let header = iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
-        kura,
+        state,
         anchor.height,
         anchor.block_hash,
         work,
@@ -1165,18 +1137,17 @@ fn authenticate_canonical_transaction_outcome(
 }
 fn pipeline_status_from_state(
     state: &CoreState,
-    kura: &Kura,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<PipelineStatusEntry>, Error> {
-    canonical_transaction_outcome(state, kura, hash)
+    canonical_transaction_outcome(state, hash)
         .map(|outcome| outcome.map(CanonicalTransactionOutcome::into_pipeline_status_entry))
 }
 fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
-    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
-    if let Some(entry) = pipeline_status_from_state(&app.state, &app.kura, hash)? {
+    app.pipeline_status_cache.refresh_pending_blocks(&app.state);
+    if let Some(entry) = pipeline_status_from_state(&app.state, hash)? {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Ok(Some((entry, "state")));
@@ -1425,7 +1396,7 @@ fn canonical_carrier_hash_for_indexed_transaction_identity(
     let mut matched = None;
     let mut duplicate = false;
     iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
-        &app.kura,
+        &app.state,
         block_height,
         expected_hash,
         work,

@@ -998,7 +998,6 @@ mod tests {
             4
         );
         assert_eq!(shared.limits.pending_certified_merge_entry_capacity, 1_024);
-        assert_eq!(shared.limits.pending_queue_plan_admission_capacity, 1_024);
         assert_eq!(
             shared.limits.pending_control_sidecar_bytes,
             256 * 1024 * 1024
@@ -1260,11 +1259,6 @@ mod tests {
                 .expect("non-zero");
             }
         );
-        assert_config_change!("pending QueuePlan admissions", |config: &mut Sumeragi| {
-            config.limits.pending_queue_plan_admission_capacity =
-                NonZeroUsize::new(config.limits.pending_queue_plan_admission_capacity.get() + 1)
-                    .expect("non-zero");
-        });
         assert_config_change!("pending control-sidecar bytes", |config: &mut Sumeragi| {
             config.limits.pending_control_sidecar_bytes =
                 NonZeroUsize::new(config.limits.pending_control_sidecar_bytes.get() + 1)
@@ -1552,17 +1546,6 @@ mod tests {
             }
         );
         let mut config = default_v2_sumeragi();
-        config.limits.pending_queue_plan_admission_capacity =
-            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.pending_queue_plan_admission_capacity",
-                ..
-            }
-        );
-        let mut config = default_v2_sumeragi();
         config.limits.pending_control_sidecar_bytes =
             NonZeroUsize::new(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MIN - 1)
                 .expect("non-zero");
@@ -1685,7 +1668,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "5b26f8675654eb00ba24ff264288498fd93df739f5c412fe1fbe21c7e59134b3",
+            "dce8d3d33d72ba736401006ef023976f5800b28529336e0d7cbd9b6feef61515",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),

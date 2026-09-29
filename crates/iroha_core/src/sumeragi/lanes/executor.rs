@@ -182,6 +182,11 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
     }
 
     fn run(&mut self, block: &Block, block_hash: &Hash32, parent: ChainState) -> ExecOutcome {
+        // Lane instances admit batches; only G executes beacon/Parliament control.
+        // Match the independent lane evidence verifier before caching any admission.
+        if block.header.attest || !block.header.control_witness.is_empty() {
+            return ExecOutcome::Invalid;
+        }
         let admission = |executor: &Self| {
             admit(
                 &executor.record,
@@ -228,6 +233,30 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
 impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
     for LaneExecutor<A, C, T>
 {
+    fn build_control_witness(
+        &mut self,
+        _: &iroha_sumeragi::api::ControlWitnessContext,
+    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
+        // Lane validity requires EMPTY; no global control producer exists in this instance.
+        Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+    }
+
+    fn drive_control(
+        &mut self,
+        _: &iroha_sumeragi::api::ApplicationControlContext,
+    ) -> Result<Option<iroha_sumeragi::message::ApplicationControl>, PublicationError> {
+        Ok(None)
+    }
+
+    fn receive_application_control(
+        &mut self,
+        _: &iroha_sumeragi::types::PublicKey,
+        _: &iroha_sumeragi::message::ApplicationControl,
+    ) -> Result<(), PublicationError> {
+        // Discard unsolicited sideframes. They cannot create state or authorize lane work.
+        Ok(())
+    }
+
     fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
         if let Some(executed) = self.cache.get(block_hash) {
             return Some(ExecOutcome::Valid(executed.result));
@@ -486,6 +515,7 @@ mod tests {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer: 0,
                 skipped_leaders: Vec::new(),
+                control_witness: Default::default(),
                 attest: false,
             },
             payload,
@@ -524,6 +554,86 @@ mod tests {
             &NoStore,
         )
         .expect("recover")
+    }
+
+    #[test]
+    fn lanes_discard_global_control_and_refuse_control_bearing_admission() {
+        use iroha_sumeragi::{
+            api::{ApplicationControlContext, ControlWitnessContext},
+            message::ApplicationControl,
+            types::{ControlWitness, PublicKey},
+        };
+        let global = Arc::new(Global {
+            applied: AtomicU64::new(5),
+        });
+        let queue = Arc::new(Queue(Mutex::new(vec![tx(1)])));
+        let mut lane = executor(&global, Some(queue));
+        let context = ApplicationControlContext {
+            instance: Hash32([1; 32]),
+            epoch: lane.config.epoch.id,
+            height: 1,
+            parent_hash: lane.applied.block_hash,
+            parent_result: Hash32([0; 32]),
+        };
+        let witness = ControlWitnessContext {
+            height: context.height,
+            view: 0,
+            epoch: context.epoch,
+            parent_hash: context.parent_hash,
+            parent_result: context.parent_result,
+        };
+        assert_eq!(
+            lane.build_control_witness(&witness),
+            Ok((ControlWitness::empty(), false))
+        );
+        assert_eq!(lane.drive_control(&context), Ok(None));
+        let control = ControlWitness::try_from_slice(b"unsolicited global control").unwrap();
+        let sender = PublicKey::new(
+            record().committee[0]
+                .peer
+                .public_key()
+                .to_bytes()
+                .1
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            lane.receive_application_control(
+                &sender,
+                &ApplicationControl {
+                    context,
+                    bytes: control
+                }
+            ),
+            Ok(())
+        );
+        assert!(lane.cache.is_empty());
+        assert_eq!(lane.applied.height, 0);
+        let payload = lane.build(1, 0, 1 << 20, 100).0;
+        let valid = block(1, lane.applied.block_hash, payload);
+        let mut foreign = valid.clone();
+        foreign.header.control_witness = control;
+        let foreign_hash = foreign.hash(&FakeCrypto::new());
+        assert_eq!(
+            lane.execute(&foreign, &foreign_hash),
+            Some(ExecOutcome::Invalid)
+        );
+        assert_eq!(
+            lane.prepare(&foreign, &qc(&foreign, Hash32([0; 32]))),
+            Ok(None)
+        );
+        assert!(lane.cache.is_empty());
+        foreign = valid.clone();
+        foreign.header.attest = true;
+        assert_eq!(
+            lane.execute(&foreign, &foreign.hash(&FakeCrypto::new())),
+            Some(ExecOutcome::Invalid)
+        );
+        assert!(lane.cache.is_empty());
+        assert!(matches!(
+            lane.execute(&valid, &valid.hash(&FakeCrypto::new())),
+            Some(ExecOutcome::Valid(_))
+        ));
     }
 
     #[test]

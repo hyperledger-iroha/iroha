@@ -18,8 +18,6 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         native_context_archive_max_bytes:
@@ -96,7 +94,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         .expect("install Native AMX queue-plan journal");
     queue.complete_empty_startup_for_test(&state);
     let (authority, authority_keypair) = gen_account_in("wonderland");
-    let transaction = accepted_queue_plan_tx_with(
+    let transaction = accepted_tx_with(
         authority.clone(),
         &authority_keypair,
         &time_source,

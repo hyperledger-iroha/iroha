@@ -408,10 +408,6 @@ fn hash_input_sections(config: &actual::Root) -> Vec<(&'static str, String)> {
         ("nexus.commit", format!("{:#?}", nexus.commit)),
         ("nexus.da", format!("{:#?}", nexus.da)),
         (
-            "nexus.lane_relay_emergency",
-            format!("{:#?}", nexus.lane_relay_emergency),
-        ),
-        (
             "nexus.catalog",
             format!(
                 "{:#?}\n{:#?}\n{:#?}\n{:#?}",

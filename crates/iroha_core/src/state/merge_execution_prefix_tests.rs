@@ -62,7 +62,6 @@ fn merge_prefix_recorded_output_seal_retains_exact_sources_and_rejects_tampering
                 );
                 Ok::<_, String>(ExecutionOutputSealMetadata {
                     committed_fragment_count: block.committed_fragment_count().try_into().unwrap(),
-                    lane_finality_statements: Vec::new(),
                 })
             })
             .expect("prefix and complete internal tail use their one original output budget");
@@ -217,7 +216,6 @@ fn merge_prefix_recorder_reset_refuses_final_seal_on_consensus_stack() {
                             .committed_fragment_count()
                             .try_into()
                             .unwrap(),
-                        lane_finality_statements: Vec::new(),
                     })
                 })
                 .unwrap();

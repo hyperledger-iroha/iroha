@@ -13,9 +13,6 @@ struct LaneGeometryPublication {
     previous_lineage_root: Hash,
     current_lineage_root: Hash,
     replaced: BTreeSet<LaneId>,
-    certified: BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-    startup_owner: Option<Arc<()>>,
-    startup_attached: bool,
     transition_height: u64,
     cursors_updated: bool,
     publish_cursors: bool,
@@ -35,22 +32,18 @@ fn geometry_lease_error(error: crate::kura::KuraPublicationPreparationError) -> 
 impl State {
     fn resume_lane_geometry_publication(
         &self,
-        request: &crate::kura::ReplayGeometryBindingRequest<'_>,
+        request: &crate::kura::GeometryBindingRequest<'_>,
         replaced: &BTreeSet<LaneId>,
-        certified: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-        mut startup: Option<&mut crate::kura::StartupReplayGeometryTransition>,
         mut releases: Option<&mut LaneLifecycleReleases<'_>>,
     ) -> Result<(), LaneLifecycleError> {
+        // TODO(S6): native close/release authority must precede physical retirement.
+        // Refuse before retaining a tiered plan or claiming any raw storage owner.
+        request
+            .validate_additions_only(replaced)
+            .map_err(LaneLifecycleError::GeometryStorage)?;
         let publish_cursors = releases.is_some();
         let mut slot = self.geometry_publication.lock();
         if let Some(original) = slot.as_ref() {
-            let startup_matches = match (&original.startup_owner, startup.as_deref()) {
-                (None, None) => true,
-                (Some(owner), Some(transition)) => {
-                    Arc::ptr_eq(owner, &transition.original_owner_identity())
-                }
-                _ => false,
-            };
             if original.publish_cursors != publish_cursors
                 || !lane_config_entries_match(&original.previous, request.previous)
                 || !lane_config_entries_match(&original.current, request.updated)
@@ -62,31 +55,19 @@ impl State {
                 || original.current_lineage_root != request.updated_lineage_root
                 || original.transition_height != request.transition_height
                 || original.replaced != *replaced
-                || original.certified != *certified
-                || !startup_matches
                 || original
                     .raw
                     .as_ref()
-                    .is_some_and(|raw| !raw.matches_request(request, replaced, certified))
+                    .is_some_and(|raw| !raw.matches_request(request, replaced))
             {
                 return Err(LaneLifecycleError::Storage(
                     "another exact lane geometry operation is already retained".to_owned(),
                 ));
             }
         } else {
-            if startup.is_some() && !certified.is_empty() {
-                return Err(LaneLifecycleError::Storage(
-                    "startup replay cannot replace live certified drain ownership".to_owned(),
-                ));
-            }
             *slot = Some(LaneGeometryPublication {
                 raw: None,
                 tiered: None,
-                certified: certified.clone(),
-                startup_owner: startup
-                    .as_deref()
-                    .map(|transition| transition.original_owner_identity()),
-                startup_attached: false,
                 previous: request.previous.clone(),
                 current: request.updated.clone(),
                 previous_incarnations: request.previous_incarnations.clone(),
@@ -127,20 +108,13 @@ impl State {
                 .map_err(geometry_lease_error)?;
             original.raw = Some(
                 lease
-                    .begin_raw_geometry_attempt(request, replaced, certified)
+                    .begin_raw_geometry_attempt(request, replaced)
                     .map_err(LaneLifecycleError::GeometryStorage)?,
             );
         }
         let raw = original.raw.as_mut().ok_or_else(|| {
             LaneLifecycleError::Storage("missing retained raw geometry owner".to_owned())
         })?;
-        if !original.startup_attached {
-            if let Some(startup) = startup.as_deref_mut() {
-                raw.attach_startup_transition(startup)
-                    .map_err(LaneLifecycleError::GeometryStorage)?;
-            }
-            original.startup_attached = true;
-        }
         // Catalog retry must not send an already chosen publication direction
         // through apply again. Its completed tiered plan is retained too.
         if !matches!(
@@ -188,7 +162,6 @@ impl State {
         activation_heights: &BTreeMap<LaneId, u64>,
         lineage_root: Hash,
         configured_baseline: Option<Hash>,
-        startup: Option<&mut crate::kura::StartupReplayGeometryTransition>,
     ) -> Result<(), LaneGeometryCatalogPublicationFailure> {
         let finish = || -> Result<(), LaneLifecycleError> {
             let mut slot = self.geometry_publication.lock();
@@ -207,7 +180,6 @@ impl State {
                 || original.current_incarnations != *incarnations
                 || original.current_activation_heights != *activation_heights
                 || original.current_lineage_root != lineage_root
-                || !raw.matches_startup_transition(startup.as_deref())
                 || !original
                     .tiered
                     .as_ref()
@@ -225,10 +197,6 @@ impl State {
                 .map_err(geometry_lease_error)?;
             if raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished {
                 raw.publish_catalog_under(&lease, configured_baseline)
-                    .map_err(LaneLifecycleError::GeometryStorage)?;
-            }
-            if let Some(startup) = startup {
-                raw.return_startup_namespace_receipts(startup)
                     .map_err(LaneLifecycleError::GeometryStorage)?;
             }
             *slot = None;
@@ -266,7 +234,6 @@ impl State {
             || original.previous_lineage_root != lineage_root
             || original.replaced != *replaced
             || original.transition_height != transition_height
-            || original.startup_owner.is_some()
         {
             return Err(LaneLifecycleError::Storage(
                 "rollback differs from its original geometry owner".to_owned(),

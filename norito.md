@@ -279,6 +279,14 @@ charges a compressed frame's declared uncompressed length before reserving or
 decompressing it, so a tiny frame cannot request an allocation up to the global
 archive ceiling.
 
+`ArchiveView::decode_exact_with<T, R, F>` keeps `T` as the original wire
+schema and padding owner while permitting a callback to return a different
+result `R`, such as a borrowed payload view with prepaid field allocations.
+The same scoped flags, payload-derived limits, stricter outer limits and exact
+consumption checks apply. The callback must still validate its field structure;
+framing alone grants no canonical-value or finality authority. This API changes
+no wire bytes or layout.
+
 Hosts decoding untrusted data with narrower semantic bounds must additionally
 use `decode_from_bytes_with_limits` (or `decode_from_reader_with_limits`) and an
 explicit `DecodeLimits` value. The explicit byte-slice APIs enter a private
@@ -385,7 +393,7 @@ IEEE-754 bits when decoded again.
 
 ## Transaction Payload Layout
 
-`TransactionPayload` is the ten-field canonical first-release struct. Its fields are encoded
+`TransactionPayload` is the nine-field canonical first-release struct. Its fields are encoded
 in this exact order, with the active per-field length-prefix rules:
 
 ```text
@@ -396,23 +404,21 @@ instructions
 time_to_live_ms
 nonce
 fee_payment
-admission_intent
 metadata
 attachments
 ```
 
 `domain` is either the exact deployment `NetworkId` or the genesis-only marker.
-`fee_payment` is required; it is not an optional extension and it precedes the
-required `admission_intent` on wire. It contains either an authority payer or one exact sponsor
+`fee_payment` is required and immediately precedes `metadata` on wire. It contains either an authority payer or one exact sponsor
 program and immutable revision, followed by canonically ordered charge limits
 and the optional positive executable gas bound. The retired transaction
 metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are not alternate
 encodings of this field and are rejected by transaction construction and
-admission. `admission_intent` is signature-bound and is exactly `Ordinary` or
-`QueuePlanSynced`; public Torii submission requires `QueuePlanSynced`.
+admission. Native queue admission is the sole transaction path; the retired
+`admission_intent` field has no wire slot or decoder.
 `attachments` is the ordered optional proof-attachment list and remains part of
 the signed transaction identity. SDK encoders and fixture exporters must emit
-this ten-field V1 layout. Missing fields, unknown intent tags, and unknown JSON
+this nine-field V1 layout. Missing fields, retired extra slots, and unknown JSON
 fields fail closed; there is no metadata-marker or legacy payload fallback.
 `time_to_live_ms` retains its canonical option discriminant so a malformed
 signed payload can be decoded into a typed admission rejection, but
@@ -559,8 +565,11 @@ the inner execution-call hash.
 
 `BlockResult` contains, in order, `outputs`, `output_merkle`,
 `committed_fragment_count`, `fastpq_transcripts`, `axt_envelopes`,
-`axt_policy_snapshot`, `axt_transitioned_dataspaces`, and
-`lane_finality_statements`. All fields are required. `outputs` is the sole
+`axt_policy_snapshot`, and `axt_transitioned_dataspaces`. All seven fields are
+required. The retired lane-finality-statement field is absent from both the
+canonical binary layout and JSON; trailing old fields are rejected, with no
+fallback decoder. Native finality authenticates the actual execution through
+its canonical result and complete executed wire. `outputs` is the sole
 `Vec<ExecutionOutputV1>`: Network rows precede Pipeline rows, followed by Time
 rows. Each owns its complete `TransactionResult` (including independent-batch
 receipts) and its actual callback completions. Network rows explicitly join an input

@@ -81,9 +81,9 @@ public enum KagemushaTestnetValueAdmissionBridgeV1 {
     do {
       var reader = CanonicalNoritoReader(data: frame.payload)
       var fields = [Data]()
-      fields.reserveCapacity(17)
+      fields.reserveCapacity(19)
       for length in [2, 1, 32, 32, 32, 32, 32, 4, 32, 32, 32, 16,
-                     32, 32, 32, 8, 32] {
+                     32, 32, 32, 8, 32, 32, 32] {
         let field = try reader.readCompactField()
         guard field.count == length else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
         fields.append(field)
@@ -105,9 +105,9 @@ public enum KagemushaTestnetValueAdmissionBridgeV1 {
       let blockHeight = try heightReader.readUInt64LE()
       let nonzero: (Data) -> Bool = { $0.contains(where: { $0 != 0 }) }
       guard version == 1, fields[1][fields[1].startIndex] == 0,
-        assetScale <= 28, blockHeight > 0, !amount.isZero,
+        assetScale <= 28, blockHeight > 1, !amount.isZero,
         [fields[2], fields[3], fields[4], fields[5], fields[6], fields[8],
-         fields[9], fields[10], fields[12], fields[13], fields[14], fields[16]].allSatisfy(nonzero),
+         fields[9], fields[10], fields[12], fields[13], fields[14], fields[16], fields[17], fields[18]].allSatisfy(nonzero),
         fields[2] != fields[3], fields[2] != fields[4], fields[3] != fields[4],
         fields[5] != fields[8], fields[9] == operationID
       else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }

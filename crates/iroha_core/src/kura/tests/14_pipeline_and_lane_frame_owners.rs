@@ -27,7 +27,7 @@ where
 #[test]
 fn pipeline_and_fastpq_owner_frames_preserve_recovery_metadata() {
     use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let tx_hash = HashOf::from_untyped_unchecked(Hash::new(b"pipeline-frame-entrypoint"));
     let tx = PipelineTxSnapshot::compact(tx_hash, 3, 7);
     let decoded = assert_pipeline_artifact_frame_bytes(&tx);
@@ -328,7 +328,7 @@ fn prune_and_merge_carrier_frame_owners_preserve_retained_coordinates() {
     use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
     let intent = canonical_prune_intent_artifact_fixture();
     check(&intent, "iroha_core::kura::KuraPruneIntentV3");
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let _genesis = blocks.next();
     let block = blocks.next();
     let entry = sample_merge_entry_for_block(1, &block);

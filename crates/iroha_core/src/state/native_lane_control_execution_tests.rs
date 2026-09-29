@@ -76,9 +76,6 @@ fn native_control_execution_fixture_from_economic(
                 7u32,
                 economic.destination.account().clone(),
             )])
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
             .sign(signer.private_key()),
     );
     let (binding, control) = queue_plan_admission_certificate_for_entrypoint_state_test(
@@ -121,7 +118,6 @@ fn native_control_execution_fixture_from_economic(
             Vec::new(),
             AxtPolicySnapshot::default(),
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();
@@ -614,7 +610,7 @@ state_test! { sync native_recorded_control_admits_same_carrier_input_without_exe
     builder.set_ttl(Duration::from_secs(1));
     let entrypoint = TransactionEntrypoint::External(builder.with_instructions([
         Transfer::asset_quantity(fixture.economic.source.clone(), 11u32, fixture.economic.destination.account().clone()),
-    ]).with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+    ])
         .sign(signer.private_key()));
     let routing = fixture.later.routing_plan().unwrap();
     let (binding, control) = queue_plan_admission_certificate_for_entrypoint_state_test(

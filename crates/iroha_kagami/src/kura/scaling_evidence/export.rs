@@ -18,8 +18,7 @@ pub(crate) mod stopped_tip_command;
 
 use super::*;
 use iroha_core::kura::{
-    CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceError, CanonicalKuraEvidenceLimits,
-    CanonicalKuraEvidenceReader,
+    CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits, CanonicalKuraEvidenceReader,
 };
 use std::path::Path;
 
@@ -196,15 +195,14 @@ fn projection_row(row: &ExportRowV1) -> Result<String> {
 /// Export one immutable disk interval using independent typed launch authority.
 ///
 /// All supplied counts, byte limits and digest bindings are checked before Core
-/// opens any path. Core derives requests from actual carrier references, scans the
-/// complete log exactly once, and rechecks all retained identities at finish.
+/// opens any path. Core reads the original four canonical files and rechecks all
+/// retained identities at finish.
 /// Neither provisional callback rows nor an output sink escape on any failure.
 #[allow(clippy::too_many_arguments)]
 pub fn export_from_kura(
     plan: TrustedRunPlan,
     limits: VerificationLimits,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     bindings: &[HeightInputBinding],
     supplied: Vec<SuppliedHeightEvidence>,
@@ -213,7 +211,6 @@ pub fn export_from_kura(
         plan,
         limits,
         block_store,
-        merge_log,
         reader_limits,
         bindings,
         supplied,
@@ -226,7 +223,6 @@ fn export_with_finish_hook(
     plan: TrustedRunPlan,
     limits: VerificationLimits,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     bindings: &[HeightInputBinding],
     supplied: Vec<SuppliedHeightEvidence>,
@@ -265,15 +261,14 @@ fn export_with_finish_hook(
         reader_limits.max_output_bytes > 0 && reader_limits.max_output_bytes <= remaining,
         "reader returned-byte reservation exceeds remaining input"
     );
-    // Core separately bounds its complete cold journal/log scan and decoder work.
+    // Core separately bounds its complete cold journal scan and decoder work.
     // Retained canonical bytes and all adapter copies use the smaller run budget.
     ensure!(
         reader_limits.max_store_data_bytes <= limits.input_bytes
-            && reader_limits.max_merge_log_bytes <= limits.input_bytes
             && reader_limits.max_decode_allocation_bytes as u64 <= limits.admitted_proof_bytes * 2,
         "reader work bound exceeds admitted run scope"
     );
-    let mut reader = CanonicalKuraEvidenceReader::open(block_store, merge_log, reader_limits)?;
+    let mut reader = CanonicalKuraEvidenceReader::open(block_store, reader_limits)?;
     let mut heights = Vec::with_capacity(supplied.len());
     for input in supplied {
         let wire = reader.read_carrier(input.height)?;
@@ -298,13 +293,6 @@ fn export_with_finish_hook(
             queries: input.queries,
         });
     }
-    // Complete the same bounded whole-log integrity scan. Current Native carriers
-    // never request a retired merge transcript, including when the log is empty.
-    reader.scan_merge_entries(&[], |_, _, _| {
-        Err(CanonicalKuraEvidenceError::Invalid(
-            "unexpected Native merge selection",
-        ))
-    })?;
     let authenticated = authenticate(verifier, &heights)?;
     before_disk_finish();
     let completed = reader.finish()?;

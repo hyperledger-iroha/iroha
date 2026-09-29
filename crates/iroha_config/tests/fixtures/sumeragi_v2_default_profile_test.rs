@@ -35,7 +35,11 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 4);
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 8);
+    assert_eq!(
+        defaults::sumeragi::PROTOCOL_VERSION,
+        u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
+    );
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);

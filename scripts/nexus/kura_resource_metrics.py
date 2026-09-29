@@ -2,7 +2,7 @@
 
 This parses a retained response; it does not authenticate an endpoint, sample
 RSS, align clocks, or qualify a scaling trial. Those belong to the probe owner.
-The source-owned projection has 23 fixed families and 125 success samples, or
+The source-owned projection has 10 fixed families and 60 success samples, or
 exactly two unavailable samples. No previous observation is accepted as input.
 """
 from __future__ import annotations
@@ -24,17 +24,20 @@ MAX_NUMERIC_TOKEN_BYTES = 128
 MAX_LABEL_TOKEN_BYTES = 256
 MAX_LABEL_VALUE_BYTES = 128
 MAX_DECIMAL_EXPONENT = 1024
-MAX_TARGET_ROWS = 125
-REVIEWED_PROJECTION_SHA256 = "94cf69104620a7efaecbd860bd735cd88192e2dd30d6ed03c6aa9ac3141448c6"
+MAX_TARGET_ROWS = 60
+REVIEWED_PROJECTION_SHA256 = "7cd6053a38063e3e2dfcb5393c8f71ba00b6e75f86c740aae8420fda5546fa8e"
 
 FAMILIES = (
-    "resident_canonical", "resident_transaction", "resident_merge", "resident_carrier",
-    "resident_replica", "resident_verification", "resident_frontier", "resident_queue",
-    "canonical_index", "canonical_hashes", "pipeline_index", "ownership_index",
-    "certified_index", "execution_input_index", "execution_preflight_index",
-    "application_receipt_index", "merge_bundle_index", "canonical_replica_index",
-    "merge_carrier_record", "native_latest_record", "query_marker_records",
-    "evidence_key_records", "storage_bytes",
+    'resident_canonical',
+    'resident_transaction',
+    'resident_frontier',
+    'resident_queue',
+    'canonical_index',
+    'canonical_hashes',
+    'pipeline_index',
+    'query_marker_records',
+    'evidence_key_records',
+    'storage_bytes',
 )
 USAGE_FIELDS = (
     "resident_associations", "persisted_entries", "index_bytes", "temporary_index_bytes", "storage_bytes",
@@ -343,7 +346,7 @@ def parse_kura_resource_metrics(raw: bytes) -> Observation:
     expected = {(name, None) for name in SCALARS}
     expected.add(("status", "available"))
     expected.update((field, family) for field in USAGE_FIELDS for family in FAMILIES)
-    if set(samples) != expected or len(samples) != 125:
+    if set(samples) != expected or len(samples) != MAX_TARGET_ROWS:
         _fail(0, "incomplete success vector or unexpected target samples")
     components = tuple(FamilyUsage(family, Usage(*(samples[(field, family)] for field in USAGE_FIELDS))) for family in FAMILIES)
     totals = tuple(samples[(field + "_sum", None)] for field in USAGE_FIELDS)

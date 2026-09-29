@@ -81,7 +81,7 @@ impl PreparedGeometryJournalTransition {
         journal: LaneGeometryJournal,
         record_index: usize,
     ) -> Result<Self> {
-        // Authenticate retained checkpoint/evidence before any transition write.
+        // Authenticate retained history and exact bindings before any transition write.
         // Changing the selected phase below cannot introduce different evidence.
         kura.validate_lane_geometry_journal(&journal)?;
         let mut writer = Some(RetainedGeometryJournal::capture(
@@ -238,18 +238,7 @@ impl PreparedGeometryJournalTransition {
             bytes = bytes.checked_add(writer.retained_allocation_bytes()?)?;
         }
         for operation in &self.operations {
-            for path in [
-                &operation.archived_blocks_path,
-                &operation.archived_merge_path,
-                &operation.unpublished_blocks_path,
-                &operation.unpublished_merge_path,
-            ] {
-                bytes = bytes.checked_add(path.capacity())?;
-            }
-            for binding in operation.previous.iter().chain(operation.updated.iter()) {
-                bytes = bytes.checked_add(binding.blocks_path.capacity())?;
-                bytes = bytes.checked_add(binding.merge_path.capacity())?;
-            }
+            bytes = bytes.checked_add(operation.created.blocks_path.capacity())?;
         }
         u64::try_from(bytes).ok()
     }

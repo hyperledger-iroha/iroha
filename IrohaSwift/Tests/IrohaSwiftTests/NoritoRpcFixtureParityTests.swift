@@ -22,7 +22,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeBridgeABIVersion(),
             23,
-            "required transaction fixture decode must execute through ABI-24"
+            "required transaction fixture decode must execute through ABI-25"
         )
         for name in loader.names {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
@@ -232,7 +232,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
                 "payer": "authority",
                 "value": ["charge_limits": [], "gas_limit": NSNull()],
             ],
-            "admission_intent": ["intent": "ordinary", "value": NSNull()],
+
             "metadata": [:],
             "nonce": NSNull(),
             "time_to_live_ms": 100_000,
@@ -281,7 +281,6 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
                 "payer": "authority",
                 "value": ["charge_limits": [], "gas_limit": gasLimit],
             ]
-            payload["admission_intent"] = ["intent": "ordinary", "value": NSNull()]
             payload["metadata"] = [String: Any]()
             var fixture = common
             fixture["name"] = "schema-policy"
@@ -330,34 +329,19 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(instructions))
         )
 
-        var missingAdmission = instructions
-        var missingAdmissionPayload = try XCTUnwrap(missingAdmission["payload"] as? [String: Any])
-        missingAdmissionPayload.removeValue(forKey: "admission_intent")
-        missingAdmission["payload"] = missingAdmissionPayload
-        XCTAssertThrowsError(
-            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(missingAdmission))
-        )
-
-        var wrongAdmission = instructions
-        var wrongAdmissionPayload = try XCTUnwrap(wrongAdmission["payload"] as? [String: Any])
-        wrongAdmissionPayload["admission_intent"] = [
-            "intent": "queue_plan_synced", "value": NSNull(),
-        ]
-        wrongAdmission["payload"] = wrongAdmissionPayload
-        XCTAssertThrowsError(
-            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(wrongAdmission))
-        )
-
-        for invalidAdmission in [
-            ["intent": "ordinary", "value": 0] as [String: Any],
-            ["intent": "ordinary", "value": NSNull(), "legacy": true],
-        ] {
-            let invalid = try replacingPayload(instructions) { payload in
-                payload["admission_intent"] = invalidAdmission
+        for field in ["admission_intent", "admissionIntent"] {
+            for retiredValue in [
+                ["intent": "ordinary", "value": NSNull()] as [String: Any],
+                ["intent": "queue_plan_synced", "value": NSNull()],
+                ["intent": "ordinary", "value": 0],
+            ] {
+                let invalid = try replacingPayload(instructions) { payload in
+                    payload[field] = retiredValue
+                }
+                XCTAssertThrowsError(
+                    try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(invalid))
+                )
             }
-            XCTAssertThrowsError(
-                try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(invalid))
-            )
         }
 
         let missingGas = try replacingPayload(instructions) { payload in
@@ -595,7 +579,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeSignedTransactionDecodeStatus(signedBytes),
             -2,
-            "ABI-24 must reject the unversioned bare signed transaction fixture: \(name)"
+            "ABI-25 must reject the unversioned bare signed transaction fixture: \(name)"
         )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)
@@ -611,7 +595,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         }
         let json = try XCTUnwrap(
             decodedJson,
-            "ABI-24 native bridge must decode every required signed transaction fixture: \(name)"
+            "ABI-25 native bridge must decode every required signed transaction fixture: \(name)"
         )
         guard let payload = decodeSignedPayload(from: json) else {
             return XCTFail("failed to decode signed transaction JSON for \(name)")
@@ -843,7 +827,7 @@ private struct NoritoRpcFixtureLoader {
             case nonce
             case executable
             case feePayment = "fee_payment"
-            case admissionIntent = "admission_intent"
+
             case metadata
         }
 
@@ -852,7 +836,7 @@ private struct NoritoRpcFixtureLoader {
                 decoder,
                 [
                     "authority", "network_id", "creation_time_ms", "executable", "fee_payment",
-                    "admission_intent", "metadata", "nonce", "time_to_live_ms",
+                    "metadata", "nonce", "time_to_live_ms",
                 ],
                 context: "shared transaction payload"
             )
@@ -885,7 +869,6 @@ private struct NoritoRpcFixtureLoader {
             }
             executable = try container.decode(SharedExecutable.self, forKey: .executable)
             let feePayment = try container.decode(SharedFeePayment.self, forKey: .feePayment)
-            _ = try container.decode(SharedAdmissionIntent.self, forKey: .admissionIntent)
             guard !executable.requiresGasLimit || feePayment.gasLimit != nil else {
                 throw DecodingError.dataCorrupted(
                     .init(
@@ -898,30 +881,6 @@ private struct NoritoRpcFixtureLoader {
         }
     }
 
-    private struct SharedAdmissionIntent: Decodable {
-        private enum CodingKeys: String, CodingKey {
-            case intent
-            case value
-        }
-
-        init(from decoder: Decoder) throws {
-            try requireExactFixtureKeys(
-                decoder,
-                ["intent", "value"],
-                context: "shared admission intent"
-            )
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            let intent = try container.decode(String.self, forKey: .intent)
-            guard intent == "ordinary", try container.decodeNil(forKey: .value) else {
-                throw DecodingError.dataCorrupted(
-                    .init(
-                        codingPath: decoder.codingPath,
-                        debugDescription: "shared admission_intent must be exactly ordinary/null"
-                    )
-                )
-            }
-        }
-    }
 
     private enum SharedExecutable: Decodable {
         case instructions([SharedInstruction])

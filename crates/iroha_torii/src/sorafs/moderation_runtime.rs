@@ -827,21 +827,13 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         })?;
         let routing_plan = self
             .queue
-            .durable_plan_admission_claim_with_state(&accepted, self.state.as_ref())
-            .map_err(|_| ModerationStrictIngressFailureV1::Unavailable)?
-            .map_or_else(
-                || {
-                    self.queue
-                        .route_plan_with_state(&accepted, self.state.as_ref())
-                },
-                |claim| Ok(claim.routing_plan),
-            )
+            .route_plan_with_state(&accepted, self.state.as_ref())
             .map_err(|_| ModerationStrictIngressFailureV1::Unavailable)?;
-        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
             Arc::clone(&self.queue),
             Arc::clone(&self.state),
             accepted,
-            routing_plan,
+            Some(routing_plan),
         ) {
             Ok(_) => Ok(ModerationStrictIngressReceiptV1 {
                 transaction_id,
@@ -861,10 +853,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                 | iroha_core::queue::Error::MaximumTransactionsPerUser => {
                     Err(ModerationStrictIngressFailureV1::Backpressure)
                 }
-                iroha_core::queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-                    Err(ModerationStrictIngressFailureV1::Ambiguous)
-                }
-                iroha_core::queue::Error::PlanJournalDurabilityRejected { .. }
+                iroha_core::queue::Error::AdmissionInvariant { .. }
                 | iroha_core::queue::Error::KagemushaV1OperationIndexInconsistent { .. }
                 | iroha_core::queue::Error::UnresolvedRoute { .. } => {
                     Err(ModerationStrictIngressFailureV1::Unavailable)

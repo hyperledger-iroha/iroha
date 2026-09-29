@@ -1,12 +1,8 @@
 //! Typed lane-route authority resolution results.
 
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::collections::BTreeSet;
 
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
-};
+use iroha_data_model::{NetworkId, account::AccountId};
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
@@ -731,111 +727,6 @@ pub(super) fn resolve_from_sources(
         fault_tolerance,
         validators,
     ))
-}
-
-/// Recover the unique descriptor committee bound by one finalized execution context.
-///
-/// Ordinary lane work commits its descriptor through `lane_payload_ownerships`,
-/// while autonomous work commits the same authority inside a producer-authenticated
-/// `autonomous_lane_payloads` envelope. Historical authority must recognize both
-/// canonical carrier forms without falling back to mutable live state.
-pub(crate) fn authenticated_committee_in_finalized_bundle(
-    bundle: &BlockExecutionContextBundle,
-    descriptor: &LaneBlockDescriptorV1,
-    network_id: NetworkId,
-    epoch: u64,
-) -> Result<Vec<PeerId>, &'static str> {
-    if descriptor.computed_descriptor_hash() != descriptor.descriptor_hash {
-        return Err("lane descriptor hash is not canonical");
-    }
-    let mut exact = None;
-    let mut bind = |validators: &[PeerId]| {
-        if exact.is_some() {
-            return Err("finalized proposal-height block ambiguously binds this lane descriptor");
-        }
-        exact = Some(validators.to_vec());
-        Ok(())
-    };
-    for ownership in bundle.lane_payload_ownerships.iter().filter(|ownership| {
-        ownership.proposal_height == descriptor.proposal_height
-            && ownership.lane_id == descriptor.lane_id
-            && ownership.dataspace_id == descriptor.dataspace_id
-            && ownership.lane_incarnation == descriptor.lane_incarnation
-            && ownership.lane_block_height == descriptor.lane_block_height
-            && ownership.lane_block_view == descriptor.lane_block_view
-            && ownership.subject_hash == descriptor.subject_hash
-            && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
-            && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
-            && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
-            && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
-            && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
-            && ownership.previous_lane_block_descriptor_hash
-                == descriptor.previous_lane_block_descriptor_hash
-            && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
-            && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
-            && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
-            && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
-            && ownership.qc_mode_tag == descriptor.qc_mode_tag
-            && ownership.validate_replay_material().is_ok()
-    }) {
-        bind(&ownership.lane_block_descriptor_validator_set)?;
-    }
-    for envelope in &bundle.autonomous_lane_payloads {
-        let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
-            envelope, network_id, epoch,
-        )
-        .map_err(
-            |_| "finalized proposal-height block contains an invalid autonomous lane payload",
-        )?;
-        if payload.origin_proposal.descriptor == *descriptor {
-            bind(&payload.origin_proposal.descriptor.validator_set)?;
-        }
-    }
-    drop(bind);
-    exact.ok_or("finalized proposal-height block does not bind this lane descriptor")
-}
-
-/// Recover a lane descriptor's immutable committee from the globally
-/// finalized block that authenticated its proposal-height ownership.
-///
-/// This is deliberately separate from live authority resolution: current
-/// manifest and stake records cannot reconstruct a historical committee
-/// after churn.
-pub(super) fn authenticated_committee_for_descriptor(
-    state: &State,
-    descriptor: &LaneBlockDescriptorV1,
-) -> Result<Vec<PeerId>, &'static str> {
-    if descriptor.computed_descriptor_hash() != descriptor.descriptor_hash {
-        return Err("lane descriptor hash is not canonical");
-    }
-    let height = usize::try_from(descriptor.proposal_height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or("lane proposal height does not fit committed block storage")?;
-    let block = state
-        .block_by_height(height)
-        .ok_or("lane proposal-height block is absent or unauthenticated")?;
-    let (finalized_header, finality) = state
-        .kura
-        .v2_finality_artifact_with_header(descriptor.proposal_height)
-        .map_err(|_| "lane proposal-height finality cannot be verified")?
-        .ok_or("lane proposal-height V2 finality is absent")?;
-    if finalized_header != block.header()
-        || finality.block_hash != block.hash()
-        || finality.height_context.height != descriptor.proposal_height
-        || finality.height_context.network_id != state.network_id
-    {
-        return Err("lane proposal-height block and V2 finality disagree");
-    }
-    let bundle = block
-        .execution_context()
-        .ok_or("lane proposal-height block has no execution context")?;
-    authenticated_committee_in_finalized_bundle(
-        bundle,
-        descriptor,
-        state.network_id,
-        finality.height_context.epoch,
-    )
 }
 
 #[cfg(test)]

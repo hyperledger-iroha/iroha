@@ -247,10 +247,6 @@ seiyaku OwnerPermission {
         authority.clone(),
     )])
     .sign(ALICE_KEYPAIR.private_key());
-    assert_eq!(
-        grant.admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    );
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(grant.hash_as_entrypoint()));
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, grant, &mut cache)

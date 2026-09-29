@@ -55,7 +55,6 @@ import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.instructions.GovernanceInstructionUtils
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.alias.AliasSetupPlanRequestV1
@@ -1319,7 +1318,7 @@ class HttpClientTransport private constructor(
      *
      * The intent must contain the exact resolved invocation and complete final transaction
      * metadata. Torii may enrich fee charge maxima, but cannot select any other signed field.
-     * The canonical payload must already use QueuePlanSynced before signing material is returned.
+     * The complete canonical payload is verified before signing material is returned.
      */
     fun prepareContractCall(
         authority: String,
@@ -1566,21 +1565,21 @@ class HttpClientTransport private constructor(
     fun requestParliamentTimedOvnCastingProofUntilTerminalV1(
         ballotAttemptId: String,
         initialTrustedCheckpointHeight: BigInteger,
-        initialTrustedCheckpointContextId: ByteArray,
+        initialTrustedCheckpointNorito: ByteArray,
         canonicalAuth: ToriiCanonicalRequestAuth,
         pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
         checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
     ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> {
         val initialHeight =
             ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(initialTrustedCheckpointHeight)
-        val initialContext = requireCastingCheckpointContext(initialTrustedCheckpointContextId)
+        val initialCheckpoint = requireCastingCheckpoint(initialTrustedCheckpointNorito)
         require(canonicalAuth.timestampMs == null && canonicalAuth.nonce == null) {
             "casting-proof paging requires unpinned canonical authentication"
         }
         return requestParliamentTimedOvnCastingProofPageV1(
             ballotAttemptId = ballotAttemptId,
             currentHeight = initialHeight,
-            currentContext = initialContext,
+            currentCheckpoint = initialCheckpoint,
             initialHeight = initialHeight,
             canonicalAuth = canonicalAuth,
             pageVerifier = pageVerifier,
@@ -1593,7 +1592,7 @@ class HttpClientTransport private constructor(
     fun requestParliamentTimedOvnCastingProofUntilTerminalV1(
         ballotAttemptId: String,
         initialTrustedCheckpointHeight: Long,
-        initialTrustedCheckpointContextId: ByteArray,
+        initialTrustedCheckpointNorito: ByteArray,
         canonicalAuth: ToriiCanonicalRequestAuth,
         pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
         checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
@@ -1601,7 +1600,7 @@ class HttpClientTransport private constructor(
         requestParliamentTimedOvnCastingProofUntilTerminalV1(
             ballotAttemptId,
             BigInteger.valueOf(initialTrustedCheckpointHeight),
-            initialTrustedCheckpointContextId,
+            initialTrustedCheckpointNorito,
             canonicalAuth,
             pageVerifier,
             checkpointPersister,
@@ -1610,7 +1609,7 @@ class HttpClientTransport private constructor(
     private fun requestParliamentTimedOvnCastingProofPageV1(
         ballotAttemptId: String,
         currentHeight: BigInteger,
-        currentContext: ByteArray,
+        currentCheckpoint: ByteArray,
         initialHeight: BigInteger,
         canonicalAuth: ToriiCanonicalRequestAuth,
         pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
@@ -1630,12 +1629,11 @@ class HttpClientTransport private constructor(
             val verification = pageVerifier.verify(
                 response,
                 currentHeight,
-                currentContext.copyOf(),
+                currentCheckpoint.copyOf(),
             )
             validateCastingProofPromotion(
                 initialHeight,
                 currentHeight,
-                currentContext,
                 verification,
             )
             val persisted = checkpointPersister.persist(verification)
@@ -1646,7 +1644,7 @@ class HttpClientTransport private constructor(
                         ParliamentTimedOvnCastingProofTerminalV1(
                             response,
                             currentHeight,
-                            currentContext,
+                            currentCheckpoint,
                             verification,
                             nextPageCount,
                         ),
@@ -1655,7 +1653,7 @@ class HttpClientTransport private constructor(
                     requestParliamentTimedOvnCastingProofPageV1(
                         ballotAttemptId,
                         verification.evaluatedBlockHeight,
-                        verification.evaluatedContextId(),
+                        verification.promotedCheckpointNorito(),
                         initialHeight,
                         canonicalAuth,
                         pageVerifier,
@@ -1670,7 +1668,6 @@ class HttpClientTransport private constructor(
     private fun validateCastingProofPromotion(
         initialHeight: BigInteger,
         currentHeight: BigInteger,
-        currentContext: ByteArray,
         verification: ParliamentTimedOvnCastingProofPageVerificationV1,
     ) {
         val evaluatedHeight = verification.evaluatedBlockHeight
@@ -1694,16 +1691,14 @@ class HttpClientTransport private constructor(
             require(pageAdvance.signum() > 0) {
                 "nonterminal casting-proof page did not advance its checkpoint"
             }
-        } else if (pageAdvance.signum() == 0) {
-            require(MessageDigest.isEqual(currentContext, verification.evaluatedContextId())) {
-                "terminal casting-proof page changed context without advancing height"
-            }
         }
+        // Native verification checks the complete retained decision. Same-height alternate
+        // certificate witnesses need not have byte-identical checkpoint encodings.
     }
 
-    private fun requireCastingCheckpointContext(value: ByteArray): ByteArray {
-        require(value.size == 32 && value.any { it != 0.toByte() }) {
-            "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes"
+    private fun requireCastingCheckpoint(value: ByteArray): ByteArray {
+        require(value.size in 1..(68 * 1024 * 1024)) {
+            "initialTrustedCheckpointNorito must contain a bounded complete canonical checkpoint"
         }
         return value.copyOf()
     }
@@ -3063,7 +3058,7 @@ class HttpClientTransport private constructor(
             }
             val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionBytes,
-                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+
             )
             check(decoded.networkId == expectedNetworkId) {
                 "contract call transaction payload changed the configured network"
@@ -3103,7 +3098,7 @@ class HttpClientTransport private constructor(
             check(
                 decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
                     decoded.nonce == null &&
-                    decoded.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED &&
+
                     decoded.attachments == null,
             ) {
                 "contract call transaction payload changed default lifetime, nonce, admission, or attachments"
@@ -3207,7 +3202,7 @@ class HttpClientTransport private constructor(
             )
             val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionBytes,
-                TransactionAdmissionIntent.ORDINARY,
+
             )
             check(decoded.networkId == expectedNetworkId) {
                 "multisig response transaction changed the configured network"
@@ -3232,7 +3227,7 @@ class HttpClientTransport private constructor(
             check(
                 decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
                     decoded.nonce == null &&
-                    decoded.admissionIntent == TransactionAdmissionIntent.ORDINARY &&
+
                     decoded.attachments == null,
             ) {
                 "multisig response transaction changed default lifetime, nonce, admission, or attachments"

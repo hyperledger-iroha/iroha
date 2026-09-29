@@ -9,7 +9,7 @@ fn eviction_requires_distinct_matching_replica_adverts() {
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
-    let wrong_hash = DummyBlocks::new().next().hash();
+    let wrong_hash = NativeBlocks::new().next().hash();
     assert_ne!(wrong_hash, block_hash);
     let repeated_peer = checked_peer_id();
     for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
@@ -1079,7 +1079,6 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: Duration::from_secs(3600),
         lane_history_retention: LANE_HISTORY_RETENTION,
@@ -1097,7 +1096,7 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
     establish_dummy_store_primary_anchor(&kura);
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..3 {
         let block = blocks.next();
         kura.store_block(block)
@@ -1196,7 +1195,6 @@ fn evicted_block_caches_after_remote_rehydrate() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,

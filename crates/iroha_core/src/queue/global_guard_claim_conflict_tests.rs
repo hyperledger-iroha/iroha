@@ -135,7 +135,7 @@ fn bounded_leader_scan_reaches_ready_work_behind_unadmitted_claims() {
     let mut claim_hashes = vec![first_hash];
     for _ in 0..2 {
         let claim_key = KeyPair::random();
-        let transaction = accepted_queue_plan_tx_with(
+        let transaction = accepted_tx_with(
             AccountId::new(claim_key.public_key().clone()),
             &claim_key,
             &time_source,
@@ -586,7 +586,7 @@ fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
     queue
         .install_plan_journal(&journal_path, 1024 * 1024, true)
         .expect("install exact pending handoff journal");
-    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    let transaction = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
     let routing_plan = queue
         .route_plan_with_state(&transaction, &state)

@@ -243,7 +243,6 @@ fn lane_decision_group_decodes_large_input_once_under_the_actual_frame_budget() 
         crate::Level::INFO,
         "x".repeat(800 * 1024),
     )])
-    .with_admission_intent(crate::transaction::TransactionAdmissionIntent::QueuePlanSynced)
     .sign(key.private_key());
     payload.input.certificate.binding.signed_transaction_hash = Some(transaction.hash());
     payload.input.entrypoint = TransactionEntrypoint::External(transaction);

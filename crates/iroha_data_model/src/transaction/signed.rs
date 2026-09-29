@@ -243,40 +243,6 @@ mod model {
         /// Genesis-only marker used to avoid a genesis-hash self-reference.
         Genesis,
     }
-    /// Signature-bound admission protocol required before a transaction may execute.
-    ///
-    /// Relays and proposers cannot downgrade this value without invalidating the
-    /// transaction signature and changing its canonical entrypoint identity.
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(
-        name = "iroha_data_model::transaction::signed::model::TransactionAdmissionIntent"
-    )]
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        IntoSchema,
-        crate :: DeriveJsonSerialize,
-        crate :: DeriveJsonDeserialize,
-    )]
-    #[norito(
-        tag = "intent",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )]
-    pub enum TransactionAdmissionIntent {
-        /// Ordinary queue admission without a globally certified `QueuePlan` owner.
-        Ordinary,
-        /// Require an exact quorum-certified `QueuePlan` registry owner before execution.
-        QueuePlanSynced,
-    }
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionPayload")]
@@ -311,8 +277,6 @@ mod model {
         pub nonce: Option<NonZeroU32>,
         /// Explicit fee payer, assets, limits, and executable gas bound.
         pub fee_payment: FeePaymentIntent,
-        /// Required signature-bound admission protocol.
-        pub admission_intent: TransactionAdmissionIntent,
         /// Store for additional information.
         pub metadata: Metadata,
         /// Proof attachments whose exact contents affect transaction execution.
@@ -713,10 +677,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let admission_intent = decode_canonical_field::<TransactionAdmissionIntent>(
-            read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
         let metadata =
             decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
         let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
@@ -736,7 +696,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
                 time_to_live_ms,
                 nonce,
                 fee_payment,
-                admission_intent,
                 metadata,
                 attachments,
             },
@@ -852,9 +811,6 @@ pub enum TransactionSignatureError {
     /// A genesis-only builder carried an ordinary network security domain.
     #[error("explicit genesis construction requires the genesis transaction domain")]
     GenesisDomainRequired,
-    /// Genesis transactions cannot depend on a post-genesis admission certificate.
-    #[error("genesis transactions require ordinary admission intent")]
-    GenesisAdmissionIntentRequired,
     /// Collected multisig signatures do not satisfy the policy threshold.
     #[error("insufficient multisig weight: collected {collected}, required {required}")]
     InsufficientMultisigWeight {
@@ -1481,11 +1437,6 @@ impl TransactionPayload {
     pub const fn domain(&self) -> &TransactionDomain {
         &self.domain
     }
-    /// Return the signature-bound admission protocol.
-    #[inline]
-    pub const fn admission_intent(&self) -> TransactionAdmissionIntent {
-        self.admission_intent
-    }
     /// Return the exact network identity for an ordinary transaction.
     ///
     /// Genesis payloads return `None` because their explicit marker avoids a
@@ -1531,11 +1482,6 @@ impl SignedTransaction {
     /// Transaction payload. Used for tests
     pub fn payload(&self) -> &TransactionPayload {
         &self.payload
-    }
-    /// Return the signature-bound admission protocol.
-    #[inline]
-    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
-        self.payload.admission_intent()
     }
     /// Return transaction instructions
     #[inline]
@@ -2340,7 +2286,6 @@ impl TransactionBuilder {
                 ),
                 instructions: Vec::<InstructionBox>::new().into(),
                 fee_payment,
-                admission_intent: TransactionAdmissionIntent::Ordinary,
                 metadata: Metadata::default(),
                 attachments: None,
             },
@@ -2456,11 +2401,6 @@ impl TransactionBuilder {
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
-        self
-    }
-    /// Select the signature-bound admission protocol for this transaction.
-    pub fn with_admission_intent(mut self, intent: TransactionAdmissionIntent) -> Self {
-        self.payload.admission_intent = intent;
         self
     }
     /// Set the required signature-bound fee payer and charge limits.
@@ -2646,17 +2586,6 @@ mod tests;
 mod ttl_tests;
 include!("signed/attachments_tests.rs");
 impl TransactionEntrypoint {
-    /// Signature-bound admission protocol for this entrypoint.
-    #[inline]
-    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
-        match self {
-            TransactionEntrypoint::External(entrypoint) => entrypoint.admission_intent(),
-            TransactionEntrypoint::SealedCommitment(_) => TransactionAdmissionIntent::Ordinary,
-            TransactionEntrypoint::SealedReveal(entrypoint) => {
-                entrypoint.signed_transaction().admission_intent()
-            }
-        }
-    }
     /// Account authorized to initiate this transaction when one exists.
     #[inline]
     pub fn authority_opt(&self) -> Option<&AccountId> {

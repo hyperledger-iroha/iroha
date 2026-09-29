@@ -1,3 +1,4 @@
+//! Retained diagnostic trace and execution behavior controls.
 use ivm::{IVM, encoding};
 mod common;
 use common::assemble_zk;
@@ -13,5 +14,8 @@ fn test_register_trace_length() {
     // cycles should equal max_cycles (8)
     assert_eq!(vm.get_cycle_count(), 8);
     // trace should contain one entry per cycle
-    assert_eq!(vm.register_trace().len() as u64, vm.get_cycle_count());
+    assert_eq!(
+        common::diagnostic_snapshot(&vm).states().len() as u64,
+        vm.get_cycle_count()
+    );
 }

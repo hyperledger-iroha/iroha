@@ -86,8 +86,7 @@ use iroha_data_model::{
         parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
     },
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionAdmissionIntent,
-        TransactionPayload,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder},
     },
@@ -298,26 +297,45 @@ fn validation_fee_iroha_hash(value: &Uint8Array, label: &str) -> napi::Result<[u
     }
     Ok(bytes)
 }
-/// Encode the frozen Norito request for one validation-fee proof page.
+fn validation_fee_checkpoint(
+    bytes: &[u8],
+) -> napi::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint> {
+    use iroha_data_model::sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
+    };
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(bytes).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("trustedCheckpointNorito is not a canonical native checkpoint: {error}"),
+        )
+    })?;
+    // Import is an explicit independent trust-root choice. Internal native consistency is still
+    // checked before its height can drive a request; the response additionally pins network_id.
+    SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &checkpoint,
+        &checkpoint.network_id(),
+        checkpoint.chain_id(),
+    )
+    .map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("trustedCheckpointNorito failed native validation: {error}"),
+        )
+    })?;
+    Ok(checkpoint)
+}
+
+/// Encode the canonical Norito request derived from one independently selected full checkpoint.
 #[napi(js_name = "validationFeeCurrentPolicyProofRequestV1")]
 pub fn validation_fee_current_policy_proof_request_v1(
-    trusted_checkpoint_height: JsU64,
-    trusted_checkpoint_context_id: Uint8Array,
+    trusted_checkpoint_norito: Uint8Array,
 ) -> napi::Result<Buffer> {
-    let trusted_checkpoint_height = trusted_checkpoint_height.0;
-    if trusted_checkpoint_height == 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "trustedCheckpointHeight must be positive",
-        ));
-    }
-    let _ =
-        validation_fee_iroha_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let checkpoint = validation_fee_checkpoint(trusted_checkpoint_norito.as_ref())?;
     let request = iroha::client::ValidationFeeCurrentPolicyProofRequestV1 {
         version: iroha::client::VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-        trusted_checkpoint_height,
+        trusted_checkpoint_height: checkpoint.height(),
     };
-    norito::to_bytes(&request)
+    norito::encode_canonical(&request)
         .map(Buffer::from)
         .map_err(|error| {
             napi::Error::new(
@@ -326,18 +344,27 @@ pub fn validation_fee_current_policy_proof_request_v1(
             )
         })
 }
+
+/// Locally verified policy and exact native checkpoint promoted by that same verification.
+#[napi(object)]
+pub struct ValidationFeeVerifiedPageV1 {
+    /// Policy projection rendered with the caller's required account network prefix.
+    pub projection_json: String,
+    /// Complete canonical checkpoint for durable retention and the next proof-page request.
+    pub promoted_checkpoint_norito: Buffer,
+}
+
 /// Locally verify one validation-fee proof page under immutable deployment bindings.
+/// The full checkpoint must be independently selected; the response cannot choose its own root.
 /// Account projections use the caller's required network prefix for this operation.
 #[napi(js_name = "validationFeeVerifyCurrentPolicyProofV1")]
-#[allow(clippy::too_many_arguments)]
 pub fn validation_fee_verify_current_policy_proof_v1(
     proof_norito: Uint8Array,
     network_id: Uint8Array,
     policy_chain_genesis_hash: Uint8Array,
-    trusted_checkpoint_height: JsU64,
-    trusted_checkpoint_context_id: Uint8Array,
+    trusted_checkpoint_norito: Uint8Array,
     network_prefix: f64,
-) -> napi::Result<String> {
+) -> napi::Result<ValidationFeeVerifiedPageV1> {
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
     let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
@@ -352,38 +379,28 @@ pub fn validation_fee_verify_current_policy_proof_v1(
     ));
     let policy_chain_genesis_hash =
         validation_fee_iroha_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
-    let trusted_checkpoint_height = trusted_checkpoint_height.0;
-    if trusted_checkpoint_height == 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "trustedCheckpointHeight must be positive",
-        ));
-    }
-    let trusted_checkpoint_context_id =
-        validation_fee_iroha_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let checkpoint = validation_fee_checkpoint(trusted_checkpoint_norito.as_ref())?;
     let proof: iroha::client::ValidationFeeCurrentPolicyProofV1 =
-        decode_from_bytes(proof_norito.as_ref()).map_err(|error| {
+        norito::decode_canonical_with_limits(
+            proof_norito.as_ref(),
+            norito::canonical_decode_limits(proof_norito.len()),
+        )
+        .map_err(|error| {
             napi::Error::new(
                 napi::Status::InvalidArg,
-                format!("proofNorito is not a validation-fee proof: {error}"),
+                format!("proofNorito is not a canonical validation-fee proof: {error}"),
             )
         })?;
-    let canonical = norito::to_bytes(&proof).map_err(norito_to_napi)?;
-    if canonical != proof_norito.as_ref() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "proofNorito is not canonical",
-        ));
-    }
-    let projection = proof
-        .verify_with_immutable_binding(
-            network_id,
-            policy_chain_genesis_hash,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )
+    let (projection, promoted) = proof
+        .verify_with_immutable_binding(network_id, policy_chain_genesis_hash, &checkpoint)
         .map_err(napi::Error::from_reason)?;
-    json::to_json(&projection).map_err(norito_to_napi)
+    Ok(ValidationFeeVerifiedPageV1 {
+        projection_json: json::to_json(&projection).map_err(norito_to_napi)?,
+        promoted_checkpoint_norito: promoted
+            .encode_canonical()
+            .map(Buffer::from)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+    })
 }
 /// Encode one exact bounded native-Norito Hijiri validation-fee quote request.
 #[napi(js_name = "validationFeeHijiriQuoteRequestV1")]
@@ -6321,7 +6338,6 @@ fn configure_transaction_builder(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<TransactionBuilder> {
-    builder = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
     if let Some(ms) = creation_time_ms {
         let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
@@ -7249,12 +7265,7 @@ pub fn finalize_signed_transaction(
         &expected_network_id,
         "JavaScript external transaction finalizer",
     )?;
-    if builder.payload().admission_intent() != TransactionAdmissionIntent::Ordinary {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "JavaScript external transaction finalizer requires Ordinary admission intent",
-        ));
-    }
+
     let payload_hash = builder.payload_hash_bytes();
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
@@ -12821,10 +12832,7 @@ seiyaku Privacy {
         assert_eq!(built.payload_hash.len(), Hash::LENGTH);
         let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
             .expect("native payload builder must emit canonical bytes");
-        assert_eq!(
-            builder.payload().admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
+
         assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
         assert_eq!(
             builder.payload_hash_bytes().as_slice(),
@@ -12988,8 +12996,7 @@ seiyaku Privacy {
             authority: authority_i105.clone(),
         };
         let retired_builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
-            .expect("decode baseline payload")
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+            .expect("decode baseline payload");
         let retired_hash = retired_builder.payload_hash_bytes();
         let retired_signature = Signature::try_new(authority_key.private_key(), &retired_hash)
             .expect("sign exact retired intent");

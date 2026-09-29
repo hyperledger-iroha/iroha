@@ -21,8 +21,6 @@ use mint_journal::{
 
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
-    bridge::{BridgeFinalityBundle, BridgeFinalityVerifier},
     isi::kagemusha_v1::{
         KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1 as ChainOperationKindV1,
         KagemushaOperationStateV1, KagemushaOperationStatusV1,
@@ -32,75 +30,62 @@ use iroha_data_model::{
         KagemushaReleasePurposeV1, KagemushaTestnetExperimentScopeV1,
         kagemusha_asset_identity_digest_v1,
     },
+    sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, verify_checkpoint_page,
+    },
 };
 
-const MAX_TESTNET_FINALITY_CHAIN_BUNDLES_V1: usize = 4096;
+const MAX_TESTNET_FINALITY_CHAIN_PROOFS_V1: usize = 4096;
 
-/// An exact finality anchor obtained from a signed consecutive chain.
+/// An exact native finality anchor obtained from an independently selected checkpoint.
 ///
-/// This non-serializable token can only be built by verifying consensus bundles against an
-/// independently trusted first height context. The caller must provision that first context
-/// outside the operation response and local journal; this type cannot prove its provenance.
+/// This non-serializable token can only be built by verifying every native proof against
+/// the complete selected checkpoint. Neither a response nor a journal can select that root.
 /// The token carries no production monetary authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaVerifiedFinalityChainV1 {
-    first_context_id: HeightContextId,
+    first_checkpoint: SumeragiFinalityCheckpoint,
     anchor: KagemushaFinalityTrustAnchorV1,
 }
 
 impl KagemushaVerifiedFinalityChainV1 {
-    /// Verify 1..4096 consecutive signed Sumeragi-v2 finality bundles.
+    /// Verify a bounded native proof page beginning at the exact independently selected tip.
     ///
     /// # Errors
-    /// Rejects an empty or oversized chain, wrong network or first context, invalid validator
-    /// signatures, nonconsecutive heights, or an inconsistent bundle commitment.
+    /// Rejects empty or oversized pages, a different network or initial decision, invalid
+    /// signatures, substituted committees, gaps, or inconsistent execution commitments.
     pub fn verify(
         expected_network_id: NetworkId,
-        trusted_first_context_id: HeightContextId,
-        bundles: &[BridgeFinalityBundle],
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
+        proofs: &[SumeragiFinalityProof],
     ) -> Result<Self, KagemushaRecursionErrorV1> {
-        if bundles.is_empty() || bundles.len() > MAX_TESTNET_FINALITY_CHAIN_BUNDLES_V1 {
-            return Err(KagemushaRecursionErrorV1::MintFinalityBinding(
-                "testnet finality chain must contain 1..4096 bundles".to_owned(),
-            ));
-        }
-        let mut verifier =
-            BridgeFinalityVerifier::with_context(expected_network_id, trusted_first_context_id);
-        for (index, bundle) in bundles.iter().enumerate() {
-            verifier.verify_bundle(bundle).map_err(|error| {
-                KagemushaRecursionErrorV1::MintFinalityBinding(format!(
-                    "testnet finality bundle {index} failed: {error}"
-                ))
-            })?;
-        }
-        let commitment = &bundles.last().expect("nonempty verified chain").commitment;
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: expected_network_id,
-            block_height: commitment.block_height,
-            height_context_id: commitment.height_context_id,
-        };
-        anchor
-            .validate()
-            .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
+        let page = verify_checkpoint_page(
+            expected_network_id,
+            trusted_checkpoint,
+            proofs,
+            MAX_TESTNET_FINALITY_CHAIN_PROOFS_V1,
+            iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+        )
+        .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
         Ok(Self {
-            first_context_id: trusted_first_context_id,
-            anchor,
+            first_checkpoint: trusted_checkpoint.clone(),
+            anchor: KagemushaFinalityTrustAnchorV1 {
+                network_id: expected_network_id,
+                checkpoint: page.into_checkpoint(),
+            },
         })
     }
 
-    /// Return the first context used to verify this signed chain.
-    ///
-    /// The caller must independently authenticate this root; the token proves only that the
-    /// chain was verified from these supplied coordinates.
+    /// Borrow the exact independently selected checkpoint used to authenticate the page.
     #[must_use]
-    pub const fn first_context_id(&self) -> HeightContextId {
-        self.first_context_id
+    pub const fn first_checkpoint(&self) -> &SumeragiFinalityCheckpoint {
+        &self.first_checkpoint
     }
 
-    /// Return the exact verified finality coordinates for status validation.
+    /// Borrow the final native checkpoint authenticated by that same verified page.
     #[must_use]
-    pub const fn anchor(&self) -> KagemushaFinalityTrustAnchorV1 {
-        self.anchor
+    pub const fn anchor(&self) -> &KagemushaFinalityTrustAnchorV1 {
+        &self.anchor
     }
 }
 
@@ -387,8 +372,8 @@ impl KagemushaTestnetValueAdmissionV1 {
     }
     /// Independently pinned finality context used for the Applied result.
     #[must_use]
-    pub const fn finality_anchor(&self) -> KagemushaFinalityTrustAnchorV1 {
-        self.finality_anchor
+    pub const fn finality_anchor(&self) -> &KagemushaFinalityTrustAnchorV1 {
+        &self.finality_anchor
     }
 
     #[cfg(test)]
@@ -754,8 +739,8 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         let mut owner = Self::new(verifier, scope)?;
         for (operation_id, chain) in independent_anchors {
             let anchor = chain.anchor();
-            check_pinned_anchor(scope, *operation_id, &anchor)?;
-            owner.pinned_anchors.insert(*operation_id, anchor);
+            check_pinned_anchor(scope, *operation_id, anchor)?;
+            owner.pinned_anchors.insert(*operation_id, anchor.clone());
         }
         let mut journal = TestnetMintJournal::open_existing(path)?;
         let mut initialized = false;
@@ -812,7 +797,7 @@ impl KagemushaTestnetProofObservationOwnerV1 {
                     if independent_anchors
                         .get(&operation_id)
                         .map(|chain| chain.anchor())
-                        != Some(trust_anchor)
+                        != Some(&trust_anchor)
                     {
                         return Err(journal_replay_error(
                             "recovered mint has no exact independent finality anchor",
@@ -924,9 +909,9 @@ impl KagemushaTestnetProofObservationOwnerV1 {
             ));
         }
         let trust_anchor = verified_chain.anchor();
-        check_pinned_anchor(self.trial.scope(), operation_id, &trust_anchor)?;
+        check_pinned_anchor(self.trial.scope(), operation_id, trust_anchor)?;
         if let Some(previous) = self.pinned_anchors.get(&operation_id) {
-            return if *previous == trust_anchor {
+            return if previous == trust_anchor {
                 Ok(false)
             } else {
                 Err(journal_replay_error(
@@ -934,7 +919,8 @@ impl KagemushaTestnetProofObservationOwnerV1 {
                 ))
             };
         }
-        self.pinned_anchors.insert(operation_id, trust_anchor);
+        self.pinned_anchors
+            .insert(operation_id, trust_anchor.clone());
         Ok(true)
     }
 
@@ -1140,7 +1126,7 @@ impl KagemushaTestnetProofObservationOwnerV1 {
             journal.append(&JournalRecord::ObserveFinalizedMint {
                 operation_id,
                 status: encode_journal_value(status)?,
-                trust_anchor: JournalAnchor::from(*trust_anchor),
+                trust_anchor: JournalAnchor::capture(trust_anchor)?,
                 public_inputs: encode_journal_value(public_inputs)?,
                 proof: encode_journal_value(proof)?,
             })?;
@@ -1154,7 +1140,7 @@ impl KagemushaTestnetProofObservationOwnerV1 {
                 reservation_digest,
                 reservation_bytes,
                 status: status.clone(),
-                trust_anchor: *trust_anchor,
+                trust_anchor: trust_anchor.clone(),
                 public_inputs: public_inputs.clone(),
                 proof: proof.clone(),
                 result,
@@ -1314,7 +1300,7 @@ fn value_admission_from_retained_v1(
         mint_envelope_digest: result.mint_envelope_digest(),
         candidate_envelope_digest: candidate,
         successor_state_commitment: observation.successor_state_commitment(),
-        finality_anchor: retained.trust_anchor,
+        finality_anchor: retained.trust_anchor.clone(),
     })
 }
 
@@ -1614,12 +1600,9 @@ mod tests {
     use super::super::KagemushaPreparedIntentCommitmentsV1;
     use super::*;
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{
-        consensus::v2::HeightContextId,
-        isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1 as ChainOperationKindV1,
-            KagemushaOperationStateV1,
-        },
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1 as ChainOperationKindV1,
+        KagemushaOperationStateV1,
     };
 
     const NETWORK: DigestV1 = [1; 32];
@@ -1652,13 +1635,48 @@ mod tests {
         .expect("distinct operator pins")
     }
 
+    fn native_anchor() -> KagemushaFinalityTrustAnchorV1 {
+        let fixture = iroha_data_model::testing::native_finality::NativeFinalityFixture::new();
+        KagemushaFinalityTrustAnchorV1 {
+            network_id: fixture.network_id(),
+            checkpoint: fixture.checkpoint(),
+        }
+    }
+
     #[test]
-    fn verified_finality_chain_requires_a_signed_bundle() {
-        let network_id =
-            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(NETWORK)));
-        let first_context =
-            HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])));
-        assert!(KagemushaVerifiedFinalityChainV1::verify(network_id, first_context, &[]).is_err());
+    fn verified_finality_chain_requires_and_authenticates_exact_native_checkpoint_page() {
+        let fixture = iroha_data_model::testing::native_finality::NativeFinalityFixture::new();
+        let anchor = native_anchor();
+        assert!(
+            KagemushaVerifiedFinalityChainV1::verify(anchor.network_id, &anchor.checkpoint, &[])
+                .is_err()
+        );
+        let token = KagemushaVerifiedFinalityChainV1::verify(
+            anchor.network_id,
+            &anchor.checkpoint,
+            std::slice::from_ref(fixture.latest()),
+        )
+        .unwrap();
+        assert_eq!(token.first_checkpoint(), &anchor.checkpoint);
+        assert_eq!(token.anchor(), &anchor);
+        let mut wrong_committee = fixture.latest().clone();
+        wrong_committee.committee.swap(0, 1);
+        assert!(
+            KagemushaVerifiedFinalityChainV1::verify(
+                anchor.network_id,
+                &anchor.checkpoint,
+                &[wrong_committee]
+            )
+            .is_err()
+        );
+        assert!(
+            KagemushaVerifiedFinalityChainV1::verify(
+                anchor.network_id,
+                &anchor.checkpoint,
+                std::slice::from_ref(fixture.genesis_proof())
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1970,15 +1988,7 @@ mod tests {
     #[test]
     fn finalized_mint_cannot_use_process_local_owner_or_unpinned_anchor() {
         assert!(require_durable_mint_observation_owner_v1(None).is_err());
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                HashOf::from_untyped_unchecked(Hash::prehashed(NETWORK)),
-            ),
-            block_height: 7,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [7; 32],
-            ))),
-        };
+        let anchor = native_anchor();
         let reservation = BTreeMap::from([([9; 32], ())]);
         assert!(
             require_exact_mint_owner_pins_v1(
@@ -1990,7 +2000,7 @@ mod tests {
             )
             .is_err()
         );
-        let pins = BTreeMap::from([([9; 32], anchor)]);
+        let pins = BTreeMap::from([([9; 32], anchor.clone())]);
         assert!(
             require_exact_mint_owner_pins_v1(&BTreeMap::new(), &pins, [9; 32], &(), &anchor)
                 .is_err()
@@ -2003,41 +2013,37 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn finality_pin_requires_exact_operation_network_and_valid_context() {
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                HashOf::from_untyped_unchecked(Hash::prehashed(NETWORK)),
-            ),
-            block_height: 7,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [7; 32],
-            ))),
-        };
-        assert_eq!(check_pinned_anchor(scope(), [9; 32], &anchor), Ok(()));
-        assert!(check_pinned_anchor(scope(), [0; 32], &anchor).is_err());
+        let anchor = native_anchor();
+        let mut native_scope = scope();
+        native_scope.network_id = *anchor.network_id.as_bytes();
+        assert_eq!(check_pinned_anchor(native_scope, [9; 32], &anchor), Ok(()));
+        assert!(check_pinned_anchor(native_scope, [0; 32], &anchor).is_err());
         assert!(
             check_pinned_anchor(
-                scope(),
+                native_scope,
                 [9; 32],
                 &KagemushaFinalityTrustAnchorV1 {
-                    block_height: 0,
-                    ..anchor
+                    network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                        Hash::new(b"wrong native network")
+                    )),
+                    ..anchor.clone()
                 }
             )
             .is_err()
         );
-        let pins = BTreeMap::from([([9; 32], anchor)]);
+        let pins = BTreeMap::from([([9; 32], anchor.clone())]);
         assert!(require_pins_have_reservations(&pins, &BTreeMap::<DigestV1, ()>::new()).is_err());
         let reservations = BTreeMap::from([([9; 32], ())]);
         assert_eq!(require_pins_have_reservations(&pins, &reservations), Ok(()));
         assert!(
             check_pinned_anchor(
-                scope(),
+                native_scope,
                 [9; 32],
                 &KagemushaFinalityTrustAnchorV1 {
                     network_id: iroha_data_model::NetworkId::from_genesis_hash(
                         HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])),
                     ),
-                    ..anchor
+                    ..anchor.clone()
                 }
             )
             .is_err()
@@ -2326,13 +2332,7 @@ mod tests {
             result: None,
             rejection: None,
         };
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: public.successor.lane.network_id,
-            block_height: 1,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"testnet mint retry context",
-            ))),
-        };
+        let anchor = native_anchor();
         let result = KagemushaTestnetFinalizedMintObservationV1 {
             observation: observed(&public, trial.scope()),
             operation_id: status.operation_id,
@@ -2349,7 +2349,7 @@ mod tests {
             reservation_digest: [0xB4; 32],
             reservation_bytes: vec![0xB5; 64],
             status: status.clone(),
-            trust_anchor: anchor,
+            trust_anchor: anchor.clone(),
             public_inputs: public.clone(),
             proof: proof.clone(),
             result,
@@ -2389,8 +2389,11 @@ mod tests {
             &proof,
         ));
         let changed_anchor = KagemushaFinalityTrustAnchorV1 {
-            block_height: 2,
-            ..anchor
+            checkpoint: iroha_data_model::testing::native_finality::NativeFinalityFixture::start(
+                "another selected instance",
+            )
+            .checkpoint(),
+            ..anchor.clone()
         };
         assert!(!retained.exact_retry_matches(
             [0xB4; 32],
@@ -2427,16 +2430,11 @@ mod tests {
     fn retained_testnet_value_projection_is_idempotent_and_rejects_changed_amount_or_credit() {
         // This tests the projection after the durable owner has verified the Applied proof.
         // A complete signed Applied fixture is still needed for the end-to-end journal test.
-        let (scope, public, statement, _, _) = mint_binding_fixture();
+        let (mut scope, public, statement, _, _) = mint_binding_fixture();
         let (_, proof) = super::super::tests::state_verification_fixture();
         let operation_id = [0x91; 32];
-        let anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: public.successor.lane.network_id,
-            block_height: 7,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [0x92; 32],
-            ))),
-        };
+        let anchor = native_anchor();
+        scope.network_id = *anchor.network_id.as_bytes();
         let result = KagemushaTestnetFinalizedMintObservationV1 {
             observation: observed(&public, scope),
             operation_id,
@@ -2455,7 +2453,7 @@ mod tests {
                 result: None,
                 rejection: None,
             },
-            trust_anchor: anchor,
+            trust_anchor: anchor.clone(),
             public_inputs: public,
             proof,
             result,
@@ -2478,7 +2476,7 @@ mod tests {
         assert_eq!(first, recovered);
         assert_eq!(first.amount(), statement.amount);
         assert_eq!(first.scope(), scope);
-        assert_eq!(first.finality_anchor(), anchor);
+        assert_eq!(first.finality_anchor(), &anchor);
         assert!(value_admission_from_retained_v1(scope, operation_id, &retained, None).is_err());
         retained.result.amount = 0;
         assert!(

@@ -71,6 +71,29 @@ impl SumeragiLaneStateCommitment {
         })
     }
 
+    /// Equality-only hash of a borrowed original canonical lane payload. The native result
+    /// path must independently authenticate this commitment before equality authorizes use.
+    pub(super) fn matches_state_payload(
+        &self,
+        network: NetworkId,
+        height: u64,
+        payload: &[u8],
+    ) -> Result<bool, norito::Error> {
+        if !self.matches_carrier(network, height) || height == 0 {
+            return Ok(false);
+        }
+        let frame = StatePayload {
+            bytes: payload,
+            _alignment: [],
+        };
+        let hash = Hash::new_from_writer(|writer| {
+            writer.write_all(DOMAIN)?;
+            norito::core::write_canonical_to_writer(&frame, writer).map_err(std::io::Error::other)
+        })
+        .map_err(|_| norito::Error::NonCanonicalEncoding)?;
+        Ok(hash == self.state_hash)
+    }
+
     /// Validate only the fixed commitment shape; external finality supplies its authority.
     /// # Errors
     /// Rejects a zero carrier height.
@@ -94,6 +117,38 @@ impl SumeragiLaneStateCommitment {
     /// Hash of the complete canonical state, used to seal the original overlay.
     pub fn state_hash(&self) -> Hash {
         self.state_hash
+    }
+}
+
+// A view of the existing payload, with the original wire type's exact alignment. This is
+// only a streaming equality projection: it implements no decoder or alternate wire format.
+struct StatePayload<'a> {
+    bytes: &'a [u8],
+    _alignment: [SumeragiLaneState; 0],
+}
+const _: () =
+    assert!(std::mem::align_of::<StatePayload<'_>>() == std::mem::align_of::<SumeragiLaneState>());
+impl norito::core::SerializePayload for StatePayload<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        // The sole canonical SumeragiLaneState payload always emits its four compact field
+        // lengths. Propagate that known layout usage while forwarding the original bytes.
+        norito::core::note_compact_len_emitted();
+        std::io::Write::write_all(writer, self.bytes)?;
+        Ok(())
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(self.bytes.len())
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(self.bytes.len())
+    }
+}
+impl norito::NoritoSchema for StatePayload<'_> {
+    fn nominal_name() -> String {
+        <SumeragiLaneState as norito::NoritoSchema>::nominal_name()
+    }
+    fn static_frame_name() -> Option<&'static str> {
+        <SumeragiLaneState as norito::NoritoSchema>::static_frame_name()
     }
 }
 
@@ -212,6 +267,115 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn borrowed_payload_equality_preserves_the_complete_original_canonical_frame() {
+        for count in [0, 1, 4, 7, 31] {
+            let original = state(count);
+            let commitment =
+                SumeragiLaneStateCommitment::from_state(network(), 4, &original).unwrap();
+            let frame = norito::encode_canonical(&original).unwrap();
+            let view = norito::core::from_bytes_view(&frame).unwrap();
+            let borrowed = StatePayload {
+                bytes: view.as_bytes(),
+                _alignment: [],
+            };
+            assert_eq!(norito::encode_canonical(&borrowed).unwrap(), frame);
+            assert!(
+                commitment
+                    .matches_state_payload(network(), 4, view.as_bytes())
+                    .unwrap()
+            );
+            assert!(
+                !commitment
+                    .matches_state_payload(network(), 5, view.as_bytes())
+                    .unwrap()
+            );
+            let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"foreign lane source",
+            )));
+            assert!(
+                !commitment
+                    .matches_state_payload(foreign, 4, view.as_bytes())
+                    .unwrap()
+            );
+            for malformed in [
+                vec![],
+                view.as_bytes()[..view.as_bytes().len() - 1].to_vec(),
+                {
+                    let mut bytes = view.as_bytes().to_vec();
+                    bytes.push(0);
+                    bytes
+                },
+            ] {
+                assert!(
+                    !commitment
+                        .matches_state_payload(network(), 4, &malformed)
+                        .unwrap()
+                );
+            }
+            // Alter every lane field family, including live BLS keys/PoPs and parameter vectors.
+            if count > 0 {
+                for field in 0..16 {
+                    let mut changed = original.clone();
+                    let lane = &mut changed.lanes[0];
+                    match field {
+                        0 => lane.lane = LaneId::new(99),
+                        1 => lane.dataspace = DataSpaceId::new(2),
+                        2 => lane.incarnation[0] ^= 1,
+                        3 => lane.params.key_allowed_algorithms.clear(),
+                        4 => {
+                            lane.committee[0].peer = PeerId::new(
+                                KeyPair::from_seed(vec![77; 32], Algorithm::BlsNormal)
+                                    .public_key()
+                                    .clone(),
+                            )
+                        }
+                        5 => lane.committee[0].pop[0] ^= 1,
+                        6 => lane.created_at += 1,
+                        7 => lane.active_from += 1,
+                        8 => lane.closing = Some(4),
+                        9 => lane.anchor_freshness += 1,
+                        10 => lane.merged.height += 1,
+                        11 => lane.merged.block_hash[0] ^= 1,
+                        12 => lane.merged.result[0] ^= 1,
+                        13 => lane.merged_at += 1,
+                        14 => lane.rescued += 1,
+                        _ => lane.params.max_clock_drift_ms += 1,
+                    }
+                    let frame = norito::encode_canonical(&changed).unwrap();
+                    let view = norito::core::from_bytes_view(&frame).unwrap();
+                    assert!(
+                        !commitment
+                            .matches_state_payload(network(), 4, view.as_bytes())
+                            .unwrap(),
+                        "field {field}"
+                    );
+                }
+            }
+            for field in 0..6 {
+                let mut changed = original.clone();
+                match field {
+                    0 => changed.samples[0].height += 1,
+                    1 => changed.samples[0].time_ms += 1,
+                    2 => changed.samples[0].transactions += 1,
+                    3 => changed.samples[0].lanes += 1,
+                    4 => changed.last_transition += 1,
+                    _ => changed.incarnations += 1,
+                }
+                let frame = norito::encode_canonical(&changed).unwrap();
+                assert!(
+                    !commitment
+                        .matches_state_payload(
+                            network(),
+                            4,
+                            norito::core::from_bytes_view(&frame).unwrap().as_bytes()
+                        )
+                        .unwrap()
+                );
+            }
+        }
+    }
+
     #[test]
     fn empty_history_is_distinct_from_absent_lanes_with_retained_autoscale_history() {
         let empty = SumeragiLaneState::default();

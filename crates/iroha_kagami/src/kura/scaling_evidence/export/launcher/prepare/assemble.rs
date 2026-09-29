@@ -201,7 +201,6 @@ pub(in crate::kura::scaling_evidence::export) fn assemble(
     journal: JournalExpectations,
     verification: VerificationLimits,
     block_store: &Path,
-    merge_log: &Path,
     reader: CanonicalKuraEvidenceLimits,
     caps: FactsAssemblyCaps,
 ) -> Result<AssembledFacts> {
@@ -300,7 +299,6 @@ pub(in crate::kura::scaling_evidence::export) fn assemble(
             verify_plan,
             verification,
             block_store,
-            merge_log,
             reader,
             &bindings,
             supplied,
@@ -457,9 +455,6 @@ pub(in crate::kura::scaling_evidence::export) fn admit_work(
             && reader.max_store_data_bytes <= limits.input_bytes
             && reader.max_carrier_bytes > 0
             && reader.max_carrier_bytes <= MAX_CARRIER_BYTES
-            && reader.max_merge_log_bytes <= limits.input_bytes
-            && reader.max_merge_log_bytes <= MAX_PROOF_BYTES
-            && reader.max_merge_frames <= reader.max_committed_blocks
             && reader.max_output_bytes > 0
             && reader.max_output_bytes <= limits.input_bytes
             && reader.max_decode_allocation_bytes > 0

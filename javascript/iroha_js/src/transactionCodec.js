@@ -74,7 +74,6 @@ const FIELD_SIGNATURE = "signature";
 const WIRE_ID_IROHA_TRANSFER = "iroha.transfer";
 const CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE = (TEXT_TRANSACTION_PAYLOAD + TEXT_EXECUTABLE);
 const CONTEXT_TRANSACTION_PAYLOAD = "transaction payload";
-const FIELD_ADMISSION_INTENT = "admissionIntent";
 
 const COMPACT_LEN_FLAG = 0x02;
 const MALFORMED_PAYLOAD = "malformed_payload";
@@ -151,8 +150,6 @@ const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const DEFAULT_TRANSACTION_TTL_MS = 100_000;
-const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
-const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
   ...GAME_INSTRUCTION_WIRE_IDS_V1,
   ...NFT_MARKET_INSTRUCTION_WIRE_IDS_V1,
@@ -1346,7 +1343,6 @@ function encodeTransactionPayload(normalized, executable, validatePayloadBound) 
     option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
-    u32(TRANSACTION_ADMISSION_ORDINARY_TAG),
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
@@ -1862,21 +1858,6 @@ function validateFeePaymentArchive(payload, context) {
   return { gasLimit };
 }
 
-function validateTransactionAdmissionIntentArchive(payload, expectedTag, context) {
-  const reader = new Reader(payload, context);
-  const tag = reader.readU32("intent");
-  reader.assertEof();
-  if (tag !== expectedTag) {
-    const expected = expectedTag === TRANSACTION_ADMISSION_ORDINARY_TAG
-      ? "Ordinary"
-      : "QueuePlanSynced";
-    fail(
-      UNSUPPORTED_PAYLOAD,
-      `${context} must be TransactionAdmissionIntent::${expected}`,
-    );
-  }
-}
-
 function validateFrame(frame, context) {
   if (frame.length < 40 || frame.subarray(0, 4).toString("ascii") !== "NRT0") {
     fail(MALFORMED_PAYLOAD, `${context} is not an NRT0 frame`);
@@ -2353,11 +2334,6 @@ function validateTransactionPayloadEnvelope(
     (TEXT_TRANSACTION_PAYLOAD + "feePayment"),
   );
   validateFeePayment?.(executableValidation, feePayment);
-  validateTransactionAdmissionIntentArchive(
-    reader.readField(FIELD_ADMISSION_INTENT),
-    TRANSACTION_ADMISSION_ORDINARY_TAG,
-    (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
-  );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
       reader.readField(FIELD_METADATA),
@@ -2384,7 +2360,6 @@ function validateTransactionPayloadEnvelope(
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {string | null} expectedAuthority
- * @param {"ordinary" | "queue_plan_synced"} expectedAdmissionIntent
  * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {{
  *   networkId: Buffer,
@@ -2398,14 +2373,14 @@ function validateTransactionPayloadEnvelope(
 export function inspectCanonicalTransactionPayloadBindings(
   payloadBytes,
   expectedAuthority,
-  expectedAdmissionIntent,
+
   networkPrefix,
 ) {
   normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   return inspectTransactionPayloadBindings(
     payloadBytes,
     expectedAuthority,
-    expectedAdmissionIntent,
+
     MAX_EXECUTION_PAYLOAD_BYTES,
     (payload) => assertTransactionPayloadByteBound(payload, networkPrefix),
   );
@@ -2413,17 +2388,17 @@ export function inspectCanonicalTransactionPayloadBindings(
 
 /**
  * @internal Multisig and contract-call drafts retain the ordinary payload bound;
- * their admission intent must still match the caller's explicit expectation.
+ * their complete canonical fields remain bound to the caller's explicit expectation.
  */
 export function _inspectOrdinaryCanonicalTransactionPayloadBindings(
   payloadBytes,
   expectedAuthority,
-  expectedAdmissionIntent,
+
 ) {
   return inspectTransactionPayloadBindings(
     payloadBytes,
     expectedAuthority,
-    expectedAdmissionIntent,
+
     MAX_PAYLOAD_BYTES,
     assertTransferPayloadByteBound,
   );
@@ -2432,18 +2407,10 @@ export function _inspectOrdinaryCanonicalTransactionPayloadBindings(
 function inspectTransactionPayloadBindings(
   payloadBytes,
   expectedAuthority,
-  expectedAdmissionIntent,
+
   maximumBytes,
   validatePayloadBound,
 ) {
-  const expectedAdmissionTag = expectedAdmissionIntent === "ordinary"
-    ? TRANSACTION_ADMISSION_ORDINARY_TAG
-    : expectedAdmissionIntent === "queue_plan_synced"
-      ? TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
-      : null;
-  if (expectedAdmissionTag === null) {
-    fail(UNSUPPORTED_PAYLOAD, "transaction payload requires one explicit expected admission intent");
-  }
   const payload = bytes(payloadBytes, CONTEXT_TRANSACTION_PAYLOAD, {
     maxBytes: maximumBytes,
   });
@@ -2485,11 +2452,6 @@ function inspectTransactionPayloadBindings(
     fail(UNSUPPORTED_PAYLOAD, (TEXT_TRANSACTION_PAYLOAD + "nonce must be absent"));
   }
   const feePaymentArchive = reader.readField(FIELD_FEE_PAYMENT);
-  validateTransactionAdmissionIntentArchive(
-    reader.readField(FIELD_ADMISSION_INTENT),
-    expectedAdmissionTag,
-    (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
-  );
   const metadataArchive = reader.readField(FIELD_METADATA);
   rejectLegacyFeeMetadata(
     validateMetadataArchive(metadataArchive, (TEXT_TRANSACTION_PAYLOAD + "metadata")),
@@ -2649,11 +2611,6 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   validateFeePaymentArchive(
     reader.readField(FIELD_FEE_PAYMENT),
     (TEXT_VERIFYING_KEY_TRANSACTION + "payload.feePayment"),
-  );
-  validateTransactionAdmissionIntentArchive(
-    reader.readField(FIELD_ADMISSION_INTENT),
-    TRANSACTION_ADMISSION_ORDINARY_TAG,
-    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.admissionIntent"),
   );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(

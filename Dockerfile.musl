@@ -25,9 +25,17 @@ EOT
 ENV RUSTFLAGS="-C link-arg=-static"
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
 
+ARG FEATURES="irohad/ivm-cuda"
+ARG IVM_CUDA_TRUSTED_KEY_SHA256
+ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}
+ENV IVM_CUDA_PTX_MODE=bundled
+
 WORKDIR /iroha
 COPY . .
-RUN cargo build \
+RUN case ",${FEATURES}," in *,irohad/ivm-cuda,*) ;; *) echo 'Shipping daemon requires irohad/ivm-cuda' >&2; exit 1 ;; esac; \
+    test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64 && \
+    case "${IVM_CUDA_TRUSTED_KEY_SHA256}" in *[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000) exit 1 ;; esac && \
+    cargo build --locked --features "${FEATURES}" \
     --bin iroha3d \
     --bin sorafs_governance_dag \
     --bin iroha \

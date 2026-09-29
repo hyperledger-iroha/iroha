@@ -254,3 +254,19 @@ mod native_execution_read_tests {
         );
     }
 }
+
+#[cfg(test)]
+impl Kura {
+    /// Corrupt the stored native frame without changing its hash/index or cached original.
+    pub(crate) fn corrupt_native_frame_for_test(&self, height: NonZeroUsize) {
+        let mut store = self.block_store.lock();
+        let slot = store
+            .read_block_index(u64::try_from(height.get() - 1).unwrap())
+            .unwrap();
+        assert!(!slot.is_evicted());
+        let mut bytes = vec![0; usize::try_from(slot.length).unwrap()];
+        store.read_block_data(slot.start, &mut bytes).unwrap();
+        *bytes.last_mut().expect("native frame is nonempty") ^= 1;
+        store.write_block_data(slot.start, &bytes).unwrap();
+    }
+}

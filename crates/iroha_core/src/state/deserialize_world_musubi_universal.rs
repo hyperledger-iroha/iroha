@@ -12,8 +12,12 @@ use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 mod accumulator;
 use accumulator::PackageRevision;
 
-fn invalid(cut: &str, field: &str, reason: impl Into<String>) -> json::Error {
-    invalid_musubi_state(field, format!("{cut} World cut: {}", reason.into()))
+fn invalid(
+    cut: ProjectionCut,
+    table: ProjectionTable,
+    reason: &'static str,
+) -> ProjectionRejection {
+    ProjectionRejection::new(table, reason).with_cut(cut)
 }
 
 /// Verify exact row content and membership against authoritative source tables.
@@ -22,11 +26,11 @@ fn invalid(cut: &str, field: &str, reason: impl Into<String>) -> json::Error {
 /// same predicate. A failed check cannot mutate the candidate or its predecessor.
 pub(in crate::state) fn validate_musubi_universal_projection_cut(
     world: &impl WorldReadOnly,
-    cut: &str,
+    cut: ProjectionCut,
     execution_budget: &AllocationBudget,
-) -> Result<(), ExecutionAttemptError<json::Error>> {
-    const RESOLVER: &str = "musubi_resolver_index";
-    const DIRECTORY: &str = "musubi_public_directory";
+) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
+    const RESOLVER: ProjectionTable = ProjectionTable::ResolverIndex;
+    const DIRECTORY: ProjectionTable = ProjectionTable::PublicDirectory;
     let packages = world.musubi_packages();
     let releases = world.musubi_releases();
     let archives = world.musubi_archives();
@@ -37,7 +41,7 @@ pub(in crate::state) fn validate_musubi_universal_projection_cut(
     for (package_id, package) in packages.iter() {
         package
             .validate()
-            .map_err(|error| invalid(cut, DIRECTORY, error.to_string()))?;
+            .map_err(|error| invalid(cut, DIRECTORY, error.reason()))?;
         if package_id != &package.package {
             return Err(invalid(
                 cut,
@@ -65,13 +69,13 @@ pub(in crate::state) fn validate_musubi_universal_projection_cut(
     }
     for (release_id, row) in resolver.iter() {
         row.validate()
-            .map_err(|error| invalid(cut, RESOLVER, error.to_string()))?;
+            .map_err(|error| invalid(cut, RESOLVER, error.reason()))?;
         let release = releases
             .get(release_id)
             .ok_or_else(|| invalid(cut, RESOLVER, "resolver row references a missing release"))?;
         release
             .validate()
-            .map_err(|error| invalid(cut, RESOLVER, error.to_string()))?;
+            .map_err(|error| invalid(cut, RESOLVER, error.reason()))?;
         if release_id != &release.manifest.release || packages.get(&release_id.package).is_none() {
             return Err(invalid(
                 cut,
@@ -125,7 +129,7 @@ pub(in crate::state) fn validate_musubi_universal_projection_cut(
     for (selector, entry) in directory.iter() {
         entry
             .validate()
-            .map_err(|error| invalid(cut, DIRECTORY, error.to_string()))?;
+            .map_err(|error| invalid(cut, DIRECTORY, error.reason()))?;
         let package = packages.get(&entry.package).ok_or_else(|| {
             invalid(
                 cut,
@@ -185,12 +189,18 @@ pub(super) fn validate_musubi_universal_projection_cuts(
     world: &World,
     execution_budget: &AllocationBudget,
 ) -> Result<(), StateRestoreError> {
-    validate_musubi_universal_projection_cut(&world.view(), "current", execution_budget)?;
     validate_musubi_universal_projection_cut(
-        &world.try_block_and_revert(execution_budget)?,
-        "predecessor",
+        &world.view(),
+        ProjectionCut::Current,
         execution_budget,
     )
+    .map_err(|error| error.map_rejection(ProjectionRejection::into_json))?;
+    validate_musubi_universal_projection_cut(
+        &world.try_block_and_revert(execution_budget)?,
+        ProjectionCut::Predecessor,
+        execution_budget,
+    )
+    .map_err(|error| error.map_rejection(ProjectionRejection::into_json))
     .map_err(Into::into)
 }
 

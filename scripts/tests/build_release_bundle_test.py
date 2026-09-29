@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from release_builder_fixture import (
+    CUDA_KEY_SHA256, SOURCE_COMMIT, acceleration_record, prepare_source_fixture,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_release_bundle.sh"
@@ -173,7 +177,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 def _authenticated_prebuilt(
-    binaries: Path, *, destination: Path, target: str, commit: str
+    binaries: Path, *, destination: Path, target: str, commit: str, source_root: Path
 ) -> tuple[Path, str]:
     package_by_binary = {
         "iroha3d": "irohad",
@@ -218,17 +222,20 @@ def _authenticated_prebuilt(
         if "-windows-" in target
         else ["irohad/external-software-signer-bin"]
     )
+    if "-linux-" in target or "-windows-" in target:
+        selected_features.append("irohad/ivm-cuda")
     manifest = {
         "schema": "iroha.release_prebuilt_provenance",
         "schema_version": 1,
         "source_commit": commit,
         "cargo_lock_sha256": hashlib.sha256(
-            (REPO_ROOT / "Cargo.lock").read_bytes()
+            (source_root / "Cargo.lock").read_bytes()
         ).hexdigest(),
         "target": target,
         "cargo_profile": "deploy",
         "default_features": True,
         "selected_features": selected_features,
+        "acceleration": acceleration_record(target),
         "binaries": rows,
     }
     payload = (
@@ -261,11 +268,8 @@ def _run(
     environment["PATH"] = f"{zstd.parent}{os.pathsep}{environment['PATH']}"
     environment["SOURCE_DATE_EPOCH"] = str(EPOCH)
     environment.update(env or {})
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
-        text=True,
-    ).strip()
+    source_root = prepare_source_fixture(REPO_ROOT, output.with_name(f".{output.name}-source"), environment)
+    commit = SOURCE_COMMIT
     authenticated_binaries, provenance_digest = _authenticated_prebuilt(
         binaries,
         destination=output.with_name(
@@ -273,6 +277,7 @@ def _run(
         ),
         target=target,
         commit=commit,
+        source_root=source_root,
     )
     option_pairs = [
         ("--target", target),
@@ -284,14 +289,16 @@ def _run(
         ("--zstd", str(zstd)),
         ("--trusted-zstd-sha256", digest),
     ]
+    if "-linux-" in target or "-windows-" in target:
+        option_pairs.append(("--trusted-cuda-key-sha256", CUDA_KEY_SHA256))
     omitted = omit_options or set()
-    command = [str(SCRIPT)]
+    command = [str(source_root / "scripts/build_release_bundle.sh")]
     for option, value in option_pairs:
         if option not in omitted:
             command.extend([option, value])
     return subprocess.run(
         command,
-        cwd=REPO_ROOT,
+        cwd=source_root,
         env=environment,
         text=True,
         capture_output=True,
@@ -632,3 +639,26 @@ def test_bundle_source_has_no_stale_or_nondeterministic_packaging_paths() -> Non
     assert "--trusted-zstd-sha256" in source
     assert 'command -v zstd' not in source
     assert "resolve_release_epoch.py" not in source
+
+
+def test_bundle_requires_independent_cuda_review_input(tmp_path: Path) -> None:
+    binaries, zstd, digest = _fixture(tmp_path)
+    output = tmp_path / "out"
+    result = _run(output, binaries, zstd, digest, omit_options={"--trusted-cuda-key-sha256"})
+    assert result.returncode != 0
+    assert "CUDA release requires --trusted-cuda-key-sha256" in result.stderr
+    assert not _outputs(output)["archive"].exists()
+
+
+@pytest.mark.parametrize("relative", ("defaults/nexus/config.toml", "scripts/untracked_guard_input.py"))
+def test_synthetic_packaging_fixture_keeps_actual_source_drift_guard(tmp_path: Path, relative: str) -> None:
+    environment = _git_fixture_environment()
+    source = prepare_source_fixture(REPO_ROOT, tmp_path / "fixture", environment)
+    command = ["python3", "-I", "-S", str(source / "scripts/check_release_feature_graph.py"), "--validate-source-commit", SOURCE_COMMIT]
+    initial = subprocess.run(command, cwd=source, env=environment, text=True, capture_output=True)
+    assert initial.returncode == 0, initial.stderr
+    changed = source / relative
+    changed.write_text((changed.read_text() if changed.exists() else "") + "\n# changed after fixture seal\n")
+    result = subprocess.run(command, cwd=source, env=environment, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "trusted release source surface drifted" in result.stderr

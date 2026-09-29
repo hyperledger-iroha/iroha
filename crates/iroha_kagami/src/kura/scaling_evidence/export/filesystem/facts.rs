@@ -140,7 +140,6 @@ impl FactsOutput {
         maximum: u64,
         bindings: &[ProofInputBinding; 10],
         block_store: &Path,
-        merge_log: &Path,
         hook: &mut impl FnMut(FactsRole, Phase) -> Result<()>,
     ) -> Result<Self> {
         ensure!(
@@ -148,7 +147,7 @@ impl FactsOutput {
             "invalid facts output cap"
         );
         ensure!(
-            [block_store, merge_log]
+            [block_store]
                 .iter()
                 .all(|path| path.as_os_str().as_bytes().len() <= MAX_PATH_BYTES),
             "facts Core source path exceeds the bound"
@@ -169,7 +168,6 @@ impl FactsOutput {
             block_store.join("blocks.index"),
             block_store.join("blocks.hashes"),
             block_store.join("blocks.count.norito"),
-            merge_log.to_owned(),
         ];
         let mut paths = std::collections::BTreeSet::new();
         for binding in bindings {
@@ -453,7 +451,6 @@ pub(in crate::kura::scaling_evidence::export) fn produce_facts(
     journal: JournalExpectations,
     verification_limits: VerificationLimits,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     caps: FactsAssemblyCaps,
 ) -> Result<PublishedFacts> {
@@ -464,7 +461,6 @@ pub(in crate::kura::scaling_evidence::export) fn produce_facts(
         journal,
         verification_limits,
         block_store,
-        merge_log,
         reader_limits,
         caps,
         |_, _| Ok(()),
@@ -482,7 +478,6 @@ fn produce_with_hook(
     journal: JournalExpectations,
     verification_limits: VerificationLimits,
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     caps: FactsAssemblyCaps,
     mut hook: impl FnMut(FactsRole, Phase) -> Result<()>,
@@ -500,7 +495,6 @@ fn produce_with_hook(
         caps.facts_bytes,
         &bindings,
         block_store,
-        merge_log,
         &mut hook,
     )?;
     let source_caps = bindings.each_ref().map(|b| b.max_bytes);
@@ -564,7 +558,6 @@ fn produce_with_hook(
         journal,
         verification_limits,
         block_store,
-        merge_log,
         reader_limits,
         caps,
     )?;

@@ -130,7 +130,7 @@ impl NativeTransactionsV1 {
         }
         // A queue failure can be ambiguous; never sign or resubmit a replacement envelope here.
         self.queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable(accepted, &self.state, plan)
+            .push_with_lane_with_state_and_routing_plan(accepted, &self.state, plan)
             .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
         while started.elapsed() < self.timeout {
             {

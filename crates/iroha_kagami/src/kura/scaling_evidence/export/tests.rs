@@ -17,7 +17,6 @@ mod unix {
     struct Disk {
         _directory: tempfile::TempDir,
         root: PathBuf,
-        log: PathBuf,
         signed: fixture::Fixture,
     }
     impl Disk {
@@ -31,12 +30,11 @@ mod unix {
                 store.append_block_to_chain(&height.block).unwrap();
             }
             drop(store);
-            let log = root.join("merge.log");
-            fs::write(&log, []).unwrap();
+
             Self {
                 _directory: directory,
                 root,
-                log,
+
                 signed,
             }
         }
@@ -62,8 +60,6 @@ mod unix {
                 max_committed_blocks: 1025,
                 max_store_data_bytes: 2 * 1024 * 1024,
                 max_carrier_bytes: 1024 * 1024,
-                max_merge_log_bytes: 2 * 1024 * 1024,
-                max_merge_frames: 8,
                 max_output_bytes: 2 * 1024 * 1024,
                 max_decode_allocation_bytes: 8 * 1024 * 1024,
                 owner_uid: fs::metadata(&self.root).unwrap().uid(),
@@ -74,7 +70,6 @@ mod unix {
                 self.signed.plan(),
                 fixture::limits(),
                 &self.root,
-                &self.log,
                 self.reader_limits(),
                 &self.bindings(),
                 self.supplied(),
@@ -211,7 +206,6 @@ mod unix {
                 "blocks.index",
                 "blocks.hashes",
                 "blocks.count.norito",
-                "merge.log",
             ] {
                 fs::set_permissions(disk.root.join(name), fs::Permissions::from_mode(0o400))
                     .unwrap();
@@ -364,7 +358,6 @@ mod unix {
                 plan,
                 fixture::limits(),
                 Path::new("/absent-canonical-fixture"),
-                &disk.log,
                 reader,
                 &bindings,
                 supplied,
@@ -376,12 +369,12 @@ mod unix {
     }
 
     #[test]
-    fn full_scan_rejects_a_late_tail_even_when_native_carriers_need_no_merge_entries() {
+    fn canonical_hash_journal_rejects_a_late_tail_without_mutation() {
         let disk = Disk::new(4);
         assert!(disk.export().is_ok());
-        let mut bytes = fs::read(&disk.log).unwrap();
+        let mut bytes = fs::read(disk.root.join("blocks.hashes")).unwrap();
         bytes.push(0x5a);
-        fs::write(&disk.log, bytes).unwrap();
+        fs::write(disk.root.join("blocks.hashes"), bytes).unwrap();
         let before = disk.snapshot();
         assert!(disk.export().is_err());
         assert_eq!(disk.snapshot(), before);
@@ -431,16 +424,15 @@ mod unix {
             disk.signed.plan(),
             fixture::limits(),
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             &disk.bindings(),
             disk.supplied(),
             || {
                 called.set(true);
-                let bytes = fs::read(&disk.log).unwrap();
-                let replacement = disk.root.join("replacement.log");
+                let bytes = fs::read(disk.root.join("blocks.hashes")).unwrap();
+                let replacement = disk.root.join("replacement.hashes");
                 fs::write(&replacement, bytes).unwrap();
-                fs::rename(replacement, &disk.log).unwrap();
+                fs::rename(replacement, disk.root.join("blocks.hashes")).unwrap();
             },
         );
         assert!(called.get());
@@ -612,7 +604,6 @@ mod unix {
             disk.signed.plan(),
             limits,
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             &disk.bindings(),
             disk.supplied(),
@@ -625,7 +616,6 @@ mod unix {
             disk.signed.plan(),
             limits,
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             &disk.bindings(),
             disk.supplied(),
@@ -665,7 +655,6 @@ mod unix {
                 disk.signed.plan(),
                 limits,
                 Path::new("/absent-canonical-fixture"),
-                &disk.log,
                 reader,
                 &disk.bindings(),
                 disk.supplied(),

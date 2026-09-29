@@ -54,18 +54,23 @@ enum GenerationAdmission<T, C> {
     Unallocated(C),
     Reserved(ReservedEbrCell<T, C>),
 }
+// A refusal returns the original writer and generation custody together.
+type GenerationCloneRefusal<'a, T, C> = (
+    EbrCellWriterAcquisition<'a, T, C>,
+    GenerationAdmission<T, C>,
+    EbrCellWriterAdmissionError<std::convert::Infallible>,
+);
+
+type GenerationCloneResult<'a, T, C> = Result<
+    (EbrCellWriterAcquisition<'a, T, C>, EbrCellOwned<T, C>),
+    GenerationCloneRefusal<'a, T, C>,
+>;
+
 impl<T: Value, C: Send + Sync + 'static> GenerationAdmission<T, C> {
     fn try_clone<'a>(
         self,
         writer: EbrCellWriterAcquisition<'a, T, C>,
-    ) -> Result<
-        (EbrCellWriterAcquisition<'a, T, C>, EbrCellOwned<T, C>),
-        (
-            EbrCellWriterAcquisition<'a, T, C>,
-            Self,
-            EbrCellWriterAdmissionError<std::convert::Infallible>,
-        ),
-    > {
+    ) -> GenerationCloneResult<'a, T, C> {
         match self {
             Self::Reserved(backing) => writer
                 .try_clone_reserved(backing)

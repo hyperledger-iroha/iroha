@@ -117,9 +117,6 @@ struct ExportArgs {
     /// Exact absolute lane directory containing the canonical block journals
     #[arg(long)]
     block_store: PathBuf,
-    /// Exact absolute canonical merge-log file
-    #[arg(long)]
-    merge_log: PathBuf,
     /// New absolute proof path; existing destinations are rejected
     #[arg(long)]
     output: PathBuf,
@@ -156,13 +153,7 @@ pub(super) struct ReaderArgs {
     /// Maximum canonical wire bytes for one carrier
     #[arg(long)]
     max_carrier_bytes: u64,
-    /// Maximum complete merge-log bytes
-    #[arg(long)]
-    max_merge_log_bytes: u64,
-    /// Maximum frames in the complete merge log
-    #[arg(long)]
-    max_merge_frames: u64,
-    /// Maximum cumulative carrier and merge-entry bytes returned by the reader
+    /// Maximum cumulative original carrier bytes returned by the reader
     #[arg(long)]
     reader_max_output_bytes: u64,
     /// Maximum cumulative owned allocation per decoder invocation
@@ -181,8 +172,6 @@ impl ReaderArgs {
             max_committed_blocks: self.max_committed_blocks,
             max_store_data_bytes: self.max_store_data_bytes,
             max_carrier_bytes: usize::try_from(self.max_carrier_bytes)?,
-            max_merge_log_bytes: self.max_merge_log_bytes,
-            max_merge_frames: self.max_merge_frames,
             max_output_bytes: self.reader_max_output_bytes,
             max_decode_allocation_bytes: usize::try_from(self.max_decode_allocation_bytes)?,
             owner_uid: self.owner_uid,
@@ -274,7 +263,6 @@ impl<T: Write> RunArgs<T> for Args {
                 let proof = export_bound_request(
                     request,
                     &args.block_store,
-                    &args.merge_log,
                     args.reader.into_limits()?,
                     input,
                 )?;

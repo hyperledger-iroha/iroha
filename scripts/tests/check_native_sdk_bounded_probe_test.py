@@ -163,10 +163,10 @@ def test_node_and_python_probe_keep_same_shared_owner(monkeypatch, tmp_path):
     calls = []
     def observed(argv, **kwargs):
         calls.append((tuple(argv), kwargs))
-        return subprocess.CompletedProcess(argv, 0, b"24", b"")
+        return subprocess.CompletedProcess(argv, 0, b"25", b"")
     monkeypatch.setattr(MODULE, "_run_bounded_probe", observed)
-    assert MODULE.probe_node_abi(tmp_path / "inert.node", (), node="node") == 24
-    assert MODULE.probe_python_abi(tmp_path / "inert.so", (), python=sys.executable) == 24
+    assert MODULE.probe_node_abi(tmp_path / "inert.node", (), node="node") == 25
+    assert MODULE.probe_python_abi(tmp_path / "inert.so", (), python=sys.executable) == 25
     assert calls[0][0][0:2] == ("node", "--eval")
     assert calls[1][0][0:4] == (sys.executable, "-I", "-B", "-c")
     assert all(options == {"stdout_limit": 4096, "stderr_limit": 4096} for _, options in calls)

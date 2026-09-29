@@ -158,7 +158,6 @@ fn install_replay_fixture_outputs(
         .axt_transitioned_dataspaces()
         .cloned()
         .unwrap_or_default();
-    let statements = block.lane_finality_statements().to_vec();
     block
         .set_execution_outputs(
             outputs,
@@ -167,7 +166,6 @@ fn install_replay_fixture_outputs(
             envelopes,
             policy,
             transitions,
-            statements,
             &replay_fixture_limits(),
         )
         .expect("attach structurally valid complete replay-fixture outputs");

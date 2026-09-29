@@ -1709,7 +1709,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
         let source = live.native_contexts.as_ref().unwrap();
         let bytes = source.canonical_bytes().to_vec();
         let carrier_hash = source.carrier_hash();
-        let projection: crate::state::NativeLaneStateProjectionV1 =
+        let projection: crate::state::NativeExecutionProjectionV1 =
             norito::decode_canonical_with_limits(
                 &bytes,
                 norito::canonical_decode_limits(bytes.len()),
@@ -1717,6 +1717,18 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             .unwrap();
         assert_eq!(projection.carrier_hash, carrier_hash);
         assert_eq!(projection.carrier_height, 2);
+        assert_eq!(
+            &projection.casting_bindings,
+            live.overlay
+                .as_ref()
+                .unwrap()
+                .captured_parliament_casting_bindings()
+                .unwrap()
+        );
+        assert_eq!(
+            projection.ordinary_writes, live.witness.writes,
+            "archive retains the exact original execution write order"
+        );
         assert!(
             live.commitment
                 .get()

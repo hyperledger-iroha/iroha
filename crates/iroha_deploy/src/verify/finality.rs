@@ -1,54 +1,27 @@
-//! Light finality verifier for exact `3f + 1` committees (spec §11.2 D-7,
-//! gate G5).
+//! Bounded, contiguous native finality verification for deployment observations.
 //!
-//! The verifier trusts one anchor and nothing that its transport returns:
+//! Trust starts at independently authenticated signed genesis or an operator-selected complete
+//! native checkpoint. Every successor is verified; a supplied committee, context digest or proof
+//! is never promoted to its own trust root. Fresh BLS attestations require `2f + 1` distinct
+//! members of the authenticated tip committee. The native checkpoint retains exact predecessor
+//! decisions, allowing one-block-lagging members to count across an epoch boundary.
 //!
-//! - a genesis the caller has authenticated ([`GenesisAnchor`]); the height-one
-//!   proof must be signed by exactly the genesis validators; or
-//! - a [`FinalityCheckpointV1`] that an earlier run verified and stored as
-//!   `checkpoint.norito`.
-//!
-//! From the anchor it verifies forward in O(new epochs). A proof inside the
-//! pinned epoch is final when exactly `2f + 1` distinct members of the pinned
-//! committee signed its `CommitQC`. The proof at an epoch's last height carries
-//! the next committee (`next_epoch_snapshot`), which that same certificate
-//! authenticates, so only epoch-terminal proofs and the tip are fetched.
-//!
-//! Liveness and identity come from challenge-bound attestations: a node signs
-//! its durable tip together with the caller's fresh nonce, and at least
-//! `2f + 1` distinct committee members must produce one that verifies against
-//! the checkpoint. The checkpoint also keeps the epoch before its own, so a
-//! member whose tip is still just behind an epoch boundary that committed
-//! between two reads is verified against that epoch's committee and terminal
-//! decision.
-//!
-//! Signature, quorum and proof-of-possession checks are the data model's own
-//! (`verify_bridge_finality_proof`, `BridgeFinalityAttestationV1::verify`).
-//! This module only decides which committee a proof must match. Transport is
-//! behind [`FinalitySource`].
-// TODO(P1): anchor from the pinned network card once `NetworkCardV1` exists.
-// TODO(P6): verify lane certificates against an expected dataspace committee
-// (spec §10.7) once the lane certificate route exists.
+//! Height-one outputs have no QC. They require a certified successor or independent committee
+//! attestations; merely constructing a verifier does not authenticate genesis execution.
+// TODO(P2): provide the native HTTP transport and concurrent bounded peer reads.
 
-use std::{cmp::Reverse, collections::BTreeMap, num::NonZeroU64};
-
-use iroha_crypto::{HashOf, PublicKey};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
-    block::{
-        BlockHeader,
-        consensus_v2::{
-            ConsensusMode, GlobalPhase, QuorumCertificateRef, ValidatorPower,
-            finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
-        },
-    },
-    bridge::{
-        BridgeFinalityAttestationV1, BridgeFinalityAttestationValidationError, BridgeFinalityProof,
-        BridgeFinalityVerifyError, verify_bridge_finality_proof,
+    block::{BlockHeader, SignedBlock},
+    sumeragi_finality::{
+        FinalityError as NativeFinalityError, FinalityValidator, ScheduledSlot,
+        SumeragiFinalityAttestation, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
+        SumeragiFinalityVerifier,
     },
 };
 use iroha_model_base::peer::PeerId;
-use norito::codec::{Decode, Encode};
+use std::{cmp::Reverse, collections::BTreeMap, num::NonZeroU64};
 
 /// Smallest committee: `f = 1`.
 pub const MIN_COMMITTEE_MEMBERS: usize = 4;
@@ -97,258 +70,44 @@ impl CommitteeSize {
     }
 }
 
-/// Genesis facts the caller has already authenticated.
-///
-/// Build it from a genesis whose signature and expected hash were checked, for
-/// example from `iroha_genesis::ValidatedGenesisBundle::{expected_hash,
-/// validator_pops}` and its consensus metadata. The verifier derives the
-/// genesis roster from these keys, never from a proof.
+/// Maximum successor proofs processed by one advance or complete observation.
+pub const MAX_ADVANCE_PROOFS: usize = 4096;
+/// Maximum canonical block bytes processed by one advance or complete observation.
+pub const MAX_ADVANCE_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum distinct peers queried by one observation across committee changes.
+pub const MAX_OBSERVATION_PEERS: usize = 4 * MAX_COMMITTEE_MEMBERS;
+
+/// Genesis and chain label the caller authenticated independently of the transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisAnchor {
-    /// Network identity; it must be derived from `genesis_block_hash`.
+    /// Independently selected genesis-derived network.
     pub network_id: NetworkId,
-    /// Hash of the signed genesis block (height one).
-    pub genesis_block_hash: HashOf<BlockHeader>,
-    /// Consensus mode fixed by genesis.
-    pub mode: ConsensusMode,
-    /// Consensus keys of the genesis validators with their BLS proofs of
-    /// possession.
-    pub validators: BTreeMap<PublicKey, Vec<u8>>,
+    /// Chain label used for native consensus instance derivation.
+    pub chain_id: String,
+    /// Original signed genesis whose signature the caller authenticated.
+    pub genesis: SignedBlock,
+    /// Exact ordered native BLS committee and possession proofs selected with genesis.
+    pub validators: Vec<FinalityValidator>,
 }
 
-impl GenesisAnchor {
-    /// The genesis roster in canonical peer-id order, one vote each, with
-    /// aligned proofs of possession.
-    fn roster(&self) -> Result<(Vec<ValidatorPower>, Vec<Vec<u8>>), FinalityError> {
-        CommitteeSize::new(self.validators.len())?;
-        let ordered: BTreeMap<_, _> = self
-            .validators
-            .iter()
-            .map(|(key, pop)| (PeerId::new(key.clone()), pop))
-            .collect();
-        Ok(ordered
-            .into_iter()
-            .map(|(validator, pop)| {
-                (
-                    ValidatorPower {
-                        validator,
-                        power: 1,
-                    },
-                    pop.clone(),
-                )
-            })
-            .unzip())
-    }
-}
-
-/// Verified finality state, stored as `checkpoint.norito` (spec §4).
-///
-/// It is trusted local state: the verifier wrote it after verifying the block
-/// at `height`, and resumes from it without reading history again. The
-/// committees reuse the data-model type that hands one epoch's frozen election
-/// inputs to the next.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::verify::finality::FinalityCheckpointV1")]
-pub struct FinalityCheckpointV1 {
-    /// Network identity, derived from the genesis hash.
-    pub network_id: NetworkId,
-    /// Hash of the genesis block.
-    pub genesis_block_hash: HashOf<BlockHeader>,
-    /// Genesis `CommitQC` decision. An attestation's genesis proof must
-    /// certify the same decision.
-    pub genesis_decision: QuorumCertificateRef,
-    /// Height of the last verified block.
-    pub height: NonZeroU64,
-    /// Hash of the last verified block.
-    pub block_hash: HashOf<BlockHeader>,
-    /// `CommitQC` decision that finalized `block_hash`.
-    pub decision: QuorumCertificateRef,
-    /// Frozen election inputs of the epoch that finalized `height`.
-    pub committee: FinalizedNextEpochSnapshot,
-    /// Inputs of the following epoch, present exactly when `height` is the
-    /// last height of `committee`'s epoch.
-    pub next_committee: Option<FinalizedNextEpochSnapshot>,
-    /// The epoch just before `committee`'s, once a verified advance crossed
-    /// into `committee`'s epoch.
-    pub previous_epoch: Option<PreviousEpochV1>,
-}
-
-/// A verified epoch that ended before the checkpoint's epoch.
-///
-/// Attestations are read one member after another, so an epoch boundary can
-/// commit between two reads. Keeping the epoch that was just crossed lets the
-/// members still behind that boundary count.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::verify::finality::PreviousEpochV1")]
-pub struct PreviousEpochV1 {
-    /// Frozen election inputs of the previous epoch.
-    pub committee: FinalizedNextEpochSnapshot,
-    /// `CommitQC` decision that finalized its last height.
-    pub terminal_decision: QuorumCertificateRef,
-}
-
-impl FinalityCheckpointV1 {
-    /// Encode as one canonical Norito frame (header included).
-    ///
-    /// # Errors
-    ///
-    /// [`FinalityError::Codec`] if encoding fails.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, FinalityError> {
-        norito::encode_canonical(self).map_err(FinalityError::Codec)
-    }
-
-    /// Decode one canonical Norito frame and check its consistency.
-    ///
-    /// # Errors
-    ///
-    /// [`FinalityError::Codec`] for bytes that are not a canonical frame, or
-    /// any error of [`Self::validate`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, FinalityError> {
-        let checkpoint: Self = norito::decode_canonical(bytes).map_err(FinalityError::Codec)?;
-        checkpoint.validate()?;
-        Ok(checkpoint)
-    }
-
-    /// The committee that must finalize the next height.
-    pub fn governing_committee(&self) -> &FinalizedNextEpochSnapshot {
-        self.next_committee.as_ref().unwrap_or(&self.committee)
-    }
-
-    /// Check that the fields agree with each other and that every committee
-    /// is an exact `3f + 1` roster.
-    ///
-    /// # Errors
-    ///
-    /// [`FinalityError::InvalidCheckpoint`] naming the broken rule, or
-    /// [`FinalityError::CommitteeSize`].
-    pub fn validate(&self) -> Result<(), FinalityError> {
-        let invalid = |reason| Err(FinalityError::InvalidCheckpoint(reason));
-        if NetworkId::from_genesis_hash(self.genesis_block_hash) != self.network_id {
-            return invalid("network id is not derived from the genesis hash");
-        }
-        if !certifies(&self.genesis_decision, 1, self.genesis_block_hash)
-            || self.genesis_decision.subject.parent_block_hash.is_some()
-        {
-            return invalid("genesis decision does not certify the genesis block");
-        }
-        if !certifies(&self.decision, self.height.get(), self.block_hash) {
-            return invalid("decision does not certify the checkpoint block");
-        }
-        if self.height.get() == 1 && !self.decision.same_commit_decision(self.genesis_decision) {
-            return invalid("height-one checkpoint differs from the genesis decision");
-        }
-        validate_committee(&self.committee)?;
-        let end = self.committee.epoch_end_height;
-        if self.height.get() > end {
-            return invalid("checkpoint height is past the end of its epoch");
-        }
-        if let Some(previous) = &self.previous_epoch {
-            let previous_end = previous.committee.epoch_end_height;
-            if previous.committee.epoch.checked_add(1) != Some(self.committee.epoch)
-                || previous_end >= self.height.get()
-                || previous.committee.mode != self.committee.mode
-                || !certifies(
-                    &previous.terminal_decision,
-                    previous_end,
-                    previous.terminal_decision.subject.block_hash,
-                )
-            {
-                return invalid("previous epoch does not precede the checkpoint epoch");
-            }
-            validate_committee(&previous.committee)?;
-        }
-        match &self.next_committee {
-            // The terminal height `u64::MAX` has no representable successor.
-            None if self.height.get() == end && end != u64::MAX => {
-                invalid("epoch-terminal checkpoint lacks the next committee")
-            }
-            None => Ok(()),
-            Some(_) if self.height.get() != end => {
-                invalid("next committee is present before the epoch ends")
-            }
-            Some(next) => {
-                if self.committee.epoch.checked_add(1) != Some(next.epoch)
-                    || next.epoch_end_height <= end
-                    || next.mode != self.committee.mode
-                {
-                    return invalid("next committee does not follow the checkpoint epoch");
-                }
-                validate_committee(next)
-            }
-        }
-    }
-
-    /// Verify `proof` as the finalized block at `expected`, a height above the
-    /// checkpoint within the governing epoch, and return the checkpoint at it.
-    fn extend(
-        &self,
-        proof: &BridgeFinalityProof,
-        expected: NonZeroU64,
-    ) -> Result<Self, FinalityError> {
-        let height = proof.block_header.height();
-        if height != expected {
-            return Err(FinalityError::UnexpectedHeight {
-                expected: expected.get(),
-                actual: height.get(),
-            });
-        }
-        let committee = self.governing_committee();
-        verify_in_committee(proof, committee, self.network_id)?;
-        let artifact = &proof.finality_artifact;
-        // Leaving an epoch-terminal checkpoint keeps the epoch it ends.
-        let previous_epoch = if self.next_committee.is_some() {
-            Some(PreviousEpochV1 {
-                committee: self.committee.clone(),
-                terminal_decision: self.decision,
-            })
-        } else {
-            self.previous_epoch.clone()
-        };
-        let next = Self {
-            network_id: self.network_id,
-            genesis_block_hash: self.genesis_block_hash,
-            genesis_decision: self.genesis_decision,
-            height,
-            block_hash: artifact.block_hash,
-            decision: artifact.commit_qc.as_ref(),
-            committee: committee.clone(),
-            next_committee: artifact
-                .height_context
-                .next_epoch_snapshot
-                .as_ref()
-                .map(epoch_inputs),
-            previous_epoch,
-        };
-        next.validate()?;
-        Ok(next)
-    }
-}
-
-/// Transport for the verifier. Everything it returns is verified, so a faulty
-/// or hostile source can only make verification fail.
+/// Untrusted transport for native proof frames and challenged node statements.
 pub trait FinalitySource {
     /// Transport failure.
     type Error: std::error::Error + Send + Sync + 'static;
-
-    /// The finality proof of the block at `height`
-    /// (`GET /v1/bridge/finality/{height}`).
+    /// Fetch the exact native proof at `height`.
     ///
     /// # Errors
-    ///
     /// Any transport failure.
-    fn finality_proof(&self, height: NonZeroU64) -> Result<BridgeFinalityProof, Self::Error>;
-
-    /// A fresh attestation of `peer`'s durable tip bound to `challenge`
-    /// (`GET /v1/bridge/finality/attestation/latest`).
+    fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error>;
+    /// Fetch `peer`'s fresh native durable-tip attestation over `challenge`.
     ///
     /// # Errors
-    ///
     /// Any transport failure.
     fn latest_attestation(
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> Result<BridgeFinalityAttestationV1, Self::Error>;
+    ) -> Result<SumeragiFinalityAttestation, Self::Error>;
 }
 
 /// A durable tip that one committee member attested to.
@@ -396,152 +155,88 @@ impl AttestationQuorum {
     }
 }
 
-/// Why finality could not be verified.
+/// Why an independently anchored native finality observation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum FinalityError {
-    /// The roster is not an exact `3f + 1` committee within bounds.
-    #[error(
-        "a committee of {members} is not an exact 3f+1 roster of \
-         {MIN_COMMITTEE_MEMBERS} to {MAX_COMMITTEE_MEMBERS} members"
-    )]
+    /// The roster is not exact `3f + 1` within deployment bounds.
+    #[error("invalid deployment committee size {members}")]
     CommitteeSize {
         /// Roster size found.
         members: usize,
     },
-    /// The value belongs to another network.
+    /// The response belongs to another network.
     #[error("expected network {expected}, got {actual}")]
     WrongNetwork {
-        /// Pinned network.
+        /// Selected network.
         expected: NetworkId,
-        /// Network found.
+        /// Response network.
         actual: NetworkId,
     },
-    /// The genesis block hash differs from the pinned genesis.
-    #[error("the genesis block hash differs from the pinned genesis")]
+    /// Genesis differs from the independently selected root.
+    #[error("genesis differs from the selected root")]
     WrongGenesis,
-    /// The source returned a proof for another height.
-    #[error("expected a finality proof for height {expected}, got height {actual}")]
+    /// The source returned another height.
+    #[error("expected height {expected}, got {actual}")]
     UnexpectedHeight {
         /// Requested height.
         expected: u64,
-        /// Height returned.
+        /// Returned height.
         actual: u64,
     },
-    /// The tip is below the checkpoint; the checkpoint never moves back.
-    #[error("the tip at height {height} is below the checkpoint at height {checkpoint}")]
+    /// Checkpoints never move backward.
+    #[error("tip {height} precedes checkpoint {checkpoint}")]
     StaleTip {
-        /// Checkpoint height.
+        /// Current checkpoint height.
         checkpoint: u64,
-        /// Tip height.
+        /// Offered height.
         height: u64,
     },
-    /// The tip is above the checkpoint; advance the verifier first.
-    #[error("the tip at height {height} is above the checkpoint at height {checkpoint}")]
+    /// An attestation exceeds the verified prefix.
+    #[error("tip {height} exceeds checkpoint {checkpoint}")]
     AheadOfCheckpoint {
-        /// Checkpoint height.
+        /// Current checkpoint height.
         checkpoint: u64,
-        /// Tip height.
+        /// Offered height.
         height: u64,
     },
-    /// The tip belongs to an epoch before the checkpoint's that the checkpoint
-    /// no longer keeps (older than the previous epoch).
-    #[error("the tip at height {height} is from epoch {epoch}, before the checkpoint epoch")]
-    EarlierEpoch {
-        /// Tip height.
-        height: u64,
-        /// Tip epoch.
-        epoch: u64,
-    },
-    /// The proof's roster, proofs of possession or epoch inputs differ from
-    /// the pinned committee.
-    #[error("the proof at height {height} is not from the pinned committee and epoch")]
-    CommitteeMismatch {
-        /// Proof height.
+    /// A lagging tip lacks a retained authenticated parent decision.
+    #[error("tip {height} is outside the retained prefix at checkpoint {checkpoint}")]
+    OutsideRetainedPrefix {
+        /// Current checkpoint height.
+        checkpoint: u64,
+        /// Offered height.
         height: u64,
     },
-    /// The proof starts from a snapshot bootstrap, which the first release
-    /// does not produce.
-    #[error("the proof at height {height} is anchored in a snapshot bootstrap")]
-    SnapshotBootstrap {
-        /// Proof height.
-        height: u64,
-    },
-    /// The `CommitQC` names a signer twice or out of order.
-    #[error("the CommitQC signers at height {height} repeat a validator or are out of order")]
-    NonCanonicalSigners {
-        /// Proof height.
-        height: u64,
-    },
-    /// The `CommitQC` names a signer outside the roster.
-    #[error("CommitQC signer {signer} at height {height} is outside the {members}-member roster")]
-    SignerOutsideRoster {
-        /// Proof height.
-        height: u64,
-        /// Signer index.
-        signer: u32,
-        /// Roster size.
-        members: usize,
-    },
-    /// The `CommitQC` does not have exactly `2f + 1` signers.
-    #[error(
-        "the CommitQC at height {height} has {actual} signers; exactly {expected} are required"
-    )]
-    SignerCount {
-        /// Proof height.
-        height: u64,
-        /// `2f + 1`.
-        expected: usize,
-        /// Signers found.
-        actual: usize,
-    },
-    /// Data-model verification of the proof failed (structure, network,
-    /// quorum, proofs of possession or aggregate signature).
-    #[error("the finality proof at height {height} does not verify: {source}")]
-    Proof {
-        /// Proof height.
-        height: u64,
-        /// Data-model error.
-        source: BridgeFinalityVerifyError,
-    },
-    /// A valid certificate for a different decision than the verified chain.
-    #[error("the proof at height {height} certifies a different decision than the verified chain")]
-    ConflictingDecision {
-        /// Proof height.
-        height: u64,
-    },
-    /// An all-zero challenge could be replayed.
-    #[error("the attestation challenge must be non-zero")]
+    /// Native structural, cryptographic, schedule or exact-decision verification failed.
+    #[error("native finality: {0}")]
+    Native(#[from] NativeFinalityError),
+    /// A zero challenge permits replay.
+    #[error("the attestation challenge must be nonzero")]
     ZeroChallenge,
-    /// The attestation answers another challenge.
-    #[error("the attestation is not bound to this challenge")]
+    /// The statement answers another request.
+    #[error("the attestation answers another challenge")]
     StaleChallenge,
-    /// The attestation is inconsistent or its node signature is invalid.
-    #[error("invalid attestation: {0}")]
-    Attestation(#[source] BridgeFinalityAttestationValidationError),
-    /// The attesting node is not a member of the checkpoint committee.
-    #[error("attesting node {peer} is not a member of the checkpoint committee")]
+    /// The signer is not in the authenticated current committee.
+    #[error("attesting node {peer} is not in the authenticated committee")]
     NotInCommittee {
-        /// Attesting node.
+        /// Rejected signer.
         peer: Box<PeerId>,
     },
-    /// The source returned another node's attestation.
-    #[error("asked {expected} for an attestation, got one signed by {actual}")]
+    /// A queried node was substituted.
+    #[error("asked {expected}, received a statement from {actual}")]
     UnexpectedPeer {
-        /// Node asked.
+        /// Queried node.
         expected: Box<PeerId>,
-        /// Node that signed.
+        /// Returned signer.
         actual: Box<PeerId>,
     },
-    /// Fewer than `2f + 1` distinct committee members attested.
-    #[error("{} of the {} required committee members attested", .0.verified(), .0.required)]
+    /// Too few distinct current members supplied valid fresh statements.
+    #[error("{} of {} required committee members attested", .0.verified(), .0.required)]
     InsufficientAttestations(Box<AttestationQuorum>),
-    /// The stored checkpoint is inconsistent.
-    #[error("invalid finality checkpoint: {0}")]
-    InvalidCheckpoint(&'static str),
-    /// The checkpoint bytes are not a canonical Norito frame.
-    #[error("finality checkpoint codec: {0}")]
-    Codec(#[source] norito::Error),
-    /// The source failed.
+    /// The requested work exceeds a finite observation budget.
+    #[error("finality observation exceeds its {0} budget")]
+    ResourceLimit(&'static str),
+    /// An untrusted transport failed.
     #[error("finality source: {0}")]
     Source(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -552,224 +247,239 @@ impl FinalityError {
     }
 }
 
-/// Light finality verifier holding one verified checkpoint.
-///
-/// Every method leaves the checkpoint unchanged when it fails.
+struct Budget {
+    proofs: usize,
+    bytes: usize,
+}
+impl Budget {
+    fn new() -> Self {
+        Self {
+            proofs: MAX_ADVANCE_PROOFS,
+            bytes: MAX_ADVANCE_BYTES,
+        }
+    }
+    fn charge(&mut self, proof: &SumeragiFinalityProof) -> Result<(), FinalityError> {
+        self.proofs = self
+            .proofs
+            .checked_sub(1)
+            .ok_or(FinalityError::ResourceLimit("proof count"))?;
+        self.bytes = self
+            .bytes
+            .checked_sub(proof.block_wire.len())
+            .ok_or(FinalityError::ResourceLimit("proof bytes"))?;
+        Ok(())
+    }
+}
+
+/// A complete independently anchored checkpoint; failure never replaces it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalityVerifier {
-    checkpoint: FinalityCheckpointV1,
+    checkpoint: SumeragiFinalityCheckpoint,
 }
 
 impl FinalityVerifier {
-    /// Anchor at an authenticated genesis: `genesis` must be the height-one
-    /// proof of `anchor`'s block, signed by exactly `2f + 1` of its validators.
+    /// Initialize from authenticated signed genesis and its result-only native frame.
+    /// Height-one execution still requires a successor or fresh quorum attestations.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::WrongNetwork`] or [`FinalityError::WrongGenesis`] for
-    /// another chain, [`FinalityError::CommitteeSize`] for a roster that is
-    /// not `3f + 1`, [`FinalityError::CommitteeMismatch`] when the proof's
-    /// roster, proofs of possession or mode differ from the anchor, and any
-    /// certificate error.
+    /// Wrong network, genesis, committee, chain label or malformed native material.
     pub fn from_genesis(
         anchor: &GenesisAnchor,
-        genesis: &BridgeFinalityProof,
+        genesis: &SumeragiFinalityProof,
     ) -> Result<Self, FinalityError> {
-        let derived = NetworkId::from_genesis_hash(anchor.genesis_block_hash);
-        if derived != anchor.network_id {
+        let actual = NetworkId::from_genesis_hash(anchor.genesis.hash());
+        if actual != anchor.network_id {
             return Err(FinalityError::WrongNetwork {
                 expected: anchor.network_id,
-                actual: derived,
+                actual,
             });
         }
-        let height = genesis.block_header.height();
-        if height.get() != 1 {
+        CommitteeSize::new(anchor.validators.len())?;
+        if genesis.height() != 1 {
             return Err(FinalityError::UnexpectedHeight {
                 expected: 1,
-                actual: height.get(),
+                actual: genesis.height(),
             });
         }
-        if genesis.block_header.hash() != anchor.genesis_block_hash {
+        if genesis.block_header.hash() != anchor.genesis.hash() {
             return Err(FinalityError::WrongGenesis);
         }
-        let (roster, pops) = anchor.roster()?;
-        let artifact = &genesis.finality_artifact;
-        let committee = committee_of(artifact);
-        if committee.mode != anchor.mode
-            || committee.roster != roster
-            || committee.validator_set_pops != pops
-        {
-            return Err(FinalityError::CommitteeMismatch { height: 1 });
-        }
-        verify_in_committee(genesis, &committee, anchor.network_id)?;
-        let decision = artifact.commit_qc.as_ref();
-        let checkpoint = FinalityCheckpointV1 {
-            network_id: anchor.network_id,
-            genesis_block_hash: anchor.genesis_block_hash,
-            genesis_decision: decision,
-            height,
-            block_hash: artifact.block_hash,
-            decision,
-            committee,
-            next_committee: artifact
-                .height_context
-                .next_epoch_snapshot
-                .as_ref()
-                .map(epoch_inputs),
-            previous_epoch: None,
-        };
-        checkpoint.validate()?;
-        Ok(Self { checkpoint })
+        let mut verifier = SumeragiFinalityVerifier::new(
+            &anchor.genesis,
+            &anchor.chain_id,
+            anchor.validators.clone(),
+        )?;
+        verifier.verify(genesis)?;
+        Ok(Self {
+            checkpoint: verifier.export_checkpoint(genesis)?,
+        })
     }
 
-    /// Resume from a stored checkpoint of the pinned network.
+    /// Resume from independently selected local checkpoint bytes, never a responding peer's claim.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::WrongNetwork`] for another network's checkpoint, or
-    /// any error of [`FinalityCheckpointV1::validate`].
+    /// Wrong selected network or chain label, or inconsistent native checkpoint.
     pub fn from_checkpoint(
-        checkpoint: FinalityCheckpointV1,
+        checkpoint: SumeragiFinalityCheckpoint,
         expected_network: NetworkId,
+        expected_chain: &str,
     ) -> Result<Self, FinalityError> {
-        checkpoint.validate()?;
-        if checkpoint.network_id != expected_network {
-            return Err(FinalityError::WrongNetwork {
-                expected: expected_network,
-                actual: checkpoint.network_id,
-            });
-        }
+        SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &expected_network,
+            expected_chain,
+        )?;
+        CommitteeSize::new(checkpoint.tip().committee.len())?;
         Ok(Self { checkpoint })
     }
 
-    /// The verified checkpoint; store it to resume later.
-    pub fn checkpoint(&self) -> &FinalityCheckpointV1 {
+    /// Complete native checkpoint to persist for independently authenticated restart.
+    pub fn checkpoint(&self) -> &SumeragiFinalityCheckpoint {
         &self.checkpoint
     }
-
-    /// Size of the committee that finalized the checkpoint.
+    /// Size of the exact committee that certified the tip.
     pub fn committee_size(&self) -> CommitteeSize {
-        CommitteeSize(self.checkpoint.committee.roster.len())
+        CommitteeSize(self.checkpoint.tip().committee.len())
+    }
+    fn native(&self) -> Result<SumeragiFinalityVerifier, FinalityError> {
+        Ok(SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &self.checkpoint,
+            &self.checkpoint.network_id(),
+            self.checkpoint.chain_id(),
+        )?)
+    }
+    fn members(&self) -> Vec<PeerId> {
+        self.checkpoint
+            .tip()
+            .committee
+            .iter()
+            .map(|v| PeerId::new(v.public_key.clone()))
+            .collect()
     }
 
-    /// Verify `tip` and move the checkpoint to it.
-    ///
-    /// For every epoch that ends between the checkpoint and the tip, only the
-    /// epoch-terminal proof is fetched. A tip at the checkpoint height must
-    /// certify the checkpoint decision. Returns the number of epoch-terminal
-    /// proofs fetched.
+    /// Verify every successor through `tip`, atomically replacing the checkpoint.
+    /// Returns the number of intermediate proofs fetched; the supplied tip is not fetched again.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::StaleTip`] for a tip below the checkpoint, any
-    /// transport error, and any certificate or committee error of the tip or
-    /// an epoch-terminal proof.
+    /// Any missing, reordered, altered or invalid successor; bounded-work exhaustion; stale tip.
     pub fn advance<S: FinalitySource + ?Sized>(
         &mut self,
         source: &S,
-        tip: &BridgeFinalityProof,
+        tip: &SumeragiFinalityProof,
     ) -> Result<usize, FinalityError> {
-        let current = &self.checkpoint;
-        let height = tip.block_header.height();
-        if height < current.height {
+        self.advance_with_budget(source, tip, &mut Budget::new())
+    }
+    fn advance_with_budget<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        tip: &SumeragiFinalityProof,
+        budget: &mut Budget,
+    ) -> Result<usize, FinalityError> {
+        self.advance_recording(source, tip, budget, &mut |_, _| {})
+    }
+    fn advance_recording<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        tip: &SumeragiFinalityProof,
+        budget: &mut Budget,
+        on_verified: &mut impl FnMut(&SumeragiFinalityVerifier, u64),
+    ) -> Result<usize, FinalityError> {
+        let current = self.checkpoint.height();
+        let height = tip.height();
+        if height < current {
             return Err(FinalityError::StaleTip {
-                checkpoint: current.height.get(),
-                height: height.get(),
+                checkpoint: current,
+                height,
             });
         }
-        if height == current.height {
-            self.verify_settled(tip)?;
+        if height == current {
+            budget.charge(tip)?;
+            let native = self.native()?;
+            native.verify_same_decision(self.checkpoint.tip(), tip)?;
+            on_verified(&native, height);
             return Ok(0);
         }
-        if height.get() > current.governing_committee().epoch_end_height {
-            // Before fetching anything for a later epoch, require the tip to
-            // carry a valid certificate from the roster it names.
-            verify_in_committee(
-                tip,
-                &committee_of(&tip.finality_artifact),
-                current.network_id,
-            )?;
+        if height - current > budget.proofs as u64 {
+            return Err(FinalityError::ResourceLimit("proof count"));
         }
-        let mut state = current.clone();
-        let mut crossed = 0;
-        while height.get() > state.governing_committee().epoch_end_height {
-            let end = NonZeroU64::new(state.governing_committee().epoch_end_height).ok_or(
-                FinalityError::InvalidCheckpoint("an epoch ends at height zero"),
-            )?;
-            let terminal = source
-                .finality_proof(end)
+        let mut native = self.native()?;
+        let mut fetched = 0;
+        for expected in current + 1..height {
+            let proof = source
+                .finality_proof(NonZeroU64::new(expected).expect("successor is positive"))
                 .map_err(FinalityError::transport)?;
-            state = state.extend(&terminal, end)?;
-            crossed += 1;
+            if proof.height() != expected {
+                return Err(FinalityError::UnexpectedHeight {
+                    expected,
+                    actual: proof.height(),
+                });
+            }
+            budget.charge(&proof)?;
+            CommitteeSize::new(proof.committee.len())?;
+            native.verify(&proof)?;
+            on_verified(&native, expected);
+            fetched += 1;
         }
-        self.checkpoint = state.extend(tip, height)?;
-        Ok(crossed)
+        budget.charge(tip)?;
+        CommitteeSize::new(tip.committee.len())?;
+        native.verify(tip)?;
+        on_verified(&native, height);
+        let checkpoint = native.export_checkpoint(tip)?;
+        self.checkpoint = checkpoint;
+        Ok(fetched)
     }
 
-    /// Verify one attestation against the checkpoint: signed by a member of
-    /// the checkpoint committee over `challenge`, on the pinned network and
-    /// genesis, reporting a tip that is final on the verified chain at or
-    /// below the checkpoint. A tip in the kept previous epoch is verified
-    /// against that epoch's committee and terminal decision.
+    /// Verify a current member's fresh attestation against the exact retained native prefix.
+    /// At most one block of lag is accepted; no arbitrary same-epoch decision is trusted.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::AheadOfCheckpoint`] when the tip is above the
-    /// checkpoint (advance first), [`FinalityError::EarlierEpoch`] when it is
-    /// in an epoch before the checkpoint's other than the kept previous one,
-    /// and any identity, binding or certificate error.
+    /// Invalid identity/signature/challenge, wrong network, nonmember, future or unretained tip.
     pub fn verify_attestation(
         &self,
         challenge: &[u8; 32],
-        attestation: &BridgeFinalityAttestationV1,
+        attestation: &SumeragiFinalityAttestation,
     ) -> Result<AttestedTip, FinalityError> {
         self.verify_attestation_identity(challenge, attestation)?;
-        let body = &attestation.body;
-        if !is_member(&self.checkpoint.committee, &body.node_id) {
+        if !self.members().contains(&attestation.body.node_id) {
             return Err(FinalityError::NotInCommittee {
-                peer: Box::new(body.node_id.clone()),
+                peer: Box::new(attestation.body.node_id.clone()),
             });
         }
-        let tip = &body.finality_proof;
-        let height = tip.block_header.height();
-        if height > self.checkpoint.height {
-            return Err(FinalityError::AheadOfCheckpoint {
-                checkpoint: self.checkpoint.height.get(),
-                height: height.get(),
-            });
+        let tip = &attestation.body.finality_proof;
+        let height = tip.height();
+        let checkpoint = self.checkpoint.height();
+        if height > checkpoint {
+            return Err(FinalityError::AheadOfCheckpoint { checkpoint, height });
         }
-        self.verify_settled(tip)?;
+        if height < checkpoint.saturating_sub(1) {
+            return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
+        }
+        self.native()?.verify_retained_decision(tip)?;
         Ok(AttestedTip {
-            height,
+            height: tip.block_header.height(),
             block_hash: tip.block_header.hash(),
         })
     }
 
-    /// Tally attestations: at least `2f + 1` distinct members of the
-    /// checkpoint committee must have one that verifies. Repeated attestations
-    /// from one member count once; attestations from non-members are ignored.
+    /// Count distinct authenticated committee members; duplicate statements count once.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::ZeroChallenge`], or
-    /// [`FinalityError::InsufficientAttestations`] with every member's outcome.
+    /// Zero challenge or insufficient valid committee statements, with per-peer outcomes.
     pub fn attestation_quorum(
         &self,
         challenge: &[u8; 32],
-        attestations: &[BridgeFinalityAttestationV1],
+        attestations: &[SumeragiFinalityAttestation],
     ) -> Result<AttestationQuorum, FinalityError> {
         require_challenge(challenge)?;
         let mut peers = self
-            .checkpoint
-            .committee
-            .roster
-            .iter()
-            .map(|member| (member.validator.clone(), AttestationOutcome::Missing))
+            .members()
+            .into_iter()
+            .map(|p| (p, AttestationOutcome::Missing))
             .collect::<Vec<_>>();
         for attestation in attestations {
             let Some((_, outcome)) = peers
                 .iter_mut()
-                .find(|(peer, _)| *peer == attestation.body.node_id)
+                .find(|(p, _)| *p == attestation.body.node_id)
             else {
                 continue;
             };
@@ -782,20 +492,14 @@ impl FinalityVerifier {
         self.quorum(peers)
     }
 
-    /// One full finality observation (gate G5): ask every committee member
-    /// for a fresh attestation over `challenge`, advance to the highest tip
-    /// that verifies, repeat while the advance reaches committee members not
-    /// yet asked, and require `2f + 1` verified attestations against the new
-    /// checkpoint.
-    ///
-    /// Tips that fail to verify do not block the others; their attestations
-    /// are reported as rejected. The checkpoint moves only if the quorum
-    /// holds.
+    /// Query current and authenticated next-committee members, follow contiguous proof chains,
+    /// and publish the new checkpoint only when a fresh quorum of its committee attests.
+    /// Responses observed before an advance remain eligible when their exact original native
+    /// decisions were authenticated during that advance, including across committee boundaries.
+    /// This bounded observation-local custody is separate from the compact restart window.
     ///
     /// # Errors
-    ///
-    /// [`FinalityError::ZeroChallenge`], or
-    /// [`FinalityError::InsufficientAttestations`] with every member's outcome.
+    /// Zero challenge, peer/proof budget exhaustion, or insufficient valid attestations.
     pub fn observe<S: FinalitySource + ?Sized>(
         &mut self,
         source: &S,
@@ -804,104 +508,143 @@ impl FinalityVerifier {
         require_challenge(challenge)?;
         let mut trial = self.clone();
         let mut reads = BTreeMap::new();
-        // Each round asks at least one new member, so this ends.
+        // Each entry certifies one immutable challenged response in `reads`, while its exact
+        // original decision and parent are retained by contiguous native verification. At most
+        // MAX_OBSERVATION_PEERS entries live here; no unbounded history is retained on restart.
+        let mut observed_prefix = BTreeMap::new();
+        let mut budget = Budget::new();
         loop {
-            let asked = reads.len();
-            trial.read_members(source, challenge, &mut reads);
-            if reads.len() == asked {
+            let count = reads.len();
+            trial.read_members(source, challenge, &mut reads)?;
+            if reads.len() == count {
                 break;
             }
-            trial.advance_to_highest(source, challenge, &reads);
+            let candidates = reads
+                .iter()
+                .filter_map(|(peer, read)| {
+                    let attestation = read.as_ref().ok()?;
+                    (attestation.body.node_id == *peer
+                        && trial
+                            .verify_attestation_identity(challenge, attestation)
+                            .is_ok())
+                    .then_some((peer, attestation))
+                })
+                .collect::<Vec<_>>();
+            let native = trial.native()?;
+            record_observed_prefix(
+                &native,
+                trial.checkpoint.height(),
+                &candidates,
+                &mut observed_prefix,
+            );
+            if trial.checkpoint.height() > 1 {
+                record_observed_prefix(
+                    &native,
+                    trial.checkpoint.height() - 1,
+                    &candidates,
+                    &mut observed_prefix,
+                );
+            }
+            let mut tips = candidates
+                .iter()
+                .map(|(_, a)| &a.body.finality_proof)
+                .filter(|tip| tip.height() > trial.checkpoint.height())
+                .collect::<Vec<_>>();
+            tips.sort_by_key(|tip| Reverse(tip.height()));
+            tips.dedup();
+            for tip in tips {
+                // An implausibly distant peer claim spends no budget and must not prevent
+                // another current member's bounded tip from forming a live quorum.
+                if tip.height() - trial.checkpoint.height() > budget.proofs as u64 {
+                    continue;
+                }
+                let mut candidate_prefix = observed_prefix.clone();
+                let mut capture = |native: &SumeragiFinalityVerifier, height| {
+                    record_observed_prefix(native, height, &candidates, &mut candidate_prefix);
+                };
+                match trial.advance_recording(source, tip, &mut budget, &mut capture) {
+                    Ok(_) => {
+                        observed_prefix = candidate_prefix;
+                        break;
+                    }
+                    Err(error @ FinalityError::ResourceLimit(_)) => return Err(error),
+                    Err(_) => {}
+                }
+            }
         }
+        let current_epoch = trial
+            .native()?
+            .verify_retained_decision(trial.checkpoint.tip())?
+            .commitment()
+            .schedule
+            .current
+            .authorization
+            .epoch;
         let peers = trial
-            .checkpoint
-            .committee
-            .roster
-            .iter()
-            .map(|member| {
-                let peer = &member.validator;
-                let outcome = match reads.get(peer) {
+            .members()
+            .into_iter()
+            .map(|peer| {
+                let outcome = match reads.get(&peer) {
                     None => AttestationOutcome::Missing,
                     Some(Err(error)) => AttestationOutcome::Unreachable(error.clone()),
-                    Some(Ok(attestation)) if attestation.body.node_id != *peer => {
+                    Some(Ok(a)) if a.body.node_id != peer => {
                         AttestationOutcome::Rejected(FinalityError::UnexpectedPeer {
                             expected: Box::new(peer.clone()),
-                            actual: Box::new(attestation.body.node_id.clone()),
+                            actual: Box::new(a.body.node_id.clone()),
                         })
                     }
-                    Some(Ok(attestation)) => trial
-                        .verify_attestation(challenge, attestation)
+                    Some(Ok(_))
+                        if observed_prefix.get(&peer).is_some_and(|observed| {
+                            observed.epoch >= current_epoch.saturating_sub(1)
+                        }) =>
+                    {
+                        AttestationOutcome::Verified(observed_prefix[&peer].tip)
+                    }
+                    Some(Ok(a)) => trial
+                        .verify_attestation(challenge, a)
                         .map_or_else(AttestationOutcome::Rejected, AttestationOutcome::Verified),
                 };
-                (peer.clone(), outcome)
+                (peer, outcome)
             })
             .collect();
         let quorum = trial.quorum(peers)?;
         *self = trial;
         Ok(quorum)
     }
-
-    /// Advance to the highest attested tip above the checkpoint that
-    /// verifies, trying lower tips when a higher one fails.
-    fn advance_to_highest<S: FinalitySource + ?Sized>(
-        &mut self,
-        source: &S,
-        challenge: &[u8; 32],
-        reads: &BTreeMap<PeerId, Result<BridgeFinalityAttestationV1, String>>,
-    ) {
-        let mut tips = reads
-            .values()
-            .filter_map(|read| read.as_ref().ok())
-            .filter(|attestation| {
-                attestation.body.finality_proof.block_header.height() > self.checkpoint.height
-                    && self
-                        .verify_attestation_identity(challenge, attestation)
-                        .is_ok()
-            })
-            .map(|attestation| &attestation.body.finality_proof)
-            .collect::<Vec<_>>();
-        tips.sort_by_key(|tip| Reverse(tip.block_header.height()));
-        tips.dedup();
-        for tip in tips {
-            if self.advance(source, tip).is_ok() {
-                return;
-            }
-        }
-    }
-
-    /// Fetch an attestation from every member of the checkpoint and governing
-    /// committees not yet in `reads`.
-    // TODO(P2): fetch concurrently once the HTTP source lands; the frozen
-    // `iroha_cli` verifier read its four peers in parallel.
     fn read_members<S: FinalitySource + ?Sized>(
         &self,
         source: &S,
         challenge: &[u8; 32],
-        reads: &mut BTreeMap<PeerId, Result<BridgeFinalityAttestationV1, String>>,
-    ) {
-        let checkpoint = &self.checkpoint;
-        let members = checkpoint.committee.roster.iter().chain(
-            checkpoint
-                .next_committee
-                .iter()
-                .flat_map(|next| &next.roster),
-        );
-        for member in members {
-            reads.entry(member.validator.clone()).or_insert_with(|| {
-                source
-                    .latest_attestation(&member.validator, challenge)
-                    .map_err(|error| error.to_string())
-            });
+        reads: &mut BTreeMap<PeerId, Result<SumeragiFinalityAttestation, String>>,
+    ) -> Result<(), FinalityError> {
+        let mut members = self.members();
+        let verified = self
+            .native()?
+            .verify_retained_decision(self.checkpoint.tip())?;
+        if let ScheduledSlot::Ready(next) = &verified.commitment().schedule.next {
+            CommitteeSize::new(next.epoch.committee.len())?;
+            members.extend(next.epoch.committee.iter().map(|v| v.validator.clone()));
         }
+        for peer in members {
+            if !reads.contains_key(&peer) {
+                if reads.len() == MAX_OBSERVATION_PEERS {
+                    return Err(FinalityError::ResourceLimit("peer count"));
+                }
+                let outcome = source
+                    .latest_attestation(&peer, challenge)
+                    .map_err(|e| e.to_string());
+                reads.insert(peer, outcome);
+            }
+        }
+        Ok(())
     }
-
     fn quorum(
         &self,
         peers: Vec<(PeerId, AttestationOutcome)>,
     ) -> Result<AttestationQuorum, FinalityError> {
         let quorum = AttestationQuorum {
-            height: self.checkpoint.height,
-            block_hash: self.checkpoint.block_hash,
+            height: self.checkpoint.tip().block_header.height(),
+            block_hash: self.checkpoint.block_hash(),
             required: self.committee_size().quorum(),
             peers,
         };
@@ -911,217 +654,62 @@ impl FinalityVerifier {
             Err(FinalityError::InsufficientAttestations(Box::new(quorum)))
         }
     }
-
-    /// Everything about an attestation except its tip: the node signature,
-    /// the challenge, the network and genesis bindings and the genesis
-    /// decision.
     fn verify_attestation_identity(
         &self,
         challenge: &[u8; 32],
-        attestation: &BridgeFinalityAttestationV1,
+        attestation: &SumeragiFinalityAttestation,
     ) -> Result<(), FinalityError> {
         require_challenge(challenge)?;
-        attestation.verify().map_err(FinalityError::Attestation)?;
-        let checkpoint = &self.checkpoint;
-        let body = &attestation.body;
-        if body.challenge != *challenge {
+        if attestation.body.challenge != *challenge {
             return Err(FinalityError::StaleChallenge);
         }
-        if body.network_id != checkpoint.network_id {
+        if attestation.body.network_id != self.checkpoint.network_id() {
             return Err(FinalityError::WrongNetwork {
-                expected: checkpoint.network_id,
-                actual: body.network_id,
+                expected: self.checkpoint.network_id(),
+                actual: attestation.body.network_id,
             });
         }
-        if body.genesis_block_hash != checkpoint.genesis_block_hash {
-            return Err(FinalityError::WrongGenesis);
-        }
-        let genesis = &body.genesis_finality_proof;
-        if !genesis
-            .finality_artifact
-            .commit_qc
-            .as_ref()
-            .same_commit_decision(checkpoint.genesis_decision)
-        {
-            return Err(FinalityError::ConflictingDecision { height: 1 });
-        }
-        // The decision pins the genesis context, and so its roster; this
-        // checks that the witness certificate is genuinely signed by it.
-        verify_bridge_finality_proof(genesis, &checkpoint.network_id)
-            .map_err(|source| FinalityError::Proof { height: 1, source })
-    }
-
-    /// Verify a proof at or below the checkpoint height against the committee
-    /// of its epoch: the checkpoint committee, or the kept previous epoch's
-    /// for a proof at or below that epoch's end. At the checkpoint height, or
-    /// at the previous epoch's end, it must also certify the decision
-    /// verified there.
-    fn verify_settled(&self, proof: &BridgeFinalityProof) -> Result<(), FinalityError> {
-        let checkpoint = &self.checkpoint;
-        let height = proof.block_header.height();
-        let epoch = proof.finality_artifact.height_context.epoch;
-        let (committee, settled_height, settled_decision) =
-            if height == checkpoint.height || epoch == checkpoint.committee.epoch {
-                (
-                    &checkpoint.committee,
-                    checkpoint.height.get(),
-                    checkpoint.decision,
-                )
-            } else {
-                match &checkpoint.previous_epoch {
-                    Some(previous)
-                        if epoch == previous.committee.epoch
-                            && height.get() <= previous.committee.epoch_end_height =>
-                    {
-                        (
-                            &previous.committee,
-                            previous.committee.epoch_end_height,
-                            previous.terminal_decision,
-                        )
-                    }
-                    _ => {
-                        return Err(FinalityError::EarlierEpoch {
-                            height: height.get(),
-                            epoch,
-                        });
-                    }
-                }
-            };
-        verify_in_committee(proof, committee, checkpoint.network_id)?;
-        if height.get() == settled_height
-            && !proof
-                .finality_artifact
-                .commit_qc
-                .as_ref()
-                .same_commit_decision(settled_decision)
-        {
-            return Err(FinalityError::ConflictingDecision {
-                height: height.get(),
-            });
-        }
+        attestation.verify()?;
+        // validate_consistency binds the complete decoded genesis frame to this independently
+        // selected network hash. Its result-only execution is not authority for the current tip.
+        // The tip is checked separately against exact retained decisions or contiguous successors.
         Ok(())
     }
 }
 
-/// Verify that `proof` was finalized by `committee`: equal epoch inputs,
-/// exactly `2f + 1` distinct in-roster signers, and a data-model-verified
-/// certificate on `network`.
-fn verify_in_committee(
-    proof: &BridgeFinalityProof,
-    committee: &FinalizedNextEpochSnapshot,
-    network: NetworkId,
-) -> Result<(), FinalityError> {
-    let artifact = &proof.finality_artifact;
-    let height = proof.block_header.height().get();
-    if artifact.height_context.snapshot_bootstrap.is_some() {
-        return Err(FinalityError::SnapshotBootstrap { height });
-    }
-    if committee_of(artifact) != *committee {
-        return Err(FinalityError::CommitteeMismatch { height });
-    }
-    let size = CommitteeSize::new(committee.roster.len())?;
-    check_signers(&artifact.commit_qc.signers, size, height)?;
-    verify_bridge_finality_proof(proof, &network)
-        .map_err(|source| FinalityError::Proof { height, source })
+/// Record only an unchanged challenged response whose complete decision has just been
+/// independently authenticated. Source reads are immutable throughout the observation, and
+/// committee membership is checked by constructing the final report from the final roster.
+#[derive(Clone, Copy)]
+struct ObservedDecision {
+    tip: AttestedTip,
+    epoch: u64,
 }
 
-/// Exactly `2f + 1` strictly increasing signer indices inside the roster.
-fn check_signers(signers: &[u32], size: CommitteeSize, height: u64) -> Result<(), FinalityError> {
-    if signers.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(FinalityError::NonCanonicalSigners { height });
-    }
-    if let Some(&signer) = signers.iter().find(|&&signer| {
-        usize::try_from(signer)
-            .ok()
-            .is_none_or(|index| index >= size.members())
-    }) {
-        return Err(FinalityError::SignerOutsideRoster {
-            height,
-            signer,
-            members: size.members(),
-        });
-    }
-    if signers.len() != size.quorum() {
-        return Err(FinalityError::SignerCount {
-            height,
-            expected: size.quorum(),
-            actual: signers.len(),
-        });
-    }
-    Ok(())
-}
-
-/// The frozen epoch inputs that finalized `artifact`.
-fn committee_of(artifact: &V2FinalityArtifact) -> FinalizedNextEpochSnapshot {
-    let context = &artifact.height_context;
-    FinalizedNextEpochSnapshot {
-        committee_preparation: None,
-        epoch: context.epoch,
-        kagemusha_mint_finality_authorization: context.kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority: context.kagemusha_mint_finality_authority.clone(),
-        epoch_end_height: context.epoch_end_height,
-        mode: context.mode,
-        roster: context.roster.clone(),
-        validator_set_pops: artifact.validator_set_pops.clone(),
-        quorum: context.quorum,
-        leader_seed: context.leader_seed,
-    }
-}
-
-/// The election inputs of the epoch a signed next-epoch snapshot governs.
-///
-/// A snapshot's `committee_preparation` is the committee frozen for the epoch
-/// after it, prepared at the snapshot's selection height. No height context of
-/// the governed epoch repeats it, so it is not part of that epoch's committee.
-fn epoch_inputs(snapshot: &FinalizedNextEpochSnapshot) -> FinalizedNextEpochSnapshot {
-    FinalizedNextEpochSnapshot {
-        committee_preparation: None,
-        ..snapshot.clone()
-    }
-}
-
-/// An exact `3f + 1` roster, sorted, one vote each, with aligned proofs of
-/// possession and the canonical quorum, and only the epoch's own inputs.
-fn validate_committee(committee: &FinalizedNextEpochSnapshot) -> Result<(), FinalityError> {
-    if committee.committee_preparation.is_some() {
-        return Err(FinalityError::InvalidCheckpoint(
-            "a committee carries a later epoch's preparation",
-        ));
-    }
-    let size = CommitteeSize::new(committee.roster.len())?;
-    if committee.validator_set_pops.len() != size.members()
-        || committee.roster.iter().any(|member| member.power != 1)
-        || committee
-            .roster
-            .windows(2)
-            .any(|pair| pair[0].validator >= pair[1].validator)
-        || usize::try_from(committee.quorum.min_signers).ok() != Some(size.quorum())
-        || usize::try_from(committee.quorum.total_power).ok() != Some(size.members())
-    {
-        return Err(FinalityError::InvalidCheckpoint(
-            "a committee is not a canonical 3f+1 roster",
-        ));
-    }
-    Ok(())
-}
-
-/// Whether `decision` is a `CommitQC` decision for `block_hash` at `height`.
-fn certifies(
-    decision: &QuorumCertificateRef,
+fn record_observed_prefix(
+    native: &SumeragiFinalityVerifier,
     height: u64,
-    block_hash: HashOf<BlockHeader>,
-) -> bool {
-    decision.phase == GlobalPhase::Commit
-        && decision.round.height == height
-        && decision.proposal_round == decision.round
-        && decision.subject.block_hash == block_hash
-}
-
-fn is_member(committee: &FinalizedNextEpochSnapshot, peer: &PeerId) -> bool {
-    committee
-        .roster
-        .iter()
-        .any(|member| member.validator == *peer)
+    candidates: &[(&PeerId, &SumeragiFinalityAttestation)],
+    observed: &mut BTreeMap<PeerId, ObservedDecision>,
+) {
+    for (peer, attestation) in candidates {
+        let proof = &attestation.body.finality_proof;
+        if proof.height() != height {
+            continue;
+        }
+        if let Ok(verified) = native.verify_retained_decision(proof) {
+            observed.insert(
+                (*peer).clone(),
+                ObservedDecision {
+                    tip: AttestedTip {
+                        height: proof.block_header.height(),
+                        block_hash: proof.block_header.hash(),
+                    },
+                    epoch: verified.commitment().schedule.current.authorization.epoch,
+                },
+            );
+        }
+    }
 }
 
 fn require_challenge(challenge: &[u8; 32]) -> Result<(), FinalityError> {

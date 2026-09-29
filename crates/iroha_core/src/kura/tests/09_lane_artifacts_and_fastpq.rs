@@ -5,7 +5,7 @@ fn lane_block_artifacts_snapshot_returns_all_valid_artifacts_in_replay_order() {
     let lane1 = LaneId::from(1);
     let lane0_entry = lane_config.entry(lane0).expect("lane 0 entry");
     let lane1_entry = lane_config.entry(lane1).expect("lane 1 entry");
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let lane1_later = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane1,
@@ -68,7 +68,7 @@ fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let foreign_dataspace = DataSpaceId::new(77);
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let active = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -197,7 +197,7 @@ fn latest_lane_block_artifact_rejects_replay_material_mismatch() {
     let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let first = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -251,7 +251,7 @@ fn lane_block_artifact_conflicting_rewrite_is_rejected_and_preserves_original() 
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let first = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -310,14 +310,14 @@ fn lane_block_artifact_rolls_back_when_block_write_fails() {
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let aborted = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
         lane_entry.dataspace_id,
         lane_block_height,
     );
-    let mut replacement_generator = DummyBlocks::new();
+    let mut replacement_generator = NativeBlocks::new();
     let replacement = dummy_block_with_lane_payload_ownership_from_generator(
         &mut replacement_generator,
         lane_id,
@@ -356,7 +356,7 @@ fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
     let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let high = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -402,117 +402,6 @@ fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
         .expect("read rolled-back lane index layout");
     assert_eq!(layout.base_height, 3);
     assert_eq!(layout.height_range(), Some(3..=3));
-}
-#[test]
-fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
-    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut generator = DummyBlocks::new();
-    let parent = generator.next();
-    let aborted = dummy_block_with_lane_payload_ownership_from_generator(
-        &mut generator,
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let mut replacement_generator = DummyBlocks {
-        blocks: vec![Arc::clone(&parent)],
-    };
-    let replacement = dummy_block_with_lane_payload_ownership_from_generator(
-        &mut replacement_generator,
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    assert_ne!(aborted.hash(), replacement.hash());
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(parent).expect("store carrier parent");
-    let mut entry = sample_merge_entry(1);
-    let aborted = bind_merge_entry_to_carrier(aborted, &mut entry);
-    let aborted_hash = aborted.hash();
-    let entry_hash = entry.canonical_hash();
-    kura.fail_next_merge_append_for_test();
-    let err = kura
-        .store_block_with_merge_entry(Arc::clone(&aborted), &entry)
-        .expect_err("merge log append should fail");
-    assert!(matches!(
-        err,
-        Error::CanonicalBlockCommittedRecoveryRequired { .. }
-    ));
-    assert!(err.requires_restart_recovery());
-    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    assert_eq!(
-        Kura::read_durable_hash_at_height(&mut kura.block_store.lock(), 2)
-            .expect("read committed carrier while poisoned"),
-        Some(aborted_hash)
-    );
-    let incarnations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            (
-                entry.lane_id,
-                kura.active_lane_incarnation_marker(
-                    &kura
-                        .lane_storage_entry(entry.lane_id)
-                        .expect("exact active identity"),
-                )
-                .expect("bound fixture lane")
-                .0,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let activations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| (entry.lane_id, 0))
-        .collect();
-    let original_network_id = kura.bound_lane_storage_network().unwrap();
-    drop(kura);
-    let (kura, BlockCount(count)) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("restart repairs committed association");
-    assert_eq!(count, 2);
-    assert!(
-        kura.lane_storage_entry(lane_id).is_err(),
-        "physical startup repair must not publish active secondary catalog membership"
-    );
-    kura.bind_lane_storage_network(original_network_id).unwrap();
-    kura.recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
-        .expect("restore the exact authoritative fixture geometry after physical startup repair");
-    let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
-    let artifact = kura
-        .read_lane_block_artifact(lane_id, lane_block_height)
-        .expect("the committed carrier retains its lane artifact");
-    assert_eq!(artifact.proposal_block_hash, aborted_hash);
-    assert_eq!(
-        kura.merge_carrier_for_entry(entry_hash)
-            .expect("carrier index remains readable"),
-        Some(MergeLedgerCarrierRecord::new(&entry, &aborted)),
-        "restart must complete the durable association stage"
-    );
-    let replacement_error = kura
-        .store_block(replacement)
-        .expect_err("a different replacement cannot overwrite the committed carrier");
-    assert!(matches!(
-        replacement_error,
-        Error::BlockHeightConflict { height: 2, .. }
-    ));
-    assert_eq!(
-        kura.read_lane_block_artifact(lane_id, lane_block_height),
-        Some(artifact),
-        "the canonical lane artifact must survive a conflicting replacement attempt"
-    );
-    kura.store_block_with_merge_entry(aborted, &entry)
-        .expect("exact post-restart retry is idempotent");
-    assert_eq!(kura.merge_ledger_snapshot(), vec![entry]);
-    assert!(
-        kura.merge_carrier_for_entry(entry_hash)
-            .expect("read repaired carrier")
-            .is_some()
-    );
 }
 #[test]
 fn replace_top_block_overwrites_replaced_lane_artifact() {
@@ -760,7 +649,7 @@ fn bound_progress_intent_identity_is_canonical_and_ambient_independent() {
 #[test]
 fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
     let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let candidate = blocks.next();
     let height = candidate.header().height().get();
     let block_hash = candidate.hash();
@@ -1849,7 +1738,7 @@ fn sidecar_fsync_mode_tracks_kura_config() {
 #[test]
 fn pipeline_sidecar_rejects_block_hash_mismatch() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let block = blocks.next();
     let expected_hash = block.hash();
     kura.store_block(block).expect("store block");
@@ -3149,7 +3038,7 @@ struct PendingSecondaryAssociationFixture {
 fn pending_secondary_association_fixture() -> PendingSecondaryAssociationFixture {
     let (directory, config, lanes) = two_lane_storage_fixture();
     let entry = lanes.entry(LaneId::new(1)).expect("secondary lane");
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let parent = blocks.next();
     let carrier = dummy_block_with_lane_payload_ownership_from_generator(
         &mut blocks,

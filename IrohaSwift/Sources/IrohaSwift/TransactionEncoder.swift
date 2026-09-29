@@ -429,17 +429,6 @@ private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
 
 private let signedTransactionWireVersion: UInt8 = 1
 
-enum TransactionAdmissionIntentV1: UInt32 {
-    case ordinary = 0
-    case queuePlanSynced = 1
-
-    var norito: Data {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt32LE(rawValue)
-        return writer.data
-    }
-}
-
 private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data {
     var bytes = Data([signedTransactionWireVersion])
     bytes.append(signedTransaction)
@@ -541,7 +530,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             ttlMs: ttlMs,
             feePayment: feePayment,
             instructionPayload: instructionPayload,
-            admissionIntent: .queuePlanSynced
+
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
         let signed = encodeCompactSignedTransaction(
@@ -603,7 +592,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
         )
         transactionPayload.writeField(try feePayment.compactNorito())
-        transactionPayload.writeField(TransactionAdmissionIntentV1.ordinary.norito)
+
         transactionPayload.writeField(try CanonicalNorito.encodeCompactMetadata(metadata))
         transactionPayload.writeField(encodeNoneOption())
 
@@ -787,8 +776,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         feePayment: FeePaymentIntent,
-        instructionPayload: Data,
-        admissionIntent: TransactionAdmissionIntentV1 = .ordinary
+        instructionPayload: Data
+
     ) throws -> Data {
         try encodeNetworkTransactionPayload(
             networkId: networkId,
@@ -797,7 +786,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             ttlMs: ttlMs,
             feePayment: feePayment,
             instructionPayloads: [instructionPayload],
-            admissionIntent: admissionIntent
+
         )
     }
 
@@ -807,8 +796,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         feePayment: FeePaymentIntent,
-        instructionPayloads: [Data],
-        admissionIntent: TransactionAdmissionIntentV1 = .ordinary
+        instructionPayloads: [Data]
+
     ) throws -> Data {
         let resolvedTtlMs = ttlMs ?? 100_000
         guard resolvedTtlMs != 0 else {
@@ -840,7 +829,7 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(try feePayment.compactNorito())
-        transactionPayload.writeField(admissionIntent.norito)
+
         transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data

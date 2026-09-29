@@ -320,6 +320,7 @@ class HttpClientTransportGovernanceTest {
                             BigInteger.valueOf(70),
                             secondContext,
                             true,
+                            secondContext,
                         )
                     }
                     1 -> {
@@ -329,6 +330,7 @@ class HttpClientTransportGovernanceTest {
                             BigInteger.valueOf(75),
                             terminalContext,
                             false,
+                            terminalContext,
                         )
                     }
                     else -> error("unexpected casting-proof page")
@@ -350,7 +352,7 @@ class HttpClientTransportGovernanceTest {
         assertEquals(2, persisted.size)
         assertEquals(2, terminal.verifiedPageCount)
         assertEquals(BigInteger.valueOf(70), terminal.verificationAnchorHeight)
-        assertContentEquals(secondContext, terminal.verificationAnchorContextId())
+        assertContentEquals(secondContext, terminal.verificationAnchorCheckpointNorito())
         assertEquals(BigInteger.valueOf(75), terminal.verification.evaluatedBlockHeight)
         assertTrue(!terminal.verification.moreAvailable)
         assertContentEquals(
@@ -386,6 +388,7 @@ class HttpClientTransportGovernanceTest {
                         BigInteger.valueOf(71),
                         ByteArray(32) { 0x22 },
                         true,
+                        ByteArray(113) { 0x44 },
                     )
                 },
                 ParliamentTimedOvnCastingCheckpointPersisterV1 {

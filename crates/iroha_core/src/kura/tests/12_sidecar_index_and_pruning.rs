@@ -123,7 +123,7 @@ fn block_store_reads_do_not_recreate_missing_journals() {
             .create_files_if_they_do_not_exist()
             .expect("initialize journals");
         store
-            .append_block_to_chain(&DummyBlocks::new().next())
+            .append_block_to_chain(&NativeBlocks::new().next())
             .expect("append nonempty block");
         store.drop_cached_handles();
         let missing_path = dir.path().join(missing_name);
@@ -192,7 +192,7 @@ fn block_store_existing_journals_reopen_for_reads_and_writes() {
         .create_files_if_they_do_not_exist()
         .expect("explicit initialization creates journals");
     assert_eq!(store.read_exact_durable_index_count().unwrap(), 0);
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let first = blocks.next();
     store
         .append_block_to_chain(&first)
@@ -298,7 +298,7 @@ fn strict_init_prunes_oversized_block_length() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let block = blocks.next();
     store.append_block_to_chain(&block).unwrap();
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
@@ -314,7 +314,7 @@ fn strict_init_does_not_prune_corruption_before_a_pinned_terminal_carrier() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let first = blocks.next();
     let carrier = blocks.next();
     store.append_block_to_chain(&first).unwrap();
@@ -347,7 +347,7 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     let dir = TempDir::new().unwrap();
     let mut store = new_block_store(&dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let blocks = vec![generator.next(), generator.next(), generator.next()];
     for block in &blocks {
         store.append_block_to_chain(block).unwrap();
@@ -382,7 +382,7 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     let dir = TempDir::new().unwrap();
     let mut store = new_block_store(&dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let blocks = vec![generator.next(), generator.next(), generator.next()];
     for block in &blocks {
         store.append_block_to_chain(block).unwrap();
@@ -413,7 +413,7 @@ fn hard_fork_data_backed_count_preserves_hash_only_tail() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
     let tail = blocks.next();
     store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
@@ -1122,7 +1122,7 @@ fn prune_blocks() -> eyre::Result<()> {
     // prune with height greater than there is - should be fine
     store.prune(10)?;
     // add some blocks
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..10 {
         store.append_block_to_chain(&blocks.next())?;
     }
@@ -1178,86 +1178,6 @@ fn kura_prune_to_height_truncates_in_memory_chain() {
         kura.get_block_height_by_hash(b3_hash),
         Some(nonzero!(3_usize))
     );
-}
-fn populate_prune_recovery_fixture(
-    temp_dir: &TempDir,
-) -> (KuraConfig, Vec<Arc<SignedBlock>>, Vec<MergeLedgerEntry>) {
-    let config = kura_config_for_dir(temp_dir, nonzero!(1_usize));
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("kura init");
-    // Authenticate the initial primary incarnation while its storage is still
-    // empty, before blocks or pipeline sidecars make the fixture recoverable.
-    publish_initial_configured_lane_geometry_for_test(
-        &kura,
-        &RuntimeLaneConfig::default(),
-        &BTreeMap::new(),
-    );
-    let mut generator = DummyBlocks::new();
-    let mut blocks = Vec::new();
-    let mut merge_entries = Vec::new();
-    for height in 1..=4 {
-        let raw = generator.next();
-        if matches!(height, 2 | 4) {
-            let epoch = u64::try_from(merge_entries.len() + 1).expect("fixture epoch");
-            let entry = sample_merge_entry_for_block(epoch, &raw);
-            let carrier = attach_merge_reference(&raw, &entry);
-            *generator.blocks.last_mut().expect("raw carrier") = Arc::clone(&carrier);
-            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
-                .expect("store merge carrier fixture");
-            blocks.push(carrier);
-            merge_entries.push(entry);
-        } else {
-            kura.store_block(Arc::clone(&raw))
-                .expect("store ordinary prune fixture block");
-            blocks.push(raw);
-        }
-    }
-    for (index, block) in blocks.iter().enumerate() {
-        let height = u64::try_from(index + 1).expect("fixture height");
-        kura.write_pipeline_metadata(&PipelineRecoverySidecar::new(
-            height,
-            block.hash(),
-            PipelineDagSnapshot {
-                fingerprint: [u8::try_from(height).expect("small fixture height"); 32],
-                key_count: u32::try_from(height).expect("small fixture height"),
-            },
-            Vec::new(),
-        ));
-    }
-    for height in [2_u64, 4] {
-        let block_hash = blocks[usize::try_from(height - 1).expect("fixture index")].hash();
-        let checkpoint_hash = Hash::new(format!("prune checkpoint {height}").as_bytes());
-        kura.store_wsv_checkpoint(height, block_hash, checkpoint_hash)
-            .expect("store prune fixture checkpoint");
-        kura.store_commit_manifest(CommitManifest::new(
-            height,
-            block_hash,
-            None,
-            None,
-            checkpoint_hash,
-            None,
-        ))
-        .expect("store prune fixture manifest");
-    }
-    // Seed a removable DA-sidecar suffix without finalizing the block.
-    // Production eviction requires signed complete-wire finality, and such
-    // a block must not subsequently be pruned by this recovery fixture.
-    let block3_wire = blocks[2]
-        .canonical_wire()
-        .expect("encode prune fixture block")
-        .into_vec();
-    kura.block_store
-        .lock()
-        .write_da_block_bytes(3, &block3_wire)
-        .expect("seed prune fixture DA sidecar");
-    assert!(kura.block_store.lock().da_block_path(3).exists());
-    // The retained carrier at height two is public evidence and therefore
-    // requires current-version finality. Height four deliberately remains
-    // the sole prepublication tip so prune exercises exact suffix removal.
-    let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
-    drop(kura);
-    (config, blocks, merge_entries)
 }
 #[test]
 fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
@@ -1897,7 +1817,7 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
     establish_dummy_store_primary_anchor(&kura);
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
     kura.store_block(blocks.next()).expect("store block 2");
     let block3 = blocks.next();
@@ -2260,7 +2180,7 @@ fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_ta
 }
 #[test]
 fn commit_manifest_v2_authority_binds_exact_artifact_and_execution_roots() {
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let artifact = v2_finality_artifact_for_block(block.as_ref());
     let commitment = artifact.commit_qc.execution_commitment;
     let manifest = CommitManifest::new(

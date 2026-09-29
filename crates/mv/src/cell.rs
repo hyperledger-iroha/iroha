@@ -685,7 +685,7 @@ mod block {
 
         /// Check the original cell owner without reading values or taking locks.
         /// This observation grants no mutation or publication authority.
-        pub fn belongs_to(&self, cell: &Cell<V>) -> bool {
+        pub fn belongs_to(&self, cell: &Cell<V, Charge>) -> bool {
             self.predecessor.belongs_to(&cell.publication)
         }
 

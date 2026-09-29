@@ -39,6 +39,7 @@ use iroha_sumeragi::{
     preimage::payload_hash,
     types::{Committee, Hash32},
 };
+use mv::storage::StorageReadOnly;
 
 use super::{
     block_store::{KuraBlockStore, Staging},

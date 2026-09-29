@@ -7,7 +7,7 @@
 use super::*;
 use crate::kura::publication_lease::KuraPublicationLease;
 
-/// Exact catalog and original GC-reconciled journal to publish under held fences.
+/// Exact catalog and original uncompacted journal to publish under held fences.
 pub(super) struct PreparedLaneGeometryCatalog {
     pub(super) bindings: Vec<LaneGeometryBinding>,
     pub(super) fingerprint: Hash,
@@ -75,15 +75,6 @@ impl KuraPublicationLease<'_> {
                     "catalog publication does not match the durable geometry frontier identity",
                 ));
             }
-        } else if journal.checkpoint.as_ref().is_some_and(|checkpoint| {
-            checkpoint.catalog != fingerprint
-                || checkpoint.lineage_root != lineage_root
-                || checkpoint.bindings != bindings
-        }) {
-            return Err(kura.geometry_error(
-                ErrorKind::InvalidData,
-                "catalog publication does not match the compacted geometry identity",
-            ));
         }
         if let Some(attempted) = configured_baseline {
             match journal.configured_catalog_hash {

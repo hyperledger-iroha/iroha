@@ -132,12 +132,14 @@ fn run_ordinary_tail_independent_batches(
             header.creation_time(),
         )
         .unwrap();
-        let (_, result) = overlay.validate_transaction_with_entrypoint_index_and_routing_context(
-            accepted,
-            &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
-            1,
-            route,
-        ).expect("local execution completes");
+        let (_, result) = overlay
+            .validate_transaction_with_entrypoint_index_and_routing_context(
+                accepted,
+                &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                1,
+                route,
+            )
+            .expect("local execution completes");
         assert!(result.is_ok());
         let before = carrier.encode_wire().unwrap();
         assert!(
@@ -290,7 +292,6 @@ fn run_ordinary_tail_independent_batches(
                 carrier.axt_envelopes().unwrap().to_vec(),
                 carrier.axt_policy_snapshot().unwrap().clone(),
                 carrier.axt_transitioned_dataspaces().unwrap().clone(),
-                carrier.lane_finality_statements().to_vec(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();

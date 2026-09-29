@@ -140,8 +140,7 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionAdmissionIntent, TransactionBuilder as ModelTransactionBuilder,
-        TransactionEntrypoint, TransactionPayload,
+        TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
         error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
@@ -5375,7 +5374,7 @@ mod tests {
     include!("tests/python_crypto_boundary_tests.rs");
     #[test]
     fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 24);
+        assert_eq!(connect_norito_bridge_abi_version_py(), 25);
     }
     #[test]
     fn hijiri_quote_pyo3_codec_encodes_and_rejects_malformed_response() {
@@ -5515,7 +5514,6 @@ mod tests {
             .expect("authority fee payment parses");
         let signed =
             ModelTransactionBuilder::new(python_test_network_id().inner, authority, fee_payment)
-                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
                 .try_sign(keypair.private_key())
                 .expect("ML-DSA-65 transaction signs");
         let envelope = signed_transaction_envelope_from_model_v1(&signed)
@@ -7807,10 +7805,7 @@ mod tests {
             .add_instruction(&batch_test_instruction("instruction"))
             .expect("instruction");
         let instruction_model = instruction_builder.to_model_builder();
-        assert_eq!(
-            instruction_model.payload().admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
+
         let instruction_executable = &instruction_model.payload().instructions;
         assert!(matches!(
             instruction_executable,
@@ -7829,10 +7824,7 @@ mod tests {
         signed
             .verify_signature()
             .expect("ordinary instruction signature");
-        assert_eq!(
-            signed.admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
+
         assert_eq!(codec::encode_adaptive(signed.payload()), expected_payload);
         let mut explicit = TransactionBuilder::new(
             &python_test_network_id(),
@@ -7853,10 +7845,7 @@ mod tests {
         batch_signed
             .verify_signature()
             .expect("ordinary batch signature");
-        assert_eq!(
-            batch_signed.admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
+
         assert_eq!(
             codec::encode_adaptive(batch_signed.payload()),
             expected_batch
@@ -10554,8 +10543,7 @@ impl TransactionBuilder {
             self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary);
+        );
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -11924,29 +11912,28 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
     Ok(json::Value::Object(result))
 }
 #[pyfunction]
-#[pyo3(name = "verify_committed_transaction_inclusion_json")]
+#[pyo3(name = "verify_committed_transaction_inclusion")]
 /// Authenticate a selected full output against an independently anchored finality chain.
-fn verify_committed_transaction_inclusion_json_py(
+fn verify_committed_transaction_inclusion_py(
+    py: Python<'_>,
     transaction_hash: &str,
     transaction_response_bytes: &[u8],
-    finality_bundle_chain_json: &str,
+    native_finality_proof_chain_json: &str,
     expected_network_id: &PyNetworkId,
-    trusted_height_context_id: &str,
-) -> PyResult<String> {
+    expected_chain: &str,
+    trusted_checkpoint: &[u8],
+) -> PyResult<(String, Py<PyBytes>)> {
     let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let (committed, bundle) =
-        committed_transaction_verification::authenticate_committed_transaction(
-            expected,
-            transaction_response_bytes,
-            finality_bundle_chain_json,
-            *expected_network_id.as_inner(),
-            trusted_height_context_id,
-        )?;
-    let execution_commitment = &bundle
-        .finality_proof
-        .finality_artifact
-        .commit_qc
-        .execution_commitment;
+    let (committed, page) = committed_transaction_verification::authenticate_committed_transaction(
+        expected,
+        transaction_response_bytes,
+        native_finality_proof_chain_json,
+        *expected_network_id.as_inner(),
+        expected_chain,
+        trusted_checkpoint,
+    )?;
+    let tip = page.tip();
+    let execution_commitment = tip.execution();
     let entrypoint_kind = match &committed.entrypoint {
         TransactionEntrypoint::External(_) => "External",
         TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
@@ -12026,12 +12013,12 @@ fn verify_committed_transaction_inclusion_json_py(
     );
     result.insert(
         "network_id".into(),
-        json::to_value(&bundle.commitment.network_id)
+        json::to_value(expected_network_id.as_inner())
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
     );
     result.insert(
-        "height_context_id".into(),
-        json::to_value(&bundle.commitment.height_context_id.0)
+        "context_id".into(),
+        json::to_value(&tip.context_id())
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
     );
     result.insert(
@@ -12059,7 +12046,7 @@ fn verify_committed_transaction_inclusion_json_py(
     );
     result.insert(
         "block_height".into(),
-        norito::json::Value::from(bundle.commitment.block_height),
+        norito::json::Value::from(tip.height()),
     );
     result.insert(
         "output_hash".into(),
@@ -12096,11 +12083,17 @@ fn verify_committed_transaction_inclusion_json_py(
         norito::json::Value::Array(batch_outcomes),
     );
     result.insert("committed_transaction".into(), committed_json);
-    norito::json::to_string(&norito::json::Value::Object(result)).map_err(|error| {
-        PyValueError::new_err(format!(
-            "failed to encode verified committed transaction JSON: {error}"
-        ))
-    })
+    let projection =
+        norito::json::to_string(&norito::json::Value::Object(result)).map_err(|error| {
+            PyValueError::new_err(format!(
+                "failed to encode verified committed transaction JSON: {error}"
+            ))
+        })?;
+    let promoted = page
+        .checkpoint()
+        .encode_canonical()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok((projection, Py::from(PyBytes::new(py, &promoted))))
 }
 #[pyfunction]
 #[pyo3(name = "verify")]
@@ -13014,11 +13007,6 @@ fn verify_prepared_transaction_context_v1_py(
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("prepared transaction has an invalid authority signature")
     })?;
-    if signed.admission_intent() != TransactionAdmissionIntent::Ordinary {
-        return Err(PyValueError::new_err(
-            "prepared transaction requires Ordinary admission",
-        ));
-    }
     if signed.network_id() != Some(network_id.as_inner())
         || signed.authority() != &expected_authority
         || signed.payload().fee_payment != expected_fee_payment
@@ -15003,7 +14991,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        verify_committed_transaction_inclusion_json_py,
+        verify_committed_transaction_inclusion_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;

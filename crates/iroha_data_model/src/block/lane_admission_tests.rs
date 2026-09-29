@@ -658,7 +658,6 @@ fn complete_input_model_with_body(body_bytes: usize) -> LaneAdmittedInputV1 {
             crate::Level::INFO,
             "x".repeat(body_bytes),
         )])
-        .with_admission_intent(crate::transaction::TransactionAdmissionIntent::QueuePlanSynced)
         .sign(key.private_key());
     input.certificate.binding.signed_transaction_hash = Some(signed.hash());
     input.entrypoint = TransactionEntrypoint::External(signed);

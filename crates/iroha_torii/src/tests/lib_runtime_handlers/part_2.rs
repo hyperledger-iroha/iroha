@@ -982,9 +982,8 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_old() {
-    // Exact ordinary dequeue/route-reuse behavior uses the authenticated
-    // threshold-key lifecycle exception, never an Ordinary economic Log.
-    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    // Exact dequeue/route-reuse behavior uses a signed native lifecycle certificate.
+    let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
@@ -1021,7 +1020,6 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
         "second transaction should enqueue"
     );
     drop(guards);
-    drop(journal);
 }
 #[test]
 fn signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated() {

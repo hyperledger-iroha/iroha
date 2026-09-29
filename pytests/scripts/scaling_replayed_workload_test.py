@@ -72,8 +72,7 @@ def make_case(tmp_path, *, lanes=4, pool=4, zero_warmup=False, fractional=False)
     fixture.events = add_retention(rows)
     result = fixture.run()
     peer = inputs.roles[3]
-    stopped = StoppedReader(peer.primary_block_store, peer.primary_merge_log, 1, 100,
-        1000, 8*1024*1024, 65536, 1024*1024, 1000, 1024*1024, 2*1024*1024, os.geteuid())
+    stopped = StoppedReader(peer.primary_block_store, 1, 100, 1000, 8*1024*1024, 65536, 1024*1024, 2*1024*1024, os.geteuid())
     return SimpleNamespace(inputs=inputs, fixture=fixture, result=result, plan=plan, stopped=stopped, counts=counts)
 
 
@@ -206,8 +205,7 @@ def test_resource_sample_coverage_and_bounds_remain_bound(case, kind):
     with pytest.raises(adapter.ReplayedWorkloadError): build(case)
 
 
-@pytest.mark.parametrize('field,bad', [('first_height',2),('last_height',1),('owner_uid',4294967295),
-    ('block_store',None),('merge_log',None)])
+@pytest.mark.parametrize('field,bad', [('first_height',2), ('last_height',1), ('owner_uid',4294967295), ('block_store',None)])
 def test_only_the_original_stopped_primary_interval_is_accepted(case, field, bad):
     case.stopped = replace(case.stopped, **{field:bad})
     with pytest.raises(adapter.ReplayedWorkloadError): build(case)

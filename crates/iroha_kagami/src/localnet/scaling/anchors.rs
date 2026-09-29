@@ -15,7 +15,7 @@ pub(in crate::localnet) struct Inputs {
     expected_hash: HashOf<BlockHeader>,
     authority: Option<StagedNativeGenesis>,
     checked_peers: usize,
-    primary_paths: Vec<(String, String)>,
+    primary_paths: Vec<String>,
     genesis_parameters: Option<(iroha_crypto::PublicKey, u16)>,
 }
 
@@ -33,7 +33,6 @@ struct OriginalPeer {
     config: String,
     client_config: String,
     primary_block_store: String,
-    primary_merge_log: String,
 }
 #[derive(norito::derive::JsonSerialize)]
 struct OriginalAccount {
@@ -172,7 +171,7 @@ impl Inputs {
                 "fixed peers disagree on effective genesis parameters"
             );
         }
-        let primary_paths = canonical_reader_paths(config)?;
+        let primary_paths = canonical_reader_path(config)?;
         let bytes = super::encode_genesis_context(&authority)?;
         if self.authority.is_none() {
             self.authority = Some(authority);
@@ -339,8 +338,7 @@ impl Inputs {
                     torii_url: host.torii_url(peer.api_port),
                     config: format!("peer{index}.toml"),
                     client_config: format!("peer{index}-client.toml"),
-                    primary_block_store: self.primary_paths[index].0.clone(),
-                    primary_merge_log: self.primary_paths[index].1.clone(),
+                    primary_block_store: self.primary_paths[index].clone(),
                 })
                 .collect(),
             accounts: accounts
@@ -381,9 +379,9 @@ impl Inputs {
 
 /// Resolve the reader's chain-scoped canonical namespace from final effective config.
 /// The generated Kura root starts empty; these descendants are created by the daemon.
-fn canonical_reader_paths(config: &actual::Root) -> Result<(String, String)> {
+fn canonical_reader_path(config: &actual::Root) -> Result<String> {
     let root = config.kura.store_dir.value();
-    let (blocks, merge) = iroha_core::kura::Kura::canonical_storage_paths(root);
+    let blocks = iroha_core::kura::Kura::canonical_storage_path(root);
     let encode = |path: &Path| -> Result<String> {
         ensure!(
             path.is_absolute() && path != root && path.starts_with(root),
@@ -398,8 +396,7 @@ fn canonical_reader_paths(config: &actual::Root) -> Result<(String, String)> {
         );
         Ok(value.to_owned())
     };
-    ensure!(blocks != merge, "fixed canonical reader paths alias");
-    Ok((encode(&blocks)?, encode(&merge)?))
+    encode(&blocks)
 }
 
 #[cfg(test)]

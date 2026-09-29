@@ -17,7 +17,6 @@ import org.hyperledger.iroha.sdk.core.model.Executable;
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent;
 import org.hyperledger.iroha.sdk.core.model.JsonValue;
 import org.hyperledger.iroha.sdk.core.model.NetworkId;
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload;
 import org.hyperledger.iroha.sdk.norito.NoritoCodec;
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder;
@@ -144,7 +143,7 @@ class ExplicitChainContextJavaConsumerTest {
         NetworkId.parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
         authority, 1_735_369_000_000L, Executable.ivm(new byte[] {1}), 100_000L, null,
         FeePaymentIntent.authority(Collections.emptyList(), 1L),
-        TransactionAdmissionIntent.ORDINARY, metadata, null);
+        metadata, null);
   }
 
   private static String account(int seed, int chain) throws Exception {

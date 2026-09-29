@@ -1,3 +1,4 @@
+// Snapshot policy fixtures preserve exact source identity and authenticated history.
 use super::*;
 use crate::{
     block::BlockBuilder,
@@ -12,10 +13,7 @@ use iroha_config::{
         actual::{Kura as KuraConfig, LaneConfig},
         defaults::{
             self,
-            kura::{
-                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-                REPLICA_ADVERT_POLICY,
-            },
+            kura::{FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, REPLICA_ADVERT_POLICY},
         },
     },
 };
@@ -30,9 +28,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+            Evidence, EvidenceAttribution, EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord,
         },
-        consensus_v2 as wire_v2,
     },
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
     nexus::{
@@ -87,107 +84,84 @@ fn checked_random_snapshot_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("snapshot BLS fixture key generation should succeed")
 }
-fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence {
+// Hash-projection fixture only: these signed artifacts do not create admitted history.
+fn snapshot_evidence_fixture(network_id: NetworkId) -> (Evidence, EvidenceAttribution) {
+    use iroha_sumeragi::{
+        message::{Evidence as NativeEvidence, Vote, VoteKind},
+        types::{EpochId, Hash32, SIGNATURE_LEN, Signature as NativeSignature},
+    };
     let mut keys = (1_u8..=4)
-        .map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("deterministic snapshot evidence key")
-        })
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
         .collect::<Vec<_>>();
-    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-    let roster = keys
-        .iter()
-        .map(|key| wire_v2::ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-            network_id,
-            u64::MAX,
-            &roster,
-        );
-    let context = wire_v2::HeightContext {
-        network_id,
-        protocol_version: wire_v2::PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        epoch_end_height: u64::MAX,
-        next_epoch_snapshot: None,
-        snapshot_bootstrap: None,
-        mode: wire_v2::ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        quorum: wire_v2::DualQuorum::from_roster(&roster)
-            .expect("equal-power snapshot evidence quorum"),
-        roster,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
-        nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
-        execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
-        da_layout: wire_v2::DataAvailabilityLayout {
-            encoding: wire_v2::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 32,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 64,
-        },
-        leader_seed: [0x51; 32],
-    };
-    context
-        .validate()
-        .expect("snapshot evidence height context must be valid");
-    let proofs_of_possession = keys
-        .iter()
-        .map(|key| {
-            bls_normal_pop_prove(key.private_key()).expect("snapshot evidence proof of possession")
-        })
-        .collect::<Vec<_>>();
-    let round = wire_v2::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: 0,
-    };
-    let execution_commitment =
-        wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"snapshot evidence parent state"),
-            Hash::new(b"snapshot evidence post state"),
-            Hash::new(b"snapshot evidence ordinary writes"),
-            1,
-            Hash::new(b"snapshot evidence executed block wire"),
-        );
-    let signer: wire_v2::ValidatorIndex = 1;
-    let signer_index = usize::try_from(signer).expect("snapshot evidence signer index fits usize");
-    let signed_vote = |seed: u8| {
-        let mut vote = wire_v2::Vote {
-            round,
-            proposal_round: round,
-            phase: wire_v2::GlobalPhase::Prepare,
-            subject: wire_v2::BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
-                payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    let signer = 1;
+    let key = &keys[signer as usize];
+    let vote = |subject: u8| {
+        let mut vote = Vote {
+            kind: VoteKind::Prepare,
+            instance: Hash32(*network_id.as_bytes()),
+            epoch: EpochId {
+                epoch: 0,
+                context: Hash32([0x51; 32]),
             },
-            execution_commitment,
+            height: 1,
+            view: 0,
+            block_hash: Hash32([subject; 32]),
+            result: Hash32([0x52; 32]),
+            attest: false,
             signer,
-            signature: Vec::new(),
+            sig: NativeSignature([0; SIGNATURE_LEN]),
+            attestation: None,
         };
-        vote.signature =
-            Signature::try_new(keys[signer_index].private_key(), &vote.signature_preimage())
-                .expect("snapshot evidence phase-vote signature")
+        vote.sig = NativeSignature(
+            Signature::new(key.private_key(), &vote.preimage())
                 .payload()
-                .to_vec();
+                .try_into()
+                .unwrap(),
+        );
         vote
     };
-    crate::sumeragi::v2_evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
-        context,
-        proofs_of_possession,
-        conflict: wire_v2::SumeragiV2Equivocation::PhaseVote {
-            first: signed_vote(0x61),
-            second: signed_vote(0x62),
-        },
-    })
+    let evidence =
+        Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0x61), vote(0x62))).unwrap();
+    let attribution = EvidenceAttribution {
+        instance: *network_id.as_bytes(),
+        height: 1,
+        epoch: 0,
+        context_id: [0x51; 32],
+        authority_generation: [0x53; 32],
+        offenders: vec![EvidenceOffender {
+            signer,
+            peer_id: PeerId::new(key.public_key().clone()),
+        }],
+        safety_violation: false,
+    };
+    (evidence, attribution)
+}
+#[test]
+fn snapshot_evidence_fixture_preserves_original_signed_bytes() {
+    let (evidence, attribution) = snapshot_evidence_fixture(snapshot_test_network_id());
+    let iroha_sumeragi::message::Evidence::VoteEquivocation(first, mut second) =
+        evidence.decode_native().unwrap()
+    else {
+        panic!("native vote pair")
+    };
+    for vote in [&first, &second] {
+        Signature::from_bytes(&vote.sig.0)
+            .verify(
+                attribution.offenders[0].peer_id.public_key(),
+                &vote.preimage(),
+            )
+            .unwrap();
+    }
+    second.epoch.context.0[0] ^= 1;
+    assert!(
+        Signature::from_bytes(&second.sig.0)
+            .verify(
+                attribution.offenders[0].peer_id.public_key(),
+                &second.preimage()
+            )
+            .is_err()
+    );
 }
 fn current_generation_name(store_dir: &Path) -> String {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
@@ -642,6 +616,7 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             BlockCount(1),
             TEST_CHUNK_SIZE,
             signing_key.public_key(),
+            &state.chain_id,
             &state.network_id,
             &state.zk_snapshot(),
             #[cfg(feature = "telemetry")]
@@ -752,6 +727,7 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         BlockCount(state.committed_height()),
         TEST_CHUNK_SIZE,
         signing_key.public_key(),
+        state.chain_id_ref(),
         state.network_id_ref(),
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
@@ -873,7 +849,6 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         blocks_in_memory,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         native_context_archive_max_bytes:
@@ -1023,13 +998,14 @@ fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
     );
     drop(staged);
 
-    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
-    let evidence_key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
+    let (evidence, attribution) = snapshot_evidence_fixture(*state.network_id_ref());
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
     let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     staged.world.consensus_evidence.insert(
         evidence_key,
         EvidenceRecord {
             evidence,
+            attribution,
             recorded_at_height: 2,
             recorded_at_view: 0,
             recorded_at_ms: 2_000,
@@ -1118,9 +1094,7 @@ async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
 async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
     for evidence in [
         None,
-        Some(canonical_snapshot_v2_phase_vote_evidence(
-            snapshot_test_network_id(),
-        )),
+        Some(snapshot_evidence_fixture(snapshot_test_network_id())),
     ] {
         let state = State::new_with_chain_and_network_id_for_testing(
             crate::state::World::default(),
@@ -1137,12 +1111,13 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
             0,
         );
         let mut state_block = state.block(header);
-        if let Some(evidence) = evidence {
-            let key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
+        if let Some((evidence, attribution)) = evidence {
+            let key = crate::sumeragi::evidence::evidence_key(&evidence);
             state_block.world.consensus_evidence.insert(
                 key,
                 EvidenceRecord {
                     evidence,
+                    attribution,
                     recorded_at_height: 1,
                     recorded_at_view: 0,
                     recorded_at_ms: 1_000,

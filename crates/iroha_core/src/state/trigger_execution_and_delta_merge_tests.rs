@@ -297,7 +297,6 @@ fn result_bearing_time_trigger_block(
                 Vec::new(),
                 snapshot,
                 Default::default(),
-                Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .expect("empty World setup metadata is structurally complete");

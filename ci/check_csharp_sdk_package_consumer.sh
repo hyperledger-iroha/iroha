@@ -226,7 +226,7 @@ if (SccpNetworkV1.EthereumMainnet.ProfileKey() != "ethereum-mainnet"
 if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 24u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-24 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-25 SoraFS native bridge is unavailable");
 }
 
 var hijiriRequest = new ValidationFeeHijiriQuoteRequestV1(
@@ -237,7 +237,7 @@ if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 24u
     || hijiriRequestNorito.Length == 0
     || hijiriRequestNorito.Length > ValidationFeeHijiriQuoteRequestV1.MaximumRequestBytes)
 {
-    throw new InvalidOperationException("Packed ABI-24 Hijiri quote encoder is unavailable");
+    throw new InvalidOperationException("Packed ABI-25 Hijiri quote encoder is unavailable");
 }
 var malformedHijiriResponseRejected = false;
 try
@@ -250,7 +250,7 @@ catch (InvalidDataException)
 }
 if (!malformedHijiriResponseRejected)
 {
-    throw new InvalidOperationException("Packed ABI-24 Hijiri quote verifier did not fail closed");
+    throw new InvalidOperationException("Packed ABI-25 Hijiri quote verifier did not fail closed");
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

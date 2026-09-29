@@ -1,18 +1,9 @@
 //! Query fixture writes publish World records without inventing finalized history.
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
-    NetworkId,
-    block::{
-        BlockHeader,
-        consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, SumeragiV2Equivocation, ValidatorPower,
-            Vote, recommended_data_availability_layout,
-        },
+    block::consensus::{
+        Evidence, EvidenceAttribution, EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord,
     },
     confidential::ConfidentialStatus,
     governance::types::{
@@ -101,12 +92,13 @@ fn evidence_fixture_publishes_signed_record_without_finality() {
     let mut state = state();
     let record = EvidenceRecord {
         evidence: phase_vote_evidence(),
+        attribution: fixture_attribution(),
         recorded_at_height: 1,
         recorded_at_view: 0,
         recorded_at_ms: 10,
         penalty_status: EvidencePenaltyStatus::Pending,
     };
-    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
+    let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
     insert_evidence_record_for_test(&mut state, record.clone());
     assert_no_finality(&state);
     let view = state.view();
@@ -283,88 +275,53 @@ fn governance_lock_fixture_publishes_original_custody_without_finality() {
 }
 
 fn phase_vote_evidence() -> Evidence {
-    let mut keys = (0..4_u8)
-        .map(|index| {
-            KeyPair::try_from_seed(vec![0xA1, index], Algorithm::BlsNormal).expect("BLS key")
-        })
-        .collect::<Vec<_>>();
-    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-    let roster = keys
-        .iter()
-        .map(|key| ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0xA1; 32]),
-    ));
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-            network_id, 2, &roster,
-        );
-    let context = HeightContext {
-        network_id,
-        protocol_version: PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
-        epoch_end_height: 2,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("four-validator quorum"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"evidence nexus context"),
-        execution_policy_hash: Hash::new(b"evidence execution policy"),
-        da_layout: recommended_data_availability_layout(),
-        leader_seed: [0xA1; 32],
+    use iroha_sumeragi::{
+        message::{Evidence as NativeEvidence, Vote, VoteKind},
+        types::{EpochId, Hash32, SIGNATURE_LEN, Signature as NativeSignature},
     };
-    context.validate().expect("valid evidence context");
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height: 1,
-        view: 0,
-    };
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"parent state"),
-        Hash::new(b"post state"),
-        Hash::new(b"writes"),
-        1,
-        Hash::new([0xA1]),
-    );
-    let vote = |seed: u8| {
+    let key =
+        KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).expect("fixture BLS key");
+    let vote = |subject| {
         let mut vote = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 2])),
-                payload_hash: Hash::new([seed, 3]),
+            kind: VoteKind::Prepare,
+            instance: Hash32([1; 32]),
+            epoch: EpochId {
+                epoch: 0,
+                context: Hash32([2; 32]),
             },
-            execution_commitment,
+            height: 1,
+            view: 0,
+            block_hash: Hash32([subject; 32]),
+            result: Hash32([4; 32]),
+            attest: false,
             signer: 0,
-            signature: Vec::new(),
+            sig: NativeSignature([0; SIGNATURE_LEN]),
+            attestation: None,
         };
-        vote.signature = Signature::new(keys[0].private_key(), &vote.signature_preimage())
-            .payload()
-            .to_vec();
+        vote.sig = NativeSignature(
+            Signature::new(key.private_key(), &vote.preimage())
+                .payload()
+                .try_into()
+                .expect("signature width"),
+        );
         vote
     };
-    Evidence {
-        equivocation: SumeragiV2EquivocationEvidence {
-            conflict: SumeragiV2Equivocation::PhaseVote {
-                first: vote(0xA1),
-                second: vote(0xA2),
-            },
-            context,
-            proofs_of_possession: keys
-                .iter()
-                .map(|key| bls_normal_pop_prove(key.private_key()).expect("BLS proof"))
-                .collect(),
-        },
+    Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0xA1), vote(0xA2)))
+        .expect("native signed pair")
+}
+fn fixture_attribution() -> EvidenceAttribution {
+    let key =
+        KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).expect("fixture BLS key");
+    EvidenceAttribution {
+        instance: [1; 32],
+        height: 1,
+        epoch: 0,
+        context_id: [2; 32],
+        authority_generation: [3; 32],
+        offenders: vec![EvidenceOffender {
+            signer: 0,
+            peer_id: PeerId::new(key.public_key().clone()),
+        }],
+        safety_violation: false,
     }
 }

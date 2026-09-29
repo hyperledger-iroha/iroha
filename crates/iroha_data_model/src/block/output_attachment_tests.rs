@@ -88,7 +88,6 @@ fn full_output_setter_rejects_size_shape_and_policy_without_mutation() {
                 vec![],
                 Default::default(),
                 Default::default(),
-                vec![],
                 &limits,
             )
             .unwrap_err();
@@ -111,7 +110,6 @@ fn full_output_setter_rejects_size_shape_and_policy_without_mutation() {
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &exact,
         )
         .unwrap();

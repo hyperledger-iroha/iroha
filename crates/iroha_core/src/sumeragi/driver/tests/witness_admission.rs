@@ -11,6 +11,7 @@ fn fixture(
     let mut qc = tests::commit_qc(&block, Hash32([3; 32]));
     qc.attestation_witness = Some(ResultWitness::from_untrusted(vec![7; 200]).unwrap());
     let shared = Arc::new(Shared {
+        node_gate: Arc::new(NodeGate::new()),
         allocation_budget: budget.clone(),
         pending_admission: Mutex::new(None),
         instance: block.header.instance,
@@ -110,5 +111,28 @@ fn pending_slot_rejects_foreign_owners_and_retained_handle_cannot_revive_stopped
     assert!(handle.shared.pending_admission.lock().is_none());
     assert!(handle.shared.ingress.lock().is_empty());
     drop(occupied);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn closed_instance_releases_original_witnesses_even_with_a_retained_handle() {
+    let budget = AllocationBudget::new(4096);
+    let (handle, _rx, peer, message) = fixture(&budget);
+    assert!(handle.deliver_message(peer.clone(), message));
+    assert!(budget.reserved_bytes() > 0);
+    handle.shared.node_gate.close();
+    let loop_owner = LoopGuard {
+        shared: Arc::clone(&handle.shared),
+        observer: Arc::new(traits::NoObserver),
+    };
+    drop(loop_owner);
+    assert!(handle.shared.ingress.lock().is_empty());
+    assert!(handle.shared.pending_admission.lock().is_none());
+    assert_eq!(budget.reserved_bytes(), 0);
+    let block = tests::block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    assert!(!handle.deliver_message(
+        peer,
+        WireMessage::Qc(tests::commit_qc(&block, Hash32([3; 32])))
+    ));
     assert_eq!(budget.reserved_bytes(), 0);
 }

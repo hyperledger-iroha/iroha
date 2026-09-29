@@ -1,6 +1,6 @@
 /// Network selected independently by the actual four-validator finality fixture.
 pub(crate) fn canonical_query_network_id() -> iroha_data_model::NetworkId {
-    test_network_id(b"kura-v2-finality-test")
+    native_storage_network_id()
 }
 
 // Physical canonical query fixtures reuse the genuine configured primary and
@@ -22,8 +22,11 @@ impl CanonicalQueryStore {
         // State readers must share the exact configured genesis incarnation,
         // established before the first physical body is persisted.
         let _initial_state = State::new_with_chain_and_network_id_for_testing(
-            World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
-            ChainId::from("canonical-query"), canonical_query_network_id(),
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from("canonical-query"),
+            canonical_query_network_id(),
         );
         for (index, block) in blocks.iter().enumerate() {
             assert_eq!(

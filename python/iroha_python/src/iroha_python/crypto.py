@@ -60,7 +60,7 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 24
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 25
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
 PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
@@ -659,48 +659,51 @@ def verify_committed_transaction_inclusion(
     transaction_hash: str,
     transaction_response_bytes: bytes,
     *,
-    finality_bundle_chain_json: str,
+    native_finality_proof_chain_json: str,
     expected_network_id: NetworkId,
-    trusted_height_context_id: str,
+    expected_chain: str,
+    trusted_checkpoint: bytes,
 ) -> Mapping[str, Any]:
-    """Authenticate a selected full output with the existing native finality verifier.
+    """Authenticate one exact output from an independently selected native checkpoint.
 
-    ``finality_bundle_chain_json`` is a Norito JSON array of 1..4096 exact
-    ``BridgeFinalityBundle`` values (at most 16 MiB UTF-8), ordered from the
-    independently trusted context/checkpoint through immediate successors to the
-    selected carrier. The expected network and initial context must come from
-    trusted network configuration or a previously authenticated checkpoint, never
-    from this response. A one-element array verifies an exact checkpoint context.
-
-    The last verified Commit QC authenticates the selected canonical query row.
-    The result includes its typed execution commitment, network/context, carrier
-    identity, wire hash/length and the selected full output hash. Rejected results
-    are authenticated too; callers must check ``result_ok`` for application policy.
+    The bounded native proof page starts at the checkpoint and extends through
+    consecutive decisions. Network, chain and checkpoint must come from trusted
+    configuration or a previously accepted promoted checkpoint. The returned
+    ``promoted_checkpoint`` is immutable canonical bytes; retain it atomically
+    only after accepting the application result. Rejections are authenticated
+    too, so application policy must check ``result_ok``.
     """
 
     expected_network_id = _require_network_id(expected_network_id, "expected_network_id")
-    for name, value in (
-        ("transaction_response_bytes", transaction_response_bytes),
-    ):
+    for name, value in (("transaction_response_bytes", transaction_response_bytes),
+                        ("trusted_checkpoint", trusted_checkpoint)):
         if type(value) is not bytes:
             raise TypeError(f"{name} must be exact immutable bytes")
-    if type(finality_bundle_chain_json) is not str:
-        raise TypeError("finality_bundle_chain_json must be a string")
-    if len(finality_bundle_chain_json.encode("utf-8")) > 16 * 1024 * 1024:
-        raise ValueError("finality_bundle_chain_json exceeds 16 MiB")
-    if type(trusted_height_context_id) is not str:
-        raise TypeError("trusted_height_context_id must be a canonical hash literal")
-    payload = _crypto.verify_committed_transaction_inclusion_json(
-        transaction_hash,
-        transaction_response_bytes,
-        finality_bundle_chain_json,
-        expected_network_id,
-        trusted_height_context_id,
+    if not transaction_response_bytes or len(transaction_response_bytes) > 32 * 1024 * 1024:
+        raise ValueError("transaction_response_bytes must contain 1..32 MiB")
+    if not trusted_checkpoint or len(trusted_checkpoint) > 68 * 1024 * 1024:
+        raise ValueError("trusted_checkpoint must contain 1..68 MiB")
+    if type(native_finality_proof_chain_json) is not str:
+        raise TypeError("native_finality_proof_chain_json must be a string")
+    if not native_finality_proof_chain_json or len(native_finality_proof_chain_json.encode("utf-8")) > 16 * 1024 * 1024:
+        raise ValueError("native_finality_proof_chain_json must contain 1..16 MiB")
+    if type(expected_chain) is not str:
+        raise TypeError("expected_chain must be a string")
+    if not expected_chain or len(expected_chain.encode("utf-8")) > 1024:
+        raise ValueError("expected_chain must contain 1..1024 UTF-8 bytes")
+    native_result = _crypto.verify_committed_transaction_inclusion(
+        transaction_hash, transaction_response_bytes, native_finality_proof_chain_json,
+        expected_network_id, expected_chain, trusted_checkpoint,
     )
+    if type(native_result) is not tuple or len(native_result) != 2:
+        raise RuntimeError("native committed verifier returned malformed output")
+    payload, promoted = native_result
+    if type(payload) is not str or type(promoted) is not bytes or not promoted or len(promoted) > 68 * 1024 * 1024:
+        raise RuntimeError("native committed verifier returned malformed checkpoint output")
     decoded = json.loads(payload)
-    if not isinstance(decoded, Mapping):
-        raise RuntimeError("native committed transaction verifier returned malformed JSON")
-    return decoded
+    if not isinstance(decoded, Mapping) or "promoted_checkpoint" in decoded:
+        raise RuntimeError("native committed verifier returned malformed projection")
+    return {**decoded, "promoted_checkpoint": promoted}
 
 
 if not TYPE_CHECKING:

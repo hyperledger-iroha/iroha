@@ -50,21 +50,10 @@ impl LaneStorageIdentity {
         format!("blocks/instances/{}", self.key())
     }
 
-    pub(super) fn merge_relative(self) -> String {
-        format!("merge_ledger/instances/{}.log", self.key())
-    }
-
     /// Resolve this exact instance beneath a Kura store root.
     #[must_use]
     pub fn blocks_dir(self, root: impl AsRef<Path>) -> PathBuf {
         root.as_ref().join(self.blocks_relative())
-    }
-
-    /// Resolve this exact instance's currently required empty geometry merge scaffold.
-    /// Canonical merge data has its separate stable storage owner.
-    #[must_use]
-    pub fn merge_log_path(self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref().join(self.merge_relative())
     }
 }
 
@@ -86,11 +75,6 @@ impl std::ops::Deref for LaneStorageEntry {
 impl LaneStorageEntry {
     pub(super) fn blocks_dir(&self, root: impl AsRef<Path>) -> PathBuf {
         self.identity.blocks_dir(root.as_ref())
-    }
-
-    #[cfg(test)]
-    pub(super) fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        self.identity.merge_log_path(root.as_ref())
     }
 }
 
@@ -122,7 +106,6 @@ mod tests {
         variants[4].activation_height = 4;
         for changed in variants {
             assert_ne!(expected.blocks_relative(), changed.blocks_relative());
-            assert_ne!(expected.merge_relative(), changed.merge_relative());
         }
         let bytes = expected.encode();
         let decoded = LaneStorageIdentity::decode_all(&mut bytes.as_slice())
@@ -138,10 +121,6 @@ mod tests {
         assert_eq!(
             entry.blocks_dir("root"),
             identity.blocks_dir(Path::new("root"))
-        );
-        assert_eq!(
-            entry.merge_log_path("root"),
-            identity.merge_log_path(Path::new("root"))
         );
     }
 }

@@ -54,10 +54,7 @@ def emit(root, argv):
         kura, state = peer / 'kura', peer / 'state'
         kura.mkdir(mode=0o700); state.mkdir(mode=0o700)
         key, url = 'ea0130' + f'{index + 1:02X}' * 48, f'http://{_url_host(public)}:{api + index}/'
-        value['peers'].append(dict(role=role, node_public_key=key, torii_url=url,
-            config=f'{role}.toml', client_config=f'{role}-client.toml',
-            primary_block_store=str(kura / 'blocks/native-primary'),
-            primary_merge_log=str(kura / 'merge_ledger/native-primary.log')))
+        value['peers'].append(dict(role=role, node_public_key=key, torii_url=url, config=f'{role}.toml', client_config=f'{role}-client.toml', primary_block_store=str(kura / 'blocks/native-primary')))
         files[f'{role}.toml'] = (f'chain = {json.dumps(chain)}\npublic_key = "{key}"\n'
             f'private_key = "PRIVATE TEST ONLY"\n[kura]\nstore_dir = {json.dumps(str(kura))}\n'
             f'[network]\naddress = "addr:{_url_host(bind)}:{p2p + index}#ABCD"\n'

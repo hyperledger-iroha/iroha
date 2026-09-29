@@ -147,7 +147,9 @@ fn assert_borrowed_attestation_error(
         .expect("location source");
     let error = load_location_provider_attestations(archive, location, &view)
         .expect_err("no partial borrowed evidence may escape a failed complete-set check");
-    assert!(error.to_string().contains(expected), "{error}");
+    assert!(error.reason().contains(expected), "{error}");
+    let rendered = invariant(error.reason());
+    assert!(rendered.to_string().contains(expected), "{rendered}");
 }
 
 #[test]
@@ -414,4 +416,30 @@ fn borrowed_attestation_failure_preserves_current_location_unhealthy_semantics()
     let view = world.view();
     let location = view.musubi_archive_locations().get(&key).unwrap();
     assert!(current_location_providers(location, &view).is_none());
+}
+
+#[test]
+fn borrowed_attestation_rejection_keeps_model_reason_until_instruction_boundary() {
+    let (world, key) = borrowed_attestation_fixture(1);
+    let mut location = world
+        .musubi_archive_locations
+        .view()
+        .get(&key)
+        .cloned()
+        .unwrap();
+    location.revision = 0;
+    let model = location.validate().unwrap_err();
+    let error = {
+        let view = world.view();
+        let archive = view.musubi_archives().get(&key.archive_id).unwrap();
+        load_location_provider_attestations(archive, &location, &view).unwrap_err()
+    };
+    assert!(std::ptr::eq(error.reason(), model.reason()));
+    drop((world, location));
+    let mapped = invariant(error.reason());
+    assert_eq!(mapped.to_string(), invariant(model.reason()).to_string());
+    let Error::InvariantViolation(message) = mapped else {
+        panic!("instruction adapter must preserve the original error variant")
+    };
+    assert_eq!(message.as_ref(), model.reason());
 }

@@ -24,16 +24,10 @@ pub use ethereum_native::*;
 pub mod test_support;
 mod ton_native;
 pub use ton_native::*;
-#[cfg(any(test, feature = "test-fixtures"))]
-mod test_fixtures;
+#[cfg(test)]
+#[path = "test_fixtures/finality_descendant_tests.rs"]
+mod native_finality_tests;
 use alloc::vec::Vec;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use test_fixtures::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1,
-    sccp_finalize_native_genesis_network_block_test_fixture_v1,
-    sccp_finalize_taira_block_test_fixture_v1,
-    sccp_finalize_taira_native_operation_block_test_fixture_v1, sccp_taira_finality_network_id_v1,
-};
 
 /// Fixed 256-bit protocol hash or word.
 pub type H256 = [u8; 32];

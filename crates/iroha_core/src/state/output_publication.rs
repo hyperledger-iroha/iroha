@@ -16,8 +16,10 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     transactions: storage_transactions::TransactionsPublicationSurface,
     block_hashes: BlockHashSurface,
     runtime: SnapshotNexusRuntime,
+    native_execution_tip: Option<NativeExecutionTip>,
+    native_execution_tip_preimage: Option<Option<NativeExecutionTip>>,
     runtime_preimage: Option<SnapshotNexusRuntime>,
-    state_journals: [mv::BlockPublicationIdentity; 3],
+    state_journals: [mv::BlockPublicationIdentity; 4],
     state_preimages: [Option<Hash>; 2],
     lane_state: Hash,
     lane_state_seal: Option<Hash>,
@@ -46,7 +48,6 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     sample_history_dirty: bool,
     evaluated_fragment_count: Option<u64>,
     lifecycle_evaluated: bool,
-    relay_records: Hash,
     axt_counters: Hash,
     axt_transitions: BTreeSet<DataSpaceId>,
     axt_ratchets_finalized: bool,
@@ -220,6 +221,7 @@ impl FinalizedPublicationSurface {
         }
         let state_journals = [
             state_journal!(canonical_runtime),
+            state_journal!(native_execution_tip),
             state_journal!(commit_topology),
             state_journal!(prev_commit_topology),
         ];
@@ -281,6 +283,11 @@ impl FinalizedPublicationSurface {
             transactions: block.transactions.publication_surface(),
             block_hashes: BlockHashSurface::capture(&block.block_hashes, &expected.block_hashes)?,
             runtime: block.canonical_runtime.get().clone(),
+            native_execution_tip: *block.native_execution_tip.get(),
+            native_execution_tip_preimage: block
+                .native_execution_tip
+                .touched_value()
+                .map(|value| *value.before),
             runtime_preimage: block
                 .canonical_runtime
                 .touched_value()
@@ -348,7 +355,6 @@ impl FinalizedPublicationSurface {
             sample_history_dirty: block.autoscale_sample_history_dirty,
             evaluated_fragment_count: block.autoscale_evaluated_committed_fragment_count,
             lifecycle_evaluated: block.autoscale_lifecycle_evaluated,
-            relay_records: hash_value(&block.verified_lane_relay_records)?,
             axt_counters: hash_value(&block.axt_next_handle_counters)?,
             axt_transitions: block.axt_authorization_transitioned.clone(),
             axt_ratchets_finalized: block.axt_policy_transition_ratchets_finalized,
@@ -591,6 +597,7 @@ mod tests {
             };
         }
         reject_foreign!(canonical_runtime);
+        reject_foreign!(native_execution_tip);
         reject_foreign!(commit_topology);
         reject_foreign!(prev_commit_topology);
         reject_foreign!(transactions);

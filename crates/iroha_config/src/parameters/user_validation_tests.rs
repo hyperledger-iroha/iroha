@@ -1585,8 +1585,8 @@ policy_digest_hex = "{policy_digest_hex}"
         }
     }
     #[test]
-    fn nexus_fee_settlement_mode_accepts_only_canonical_labels() {
-        for canonical in ["direct", "lane_relay_burn"] {
+    fn nexus_fee_settlement_mode_accepts_direct_and_rejects_retired_modes() {
+        for canonical in ["direct"] {
             let mut fees = NexusFees::default();
             fees.settlement_mode = canonical.to_owned();
             let mut emitter = Emitter::new();
@@ -1597,7 +1597,13 @@ policy_digest_hex = "{policy_digest_hex}"
             );
             assert!(emitter.into_result().is_ok());
         }
-        for alias in ["lane-relay-burn", "Lane_Relay_Burn", " direct", "direct "] {
+        for alias in [
+            "lane_relay_burn",
+            "lane-relay-burn",
+            "Lane_Relay_Burn",
+            " direct",
+            "direct ",
+        ] {
             let mut fees = NexusFees::default();
             fees.settlement_mode = alias.to_owned();
             let mut emitter = Emitter::new();
@@ -1675,6 +1681,27 @@ policy_digest_hex = "{policy_digest_hex}"
             .try_algorithm()
             .expect("onboarding authority fixture key advertises a valid algorithm");
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+    }
+    #[test]
+    fn retired_lane_emergency_configuration_is_always_unknown() {
+        for (name, value) in [
+            ("enabled", Value::Boolean(false)),
+            ("enabled", Value::Boolean(true)),
+            ("multisig_threshold", Value::Integer(3)),
+            ("multisig_members", Value::Integer(5)),
+            ("max_ttl_blocks", Value::Integer(20)),
+        ] {
+            let mut table = base_table();
+            let mut retired = Table::new();
+            retired.insert(name.into(), value);
+            nexus_table_mut(&mut table)
+                .insert("lane_relay_emergency".into(), Value::Table(retired));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("retired emergency committee filling has no configuration path");
+            let report = format!("{error:?}");
+            assert!(report.contains("unknown parameter"), "{report}");
+            assert!(report.contains("nexus.lane_relay_emergency"), "{report}");
+        }
     }
     #[test]
     fn nexus_enabled_is_rejected_as_an_unknown_parameter() {

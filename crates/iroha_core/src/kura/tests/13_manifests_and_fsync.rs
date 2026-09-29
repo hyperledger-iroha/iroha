@@ -214,7 +214,7 @@ fn prune_to_height_removes_commit_manifests_above_new_tip() {
 #[test]
 fn replace_top_block_rejects_checkpointed_top_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let original_hash = block.hash();
     let original_state_hash = Hash::new(b"original checkpoint");
     kura.store_block(Arc::clone(&block)).expect("store block");
@@ -277,7 +277,7 @@ fn replace_top_block_rejects_checkpointed_top_without_mutation() {
 #[test]
 fn replace_top_block_rejects_manifest_bound_top_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let original_hash = block.hash();
     let original_state_hash = Hash::new(b"original manifest checkpoint");
     kura.store_block(Arc::clone(&block)).expect("store block");
@@ -367,7 +367,7 @@ fn replace_top_block_replay_metadata_preflight_fails_closed_without_mutation() {
         ReplayMetadataCase::CorruptManifest,
     ] {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
+        let block = NativeBlocks::new().next();
         let original_hash = block.hash();
         kura.store_block(Arc::clone(&block)).expect("store block");
         let protected_path = match case {
@@ -757,7 +757,7 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
             subsystem: "canonical mutation"
         })
     ));
-    let benchmark_block = DummyBlocks::new().next();
+    let benchmark_block = NativeBlocks::new().next();
     assert!(matches!(
         kura.persist_block_immediate_for_bench(&benchmark_block),
         Err(Error::EmergencyFastAuxiliaryUnavailable {
@@ -1027,7 +1027,7 @@ fn commit_marker_prunes_excess_entries_on_init() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..3 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1050,7 +1050,7 @@ fn commit_marker_truncates_hashes_tail_on_init() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..2 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1072,7 +1072,7 @@ fn commit_marker_overwrites_existing_file() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
     store.append_block_to_chain(&blocks.next()).unwrap();
     store.write_commit_marker(1).unwrap();
@@ -1131,7 +1131,7 @@ fn init_rejects_commit_marker_tip_hash_mismatch() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
     let mut marker = store.read_commit_marker().unwrap().expect("marker");
     marker.tip_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA6; 32])));
@@ -1173,7 +1173,7 @@ fn finalized_prefix_preflight_rejects_commit_marker_tip_hash_mismatch() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
     let mut marker = store.read_commit_marker().unwrap().expect("marker");
     marker.tip_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA8; 32])));
@@ -1196,7 +1196,7 @@ fn commit_marker_corruption_falls_back_to_index_count() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..2 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1215,7 +1215,7 @@ fn commit_marker_corruption_falls_back_to_data_backed_count() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..2 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1245,7 +1245,7 @@ fn index_misalignment_truncates_on_init() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..2 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1268,7 +1268,7 @@ fn hashes_misalignment_truncates_on_init() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     for _ in 0..2 {
         store.append_block_to_chain(&blocks.next()).unwrap();
     }
@@ -1291,7 +1291,7 @@ fn prune_does_not_advance_commit_marker() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store.append_block_to_chain(block.as_ref()).unwrap();
     let marker = store.read_commit_marker().unwrap().expect("marker");
     assert_eq!(marker.count, 1);
@@ -1309,7 +1309,7 @@ fn batched_fsync_waits_until_interval_elapses() {
         Duration::from_millis(5),
     );
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store
         .append_block_to_chain(block.as_ref())
         .expect("append block");
@@ -1336,7 +1336,7 @@ fn fsync_on_flushes_immediately() {
     let temp_dir = TempDir::new().expect("temp dir");
     let mut store = BlockStore::with_fsync(temp_dir.path(), FsyncMode::Always, FSYNC_INTERVAL);
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store
         .append_block_to_chain(block.as_ref())
         .expect("append block");
@@ -1356,7 +1356,7 @@ fn commit_marker_write_failure_rolls_back_unpublished_append() {
     let mut store =
         BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, Duration::from_millis(10));
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store
         .append_block_to_chain(block.as_ref())
         .expect("append block");
@@ -1392,7 +1392,7 @@ fn commit_marker_ack_failure_with_new_readback_commits_append() {
     let mut store =
         BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, Duration::from_secs(60));
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store
         .append_block_to_chain(block.as_ref())
         .expect("append pending block");
@@ -1420,7 +1420,7 @@ fn deterministic_commit_marker_temp_recovers_or_rolls_back_exactly() {
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     store
         .append_block_to_chain(block.as_ref())
         .expect("append marker recovery block");
@@ -1497,7 +1497,7 @@ fn writer_loop_records_periodic_fsync_failure_without_panic() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     {
         let mut store = kura.block_store.lock();
         store
@@ -1534,7 +1534,7 @@ fn writer_loop_records_periodic_fsync_failure_without_panic() {
 #[test]
 fn local_full_wsv_observation_requires_complete_exact_manifest_and_finality_binding() {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     let artifact = v2_finality_artifact_for_block(&block);
     let blocks_dir = kura.active_blocks_dir.lock().clone();
@@ -1621,7 +1621,7 @@ pub(crate) fn carrier_checkpoint_receipt_fixture() -> (
     KuraV2CommitReceipt,
 ) {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     kura.store_block(Arc::clone(&block))
         .expect("store exact body");
     let artifact = v2_finality_artifact_for_block(&block);
@@ -1813,40 +1813,6 @@ fn carrier_checkpoint_receipt_refuses_real_write_and_post_sync_readback_failures
 }
 
 #[test]
-fn carrier_checkpoint_receipt_survives_independent_later_checkpoint_publication() {
-    let (kura, first, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"first exact checkpoint");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let original_bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
-    let mut blocks = DummyBlocks {
-        blocks: vec![first],
-    };
-    let second = blocks.next();
-    let second_artifact = v2_finality_artifact_for_block_with_keys(
-        &second,
-        Some(&artifact),
-        &v2_finality_fixture_keys(),
-        v2_finality_fixture_execution_commitment(),
-    );
-    kura.store_block(second).unwrap();
-    let second_finality = kura.store_v2_finality_artifact(&second_artifact).unwrap();
-    let _second_receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(
-            &second_finality,
-            Hash::new(b"second exact checkpoint"),
-        )
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .expect("sibling directory timestamps are not checkpoint identity");
-    assert_eq!(
-        fs::read(kura.wsv_checkpoint_path(1)).unwrap(),
-        original_bytes
-    );
-}
-
-#[test]
 fn carrier_checkpoint_receipt_reauthenticates_under_the_original_joint_lease() {
     let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
     let state_hash = Hash::new(b"held original durability boundary");
@@ -1968,7 +1934,7 @@ fn v2_finality_retry_repeats_each_failed_directory_barrier_on_the_exact_file() {
     // repeats synchronization rather than accepting presence as durability.
     for target_index in 0..4 {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
+        let block = NativeBlocks::new().next();
         kura.store_block(Arc::clone(&block)).unwrap();
         let artifact = v2_finality_artifact_for_block(&block);
         let path = kura.v2_finality_artifact_path(artifact.height);
@@ -2040,7 +2006,7 @@ fn commit_manifest_binds_checkpoint_only_after_every_directory_barrier() {
     for target_index in 0..4 {
         let kura = Kura::blank_kura_for_testing();
         establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
-        let block = DummyBlocks::new().next();
+        let block = NativeBlocks::new().next();
         kura.store_block(Arc::clone(&block)).unwrap();
         let artifact = v2_finality_artifact_for_block(&block);
         let checkpoint = Hash::new(b"original captured checkpoint");

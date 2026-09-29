@@ -1543,7 +1543,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
         }
         val manifest = linkedMapOf<String, Any?>(
             "schema" to "iroha.android-native-build-provenance.v1",
-            "native_bridge_abi_version" to 24,
+            "native_bridge_abi_version" to 25,
             "build_profile" to "release",
             "cargo_locked" to true,
             "privacy_production_enabled" to privacyProductionEnabled.get(),

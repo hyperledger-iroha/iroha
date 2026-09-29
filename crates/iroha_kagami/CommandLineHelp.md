@@ -415,7 +415,7 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `--artifact-root <PATH>` — Absolute directory containing all 50 SHA-256-addressed release artifacts
 * `--authority-review-projection <PATH>` — Canonical output from the separately pinned authority-review verifier
 * `--authority-review-projection-sha256 <LOWER_HEX>` — SHA-256 pin for the exact authority-review projection bytes
-* `--native-artifact-manifest <PATH>` — Canonical ABI24 c-jni native-artifact evidence manifest
+* `--native-artifact-manifest <PATH>` — Canonical ABI25 c-jni native-artifact evidence manifest
 * `--native-artifact-manifest-sha256 <LOWER_HEX>` — SHA-256 pin for the exact native-artifact manifest bytes
 * `--native-artifact <PATH>` — Exact c-jni library whose bytes must match the native-artifact manifest
 
@@ -1185,7 +1185,6 @@ Project bounded typed public beacon candidates, with explicit coverage limits
 
 * `-f`, `--from <BLOCK_HEIGHT>` — First block height in the exact inspection interval
 * `--length <LENGTH>` — Exact number of blocks, from the --from height (1..=4096)
-* `--merge-sidecar <FILE>` — Exact canonical public merge-entry file; repeat for referenced carriers only
 * `-o`, `--output <OUTPUT>` — Write bounded JSON outside the inspected store; defaults to stdout
 
 

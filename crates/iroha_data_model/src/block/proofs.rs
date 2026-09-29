@@ -6,22 +6,13 @@
 //! no synthetic input leaves. The exact executed block wire, and therefore both trees and their
 //! explicit source join, is authenticated either by the certified execution result of a committed
 //! Sumeragi block (its commit certificate's result preimage, read by `iroha_core`'s certified-chain
-//! reader) or by a fully verified Sumeragi-v2 `CommitQC`. `BlockHeader::merkle_root` is checked as
+//! reader) or by the portable native verifier's `VerifiedSumeragiBlock`. `BlockHeader::merkle_root` is checked as
 //! proposal metadata, but is never selected as the entry-proof anchor.
-#[cfg(test)]
-use crate::block::consensus_v2::ExecutionCommitment;
 use crate::{
     block::execution_output::ExecutionOutputV1,
-    block::{
-        BlockHeader, SignedBlock,
-        consensus_v2::{
-            HeightContextId,
-            finality::{
-                V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
-            },
-        },
-    },
+    block::{BlockHeader, SignedBlock},
     fastpq::TransferTranscript,
+    sumeragi_finality::VerifiedSumeragiBlock,
     transaction::signed::TransactionEntrypoint,
 };
 use core::num::NonZeroU64;
@@ -190,21 +181,12 @@ pub struct TrustedBlockProofAnchor {
 /// Failure to derive a trusted proof anchor from authenticated block metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TrustedBlockProofAnchorError {
-    /// The artifact's complete context differs from the independently trusted target context.
-    #[error("finality context {got:?} differs from independently trusted target {expected:?}")]
-    UnexpectedContext {
-        /// Independently selected context of the target height, after any verified chain transition.
-        expected: HeightContextId,
-        /// Complete context identity recomputed from the untrusted artifact.
-        got: HeightContextId,
-    },
-    /// The supplied finality artifact failed structural, roster, proof-of-possession, or
-    /// aggregate-signature verification.
-    #[error("untrusted finality artifact failed cryptographic verification: {0}")]
-    FinalityVerification(V2QuorumCertificateVerificationError),
-    /// A cryptographically valid finality artifact does not finalize the supplied block header.
-    #[error("verified finality artifact does not match the supplied block header: {0}")]
-    FinalityHeaderMismatch(V2FinalityValidationError),
+    /// Signed genesis alone does not authenticate its subsequently computed execution output.
+    #[error("genesis execution needs independent node attestations or a certified successor")]
+    UnauthenticatedGenesisExecution,
+    /// The authenticated native decision belongs to another block header.
+    #[error("verified native finality does not match the supplied block header")]
+    FinalityHeaderMismatch,
     /// The exact executed block wire could not be encoded canonically.
     #[error("failed to encode the authenticated executed block wire")]
     ExecutedBlockWireEncoding,
@@ -216,10 +198,7 @@ pub enum TrustedBlockProofAnchorError {
     MissingEntrypoints,
     /// The requested entrypoint is not present in the authenticated block.
     #[error("requested entrypoint is absent from the authenticated block")]
-    EntrypointNotFound {
-        /// Hash requested by the proof consumer.
-        entry_hash: HashOf<TransactionEntrypoint>,
-    },
+    EntrypointNotFound,
     /// The authenticated entrypoint tree exceeds the block-proof index space.
     #[error("authenticated block entrypoint count exceeds the u32 proof index space")]
     TooManyEntrypoints,
@@ -243,35 +222,20 @@ pub enum TrustedBlockProofAnchorError {
     InconsistentMerkleMaterial,
 }
 impl TrustedBlockProofAnchor {
-    /// Derive a target-specific anchor from an untrusted finality artifact.
+    /// Derive an entrypoint anchor from a native block authenticated by the portable verifier.
     ///
-    /// `expected_context_id` must be independently trusted for this exact target height, either
-    /// pinned directly or obtained after authenticated chain verification. Deriving it from an
-    /// unverified artifact is circular and does not establish trust. A chain's initial predecessor
-    /// pin is not the target context after a height transition.
-    ///
-    /// This first compares the complete context with that expectation, then verifies the
-    /// artifact's complete frozen-roster, proof-of-possession, and
-    /// `CommitQC` cryptography, then validates its exact association with `block.header()`. Only
-    /// after both checks succeed does it use the `CommitQC`'s execution commitment to authenticate
-    /// the exact executed block wire hash and length. It validates the output cache in place,
-    /// locates `entry_hash` in authenticated network-input order, and
-    /// retains the exact FASTPQ transcript map bound by that wire. Input and output positions join
-    /// only through the authenticated `Network.input_index`; internal outputs have no input leaf. The
-    /// external-only header root is checked with a logarithmic-memory accumulator.
+    /// The verified capability retains the independently selected genesis/checkpoint and complete
+    /// epoch-chain authentication. The separate candidate block must reproduce that decision's
+    /// exact header and executed wire; no caller-supplied context digest confers authority.
     ///
     /// # Errors
-    /// Returns [`TrustedBlockProofAnchorError`] when the independently trusted context differs,
-    /// finality verification or header association
-    /// fails, the exact block wire is not the `CommitQC`-authenticated wire, or Merkle material is
-    /// missing or inconsistent.
-    pub fn from_untrusted_finality_artifact(
+    /// Rejects a different header or executed wire, inconsistent output material, or absent entry.
+    pub fn from_verified_finality(
         block: &SignedBlock,
-        artifact: &V2FinalityArtifact,
-        expected_context_id: HeightContextId,
+        verified: &VerifiedSumeragiBlock,
         entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let authenticated = authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        let authenticated = authenticate_verified_execution(block, verified)?;
         Self::from_authenticated_outputs(block, authenticated, entry_hash)
     }
     /// Derive a target-specific anchor for a committed block whose executed-wire identity was
@@ -282,7 +246,7 @@ impl TrustedBlockProofAnchor {
     /// header chain or a verified `CommitQC` binds), never from the block itself. This binds
     /// the exact block to that identity (ignoring the node-local commit certificate the block may
     /// carry), validates the output cache in place and locates `entry_hash` in authenticated
-    /// network-input order, as [`Self::from_untrusted_finality_artifact`] does.
+    /// network-input order, as [`Self::from_verified_finality`] does.
     ///
     /// # Errors
     /// Returns [`TrustedBlockProofAnchorError`] when the block is not the committed wire or its
@@ -314,9 +278,7 @@ impl TrustedBlockProofAnchor {
         let entry_index = block
             .network_input_hashes()
             .position(|candidate| &candidate == entry_hash)
-            .ok_or(TrustedBlockProofAnchorError::EntrypointNotFound {
-                entry_hash: *entry_hash,
-            })?;
+            .ok_or(TrustedBlockProofAnchorError::EntrypointNotFound)?;
         let entry_index = u32::try_from(entry_index)
             .map_err(|_| TrustedBlockProofAnchorError::TooManyEntrypoints)?;
         let (output_index, _) = block
@@ -380,8 +342,8 @@ impl TrustedBlockProofAnchor {
 /// Target-specific authority for any typed output, including Pipeline and Time invocations.
 ///
 /// This non-serializable capability has no input proof or synthetic transaction identity.
-/// Its constructor requires an independently trusted target context, then verifies finality,
-/// the exact executed wire, and all output cache material.
+/// Its native constructor requires the verifier's authenticated block capability, then binds
+/// the exact executed wire and all output cache material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustedExecutionOutputAnchor {
     block_height: NonZeroU64,
@@ -393,23 +355,16 @@ pub struct TrustedExecutionOutputAnchor {
 }
 
 impl TrustedExecutionOutputAnchor {
-    /// Authenticate the output at `output_index` with a fully verified `CommitQC` under an
-    /// independently trusted target height context.
-    ///
-    /// Pin `expected_context_id` independently, or obtain the exact target context after verifying
-    /// its chain from an external pin. Never derive this expectation from an unverified artifact.
-    /// A verified successor's context differs from the chain's initial predecessor pin.
+    /// Bind one typed output to the native verifier's authenticated block capability.
     ///
     /// # Errors
-    /// Returns an error for a different trusted context, invalid finality, wire or cache mismatches,
-    /// or an absent output.
-    pub fn from_untrusted_finality_artifact(
+    /// Rejects a different header, mismatched wire or output cache, or an absent output.
+    pub fn from_verified_finality(
         block: &SignedBlock,
-        artifact: &V2FinalityArtifact,
-        expected_context_id: HeightContextId,
+        verified: &VerifiedSumeragiBlock,
         output_index: u32,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let authenticated = authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        let authenticated = authenticate_verified_execution(block, verified)?;
         Self::from_authenticated_outputs(block, authenticated, output_index)
     }
     /// Authenticate the output at `output_index` of a committed block whose executed-wire
@@ -484,25 +439,17 @@ impl TrustedExecutionOutputAnchor {
     }
 }
 
-fn authenticate_execution_outputs(
+fn authenticate_verified_execution(
     block: &SignedBlock,
-    artifact: &V2FinalityArtifact,
-    expected_context_id: HeightContextId,
+    verified: &VerifiedSumeragiBlock,
 ) -> Result<(Hash, MerkleTreeCommitment<ExecutionOutputV1>), TrustedBlockProofAnchorError> {
-    let got = artifact.context_id();
-    if got != expected_context_id {
-        return Err(TrustedBlockProofAnchorError::UnexpectedContext {
-            expected: expected_context_id,
-            got,
-        });
+    if verified.height() <= 1 {
+        return Err(TrustedBlockProofAnchorError::UnauthenticatedGenesisExecution);
     }
-    artifact
-        .verify()
-        .map_err(TrustedBlockProofAnchorError::FinalityVerification)?;
-    artifact
-        .validate_for_header(&block.header())
-        .map_err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)?;
-    let commitment = &artifact.commit_qc.execution_commitment;
+    if block.header() != verified.header() {
+        return Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch);
+    }
+    let commitment = verified.execution();
     authenticate_executed_wire(
         block,
         commitment.executed_block_wire_len,
@@ -565,22 +512,12 @@ impl BlockProofs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "transparent_api")]
-    use crate::block::consensus_v2::{
-        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-        GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-        ValidatorPower, Vote,
-    };
     use crate::{
         account::AccountId,
         transaction::{TransactionResultInner, signed::TransactionBuilder},
     };
-    #[cfg(feature = "transparent_api")]
-    use iroha_crypto::{Algorithm, Signature};
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
     use iroha_model_base::domain::DomainId;
-    #[cfg(feature = "transparent_api")]
-    use iroha_model_base::peer::PeerId;
     use norito::codec::DecodeAll as _;
     use std::iter::FromIterator;
     fn sample_output(index: u32) -> ExecutionOutputV1 {
@@ -754,145 +691,20 @@ mod tests {
         assert_eq!(decoded, proofs);
     }
     #[cfg(feature = "transparent_api")]
-    fn finality_context_for_block(block: &SignedBlock, key_pairs: &[KeyPair]) -> HeightContext {
-        let roster = key_pairs
-            .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let network_id = test_network_id();
-        let authority = crate::block::consensus_v2::test_kagemusha_mint_finality_authority(
-            network_id, 0, &roster,
-        );
-        let authorization =
-            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &authority,
-                u64::MAX,
-            )
-            .expect("valid fixture genesis scheduling authorization");
-        HeightContext {
-            network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: block.header().height().get(),
-            epoch: 0,
-            kagemusha_mint_finality_authorization: authorization,
-            kagemusha_mint_finality_authority: authority,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"trusted proof anchor finality context"),
-            execution_policy_hash: Hash::new(b"trusted proof anchor execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0xA7; 32],
-        }
-    }
-    #[cfg(feature = "transparent_api")]
-    fn finalized_artifact_for_block(
-        block: &SignedBlock,
-        execution_commitment: &ExecutionCommitment,
-    ) -> V2FinalityArtifact {
-        finalized_artifact_for_block_with_layout(block, execution_commitment, None, None)
-    }
-    #[cfg(feature = "transparent_api")]
-    pub(super) fn finalized_artifact_for_block_with_layout(
-        block: &SignedBlock,
-        execution_commitment: &ExecutionCommitment,
-        layout: Option<DataAvailabilityLayout>,
-        snapshot_bootstrap: Option<crate::block::consensus_v2::SnapshotBootstrapAnchor>,
-    ) -> V2FinalityArtifact {
-        let mut key_pairs = core::iter::repeat_with(|| {
-            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-                .expect("generate checked finality fixture keypair")
-        })
-        .take(4)
-        .collect::<Vec<_>>();
-        key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let mut context = finality_context_for_block(block, &key_pairs);
-        context.snapshot_bootstrap = snapshot_bootstrap;
-        if let Some(layout) = layout {
-            context.da_layout = layout;
-        }
-        let subject = BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("fixture canonical proposal wire"),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: block.header().view_change_index(),
-        };
-        let vote = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment: *execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        };
-        let preimage = vote.signature_preimage();
-        let shares = key_pairs[..3]
-            .iter()
-            .map(|key| {
-                Signature::new(key.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let commit_qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment: *execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                .expect("aggregate fixture CommitQC"),
-        };
-        let validator_set_pops = key_pairs
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator PoP")
-            })
-            .collect();
-        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-        artifact.verify().expect("fixture finality must verify");
-        artifact
-            .validate_for_header(&block.header())
-            .expect("fixture finality must match the block header");
-        artifact
-    }
-    #[cfg(feature = "transparent_api")]
     fn authenticated_block_with_internal_output() -> (
         SignedBlock,
-        V2FinalityArtifact,
+        VerifiedSumeragiBlock,
         HashOf<TransactionEntrypoint>,
         u32,
     ) {
+        let native = crate::sumeragi_finality::tests::Fixture::new();
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1000, 0);
+        let header = native.next_header();
         let mut builder = crate::block::builder::BlockBuilder::new(header);
         for index in 0..2 {
-            let mut tx = TransactionBuilder::new_genesis(
+            let mut tx = TransactionBuilder::new(
+                native.network,
                 authority.clone(),
                 crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );
@@ -911,17 +723,8 @@ mod tests {
             0,
         )
         .expect("valid full outputs");
-        let wire = block.encode_wire().expect("fixture wire");
-        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"trusted proof parent state"),
-            Hash::new(b"trusted proof post state"),
-            Hash::new(b"trusted proof ordinary writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        );
-        commitment.validate().expect("valid execution commitment");
-        let artifact = finalized_artifact_for_block(&block, &commitment);
-        (block, artifact, external_hash, 2)
+        let verified = native.verify_block(block.clone());
+        (block, verified, external_hash, 2)
     }
     #[cfg(feature = "transparent_api")]
     #[test]
@@ -939,6 +742,7 @@ mod tests {
         use iroha_primitives::numeric::{NumericSpec, Quantity};
         use std::collections::BTreeSet;
 
+        let native = crate::sumeragi_finality::tests::Fixture::new();
         let owner_key = checked_random_keypair();
         let owner = AccountId::new(owner_key.public_key().clone());
         let reserve = AccountId::new(checked_random_keypair().public_key().clone());
@@ -969,12 +773,13 @@ mod tests {
             ),
             policy: policy.clone(),
         };
-        // A test signer can make a self-consistent synthetic block. Production
-        // callers must independently pin the expected height context and owner.
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1000, 0);
+        // The native fixture signs this block with its authenticated four-validator
+        // prefix; business owner and policy expectations remain independently selected.
+        let header = native.next_header();
         let mut builder = crate::block::builder::BlockBuilder::new(header);
         builder.push_transaction(
-            TransactionBuilder::new_genesis(
+            TransactionBuilder::new(
+                native.network,
                 owner.clone(),
                 crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -989,20 +794,10 @@ mod tests {
             .expect("activation input");
         super::super::output_test_support::install(&mut block, vec![sample_output(0)], 0)
             .expect("fixture success output");
-        let wire = block.encode_wire().expect("fixture executed wire");
-        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"retail activation fixture parent"),
-            Hash::new(b"retail activation fixture post"),
-            Hash::new(b"retail activation fixture writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        );
-        let artifact = finalized_artifact_for_block(&block, &commitment);
-        let trusted_context = artifact.context_id();
+        let finalized = native.verify_block(block.clone());
         let verified = verify_finalized_retail_activation_v1(
             &block,
-            &artifact,
-            trusted_context,
+            &finalized,
             entry_hash,
             &owner,
             &policy,
@@ -1012,8 +807,14 @@ mod tests {
         )
         .expect("test-finalized activation with independently selected fixture coordinates");
         assert_eq!(verified.policy, policy);
-        assert_eq!(verified.activation.activated_at_ms, 1000);
-        assert_eq!(verified.activation.enforce_from_day_start_ms, 86_400_000);
+        assert_eq!(
+            verified.activation.activated_at_ms,
+            block.header().creation_time_ms
+        );
+        assert_eq!(
+            verified.activation.enforce_from_day_start_ms,
+            (block.header().creation_time_ms / 86_400_000 + 1) * 86_400_000
+        );
         assert_eq!(verified.block_hash, block.hash());
         assert_eq!(verified.entry_hash, entry_hash);
 
@@ -1021,8 +822,7 @@ mod tests {
         assert_eq!(
             verify_finalized_retail_activation_v1(
                 &block,
-                &artifact,
-                trusted_context,
+                &finalized,
                 entry_hash,
                 &wrong_owner,
                 &policy,
@@ -1036,8 +836,7 @@ mod tests {
         assert_eq!(
             verify_finalized_retail_activation_v1(
                 &block,
-                &artifact,
-                trusted_context,
+                &finalized,
                 entry_hash,
                 &owner,
                 &policy,
@@ -1052,8 +851,7 @@ mod tests {
         assert_eq!(
             verify_finalized_retail_activation_v1(
                 &block,
-                &artifact,
-                trusted_context,
+                &finalized,
                 entry_hash,
                 &owner,
                 &wrong_policy,
@@ -1063,111 +861,30 @@ mod tests {
             ),
             Err(RetailActivationProofError::WrongPolicy)
         );
-        let mut forged_artifact = artifact.clone();
-        forged_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
-        assert!(matches!(
-            verify_finalized_retail_activation_v1(
-                &block,
-                &forged_artifact,
-                trusted_context,
-                entry_hash,
-                &owner,
-                &policy,
-                &definition_id,
-                &domain,
-                dataspace,
-            ),
-            Err(RetailActivationProofError::Finality(_))
-        ));
+        // Invalid certificates are refused before a VerifiedSumeragiBlock exists;
+        // a_self_consistent_candidate_cannot_create_a_native_anchor_without_valid_qc covers it.
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn both_anchors_reject_a_valid_alternate_roster_before_cryptography() {
-        let (block, trusted, entry_hash, output_index) = authenticated_block_with_internal_output();
-        // Pin the deployment selected by the fixture owner before handling the alternate response.
-        let expected = trusted.context_id();
-        let alternate =
-            finalized_artifact_for_block(&block, &trusted.commit_qc.execution_commitment);
-        alternate
-            .verify()
-            .expect("alternate roster has genuine three-of-four BLS finality and PoPs");
-        alternate
-            .validate_for_header(&block.header())
-            .expect("identical carrier header");
-        assert_eq!(trusted.subject, alternate.subject);
-        assert_eq!(
-            trusted.commit_qc.execution_commitment,
-            alternate.commit_qc.execution_commitment
+    fn a_foreign_roster_cannot_create_a_native_anchor_capability() {
+        use iroha_crypto::{Algorithm, bls_normal_pop_prove};
+        let native = crate::sumeragi_finality::tests::Fixture::new();
+        let mut proof = native.second.clone();
+        let foreign = KeyPair::from_seed(vec![99; 32], Algorithm::BlsNormal);
+        proof.committee[0].public_key = foreign.public_key().clone();
+        proof.committee[0].proof_of_possession =
+            bls_normal_pop_prove(foreign.private_key()).unwrap();
+        let mut verifier = native.verifier();
+        verifier.verify(&native.first).unwrap();
+        assert!(
+            verifier
+                .verify(&proof)
+                .unwrap_err()
+                .to_string()
+                .contains("proof roster differs from its complete epoch context")
         );
-        assert_eq!(
-            trusted.height_context.network_id,
-            alternate.height_context.network_id
-        );
-        assert_ne!(
-            trusted.height_context.roster,
-            alternate.height_context.roster
-        );
-        assert_eq!(alternate.height_context.roster.len(), 4);
-        assert_eq!(alternate.commit_qc.signers.len(), 3);
-        assert_eq!(alternate.validator_set_pops.len(), 4);
-        assert_ne!(expected, alternate.context_id());
-        let refusal = TrustedBlockProofAnchorError::UnexpectedContext {
-            expected,
-            got: alternate.context_id(),
-        };
-        for corrupt_signature in [false, true] {
-            let mut response = alternate.clone();
-            if corrupt_signature {
-                response.commit_qc.aggregate_signature[0] ^= 0x80;
-            }
-            assert_eq!(
-                TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                    &block,
-                    &response,
-                    expected,
-                    &entry_hash,
-                ),
-                Err(refusal)
-            );
-            assert_eq!(
-                TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                    &block,
-                    &response,
-                    expected,
-                    output_index,
-                ),
-                Err(refusal)
-            );
-        }
-        // Either known deployment can be selected independently; trust is never inferred
-        // from a valid signature made by another roster for the same proposal and output wire.
-        for selected in [&trusted, &alternate] {
-            let selected_context = selected.context_id();
-            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                selected,
-                selected_context,
-                &entry_hash,
-            )
-            .expect("independently selected valid network-output authority");
-            assert!(
-                block
-                    .network_execution_proof(&entry_hash)
-                    .unwrap()
-                    .verify(&anchor)
-            );
-            let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &block,
-                selected,
-                selected_context,
-                output_index,
-            )
-            .expect("independently selected valid internal-output authority");
-            assert!(anchor.verify(&ExecutionReceiptProof::new(
-                block.execution_outputs()[output_index as usize].clone(),
-                block.output_proof(output_index).unwrap(),
-            )));
-        }
+        // Both anchor constructors require VerifiedSumeragiBlock, which a structural
+        // decode or a response-supplied committee cannot create.
     }
 
     #[cfg(feature = "transparent_api")]
@@ -1229,7 +946,7 @@ mod tests {
                 hash,
                 &sample_entrypoint_hash()
             ),
-            Err(TrustedBlockProofAnchorError::EntrypointNotFound { .. })
+            Err(TrustedBlockProofAnchorError::EntrypointNotFound)
         ));
     }
     #[cfg(feature = "transparent_api")]
@@ -1239,13 +956,9 @@ mod tests {
         let proofs = block
             .network_execution_proof(&external_hash)
             .expect("external proof exists");
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-            &block,
-            &artifact,
-            artifact.context_id(),
-            &external_hash,
-        )
-        .expect("external anchor derives");
+        let anchor =
+            TrustedBlockProofAnchor::from_verified_finality(&block, &artifact, &external_hash)
+                .expect("external anchor derives");
         assert_eq!(anchor.entry_hash(), external_hash);
         assert_eq!(anchor.entry_index(), 0);
         assert_eq!(anchor.entry_commitment(), proofs.entry_commitment);
@@ -1272,13 +985,8 @@ mod tests {
             block.execution_outputs()[index as usize].clone(),
             block.output_proof(index).unwrap(),
         );
-        let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-            &block,
-            &artifact,
-            artifact.context_id(),
-            index,
-        )
-        .expect("internal output anchor");
+        let anchor = TrustedExecutionOutputAnchor::from_verified_finality(&block, &artifact, index)
+            .expect("internal output anchor");
         assert_eq!(anchor.output_index(), index);
         assert_eq!(anchor.block_height(), block.header().height());
         assert_eq!(anchor.block_hash(), block.hash());
@@ -1301,12 +1009,7 @@ mod tests {
         assert!(other.verify(&anchor.output_commitment()));
         assert!(!anchor.verify(&other));
         assert_eq!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                3
-            ),
+            TrustedExecutionOutputAnchor::from_verified_finality(&block, &artifact, 3),
             Err(TrustedBlockProofAnchorError::OutputNotFound { output_index: 3 })
         );
         let fake_input = HashOf::from_untyped_unchecked(proof.leaf().into());
@@ -1317,13 +1020,9 @@ mod tests {
     fn trusted_anchor_rejects_unknown_or_substituted_target() {
         let (block, artifact, external_hash, _) = authenticated_block_with_internal_output();
         let other_input_hash = block.network_input_hashes().nth(1).unwrap();
-        let external_anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-            &block,
-            &artifact,
-            artifact.context_id(),
-            &external_hash,
-        )
-        .expect("external anchor derives");
+        let external_anchor =
+            TrustedBlockProofAnchor::from_verified_finality(&block, &artifact, &external_hash)
+                .expect("external anchor derives");
         let other_proofs = block
             .network_execution_proof(&other_input_hash)
             .expect("second network proof exists");
@@ -1333,34 +1032,29 @@ mod tests {
         );
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing entrypoint"));
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                &missing_hash,
-            ),
-            Err(TrustedBlockProofAnchorError::EntrypointNotFound {
-                entry_hash: missing_hash,
-            })
+            TrustedBlockProofAnchor::from_verified_finality(&block, &artifact, &missing_hash,),
+            Err(TrustedBlockProofAnchorError::EntrypointNotFound)
         );
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn self_consistent_block_and_execution_commitment_cannot_mint_an_anchor_without_valid_qc() {
-        let (block, mut artifact, external_hash, _) = authenticated_block_with_internal_output();
-        let expected_context_id = artifact.context_id();
-        artifact.commit_qc.aggregate_signature[0] ^= 0x80;
-        assert!(matches!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                expected_context_id,
-                &external_hash,
-            ),
-            Err(TrustedBlockProofAnchorError::FinalityVerification(
-                V2QuorumCertificateVerificationError::InvalidAggregateSignature
-            ))
-        ));
+    fn a_self_consistent_candidate_cannot_create_a_native_anchor_without_valid_qc() {
+        let native = crate::sumeragi_finality::tests::Fixture::new();
+        let mut proof = native.second.clone();
+        let mut block = crate::block::decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let mut qc: iroha_sumeragi::message::Qc =
+            norito::decode_canonical(certificate.commit_qc()).unwrap();
+        qc.agg_sig.0[0] ^= 0x80;
+        block.set_commit_certificate(Some(crate::block::CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            norito::encode_canonical(&qc).unwrap(),
+            certificate.result_preimage().to_vec(),
+        )));
+        proof.block_wire = block.encode_wire().unwrap();
+        let mut verifier = native.verifier();
+        verifier.verify(&native.first).unwrap();
+        assert!(verifier.verify(&proof).is_err());
     }
     #[cfg(feature = "transparent_api")]
     #[test]
@@ -1368,38 +1062,30 @@ mod tests {
         let (block, artifact, _, _) = authenticated_block_with_internal_output();
         let (other_block, _, other_external_hash, _) = authenticated_block_with_internal_output();
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            TrustedBlockProofAnchor::from_verified_finality(
                 &other_block,
                 &artifact,
-                artifact.context_id(),
                 &other_external_hash,
             ),
-            Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch(
-                V2FinalityValidationError::AssociatedBlockHashMismatch,
-            ))
+            Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)
         );
         assert_ne!(block.hash(), other_block.hash());
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
+    fn committed_wire_binding_rejects_wrong_executed_wire() {
         let (block, _, external_hash, _) = authenticated_block_with_internal_output();
         let wrong_executed_block_wire = b"different finalized executed block wire";
-        let wrong_execution_commitment =
-            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"wrong-wire parent state"),
-                Hash::new(b"wrong-wire post state"),
-                Hash::new(b"wrong-wire ordinary writes"),
-                u64::try_from(wrong_executed_block_wire.len())
-                    .expect("wrong fixture wire length fits u64"),
-                Hash::new(wrong_executed_block_wire),
-            );
-        let artifact = finalized_artifact_for_block(&block, &wrong_execution_commitment);
+        let wrong_execution_commitment = (
+            wrong_executed_block_wire.len() as u64,
+            Hash::new(wrong_executed_block_wire),
+        );
+        let artifact = wrong_execution_commitment;
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            TrustedBlockProofAnchor::from_committed_execution(
                 &block,
-                &artifact,
-                artifact.context_id(),
+                artifact.0,
+                artifact.1,
                 &external_hash,
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
@@ -1412,13 +1098,9 @@ mod tests {
         let proofs = block
             .network_execution_proof(&external_hash)
             .expect("external proof exists");
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-            &block,
-            &artifact,
-            artifact.context_id(),
-            &external_hash,
-        )
-        .expect("external anchor derives");
+        let anchor =
+            TrustedBlockProofAnchor::from_verified_finality(&block, &artifact, &external_hash)
+                .expect("external anchor derives");
         assert!(proofs.verify(&anchor));
         let mut wrong_count = proofs.clone();
         wrong_count.entry_commitment = MerkleTreeCommitment::new(
@@ -1446,54 +1128,45 @@ mod tests {
         result.outputs.remove(1);
         result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
         let wire = block.encode_wire().unwrap();
-        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"missing output parent"),
-            Hash::new(b"missing output post"),
-            Hash::new(b"missing output writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        );
-        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let commitment = (wire.len() as u64, Hash::new(&wire));
+        let artifact = commitment;
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            TrustedBlockProofAnchor::from_committed_execution(
                 &block,
-                &artifact,
-                artifact.context_id(),
+                artifact.0,
+                artifact.1,
                 &external_hash
             ),
             Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
         );
         assert_eq!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                0
+            TrustedExecutionOutputAnchor::from_committed_execution(
+                &block, artifact.0, artifact.1, 0
             ),
             Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
         );
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn trusted_anchors_require_exact_finalized_wire_length() {
+    fn committed_wire_binding_requires_exact_length() {
         let (block, valid, input, index) = authenticated_block_with_internal_output();
-        let mut commitment = valid.commit_qc.execution_commitment;
+        let mut commitment = *valid.execution();
         commitment.executed_block_wire_len += 1;
-        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let artifact = commitment;
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            TrustedBlockProofAnchor::from_committed_execution(
                 &block,
-                &artifact,
-                artifact.context_id(),
+                artifact.executed_block_wire_len,
+                artifact.executed_block_wire_hash,
                 &input
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
         );
         assert_eq!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+            TrustedExecutionOutputAnchor::from_committed_execution(
                 &block,
-                &artifact,
-                artifact.context_id(),
+                artifact.executed_block_wire_len,
+                artifact.executed_block_wire_hash,
                 index
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
@@ -1501,7 +1174,7 @@ mod tests {
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn internal_pipeline_output_has_finality_without_a_synthetic_transaction() {
+    fn committed_pipeline_output_binding_needs_no_synthetic_transaction() {
         use crate::block::execution_output::{
             PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineInvocationV1,
         };
@@ -1525,19 +1198,10 @@ mod tests {
             .validate_output_merkle_cache()
             .expect("valid Pipeline output");
         let wire = block.encode_wire().unwrap();
-        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"pipeline parent"),
-            Hash::new(b"pipeline post"),
-            Hash::new(b"pipeline writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        );
-        let artifact = finalized_artifact_for_block(&block, &commitment);
-        let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-            &block,
-            &artifact,
-            artifact.context_id(),
-            index,
+        let commitment = (wire.len() as u64, Hash::new(&wire));
+        let artifact = commitment;
+        let anchor = TrustedExecutionOutputAnchor::from_committed_execution(
+            &block, artifact.0, artifact.1, index,
         )
         .unwrap();
         let proof = ExecutionReceiptProof::new(
@@ -1552,7 +1216,7 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn both_anchor_types_reject_a_finalized_stale_output_cache() {
+    fn both_anchor_types_reject_a_committed_stale_output_cache() {
         let (mut block, _, input, index) = authenticated_block_with_internal_output();
         let result = block.result.as_mut().unwrap();
         let ExecutionOutputV1::Time(timer) = &mut result.outputs[index as usize] else {
@@ -1561,29 +1225,17 @@ mod tests {
         timer.invocation.trigger.action_hash =
             Hash::new(b"substituted action with stale output cache");
         let wire = block.encode_wire().unwrap();
-        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"stale parent"),
-            Hash::new(b"stale post"),
-            Hash::new(b"stale writes"),
-            wire.len() as u64,
-            Hash::new(&wire),
-        );
-        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let commitment = (wire.len() as u64, Hash::new(&wire));
+        let artifact = commitment;
         assert_eq!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                &input
+            TrustedBlockProofAnchor::from_committed_execution(
+                &block, artifact.0, artifact.1, &input
             ),
             Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
         );
         assert_eq!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                index
+            TrustedExecutionOutputAnchor::from_committed_execution(
+                &block, artifact.0, artifact.1, index
             ),
             Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
         );
@@ -1591,40 +1243,59 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn internal_output_anchor_requires_valid_qc_and_exact_header_and_wire() {
-        let (block, valid, _, index) = authenticated_block_with_internal_output();
-        let mut invalid = valid.clone();
-        invalid.commit_qc.aggregate_signature[0] ^= 0x80;
-        assert!(matches!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &block,
-                &invalid,
-                valid.context_id(),
-                index
-            ),
-            Err(TrustedBlockProofAnchorError::FinalityVerification(_))
-        ));
+    fn internal_native_output_anchor_requires_exact_header_and_wire() {
+        let (block, verified, _, index) = authenticated_block_with_internal_output();
         let (other, _, _, _) = authenticated_block_with_internal_output();
         assert!(matches!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
-                &other,
-                &valid,
-                valid.context_id(),
-                index
-            ),
-            Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch(_))
+            TrustedExecutionOutputAnchor::from_verified_finality(&other, &verified, index),
+            Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)
         ));
-        let mut commitment = valid.commit_qc.execution_commitment;
-        commitment.executed_block_wire_hash = Hash::new(b"another wire");
-        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let commitment = verified.execution();
         assert_eq!(
-            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+            TrustedExecutionOutputAnchor::from_committed_execution(
                 &block,
-                &artifact,
-                artifact.context_id(),
-                index
+                commitment.executed_block_wire_len,
+                Hash::new(b"another wire"),
+                index,
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn native_capability_rejects_substituted_execution_with_the_same_header() {
+        let (mut block, verified, input, index) = authenticated_block_with_internal_output();
+        let result = block.result.as_mut().unwrap();
+        let ExecutionOutputV1::Time(timer) = &mut result.outputs[index as usize] else {
+            panic!("time fixture")
+        };
+        timer.invocation.trigger.action_hash = Hash::new(b"different certified output");
+        result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+        block.validate_output_merkle_cache().unwrap();
+        assert_eq!(block.header(), verified.header());
+        assert_eq!(
+            TrustedBlockProofAnchor::from_verified_finality(&block, &verified, &input),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_verified_finality(&block, &verified, index),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn signed_genesis_alone_cannot_mint_execution_anchors() {
+        let fixture = crate::sumeragi_finality::tests::Fixture::new();
+        let verified = fixture.verifier().verify(&fixture.first).unwrap();
+        let block = verified.block();
+        let input = block.network_input_hashes().next().unwrap();
+        assert_eq!(
+            TrustedBlockProofAnchor::from_verified_finality(block, &verified, &input),
+            Err(TrustedBlockProofAnchorError::UnauthenticatedGenesisExecution)
+        );
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_verified_finality(block, &verified, 0),
+            Err(TrustedBlockProofAnchorError::UnauthenticatedGenesisExecution)
         );
     }
     fn aligned_block_proofs_fixture() -> (BlockProofs, TrustedBlockProofAnchor) {
@@ -1727,39 +1398,3 @@ mod tests {
 
 #[cfg(test)]
 mod captured_proofs_schema_tests;
-
-/// Reuse real BLS/PoP finality fixtures for native-output anchor controls.
-#[cfg(all(test, feature = "transparent_api"))]
-pub(super) fn finalized_native_output_artifact_for_test(
-    block: &SignedBlock,
-    commitment: &ExecutionCommitment,
-) -> V2FinalityArtifact {
-    let header = block.header();
-    let batch = block
-        .execution_context()
-        .and_then(|context| context.native_lane_decisions.as_deref())
-        .expect("native output fixture has an exact source batch");
-    assert_eq!(
-        batch.base_state_height.checked_add(1),
-        Some(header.height().get())
-    );
-    // This pure proof fixture declares its exact pre-State trust root. It does not claim
-    // to have executed that State or authenticate the native input certificates.
-    let snapshot_bootstrap = super::consensus_v2::SnapshotBootstrapAnchor {
-        snapshot_height: batch.base_state_height,
-        snapshot_block_hash: header
-            .prev_block_hash()
-            .expect("non-genesis native carrier"),
-        snapshot_block_creation_time_ms: header
-            .creation_time_ms
-            .checked_sub(1)
-            .expect("fixture successor timestamp follows its anchor"),
-        snapshot_state_hash: batch.base_state_hash.into(),
-    };
-    tests::finalized_artifact_for_block_with_layout(
-        block,
-        commitment,
-        Some(super::consensus_v2::recommended_data_availability_layout()),
-        Some(snapshot_bootstrap),
-    )
-}

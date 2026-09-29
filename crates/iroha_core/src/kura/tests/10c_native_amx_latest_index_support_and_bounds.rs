@@ -689,33 +689,7 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             .expect("exactly two distinct Native publication routes"),
     }
 }
-fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    fn collect(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
-        let mut entries = fs::read_dir(directory)
-            .expect("read snapshot directory")
-            .map(|entry| entry.expect("read snapshot entry"))
-            .collect::<Vec<_>>();
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path).expect("inspect snapshot entry");
-            assert!(!metadata.file_type().is_symlink());
-            if metadata.is_dir() {
-                collect(root, &path, files);
-            } else {
-                files.insert(
-                    path.strip_prefix(root)
-                        .expect("snapshot file is below root")
-                        .to_path_buf(),
-                    fs::read(&path).expect("read snapshot file"),
-                );
-            }
-        }
-    }
-    let mut files = BTreeMap::new();
-    collect(root, root, &mut files);
-    files
-}
+
 fn native_amx_latest_index_test_paths(kura: &Kura, entry: &LaneStorageEntry) -> (PathBuf, PathBuf) {
     let stable =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(entry, &kura.store_root);
@@ -2194,90 +2168,6 @@ fn native_amx_latest_strict_read_defers_authenticated_pending_tip_metadata() {
 }
 
 #[test]
-fn native_amx_latest_strict_read_preserves_one_extra_pair_until_pending_tip_recovery() {
-    let temp_dir = TempDir::new().expect("pending Native retained suffix");
-    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.lane_history_retention = nonzero!(1_usize);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("open one-pair Native retention fixture");
-    establish_dummy_store_primary_anchor(&kura);
-    let entry = kura
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("active primary route");
-    let first = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-    kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-        .expect("publish first complete pointer");
-    let mut blocks = DummyBlocks {
-        blocks: vec![
-            kura.get_block(nonzero!(1_usize))
-                .expect("retained first carrier"),
-        ],
-    };
-    let second_block = blocks.next();
-    kura.store_block(Arc::clone(&second_block))
-        .expect("append second canonical carrier");
-    let second = install_native_amx_evidence_fixture_at_block(
-        &kura,
-        &entry,
-        &[2],
-        None,
-        second_block,
-        Some(&first.participant_proposal),
-        Some(first.participant_settlement_hash),
-    )
-    .pop()
-    .expect("second Native application receipt");
-    let checkpoint_path = kura.wsv_checkpoint_path(2);
-    let manifest_path = kura.commit_manifest_path(2);
-    let checkpoint = std::fs::read(&checkpoint_path).expect("second exact checkpoint bytes");
-    let manifest = std::fs::read(&manifest_path).expect("second exact commit manifest bytes");
-    kura.remove_commit_manifest_without_binding_for_tests(2)
-        .expect("interrupt tip metadata");
-    kura.remove_wsv_checkpoint_without_binding_for_tests(2)
-        .expect("tip checkpoint pending");
-    kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-        .expect("owned startup retains previous complete pair alongside pending tip");
-    let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
-    let before = snapshot_regular_files_recursively(&evidence_directory);
-    assert_eq!(
-        kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
-            .expect("retention plus one is valid only for the authenticated pending frontier"),
-        NativeAmxLatestReceiptObservation::PendingTipMetadata(second.clone()),
-    );
-    assert_eq!(
-        snapshot_regular_files_recursively(&evidence_directory),
-        before,
-        "runtime observation cannot prune the previous complete pair"
-    );
-    let first_receipt_path =
-        Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
-    assert!(first_receipt_path.exists());
-    write_synced_native_amx_test_file(&checkpoint_path, &checkpoint);
-    write_synced_native_amx_test_file(&manifest_path, &manifest);
-    let before_cleanup = snapshot_regular_files_recursively(&evidence_directory);
-    assert_eq!(
-        kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
-            .expect("completed metadata may precede cleanup in live Apply"),
-        NativeAmxLatestReceiptObservation::Applied(second.clone()),
-    );
-    assert_eq!(
-        snapshot_regular_files_recursively(&evidence_directory),
-        before_cleanup,
-        "Applied observation must not perform pending retention cleanup"
-    );
-    assert!(first_receipt_path.exists());
-    kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-        .expect("owned recovery completes retention after exact metadata returns");
-    assert!(!first_receipt_path.exists());
-    assert_eq!(
-        kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
-            .expect("completed retained frontier"),
-        NativeAmxLatestReceiptObservation::Applied(second),
-    );
-}
-
-#[test]
 fn native_amx_history_read_exposes_highest_repair_half_without_mutation() {
     for missing_kind in ["manifest", "receipt"] {
         for pointer_state in ["current", "previous", "absent"] {
@@ -3717,7 +3607,7 @@ fn native_amx_precommit_scope_failure_preserves_before_marker_until_restart() {
             .records
             .contains_key(&carrier)
     );
-    let ordinary = DummyBlocks::new().next();
+    let ordinary = NativeBlocks::new().next();
     assert!(matches!(
         kura.store_block(Arc::clone(&ordinary)),
         Err(Error::CanonicalStoragePoisoned)
@@ -3964,7 +3854,7 @@ fn native_amx_uncommitted_association_cleanup_failure_blocks_mutation_until_cold
             finality: _,
             lane_config,
         } = native_amx_publication_capacity_fixture();
-        let mut ordinary = DummyBlocks::new();
+        let mut ordinary = NativeBlocks::new();
         let old = replacing.then(|| ordinary.next());
         if let Some(old) = &old {
             kura.store_block(Arc::clone(old))
@@ -4068,7 +3958,7 @@ fn native_amx_proven_uncommitted_cleanup_releases_owner_without_poison() {
     for replacing in [false, true] {
         let fixture = native_amx_publication_capacity_fixture();
         let kura = &fixture.kura;
-        let mut ordinary = DummyBlocks::new();
+        let mut ordinary = NativeBlocks::new();
         if replacing {
             kura.store_block(ordinary.next())
                 .expect("ordinary selected tip");

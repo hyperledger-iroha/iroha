@@ -28,41 +28,13 @@ fn index_resource_kind(path: &Path) -> Option<(ResourceFamily, IndexResourceForm
     } else {
         (file_name, false)
     };
-    if path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new(MERGE_CARRIERS_DIR)) {
-        let height = name.strip_suffix(".norito")?;
-        let value = height.parse::<u64>().ok()?;
-        if prepend || value == 0 || value.to_string() != height {
-            return None;
-        }
-        return Some((
-            ResourceFamily::MergeCarrierRecord,
-            IndexResourceFormat::Singleton(MERGE_CARRIER_MAX_BYTES as u64),
-            temporary,
-        ));
-    }
-    // Only the ownership checkpoint rollback owner writes this temporary V1 index.
-    // No other sidecar family has a rollback publication path.
-    if let Some(main) = file_name.strip_suffix(".rollback.tmp") {
-        return (main == LANE_ARTIFACTS_INDEX_FILE).then_some((
-            ResourceFamily::OwnershipIndex,
-            IndexResourceFormat::SidecarV1,
-            true,
-        ));
-    }
+
     let (family, format) = match name {
-        NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE => (ResourceFamily::NativeLatestRecord, IndexResourceFormat::Singleton(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES as u64)),
         crate::query::index_status::QueryIndexJournal::JOURNAL_FILE => (ResourceFamily::QueryMarkerRecords, IndexResourceFormat::Singleton(crate::query::index_status::QueryIndexJournal::JOURNAL_MAX_BYTES)),
         crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE => (ResourceFamily::QueryMarkerRecords, IndexResourceFormat::Singleton(crate::query::projection_checkpoint_journal::QUERY_PROJECTION_CHECKPOINT_JOURNAL_MAX_BYTES as u64)),
         INDEX_FILE_NAME => (ResourceFamily::CanonicalIndex, IndexResourceFormat::Fixed(BlockIndex::SIZE)),
         HASHES_FILE_NAME => (ResourceFamily::CanonicalHashes, IndexResourceFormat::Fixed(SIZE_OF_BLOCK_HASH)),
         PIPELINE_SIDECARS_INDEX_FILE => (ResourceFamily::PipelineIndex, IndexResourceFormat::SidecarV1),
-        LANE_ARTIFACTS_INDEX_FILE => (ResourceFamily::OwnershipIndex, IndexResourceFormat::SidecarV1),
-        CERTIFIED_LANE_BLOCKS_INDEX_FILE => (ResourceFamily::CertifiedIndex, IndexResourceFormat::SidecarV1),
-        LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE => (ResourceFamily::ExecutionInputIndex, IndexResourceFormat::SidecarV1),
-        LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE => (ResourceFamily::ExecutionPreflightIndex, IndexResourceFormat::SidecarV1),
-        LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE => (ResourceFamily::ApplicationReceiptIndex, IndexResourceFormat::SidecarV1),
-        AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE => (ResourceFamily::MergeBundleIndex, IndexResourceFormat::SidecarV1),
-        CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE => (ResourceFamily::CanonicalReplicaIndex, IndexResourceFormat::SidecarV1),
         _ => return None,
     };
     if prepend && !matches!(format, IndexResourceFormat::SidecarV1) {
@@ -355,9 +327,6 @@ impl Kura {
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::Unavailable;
         if self.canonical_storage_poisoned.load(Ordering::Acquire)
-            || self
-                .latest_certified_frontier_storage_unknown
-                .load(Ordering::Acquire)
             || self.prune_recovery_is_required()
         {
             return Err(Unavailable::InvalidInventory);
@@ -365,17 +334,7 @@ impl Kura {
         if self.prune_in_progress.load(Ordering::Acquire) {
             return Err(Unavailable::Busy);
         }
-        if self.auxiliary_history_deferred
-            || !self
-                .native_amx_resident_recovery_complete
-                .load(Ordering::Acquire)
-            || !self
-                .post_wsv_resident_recovery_complete
-                .load(Ordering::Acquire)
-            || !self
-                .certified_resident_recovery_complete
-                .load(Ordering::Acquire)
-        {
+        if self.auxiliary_history_deferred {
             return Err(Unavailable::Unregistered);
         }
         let bootstrap = self

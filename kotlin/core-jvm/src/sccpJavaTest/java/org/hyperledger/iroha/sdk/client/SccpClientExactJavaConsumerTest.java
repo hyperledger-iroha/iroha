@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client;
 
+import org.hyperledger.iroha.sdk.testing.RetiredTransactionWire;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.net.URI;
@@ -22,7 +23,6 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse;
 import org.hyperledger.iroha.sdk.crypto.IrohaHash;
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent;
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId;
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload;
 import org.hyperledger.iroha.sdk.core.model.Executable;
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter;
@@ -187,7 +187,7 @@ public final class SccpClientExactJavaConsumerTest {
                         org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
                             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"), AUTHORITY, 7L,
                         Executable.instructions(Collections.emptyList()), 100_000L, null, expectedFeePayment,
-                        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, Collections.emptyMap(), null));
+                        Collections.emptyMap(), null));
     final TransactionPayload decoded = codec.decodeTransaction(encoded);
     final FeePaymentIntent.Sponsor decodedSponsor =
         (FeePaymentIntent.Sponsor) decoded.getFeePayment();
@@ -354,7 +354,7 @@ public final class SccpClientExactJavaConsumerTest {
                         org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
                             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"), AUTHORITY, 7L,
                         Executable.instructions(Collections.emptyList()), 100_000L, null, BRIDGE_FEE_PAYMENT,
-                        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, Collections.emptyMap(), null)));
+                        Collections.emptyMap(), null)));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
     }
@@ -373,7 +373,7 @@ public final class SccpClientExactJavaConsumerTest {
                         org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
                             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"), canonicalAuthority(0x12), 7L,
                         Executable.instructions(Collections.emptyList()), 100_000L, null, BRIDGE_FEE_PAYMENT,
-                        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, Collections.emptyMap(), null)));
+                        Collections.emptyMap(), null)));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode mismatched SCCP authority fixture", ex);
     }
@@ -1392,7 +1392,7 @@ public final class SccpClientExactJavaConsumerTest {
                         org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
                             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"), AUTHORITY, 10L,
                         Executable.instructions(Collections.emptyList()), 100_000L, null, BRIDGE_FEE_PAYMENT,
-                        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, Collections.emptyMap(), null));
+                        Collections.emptyMap(), null));
     final Map<String, Object> response = map();
     response.put("submitted", false);
     response.put("payload_kind", "transfer");
@@ -1441,21 +1441,12 @@ public final class SccpClientExactJavaConsumerTest {
     response.put("counterparty_domain", 2);
     response.put("counterparty_chain", "bsc-mainnet");
 
-    final byte[] ordinaryTransactionBytes =
-        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-            .encodeTransaction(
-                new TransactionPayload(
-                    org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
-                            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"), AUTHORITY, 10L,
-                    Executable.instructions(Collections.emptyList()), 100_000L, null, BRIDGE_FEE_PAYMENT,
-                    TransactionAdmissionIntent.ORDINARY, Collections.emptyMap(), null));
-    response.put(
-        "transaction_payload_b64",
-        Base64.getEncoder().encodeToString(ordinaryTransactionBytes));
-    response.put(
-        "signing_message_b64",
-        Base64.getEncoder().encodeToString(IrohaHash.prehash(ordinaryTransactionBytes)));
-    expectFailure(() -> SccpBridgeSubmitResponseParser.parse(jsonBytes(response)));
+    for (int tag : new int[] {0, 1, 2}) {
+      final byte[] retired = RetiredTransactionWire.insertAdmissionSlot(transactionBytes, tag);
+      response.put("transaction_payload_b64", Base64.getEncoder().encodeToString(retired));
+      response.put("signing_message_b64", Base64.getEncoder().encodeToString(IrohaHash.prehash(retired)));
+      expectFailure(() -> SccpBridgeSubmitResponseParser.parse(jsonBytes(response)));
+    }
     response.put(
         "transaction_payload_b64", Base64.getEncoder().encodeToString(transactionBytes));
     response.put(

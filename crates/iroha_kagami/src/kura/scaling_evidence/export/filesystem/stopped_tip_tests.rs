@@ -21,18 +21,16 @@ fn run(fixture: &Fixture, hook: impl FnMut(Boundary) -> Result<()>) -> Result<Re
         fixture.bindings().signed_genesis,
         fixture.genesis().network_id,
         fixture.block_store(),
-        fixture.merge_log(),
         limits(fixture),
         hook,
     )
 }
-fn core_paths(fixture: &Fixture) -> [PathBuf; 5] {
+fn core_paths(fixture: &Fixture) -> [PathBuf; 4] {
     [
         fixture.block_store().join("blocks.data"),
         fixture.block_store().join("blocks.index"),
         fixture.block_store().join("blocks.hashes"),
         fixture.block_store().join("blocks.count.norito"),
-        fixture.merge_log().to_owned(),
     ]
 }
 fn replace(path: &Path) -> PathBuf {
@@ -76,12 +74,10 @@ fn stopped_tip_real_one_and_four_observe_whole_marker_with_only_genesis_carrier(
             original,
             fixture.genesis().network_id,
             fixture.block_store(),
-            fixture.merge_log(),
             limits(&fixture),
         )
         .unwrap();
         assert_eq!(owner.complete.carrier_count(), 1);
-        assert_eq!(owner.complete.merge_frames(), 1);
         assert_eq!(owner.complete.committed_height(), 2);
         let mut writer = BufWriter::new(Vec::new());
         let identity = owner
@@ -107,22 +103,22 @@ fn stopped_tip_actual_genesis_only_store_yields_one_without_discovery_mode() {
     let root = fixture.block_store().with_file_name("genesis-only-kura");
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let genesis = iroha_genesis::decode_signed_genesis(
-        &fs::read(fixture.bindings().signed_genesis.path).unwrap(),
-    )
-    .unwrap();
+    let mut source =
+        CanonicalKuraEvidenceReader::open(fixture.block_store(), limits(&fixture)).unwrap();
+    let wire = source.read_carrier(1).unwrap();
+    let genesis = iroha_data_model::block::decode_versioned_signed_block(&wire).unwrap();
+    let complete = source.finish().unwrap();
+    assert!(genesis.commit_certificate().is_some());
+    complete.recheck_sources().unwrap();
     let mut store = iroha_core::kura::BlockStore::new(&root);
     store.create_files_if_they_do_not_exist().unwrap();
     store.append_block_to_chain(&genesis).unwrap();
     drop(store);
-    let merge = root.join("merge.log");
-    fs::write(&merge, []).unwrap();
     for name in [
         "blocks.data",
         "blocks.index",
         "blocks.hashes",
         "blocks.count.norito",
-        "merge.log",
     ] {
         fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o600)).unwrap();
     }
@@ -130,11 +126,9 @@ fn stopped_tip_actual_genesis_only_store_yields_one_without_discovery_mode() {
         fixture.bindings().signed_genesis,
         fixture.genesis().network_id,
         &root,
-        &merge,
         limits(&fixture),
     )
     .unwrap();
-    assert_eq!(owner.complete.merge_frames(), 0);
     assert_eq!(owner.finish_reply(|_| Ok(())).unwrap().committed_height, 1);
 }
 
@@ -146,13 +140,11 @@ fn stopped_tip_invalid_independent_bounds_reject_before_any_file_hook() {
         max_committed_blocks: 10,
         max_store_data_bytes: 1024 * 1024,
         max_carrier_bytes: 1024 * 1024,
-        max_merge_log_bytes: 1024 * 1024,
-        max_merge_frames: 10,
         max_output_bytes: 1024 * 1024,
         max_decode_allocation_bytes: 16 * 1024 * 1024,
         owner_uid: rustix::process::geteuid().as_raw(),
     };
-    for case in 0..22 {
+    for case in 0..20 {
         let mut reader = base;
         let mut genesis = ProofInputBinding {
             path: "/absent/genesis.nrt".into(),
@@ -171,18 +163,16 @@ fn stopped_tip_invalid_independent_bounds_reject_before_any_file_hook() {
             7 => reader.max_store_data_bytes = 2 * 1024 * 1024 * 1024 + 1,
             8 => reader.max_carrier_bytes = 0,
             9 => reader.max_carrier_bytes = 32 * 1024 * 1024 + 1,
-            10 => reader.max_merge_log_bytes = MAX_INPUT_BYTES + 1,
-            11 => reader.max_merge_frames = 11,
-            12 => reader.max_output_bytes = 0,
-            13 => reader.max_output_bytes = MAX_INPUT_BYTES + 1,
-            14 => reader.max_decode_allocation_bytes = 0,
-            15 => reader.max_decode_allocation_bytes = 512 * 1024 * 1024 + 1,
-            16 => genesis.max_bytes = 0,
-            17 => genesis.max_bytes = 32 * 1024 * 1024 + 1,
-            18 => genesis.path = root.join("blocks.data"),
-            19 => root = "relative".into(),
-            20 => genesis.path = "/absent/../genesis.nrt".into(),
-            21 => root = format!("/{}", "x".repeat(MAX_PATH_BYTES)).into(),
+            10 => reader.max_output_bytes = 0,
+            11 => reader.max_output_bytes = MAX_INPUT_BYTES + 1,
+            12 => reader.max_decode_allocation_bytes = 0,
+            13 => reader.max_decode_allocation_bytes = 512 * 1024 * 1024 + 1,
+            14 => genesis.max_bytes = 0,
+            15 => genesis.max_bytes = 32 * 1024 * 1024 + 1,
+            16 => genesis.path = root.join("blocks.data"),
+            17 => root = "relative".into(),
+            18 => genesis.path = "/absent/../genesis.nrt".into(),
+            19 => root = format!("/{}", "x".repeat(MAX_PATH_BYTES)).into(),
             _ => unreachable!(),
         }
         let mut hooks = 0;
@@ -192,7 +182,6 @@ fn stopped_tip_invalid_independent_bounds_reject_before_any_file_hook() {
                 b"test network",
             ))),
             &root,
-            Path::new("/absent/merge.log"),
             reader,
             |_| {
                 hooks += 1;
@@ -214,7 +203,6 @@ fn stopped_tip_raw_pin_network_and_same_header_different_signed_wire_are_indepen
             binding,
             fixture.genesis().network_id,
             fixture.block_store(),
-            fixture.merge_log(),
             limits(&fixture),
         ),
         "SHA-256 mismatch",
@@ -226,7 +214,6 @@ fn stopped_tip_raw_pin_network_and_same_header_different_signed_wire_are_indepen
                 b"wrong network",
             ))),
             fixture.block_store(),
-            fixture.merge_log(),
             limits(&fixture),
         ),
         "expected unmerged genesis",
@@ -246,7 +233,6 @@ fn stopped_tip_raw_pin_network_and_same_header_different_signed_wire_are_indepen
             binding,
             fixture.genesis().network_id,
             fixture.block_store(),
-            fixture.merge_log(),
             limits(&fixture),
         ),
         "differs from original signed genesis",
@@ -281,31 +267,6 @@ fn stopped_tip_actual_whole_store_files_reject_missing_truncated_and_uncommitted
             .committed_height,
         2
     );
-}
-
-#[test]
-fn stopped_tip_full_merge_scan_rejects_genesis_epoch_gaps_and_beyond_marker_carriers() {
-    let fixture = Fixture::new(1);
-    let original = fs::read(fixture.merge_log()).unwrap();
-    let entry = iroha_data_model::merge::MergeLedgerEntry::decode_all(&mut &original[4..]).unwrap();
-    for case in 0..3 {
-        let mut changed =
-            iroha_data_model::merge::MergeLedgerEntry::decode_all(&mut &original[4..]).unwrap();
-        match case {
-            0 => changed.merge_qc.carrier_height = 1,
-            1 => changed.epoch_id = 2,
-            2 => changed.merge_qc.carrier_height = 3,
-            _ => unreachable!(),
-        }
-        let payload = changed.encode();
-        let mut raw = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
-        raw.extend(payload);
-        fs::write(fixture.merge_log(), raw).unwrap();
-        assert!(run(&fixture, |_| Ok(())).is_err(), "case {case}");
-    }
-    assert_eq!(entry.epoch_id, 1);
-    assert_eq!(entry.merge_qc.carrier_height, 2);
-    fs::write(fixture.merge_log(), original).unwrap();
 }
 
 #[test]
@@ -360,8 +321,6 @@ fn stopped_tip_core_and_genesis_replacement_at_every_observation_boundary_preven
         Boundary::AfterCoreOpen,
         Boundary::BeforeCarrier,
         Boundary::AfterCarrier,
-        Boundary::BeforeMergeScan,
-        Boundary::AfterMergeScan,
         Boundary::BeforeCoreFinish,
         Boundary::AfterCoreFinish,
         Boundary::BeforeIdentity,
@@ -494,7 +453,6 @@ fn stopped_tip_original_under_core_namespace_and_core_parent_replacement_are_rej
             },
             fixture.genesis().network_id,
             fixture.block_store(),
-            fixture.merge_log(),
             limits(&fixture),
         ),
         "protected Core source namespace",

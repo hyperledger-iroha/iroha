@@ -414,161 +414,105 @@ struct PendingAutoscaleLaneLifecycle {
     expected_incarnation_root: Hash,
     runtime_catalog: Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>,
 }
-impl PendingAutoscaleLaneLifecycle {
-    fn exact_scale_in_binding(
-        &self,
-    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
-        let PendingAutoscaleTransition::ScaleIn { lane, .. } = &self.transition else {
-            return Ok(None);
-        };
-        ensure_autoscale_transition_matches_plan(&self.plan, &self.transition)?;
-        let previous_lane = self
-            .catalog_update
-            .previous_catalog
-            .lanes()
-            .iter()
-            .find(|candidate| candidate.id == *lane)
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane in the previous catalog",
-            })?;
-        let incarnation = self
-            .catalog_update
-            .previous_lane_incarnations
-            .get(lane)
-            .copied()
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane incarnation",
-            })?;
-        Ok(Some((*lane, previous_lane.dataspace_id, incarnation)))
-    }
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AutoscaleScaleInAction {
-    RequestDrain(LaneId),
-    Retire(LaneId),
-}
+/// Physical catalog additions retain data and do not drive logical lane closure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PendingAutoscaleTransition {
     Manual,
-    DrainIntent {
-        lane: LaneId,
-        intent: LaneDrainIntentV1,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        in_latency_ratio_permille: u64,
-        in_utilization_p95_permille: u64,
-    },
-    DrainCommitment {
-        lane: LaneId,
-        commitment: LaneDrainCommitmentV1,
-    },
-    ScaleOut {
-        lane: LaneId,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        out_latency_ratio_permille: u64,
-        out_utilization_p95_permille: u64,
-    },
-    ScaleIn {
-        lane: LaneId,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        in_latency_ratio_permille: u64,
-        in_utilization_p95_permille: u64,
-    },
 }
 impl PendingAutoscaleTransition {
     fn name(&self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::DrainIntent { .. } => "drain-intent",
-            Self::DrainCommitment { .. } => "drain-commitment",
-            Self::ScaleOut { .. } => "scale-out",
-            Self::ScaleIn { .. } => "scale-in",
-        }
+        "catalog-addition"
     }
     fn log(&self, height: u64) {
-        match self {
-            Self::Manual => {
-                info!(
-                    height,
-                    "applied consensus-replayed manual lane lifecycle transition"
-                );
-            }
-            Self::DrainIntent {
-                lane,
-                intent,
-                active_lanes,
-                autoscale_capacity_lanes,
-                in_latency_ratio_permille,
-                in_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    close_global_height = intent.close_global_height,
-                    initial_merged_lane_height = intent.initial_frontier.lane_block_height,
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    in_latency_ratio_permille,
-                    in_utilization_p95_permille,
-                    "committed deterministic lane autoscale drain intent"
-                );
-            }
-            Self::DrainCommitment { lane, commitment } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    carrier_height = commitment.carrier_height,
-                    final_lane_block_height = commitment.frontier.lane_block_height,
-                    "committed globally certified lane autoscale drain frontier"
-                );
-            }
-            Self::ScaleOut {
-                lane,
-                active_lanes,
-                autoscale_capacity_lanes,
-                out_latency_ratio_permille,
-                out_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    out_latency_ratio_permille,
-                    out_utilization_p95_permille,
-                    "applied deterministic lane autoscale scale-out transition"
-                );
-            }
-            Self::ScaleIn {
-                lane,
-                active_lanes,
-                autoscale_capacity_lanes,
-                in_latency_ratio_permille,
-                in_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    in_latency_ratio_permille,
-                    in_utilization_p95_permille,
-                    "applied deterministic lane autoscale scale-in transition"
-                );
-            }
-        }
+        info!(height, "applied authenticated physical catalog addition");
     }
     const fn requires_geometry(&self) -> bool {
-        !matches!(
-            self,
-            Self::DrainIntent { .. } | Self::DrainCommitment { .. }
-        )
+        true
     }
 }
+
+/// Physical storage identifiers and history remain after native logical lane closure.
+fn ensure_physical_catalog_additions_only(
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+) -> Result<(), LaneLifecycleError> {
+    if let Some(lane) = plan.retire.first() {
+        return Err(LaneLifecycleError::UnsafeRetirement {
+            lane: *lane,
+            reason: "physical catalog retirement is unsupported; native lane closure retains its data",
+        });
+    }
+    Ok(())
+}
+
+fn ensure_no_retired_physical_drain_metadata(
+    lane: &iroha_data_model::nexus::LaneConfig,
+) -> Result<(), LaneLifecycleError> {
+    if lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE) {
+        return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane.id,
+            reason: "autoscale.drain_state is retired; native lane state owns closure",
+        });
+    }
+    Ok(())
+}
+
+/// Physical catalogs retain every existing lane while native logical closure advances.
+fn ensure_physical_lane_ids_retained(
+    previous: &[iroha_data_model::nexus::LaneConfig],
+    updated: &[iroha_data_model::nexus::LaneConfig],
+) -> Result<(), LaneLifecycleError> {
+    for lane in previous {
+        if !updated.iter().any(|candidate| candidate.id == lane.id) {
+            return Err(LaneLifecycleError::UnsafeRetirement {
+                lane: lane.id,
+                reason: "physical catalog retirement is unsupported; native lane closure retains its data",
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod physical_catalog_addition_tests {
+    use super::*;
+    #[test]
+    fn retired_drain_metadata_never_creates_an_open_physical_route() {
+        let mut lane = iroha_data_model::nexus::LaneConfig::default();
+        ensure_no_retired_physical_drain_metadata(&lane).unwrap();
+        lane.metadata.insert(AUTOSCALE_META_DRAIN_STATE.into(), "{}".into());
+        assert!(ensure_no_retired_physical_drain_metadata(&lane).is_err());
+        assert!(!autoscale_lane_accepts_proposal_height(&lane, 1));
+        assert!(!autoscale_lane_accepts_proposal_height(&lane, u64::MAX));
+    }
+
+    #[test]
+    fn configuration_cannot_drop_a_physical_lane() {
+        let first = iroha_data_model::nexus::LaneConfig::default();
+        let mut extra = first.clone();
+        extra.id = LaneId::new(7);
+        let original = [first.clone(), extra.clone()];
+        ensure_physical_lane_ids_retained(&[first.clone()], &original).unwrap();
+        ensure_physical_lane_ids_retained(&original, &[extra, first.clone()]).unwrap();
+        assert!(matches!(
+            ensure_physical_lane_ids_retained(&original, &[first]),
+            Err(LaneLifecycleError::UnsafeRetirement { lane, .. }) if lane == LaneId::new(7)
+        ));
+    }
+
+    #[test]
+    fn physical_retirement_is_rejected_before_geometry_or_custody_changes() {
+        let mut plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: Vec::new(),
+        };
+        ensure_physical_catalog_additions_only(&plan).unwrap();
+        plan.retire.push(LaneId::new(7));
+        assert!(
+            matches!(ensure_physical_catalog_additions_only(&plan), Err(LaneLifecycleError::UnsafeRetirement { lane, .. }) if lane == LaneId::new(7))
+        );
+    }
+}
+
 const LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON: &str =
     "it contains live shared-dataspace staking state across a canonical owner reset or change";
 const LIVE_LANE_STAKING_CUSTODY_REASON: &str =

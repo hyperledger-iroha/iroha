@@ -197,7 +197,6 @@ fn test_block(envelopes: Vec<AxtEnvelopeRecord>, snapshot: AxtPolicySnapshot) ->
             envelopes,
             snapshot,
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("test block carries canonical outputs");

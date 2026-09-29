@@ -72,7 +72,7 @@ TRANSACTION_PAYLOAD_FIELDS = (
     "time_to_live_ms",
     "nonce",
     "fee_payment",
-    "admission_intent",
+
     "metadata",
     "attachments",
 )
@@ -352,9 +352,6 @@ def _transaction_payload_fields(data: bytes, context: str) -> Mapping[str, bytes
     if nonce is not None and int.from_bytes(nonce, "little") == 0:
         raise ValueError(f"{context}.nonce must be non-zero when present")
     _validate_fee_payment(fields["fee_payment"], f"{context}.fee_payment")
-    admission = fields["admission_intent"]
-    if len(admission) != 4 or int.from_bytes(admission, "little") not in (0, 1):
-        raise ValueError(f"{context}.admission_intent has an unknown tag")
     if len(fields["metadata"]) < 8:
         raise ValueError(f"{context}.metadata has a truncated entry count")
     _read_option(fields["attachments"], f"{context}.attachments", None)

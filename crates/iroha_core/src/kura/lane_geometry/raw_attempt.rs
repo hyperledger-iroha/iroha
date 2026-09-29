@@ -159,16 +159,10 @@ struct OwnedRequest {
     updated_lineage_root: Hash,
     transition_height: u64,
     replaced: BTreeSet<LaneId>,
-    certified_frontiers: BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-    certified_retirements: BTreeSet<(LaneId, DataSpaceId, Hash)>,
 }
 
 impl OwnedRequest {
-    fn capture(
-        request: &ReplayGeometryBindingRequest<'_>,
-        replaced: &BTreeSet<LaneId>,
-        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-    ) -> Self {
+    fn capture(request: &GeometryBindingRequest<'_>, replaced: &BTreeSet<LaneId>) -> Self {
         Self {
             previous: request.previous.clone(),
             updated: request.updated.clone(),
@@ -180,17 +174,10 @@ impl OwnedRequest {
             updated_lineage_root: request.updated_lineage_root,
             transition_height: request.transition_height,
             replaced: replaced.clone(),
-            certified_frontiers: certified_frontiers.clone(),
-            certified_retirements: certified_frontiers.keys().copied().collect(),
         }
     }
 
-    fn matches(
-        &self,
-        request: &ReplayGeometryBindingRequest<'_>,
-        replaced: &BTreeSet<LaneId>,
-        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-    ) -> bool {
+    fn matches(&self, request: &GeometryBindingRequest<'_>, replaced: &BTreeSet<LaneId>) -> bool {
         self.previous == *request.previous
             && self.updated == *request.updated
             && self.previous_incarnations == *request.previous_incarnations
@@ -201,7 +188,6 @@ impl OwnedRequest {
             && self.updated_lineage_root == request.updated_lineage_root
             && self.transition_height == request.transition_height
             && self.replaced == *replaced
-            && self.certified_frontiers == *certified_frontiers
     }
 }
 
@@ -325,8 +311,6 @@ pub(crate) struct RawGeometryAttempt {
     provisioning_failure: Option<RawGeometryProvisioningFailure>,
     phase: RawGeometryPhase,
     catalog_baseline: Option<Option<Hash>>,
-    startup_owner: Option<Arc<()>>,
-    namespace_receipts: Vec<StartupReplayNamespaceCreation>,
     // Last: abandoned partial effects retain fail-closed exclusion after payload drop.
     claim: RawGeometryClaim,
 }
@@ -343,25 +327,16 @@ impl KuraPublicationLease<'_> {
     /// Capture one exact operation before any filesystem/reference mutation.
     pub(crate) fn begin_raw_geometry_attempt(
         &self,
-        request: &ReplayGeometryBindingRequest<'_>,
+        request: &GeometryBindingRequest<'_>,
         replaced: &BTreeSet<LaneId>,
-        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
     ) -> Result<RawGeometryAttempt> {
         let kura = self.original_kura();
         kura.durable_mutation_authorized()?;
         kura.require_raw_geometry_canonical_recovery_complete()?;
         kura.ensure_nonzero_lineage_root(request.previous_lineage_root)?;
         kura.ensure_nonzero_lineage_root(request.updated_lineage_root)?;
+        request.validate_additions_only(replaced)?;
         let claim = kura.raw_geometry_claim.claim()?;
-        for (&(lane, dataspace, incarnation), frontier) in certified_frontiers {
-            kura.validate_certified_lane_drain_frontier_under_publication_lease(
-                self,
-                lane,
-                dataspace,
-                incarnation,
-                frontier,
-            )?;
-        }
         let previous_bindings = kura.geometry_bindings(
             request.previous,
             request.previous_incarnations,
@@ -412,7 +387,7 @@ impl KuraPublicationLease<'_> {
         };
         Ok(RawGeometryAttempt {
             kura: kura.instance_identity(),
-            request: OwnedRequest::capture(request, replaced, certified_frontiers),
+            request: OwnedRequest::capture(request, replaced),
             previous_bindings,
             updated_bindings,
             previous_entries: Some(previous_entries),
@@ -428,30 +403,12 @@ impl KuraPublicationLease<'_> {
             provisioning_failure: None,
             phase: RawGeometryPhase::Captured,
             catalog_baseline: None,
-            startup_owner: None,
-            namespace_receipts: Vec::new(),
             claim,
         })
     }
 }
 
 impl RawGeometryAttempt {
-    #[cfg(test)]
-    pub(super) fn set_fixture_certified_retirements(
-        &mut self,
-        certified: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
-    ) {
-        self.request.certified_retirements = certified.clone();
-    }
-
-    #[cfg(test)]
-    pub(super) fn move_fixture_receipts(
-        &mut self,
-        receipts: &mut Vec<StartupReplayNamespaceCreation>,
-    ) {
-        receipts.append(&mut self.namespace_receipts);
-    }
-
     #[cfg(test)]
     pub(super) fn surrender_structural_fixture(&mut self) {
         // Old storage fixtures inspect a durable FilesApplied image separately
@@ -460,74 +417,6 @@ impl RawGeometryAttempt {
         if !self.has_pending_journal_write() && self.phase == RawGeometryPhase::FilesApplied {
             self.claim.finish();
         }
-    }
-
-    pub(crate) fn matches_startup_transition(
-        &self,
-        transition: Option<&StartupReplayGeometryTransition>,
-    ) -> bool {
-        match (&self.startup_owner, transition) {
-            (None, None) => true,
-            (Some(owner), Some(transition)) => Arc::ptr_eq(owner, &transition.original_owner),
-            _ => false,
-        }
-    }
-    /// Move the original startup creation receipts before any operation effects.
-    pub(crate) fn attach_startup_transition(
-        &mut self,
-        transition: &mut StartupReplayGeometryTransition,
-    ) -> Result<()> {
-        if self.phase != RawGeometryPhase::Captured
-            || self.startup_owner.is_some()
-            || !self.namespace_receipts.is_empty()
-            || !self.kura.same_instance(&transition.original_kura)
-            || !transition.expected_transitions.iter().any(|expected| {
-                expected.height == self.request.transition_height
-                    && expected.previous == self.previous_bindings
-                    && expected.updated == self.updated_bindings
-                    && expected.previous_lineage == self.request.previous_lineage_root
-                    && expected.updated_lineage == self.request.updated_lineage_root
-            })
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "startup geometry custody must attach once before effects",
-                ),
-                PathBuf::new(),
-            ));
-        }
-        self.startup_owner = Some(Arc::clone(&transition.original_owner));
-        self.namespace_receipts = std::mem::take(&mut transition.created_namespaces);
-        Ok(())
-    }
-
-    /// Return receipts only to their original startup owner after a terminal operation.
-    pub(crate) fn return_startup_namespace_receipts(
-        &mut self,
-        transition: &mut StartupReplayGeometryTransition,
-    ) -> Result<()> {
-        if !matches!(
-            self.phase,
-            RawGeometryPhase::CatalogPublished | RawGeometryPhase::RolledBack
-        ) || self.has_pending_journal_write()
-            || self
-                .startup_owner
-                .as_ref()
-                .is_none_or(|owner| !Arc::ptr_eq(owner, &transition.original_owner))
-            || !transition.created_namespaces.is_empty()
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "startup geometry receipts require their original terminal owner",
-                ),
-                PathBuf::new(),
-            ));
-        }
-        transition.created_namespaces = std::mem::take(&mut self.namespace_receipts);
-        self.startup_owner = None;
-        Ok(())
     }
 
     /// Return the original local recovery cause before any other owner reverses effects.
@@ -544,11 +433,10 @@ impl RawGeometryAttempt {
     /// Comparison only: equal request bytes cannot create or replace this owner.
     pub(crate) fn matches_request(
         &self,
-        request: &ReplayGeometryBindingRequest<'_>,
+        request: &GeometryBindingRequest<'_>,
         replaced: &BTreeSet<LaneId>,
-        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
     ) -> bool {
-        self.request.matches(request, replaced, certified_frontiers)
+        self.request.matches(request, replaced)
     }
 
     pub(crate) fn has_pending_journal_write(&self) -> bool {
@@ -716,18 +604,8 @@ impl RawGeometryAttempt {
         }
         if self.phase == RawGeometryPhase::Maintenance {
             self.claim.effects_started = true;
-            // Existing durable-evidence validation may complete a failed merge
-            // append. It belongs to this retained operation, never pure capture.
+            // Validate the retained journal before choosing any physical operation.
             kura.validate_lane_geometry_journal(&self.journal)?;
-            let mut mutation = RawGeometryMutation {
-                lease,
-                claim: &self.claim,
-                maintenance: &mut self.maintenance,
-            };
-            kura.finish_pending_lane_geometry_gc_with_custody(
-                &mut self.journal,
-                Some(&mut mutation),
-            )?;
             if self.plan.is_none() {
                 self.plan = Some(self.select_plan(kura)?);
             }
@@ -750,11 +628,10 @@ impl RawGeometryAttempt {
                     plan.desired_previous_count,
                     Some(&mut mutation),
                 )?;
-                kura.ensure_authoritative_lane_markers_with_receipts(
+                kura.ensure_authoritative_lane_markers(
                     &self.request.previous,
                     &self.request.previous_incarnations,
                     &self.request.previous_activation_heights,
-                    Some(&mut self.namespace_receipts),
                 )?;
             }
             self.phase = RawGeometryPhase::Applying;
@@ -787,18 +664,6 @@ impl RawGeometryAttempt {
                         .records
                         .iter()
                         .map(|r| r.transition_sequence)
-                        .chain(
-                            self.journal
-                                .pending_archive_gc
-                                .iter()
-                                .map(|p| p.intent.transition_sequence),
-                        )
-                        .chain(
-                            self.journal
-                                .checkpoint
-                                .iter()
-                                .filter_map(|c| c.transition_sequence),
-                        )
                         .max();
                     let sequence = last.map_or(Ok(0), |last| {
                         last.checked_add(1).ok_or_else(|| {
@@ -845,26 +710,6 @@ impl RawGeometryAttempt {
                         "geometry target has no journal record",
                     )
                 })?;
-                if !matches!(kind, TargetKind::Published) {
-                    let retiring = kura.geometry_retirement_identities(
-                        &self.request.previous,
-                        &self.journal.records[index].operations,
-                    )?;
-                    let certified = self
-                        .request
-                        .certified_retirements
-                        .iter()
-                        .map(
-                            |&(lane_id, dataspace_id, lane_incarnation)| LaneRetirementIdentity {
-                                lane_id,
-                                dataspace_id,
-                                lane_incarnation,
-                            },
-                        )
-                        .collect();
-                    let pending = lease.pending_canonical_bytes();
-                    kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;
-                }
                 // All semantic preparation must precede moving the sole retained
                 // descriptor. Preserve it if any preparation step refuses.
                 self.target = Some(self.prepare_target(kura, index)?);
@@ -908,11 +753,10 @@ impl RawGeometryAttempt {
                 self.persist_target(kura, LaneGeometryPhase::FilesApplied)?;
             }
         }
-        kura.ensure_authoritative_lane_markers_with_receipts(
+        kura.ensure_authoritative_lane_markers(
             &self.request.updated,
             &self.request.updated_incarnations,
             &self.request.updated_activation_heights,
-            Some(&mut self.namespace_receipts),
         )?;
         if let Some(entries) = self.updated_entries.take() {
             *kura.lane_storage_entries.lock() = entries;
@@ -1106,11 +950,10 @@ impl RawGeometryAttempt {
             self.persist_target(kura, LaneGeometryPhase::RolledBack)?;
         }
         if !kura.store_root.as_os_str().is_empty() {
-            kura.ensure_authoritative_lane_markers_with_receipts(
+            kura.ensure_authoritative_lane_markers(
                 &self.request.previous,
                 &self.request.previous_incarnations,
                 &self.request.previous_activation_heights,
-                Some(&mut self.namespace_receipts),
             )?;
         }
         if let Some(entries) = self.previous_entries.take() {
@@ -1125,7 +968,7 @@ impl RawGeometryAttempt {
 impl Kura {
     /// The original canonical resolver owns repair at Strict startup. A retained
     /// geometry operation may inspect this boundary under its joint lease, but
-    /// cannot silently nest an association resolver which reacquires its locks.
+    /// cannot repair canonical storage or reacquire its original locks.
     fn require_raw_geometry_canonical_recovery_complete(&self) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -1138,9 +981,6 @@ impl Kura {
             return Err(Error::LaneGeometryCanonicalRecoveryRequired);
         }
         drop(store);
-        if self.read_canonical_association_stage()?.is_some() {
-            return Err(Error::LaneGeometryCanonicalRecoveryRequired);
-        }
         Ok(())
     }
 }

@@ -1,10 +1,10 @@
 package org.hyperledger.iroha.sdk.tx
 
+import org.hyperledger.iroha.sdk.testing.RetiredTransactionWire
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
@@ -21,47 +21,38 @@ import kotlin.test.assertFailsWith
 class TransactionBuilderTest {
 
     @Test
-    fun `public builder signs the caller's ordinary admission bytes unchanged`() {
+    fun `public builder signs the caller's canonical nine-field payload unchanged`() {
         val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = payload(metadata = mapOf("channel" to JsonValue.string("sdk-test")))
         val directBytes = codec.encodeTransaction(payload)
-        val direct = codec.decodeTransaction(directBytes)
-        assertEquals(TransactionAdmissionIntent.ORDINARY, direct.admissionIntent)
-        assertFailsWith<NoritoException> {
-            NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
-                directBytes,
-                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
-            )
-        }
-
+        assertEquals(payload, codec.decodeTransaction(directBytes))
         val signer = CapturingSigner()
         val signed = TransactionBuilder(codec).encodeAndSign(payload, signer)
         val decoded = codec.decodeTransaction(signed.encodedPayload())
         NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
             signed.encodedPayload(),
-            TransactionAdmissionIntent.ORDINARY,
         )
 
-        assertEquals(TransactionAdmissionIntent.ORDINARY, decoded.admissionIntent)
         assertEquals(JsonValue.string("sdk-test"), decoded.metadata["channel"])
-        assertEquals(TransactionAdmissionIntent.ORDINARY, payload.admissionIntent)
         assertContentEquals(directBytes, signed.encodedPayload())
         assertContentEquals(signed.encodedPayload(), signer.lastMessage)
     }
 
     @Test
-    fun `public builder preserves an explicit QueuePlan intent`() {
+    fun `canonical payload rejects every retired admission slot`() {
         val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val payload = payload(
-            metadata = mapOf("channel" to JsonValue.string("already-queue-plan")),
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
-        )
-
-        val signed = TransactionBuilder(codec).encodeAndSign(payload, CapturingSigner())
-        val decoded = codec.decodeTransaction(signed.encodedPayload())
-
-        assertEquals(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, decoded.admissionIntent)
-        assertEquals(payload, decoded)
+        val payload = payload(metadata = mapOf("channel" to JsonValue.string("sdk-test")))
+        val canonical = codec.encodeTransaction(payload)
+        assertEquals(payload, NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(canonical))
+        for (tag in listOf(0, 1, 2)) {
+            val retired = RetiredTransactionWire.insertAdmissionSlot(canonical, tag)
+            assertFailsWith<NoritoException>("retired slot $tag") {
+                NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(retired)
+            }
+            assertFailsWith<NoritoException>("retired codec slot $tag") {
+                codec.decodeTransaction(retired)
+            }
+        }
     }
 
     @Test
@@ -101,7 +92,7 @@ class TransactionBuilderTest {
 
     private fun payload(
         metadata: Map<String, JsonValue>,
-        admissionIntent: TransactionAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
+
     ): TransactionPayload = TransactionPayload(
         networkId = TestNetworkIds.canonical(),
         authority = AccountAddress
@@ -110,7 +101,7 @@ class TransactionBuilderTest {
         creationTimeMs = 1_736_000_000_000,
         executable = Executable.instructions(emptyList()),
         feePayment = FeePaymentIntent.authority(emptyList()),
-        admissionIntent = admissionIntent,
+
         metadata = metadata,
     )
 

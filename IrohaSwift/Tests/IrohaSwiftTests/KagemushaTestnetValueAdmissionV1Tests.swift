@@ -73,6 +73,9 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
       (11, KagemushaUInt128V1(0).littleEndianBytes),
       (15, u64(0)),
       (16, Data(repeating: 0, count: 32)),
+      (17, Data(repeating: 0, count: 32)),
+      (18, Data(repeating: 0, count: 32)),
+      (15, u64(1)),
     ] {
       var fields = validFields()
       fields[index] = replacement
@@ -81,6 +84,7 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
   }
 
   func testMalformedOrNoncanonicalFieldsFailClosed() {
+    assertInvalid(archive(fields: Array(validFields().dropLast(2))))
     var short = validFields()
     short[10] = Data(repeating: 8, count: 31)
     assertInvalid(archive(fields: short))
@@ -109,7 +113,8 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
      u32(2), Data(repeating: 6, count: 32), operationID,
      Data(repeating: 8, count: 32), KagemushaUInt128V1(17).littleEndianBytes,
      Data(repeating: 10, count: 32), Data(repeating: 11, count: 32),
-     Data(repeating: 12, count: 32), u64(13), Data(repeating: 14, count: 32)]
+     Data(repeating: 12, count: 32), u64(13), Data(repeating: 14, count: 32),
+     Data(repeating: 15, count: 32), Data(repeating: 16, count: 32)]
   }
 
   private func archive(fields: [Data]? = nil) -> Data {

@@ -11007,9 +11007,8 @@ impl BlockHeight {
     }
 }
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let hashes_path = iroha_core::kura::Kura::canonical_storage_paths(storage_dir)
-        .0
-        .join("blocks.hashes");
+    let hashes_path =
+        iroha_core::kura::Kura::canonical_storage_path(storage_dir).join("blocks.hashes");
     let metadata = fs::metadata(hashes_path).ok()?;
     let hash_bytes = u64::try_from(CryptoHash::LENGTH).ok()?;
     if !metadata.is_file() || metadata.len() % hash_bytes != 0 {
@@ -12387,7 +12386,7 @@ mod tests {
         fs::create_dir_all(&alias).unwrap();
         fs::write(alias.join("blocks.hashes"), vec![0u8; 32 * 20]).unwrap();
         assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
-        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        let canonical = iroha_core::kura::Kura::canonical_storage_path(directory.path());
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("blocks.hashes"), vec![0u8; 32 * 2]).unwrap();
         assert_eq!(
@@ -12401,7 +12400,7 @@ mod tests {
     #[test]
     fn detect_block_height_rejects_partial_canonical_hash_journal() {
         let directory = tempdir().expect("storage fixture");
-        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        let canonical = iroha_core::kura::Kura::canonical_storage_path(directory.path());
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("blocks.hashes"), vec![0u8; 33]).unwrap();
         assert!(detect_block_height_from_storage(directory.path(), 0).is_none());

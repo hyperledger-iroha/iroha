@@ -73,7 +73,6 @@ pub(crate) fn attach_fixture_execution_outputs(
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &iroha_data_model::block::output_budget::ExecutionOutputLimits {
                 max_outputs: 1024,
                 max_output_bytes: 1024 * 1024,
@@ -998,8 +997,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: defaults::kura::FSYNC_MODE,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:

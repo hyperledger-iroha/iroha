@@ -455,7 +455,6 @@ class MusubiInstructionsV1FixtureTest {
             "time_to_live_ms",
             "nonce",
             "fee_payment",
-            "admission_intent",
             "metadata",
             "attachments",
         ).forEach { field -> readField(transactionDecoder, field) }

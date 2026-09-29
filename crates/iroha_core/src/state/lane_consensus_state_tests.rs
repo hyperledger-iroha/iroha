@@ -52,7 +52,6 @@ fn lane_context_admission_carrier_for_test(
             Vec::new(),
             AxtPolicySnapshot::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("admission-only carrier retains its exact empty execution result");

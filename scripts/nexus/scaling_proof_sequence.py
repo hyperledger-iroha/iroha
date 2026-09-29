@@ -54,14 +54,11 @@ class StoppedReader:
     first_height=1 so the original genesis context anchors the complete interval.
     """
     block_store: Path
-    merge_log: Path
     first_height: int
     last_height: int
     max_committed_blocks: int
     max_store_data_bytes: int
     max_carrier_bytes: int
-    max_merge_log_bytes: int
-    max_merge_frames: int
     reader_max_output_bytes: int
     max_decode_allocation_bytes: int
     owner_uid: int
@@ -69,8 +66,7 @@ class StoppedReader:
 
 def _reader_snapshot(value):
     _require(type(value) is StoppedReader, 'proof_sequence_reader_invalid')
-    store, merge = _path(value.block_store), _path(value.merge_log)
-    _require(store != merge, 'proof_sequence_store_alias')
+    store = _path(value.block_store)
     _require(type(value.first_height) is int and value.first_height == 1,
              'proof_sequence_genesis_interval_required')
     last = _integer(value.last_height, 1, 1_000_000)
@@ -78,10 +74,9 @@ def _reader_snapshot(value):
     # Core owns the additional format-specific limits. Every count here is still
     # explicit, positive and bounded before any command or directory publication.
     sizes = tuple(_integer(getattr(value, name), 1) for name in (
-        'max_store_data_bytes', 'max_carrier_bytes', 'max_merge_log_bytes',
-        'max_merge_frames', 'reader_max_output_bytes', 'max_decode_allocation_bytes'))
+        'max_store_data_bytes', 'max_carrier_bytes', 'reader_max_output_bytes', 'max_decode_allocation_bytes'))
     uid = _integer(value.owner_uid, 0, (1 << 32) - 1)
-    return store, merge, (1, last, maximum, *sizes, uid)
+    return store, (1, last, maximum, *sizes, uid)
 
 
 class NativeProofSequence:
@@ -97,7 +92,7 @@ class NativeProofSequence:
         _integer(trial_deadline_ns, 1)
         _require(0 < trial_deadline_ns - time.monotonic_ns() <= MAX_TRIAL_NS,
                  'proof_sequence_deadline_invalid')
-        self._store, self._merge, self._reader_args = _reader_snapshot(stopped)
+        self._store, self._reader_args = _reader_snapshot(stopped)
         self._reply_cap = _integer(replay_reply_max_bytes, 1, MAX_BYTES)
         self._outputs, self._image, self._reader = outputs, image, reader
         self._end, self._guard = trial_deadline_ns, verify_original_inputs
@@ -162,7 +157,7 @@ class NativeProofSequence:
         outputs = self._outputs
         cap, path = outputs.allocation('proof'), outputs.path('proof')
         flags = ('first-height', 'last-height', 'max-committed-blocks', 'max-store-data-bytes',
-            'max-carrier-bytes', 'max-merge-log-bytes', 'max-merge-frames', 'reader-max-output-bytes',
+            'max-carrier-bytes', 'reader-max-output-bytes',
             'max-decode-allocation-bytes', 'owner-uid')
         reader_args = tuple(part for flag, value in zip(flags, self._reader_args, strict=True)
                             for part in ('--' + flag, str(value)))
@@ -170,7 +165,7 @@ class NativeProofSequence:
         reply = self._call('export', ('--request', str(request.path), '--request-sha256', request.sha256,
             '--request-max-bytes', str(request.max_bytes), '--input', str(bundle.path),
             '--input-sha256', bundle.sha256, '--input-max-bytes', str(bundle.max_bytes),
-            '--reply-max-bytes', '1024', '--block-store', self._store, '--merge-log', self._merge,
+            '--reply-max-bytes', '1024', '--block-store', self._store,
             '--output', str(path), '--output-max-bytes', str(cap), *reader_args), _EXPORT_FIELDS)
         _require(reply['request_sha256'] == request.sha256 and reply['input_sha256'] == bundle.sha256,
                  'proof_sequence_export_input_changed')

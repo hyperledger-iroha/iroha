@@ -111,13 +111,10 @@ fn arguments() -> Vec<String> {
         ("max-committed-blocks", "16".to_owned()),
         ("max-store-data-bytes", "1048576".to_owned()),
         ("max-carrier-bytes", "65536".to_owned()),
-        ("max-merge-log-bytes", "1048576".to_owned()),
-        ("max-merge-frames", "16".to_owned()),
         ("reader-max-output-bytes", "524288".to_owned()),
         ("max-decode-allocation-bytes", "2097152".to_owned()),
         ("owner-uid", "42".to_owned()),
         ("block-store", "/independent/store".to_owned()),
-        ("merge-log", "/independent/merge.log".to_owned()),
         (
             "facts-output",
             "/independent/output/facts.norito".to_owned(),

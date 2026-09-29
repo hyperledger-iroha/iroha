@@ -19,6 +19,7 @@ mod archive_validation;
 mod publication_validation;
 pub mod source_work;
 mod streaming;
+mod text_validation;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -512,20 +513,6 @@ fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
     .expect("Musubi signing hash writer is infallible");
     HashOf::from_untyped_unchecked(hash)
 }
-fn validate_ascii_kebab(raw: &str, maximum: usize, label: &'static str) -> Result<(), ParseError> {
-    parse_clean(raw, label, label)?;
-    if raw.len() > maximum
-        || raw.starts_with('-')
-        || raw.ends_with('-')
-        || raw.contains("--")
-        || !raw
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
-        return Err(ParseError::new(label));
-    }
-    Ok(())
-}
 /// Canonical human-facing namespace text resolved through a namespace binding.
 #[derive(
     Clone,
@@ -566,7 +553,16 @@ impl MusubiNamespaceV1 {
     /// Returns an error if the decoded namespace is not in canonical dataspace-root or
     /// domain-qualified form.
     pub fn validate(&self) -> Result<(), ParseError> {
-        Self::from_str(&self.0).map(|_| ())
+        text_validation::namespace(&self.0)
+    }
+    /// Bound the sequential NFC scratch used by borrowed namespace validation.
+    ///
+    /// The demand helper performs no normalization and returns no semantic error.
+    /// A caller must reserve this maximum from its original execution pool before
+    /// validation and retain the lease until the validation call returns.
+    #[must_use]
+    pub fn validation_scratch_bytes(&self) -> usize {
+        text_validation::namespace_scratch_bytes(&self.0)
     }
     /// Return the optional domain segment.
     #[must_use]
@@ -584,33 +580,8 @@ impl MusubiNamespaceV1 {
 impl FromStr for MusubiNamespaceV1 {
     type Err = ParseError;
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        parse_clean(
-            raw,
-            "Musubi namespace must not be empty",
-            "Musubi namespace is not canonical",
-        )?;
-        if raw.len() > MUSUBI_MAX_NAMESPACE_BYTES_V1 || raw.contains(['/', '@', ':']) {
-            return Err(ParseError::new("Musubi namespace is not canonical"));
-        }
-        let segments = raw.split('.').collect::<Vec<_>>();
-        if !(1..=2).contains(&segments.len()) {
-            return Err(ParseError::new(
-                "Musubi namespace must be `<dataspace>` or `<domain>.<dataspace>`",
-            ));
-        }
-        let canonical = segments
-            .into_iter()
-            .map(Name::from_str)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ParseError::new("Musubi namespace segment is invalid"))?
-            .into_iter()
-            .map(|name| name.to_string())
-            .collect::<Vec<_>>()
-            .join(".");
-        if canonical != raw {
-            return Err(ParseError::new("Musubi namespace is not canonical"));
-        }
-        Ok(Self(canonical))
+        text_validation::namespace(raw)?;
+        Ok(Self(raw.to_owned()))
     }
 }
 impl fmt::Display for MusubiNamespaceV1 {
@@ -761,17 +732,13 @@ impl MusubiPackageNameV1 {
     ///
     /// Returns an error if the decoded name is not canonical lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
-        Self::from_str(&self.0).map(|_| ())
+        text_validation::package_name(&self.0)
     }
 }
 impl FromStr for MusubiPackageNameV1 {
     type Err = ParseError;
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        validate_ascii_kebab(
-            raw,
-            MUSUBI_MAX_PACKAGE_NAME_BYTES_V1,
-            "Musubi package name must be lowercase ASCII kebab text",
-        )?;
+        text_validation::package_name(raw)?;
         Ok(Self(raw.to_owned()))
     }
 }
@@ -2207,10 +2174,7 @@ macro_rules! bounded_text_type {
             /// Returns an error if `raw` is empty, contains surrounding whitespace or control
             /// characters, or exceeds this text type's V1 byte bound.
             pub fn new(raw: &str) -> Result<Self, ParseError> {
-                parse_clean(raw, $error, $error)?;
-                if raw.len() > $maximum {
-                    return Err(ParseError::new($error));
-                }
+                text_validation::bounded(raw, $maximum, $error)?;
                 Ok(Self(raw.to_owned()))
             }
             /// Return the validated text.
@@ -2224,7 +2188,7 @@ macro_rules! bounded_text_type {
             ///
             /// Returns an error if the decoded text is empty, noncanonical, or overlong.
             pub fn validate(&self) -> Result<(), ParseError> {
-                Self::new(&self.0).map(|_| ())
+                text_validation::bounded(&self.0, $maximum, $error)
             }
         }
         impl FromStr for $name {
@@ -2286,13 +2250,13 @@ impl MusubiKeywordV1 {
     ///
     /// Returns an error if the keyword is empty, overlong, or not lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
-        Self::from_str(&self.0).map(|_| ())
+        text_validation::keyword(&self.0)
     }
 }
 impl FromStr for MusubiKeywordV1 {
     type Err = ParseError;
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        validate_ascii_kebab(raw, 64, "Musubi keyword must be lowercase ASCII kebab text")?;
+        text_validation::keyword(raw)?;
         Ok(Self(raw.to_owned()))
     }
 }
@@ -4046,17 +4010,13 @@ impl MusubiAliasNameV1 {
     ///
     /// Returns an error if the alias is empty, overlong, or not lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
-        Self::from_str(&self.0).map(|_| ())
+        text_validation::alias(&self.0)
     }
 }
 impl FromStr for MusubiAliasNameV1 {
     type Err = ParseError;
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        validate_ascii_kebab(
-            raw,
-            MUSUBI_MAX_ALIAS_BYTES_V1,
-            "Musubi alias must be 1-32 lowercase ASCII kebab characters",
-        )?;
+        text_validation::alias(raw)?;
         Ok(Self(raw.to_owned()))
     }
 }

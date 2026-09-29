@@ -127,7 +127,7 @@ fn captured(nominal: &str) -> &'static Value {
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 330, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 329, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -150,7 +150,7 @@ fn captured(nominal: &str) -> &'static Value {
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 330, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 329, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));

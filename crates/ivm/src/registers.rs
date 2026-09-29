@@ -32,6 +32,18 @@ pub struct Registers {
     /// Dirty flag to defer rebuilds until root/path are requested.
     dirty: AtomicBool,
 }
+impl Drop for Registers {
+    fn drop(&mut self) {
+        // Inline values belong to this file alone, even inside a shared outer
+        // runtime template. No borrowed baseline is erased before final drop.
+        iroha_crypto::zeroize_value_for_confidential_discard(&mut self.gpr);
+        iroha_crypto::zeroize_value_for_confidential_discard(&mut self.tags);
+    }
+}
+
+#[cfg(test)]
+mod private_disposal_tests;
+
 impl Clone for Registers {
     fn clone(&self) -> Self {
         let gpr = self.gpr;
@@ -54,6 +66,14 @@ impl Clone for Registers {
     }
 }
 impl Registers {
+    #[cfg(test)]
+    pub(crate) fn disposal_spans_for_testing(&self) -> [(*const u8, usize); 2] {
+        [
+            (self.gpr.as_ptr().cast(), std::mem::size_of_val(&self.gpr)),
+            (self.tags.as_ptr().cast(), std::mem::size_of_val(&self.tags)),
+        ]
+    }
+
     /// Conservatively cover the exact node clone request, including spare source capacity.
     pub(crate) fn runtime_template_memory_plan(
         &self,
@@ -291,8 +311,9 @@ impl Registers {
     pub(crate) fn scrub_private(&mut self) {
         for index in 1..self.tags.len() {
             if self.tags[index] {
-                self.set(index, 0);
-                self.set_tag(index, false);
+                iroha_crypto::zeroize_value_for_confidential_discard(&mut self.gpr[index]);
+                self.tags[index] = false;
+                self.dirty.store(true, Ordering::Release);
             }
         }
     }
@@ -528,6 +549,22 @@ mod tests {
         assert!(!regs.tag(7));
         assert!(!regs.has_private());
     }
+    #[test]
+    fn private_owner_scrub_does_not_emit_register_proofs() {
+        let mut regs = Registers::new();
+        regs.set(2, 91);
+        regs.set_tag(2, true);
+        regs.set(7, 55);
+        let log = std::sync::Arc::new(parking_lot::Mutex::new(crate::zk::RegLog::default()));
+        let guard = crate::zk::RegLoggerGuard::install(Some(std::sync::Arc::clone(&log)));
+        regs.scrub_private();
+        assert!(log.lock().events.is_empty());
+        drop(guard);
+        let mut expected = Registers::new();
+        expected.set(7, 55);
+        assert_eq!(regs.merkle_root(), expected.merkle_root());
+    }
+
     #[test]
     fn register_writes_defer_merkle_hashing_until_the_root_is_read() {
         let mut regs = Registers::new();

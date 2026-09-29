@@ -334,10 +334,10 @@ impl WorldProjection for BaselineBuilder {
         Ok(())
     }
 
-    fn append_cell_with<V: Value>(
+    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V>,
+        cell: &CellBlock<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         let Some(field) = self.field(name, 1)? else {

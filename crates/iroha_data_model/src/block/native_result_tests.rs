@@ -88,7 +88,6 @@ fn attach_native_model_results(
         vec![],
         Default::default(),
         Default::default(),
-        vec![],
         &crate::block::output_test_support::limits(),
     )
 }
@@ -171,7 +170,6 @@ fn native_full_result_setter_rejects_output_owner_shape_and_index_mutations_atom
                     vec![],
                     Default::default(),
                     Default::default(),
-                    vec![],
                     &crate::block::output_test_support::limits()
                 )
                 .is_err(),
@@ -334,7 +332,6 @@ fn native_full_result_setter_preserves_batch_receipts_and_mutations_change_execu
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &crate::block::output_test_support::limits(),
         )
         .unwrap();
@@ -356,7 +353,6 @@ fn native_actual_fragment_count_is_explicit_and_inner_result_wrappers_are_refuse
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &crate::block::output_test_support::limits(),
         )
         .unwrap();
@@ -419,7 +415,6 @@ fn native_results_allow_equal_time_displays_with_distinct_untrusted_evidence_key
                 vec![],
                 Default::default(),
                 Default::default(),
-                vec![],
                 &crate::block::output_test_support::limits(),
             )
             .unwrap();
@@ -439,7 +434,6 @@ fn native_results_allow_equal_time_displays_with_distinct_untrusted_evidence_key
                     vec![],
                     Default::default(),
                     Default::default(),
-                    vec![],
                     &crate::block::output_test_support::limits()
                 )
                 .is_err()
@@ -474,11 +468,8 @@ fn native_signed_builder_allows_repeated_time_display_positions() {
 }
 
 #[test]
-fn native_output_authenticity_belongs_to_exact_global_execution_finality() {
-    use crate::block::{
-        consensus_v2::ExecutionCommitment,
-        proofs::{TrustedBlockProofAnchor, TrustedBlockProofAnchorError},
-    };
+fn native_output_wire_binding_rejects_exact_output_mutations() {
+    use crate::block::proofs::{TrustedBlockProofAnchor, TrustedBlockProofAnchorError};
     let (mut block, time, results, transcripts) = native_model_result_fixture(true);
     attach_native_model_results(
         &mut block,
@@ -489,42 +480,14 @@ fn native_output_authenticity_belongs_to_exact_global_execution_finality() {
     .unwrap();
     let entry = block.network_entrypoint_at(0).unwrap().hash();
     let wire = block.encode_wire().unwrap();
-    let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"actual model pre-State"),
-        Hash::new(b"actual model post-State"),
-        Hash::new(b"actual model writes"),
-        wire.len() as u64,
-        Hash::new(&wire),
-    );
-    let artifact =
-        crate::block::proofs::finalized_native_output_artifact_for_test(&block, &commitment);
-    artifact.verify().unwrap();
-    let bootstrap = artifact.height_context.snapshot_bootstrap.as_ref().unwrap();
-    let batch = block
-        .execution_context()
-        .unwrap()
-        .native_lane_decisions
-        .as_deref()
-        .unwrap();
-    assert_eq!(bootstrap.snapshot_height, batch.base_state_height);
-    assert_eq!(bootstrap.snapshot_height + 1, block.header().height().get());
-    assert_eq!(
-        Some(bootstrap.snapshot_block_hash),
-        block.header().prev_block_hash()
-    );
-    assert_eq!(
-        bootstrap.snapshot_state_hash,
-        Hash::from(batch.base_state_hash)
-    );
-    assert!(bootstrap.snapshot_block_creation_time_ms < block.header().creation_time_ms);
-    assert!(artifact.height_context.parent_commit_qc.is_none());
-    assert_eq!(artifact.commit_qc.signers.len(), 3);
-    assert_eq!(artifact.validator_set_pops.len(), 4);
-    let trusted_context_id = artifact.context_id();
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+    // This fixture supplies a preselected wire identity only. It does not create
+    // native lane/global finality or authenticate the synthetic decision-batch source.
+    let committed_len = wire.len() as u64;
+    let committed_hash = Hash::new(&wire);
+    let anchor = TrustedBlockProofAnchor::from_committed_execution(
         &block,
-        &artifact,
-        trusted_context_id,
+        committed_len,
+        committed_hash,
         &entry,
     )
     .unwrap();
@@ -586,7 +549,6 @@ fn native_output_authenticity_belongs_to_exact_global_execution_finality() {
                         vec![],
                         Default::default(),
                         Default::default(),
-                        vec![],
                         &crate::block::output_test_support::limits(),
                     )
                     .unwrap();
@@ -601,20 +563,17 @@ fn native_output_authenticity_belongs_to_exact_global_execution_finality() {
             changed.canonical_proposal_wire_hash().unwrap(),
             block.canonical_proposal_wire_hash().unwrap()
         );
-        assert_ne!(
-            changed.executed_block_wire_hash().unwrap(),
-            commitment.executed_block_wire_hash
-        );
+        assert_ne!(changed.executed_block_wire_hash().unwrap(), committed_hash);
         let proof = changed.network_execution_proof(&entry).unwrap();
         assert!(
             !proof.verify(&anchor),
-            "mutation {mutation} cannot use the original finalized output anchor"
+            "mutation {mutation} cannot use the original preselected output-wire anchor"
         );
         assert!(matches!(
-            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            TrustedBlockProofAnchor::from_committed_execution(
                 &changed,
-                &artifact,
-                trusted_context_id,
+                committed_len,
+                committed_hash,
                 &entry
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)

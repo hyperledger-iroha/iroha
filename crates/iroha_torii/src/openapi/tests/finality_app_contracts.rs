@@ -116,201 +116,131 @@ fn inrou_first_release_openapi_matches_block_clock_and_exact_admission() {
     }
 }
 #[test]
-fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
+fn native_finality_schemas_are_exact_closed_and_bounded() {
     let schemas = openapi_schemas();
-    let max_validators = u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT).expect("validator bound");
-    schema_shapes!(&schemas;
-        "BridgeFinalityProof", "bridge.proof.required", None;
-        "SumeragiFinalityAttestation", "bridge.attestation.required", None;
-        "SumeragiV2FinalityArtifact", "finality.artifact.required", None;
-        "SumeragiV2HeightContext", "height.context.required", None;
-        "SumeragiV2ValidatorPower", "validator.power.required", None;
-        "SumeragiV2DualQuorum", "dual.quorum.required", None;
-        "SumeragiV2BlockSubject", "block.subject.required", None;
-        "SumeragiV2MergeCarrierCommitment", "merge.carrier.required", None;
-        "SumeragiV2ExecutionCommitment", "execution.required", None;
-        "SumeragiV2QuorumCertificate", "qc.required", None;
-        "SumeragiV2CommitQuorumCertificate", "qc.required", None;
-        "SumeragiV2SnapshotBootstrapAnchor", "snapshot.bootstrap.required", None;
-        "SumeragiV2FinalizedNextEpochSnapshot", "next.epoch.required", None;
-        "BridgeCommitment", "bridge.commitment.required", None;
-        "SumeragiFinalityBundle", "bridge.bundle.required", None;
-        "BlockHeader", "block.header.required", None;
-    );
-    for (owner, inventory) in contract_rows! {
-        "SumeragiV2HeightContext", "height.context.nullable";
-        "SumeragiV2BlockSubject", "block.subject.nullable";
-        "SumeragiV2ExecutionCommitment", "execution.nullable";
-        "BlockHeader", "block.header.nullable";
-    } {
-        for field in contract_strings(inventory) { let _ = nullable_property_ref(&schemas, owner, field); }
+    assert_exact_closed_required_schema_fields(&schemas, "SumeragiFinalityProof", &contract_strings("bridge.proof.required"));
+    assert_exact_closed_required_schema_fields(&schemas, "SumeragiFinalityBundle", &contract_strings("bridge.bundle.required"));
+    assert_exact_closed_required_schema_fields(&schemas, "SumeragiFinalityAttestation", &contract_strings("bridge.attestation.required"));
+    assert_exact_closed_required_schema_fields(&schemas, "FinalityValidator", &contract_words("public_key proof_of_possession"));
+    assert_exact_closed_required_schema_fields(&schemas, "BlockHeader", &contract_strings("block.header.required"));
+    for field in contract_strings("block.header.nullable") { let _ = nullable_property_ref(&schemas, "BlockHeader", field); }
+    let committee = contract_property(&schemas, "SumeragiFinalityProof", "committee");
+    assert_array_bounds(committee, 4, iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64, Some(true));
+    assert_item_ref(committee, "#/components/schemas/FinalityValidator");
+    let wire = contract_property(&schemas, "SumeragiFinalityProof", "block_wire");
+    assert_array_bounds(wire, 1, iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64, None);
+    let pop = contract_property(&schemas, "FinalityValidator", "proof_of_possession");
+    assert_array_bounds(pop, 96, 96, None);
+    for schema in [wire, pop] {
+        let byte = contract_object(schema.get("items"), "native byte");
+        scalar_contracts! { byte.get("type") => Text("integer"); byte.get("minimum") => Unsigned(0); byte.get("maximum") => Unsigned(255); }
     }
-    assert_eq!(contract_property(&schemas, "BridgeFinalityProof", "version").get("enum").and_then(Value::as_array), Some(&vec![Value::from(2_u64)]));
-    for (owner, field) in contract_rows! { "SumeragiV2FinalityArtifact", "format_version"; "SumeragiV2FinalityArtifact", "protocol_version"; "SumeragiV2HeightContext", "protocol_version"; } {
-        assert_eq!(contract_property(&schemas, owner, field).get("enum").and_then(Value::as_array), Some(&vec![Value::from(4_u64)]), "{owner}.{field} version");
-    }
-    let roster = contract_property(&schemas, "SumeragiV2HeightContext", "roster");
-    assert_array_bounds(roster, 4, max_validators, Some(true));
-    assert_item_ref(roster, "#/components/schemas/SumeragiV2ValidatorPower");
-    assert_eq!(contract_property(&schemas, "SumeragiV2ValidatorPower", "power").get("enum").and_then(Value::as_array), Some(&vec![Value::from(1_u64)]));
+    scalar_contracts! { contract_property(&schemas, "FinalityValidator", "public_key").get("pattern") => Text("^ea0130[0-9A-F]{96}$"); }
     property_refs!(&schemas;
-        "SumeragiV2ValidatorPower", "validator", "#/components/schemas/SumeragiV2BlsValidatorId";
-        "SumeragiV2MergeCarrierCommitment", "entry_hash", "#/components/schemas/Hash";
-        "SumeragiV2FinalityArtifact", "commit_qc", "#/components/schemas/SumeragiV2CommitQuorumCertificate";
-        "SumeragiV2QuorumCertificate", "execution_commitment", "#/components/schemas/SumeragiV2ExecutionCommitment";
-        "SumeragiV2CommitQuorumCertificate", "execution_commitment", "#/components/schemas/SumeragiV2ExecutionCommitment";
+        "SumeragiFinalityProof", "block_header", "#/components/schemas/BlockHeader";
+        "SumeragiFinalityBundle", "network_id", "#/components/schemas/Hash";
+        "SumeragiFinalityBundle", "finality_proof", "#/components/schemas/SumeragiFinalityProof";
+        "SumeragiFinalityAttestation", "body", "#/components/schemas/SumeragiFinalityAttestationBody";
     );
-    scalar_contracts! { contract_schema(&schemas, "SumeragiV2BlsValidatorId").get("pattern") => Text("^ea0130[0-9A-F]{96}$"); }
-    for owner in contract_words("SumeragiV2FinalityArtifact SumeragiV2FinalizedNextEpochSnapshot") {
-        let pops = contract_property(&schemas, owner, "validator_set_pops");
-        assert_array_bounds(pops, 4, max_validators, None);
-        assert_item_ref(pops, "#/components/schemas/SumeragiV2BlsProof");
+    let signature = contract_property(&schemas, "SumeragiFinalityAttestation", "signature");
+    scalar_contracts! { signature.get("minLength") => Unsigned(192); signature.get("maxLength") => Unsigned(192); }
+    for name in contract_words("BridgeFinalityProof BridgeCommitment SumeragiV2FinalityArtifact SumeragiV2HeightContext SumeragiV2SnapshotBootstrapAnchor SumeragiV2FinalizedNextEpochSnapshot SumeragiV2ValidatorPower SumeragiV2CommitQuorumCertificate SumeragiV2QuorumCertificate") {
+        assert!(!schemas.contains_key(name), "retired bridge component {name}");
     }
-    let proof = contract_schema(&schemas, "SumeragiV2BlsProof");
-    assert_array_bounds(proof, 96, 96, None);
-    let byte = contract_object(proof.get("items"), "BLS proof byte");
-    scalar_contracts! { byte.get("minimum") => Unsigned(0); byte.get("maximum") => Unsigned(255); }
-    for owner in contract_words("SumeragiV2QuorumCertificate SumeragiV2CommitQuorumCertificate") {
-        assert_array_bounds(contract_property(&schemas, owner, "signers"), 1, max_validators, Some(true));
-    }
-    assert_array_bounds(contract_property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster"), 4, max_validators, None);
-    scalar_contracts! { contract_property(&schemas, "SumeragiV2DualQuorum", "min_signers").get("maximum") => Unsigned(max_validators); contract_property(&schemas, "SumeragiV2MergeCarrierCommitment", "version").get("const") => Unsigned(1); contract_property(&schemas, "SumeragiV2ExecutionCommitment", "merge_carrier").get("oneOf") => Length(2); }
-    let wire_len = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "executed_block_wire_len");
-    scalar_contracts! { wire_len.get("format") => Text("uint64"); wire_len.get("minimum") => Unsigned(1); }
-    let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "kagemusha_top_up_count");
-    scalar_contracts! { topups.get("minimum") => Unsigned(0); }
-    assert!(topups.get("maximum").is_none(), "block bytes, not a special KAGEMUSHA count cap, bound top-ups");
-    let execution = contract_schema(&schemas, "SumeragiV2ExecutionCommitment");
-    scalar_contracts! { execution.get("oneOf") => Length(2); contract_property(&schemas, "SumeragiV2ExecutionCommitment", "native_amx_application_manifest_version").get("const") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)); }
-    let manifest_count = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "native_amx_application_manifest_count");
-    scalar_contracts! { manifest_count.get("minimum") => Unsigned(0); manifest_count.get("maximum") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES)); }
-    assert_exact_closed_required_schema_fields( &schemas, "SumeragiV2LaneFinalityManifestCommitment", &contract_words("root leaf_count"), );
-    text_contracts! { property_ref(&schemas, "SumeragiV2LaneFinalityManifestCommitment", "root") => "#/components/schemas/Hash"; }
-    let lane_leaf_count = contract_property(&schemas, "SumeragiV2LaneFinalityManifestCommitment", "leaf_count");
-    scalar_contracts! {
-        lane_leaf_count.get("minimum") => Unsigned(1);
-        lane_leaf_count.get("maximum") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK));
-        execution.get("allOf").and_then(Value::as_array).and_then(|all| all.first()).and_then(Value::as_object).and_then(|contract| contract.get("oneOf")) => Length(2);
-    }
-    assert_eq!(contract_property(&schemas, "SumeragiV2CommitPhase", "phase").get("enum").and_then(Value::as_array), Some(&vec![Value::from("commit")]));
-    assert_array_bounds(contract_schema(&schemas, "SumeragiV2HeightContextId"), 1, 1, None);
-    let mut components = Map::new();
-    for name in contract_strings("bridge.components") {
-        components.insert(name.to_owned(), schemas.get(name).unwrap_or_else(|| panic!("missing {name}")).clone());
-    }
-    let serialized = norito::json::to_string(&Value::Object(components)).expect("serialize bridge schemas");
-    for retired in contract_strings("bridge.retired") {
-        assert!(!serialized.contains(&format!("\"{retired}\"")), "retired bridge field `{retired}`");
+    for name in ["GovernanceParliamentTimedOvnCastingProofResponseV1", "ValidationFeeCurrentPolicyProofV1"] {
+        assert_item_ref(contract_property(&schemas, name, "finality_chain"), "#/components/schemas/SumeragiFinalityProof");
     }
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
-    let (app, _) = crate::tests_runtime_handlers::app_with_finalized_block_for_test(true);
-    let proof = iroha_core::bridge::build_finality_proof(app.state.as_ref(), 1).expect("finalized-block fixture proof");
-    let value = norito::json::to_value(&proof).expect("serialize finality proof");
+fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_fields() {
+    use iroha_core::{state::World, sumeragi::{finality::{build_checkpoint, build_proof}, test_chain::{CertifiedTestChain, TestChainConfig}}};
+    use iroha_data_model::{block::{CommitCertificate, decode_versioned_signed_block}, parameter::{Parameter, system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters}}, sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier}};
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config.genesis_parameters.push(Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()));
+    let mut chain = CertifiedTestChain::start(config).expect("actual signed NPoS genesis");
+    chain.commit(Vec::new());
+    let view = chain.state().view();
+    let checkpoint = build_checkpoint(&view, 1).expect("independently selected original checkpoint");
+    let proof = build_proof(&view, 2).expect("actual executed native proof");
+    let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &checkpoint.network_id(), checkpoint.chain_id()).unwrap();
+    let verified = verifier.verify(&proof).expect("full contiguous native BLS proof");
+    assert_eq!(verified.commitment().schedule.current.mode, ConsensusMode::Npos);
+    let value = norito::json::to_value(&proof).expect("serialize native proof");
     let proof_object = value.as_object().expect("proof object");
     set_contracts! { object_field_set(proof_object) => asset_field_set("bridge.proof.required"); }
     let header = contract_object(proof_object.get("block_header"), "block header");
-    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root", "sccp_commitment_root"]; }
-    assert!( header .get("npos_effects_hash") .is_some_and(|hash| hash.is_null() || hash.is_string()), "the finalized-block fixture must carry the nullable NPoS effects slot" );
-    assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the finalized-block fixture must carry the required nullable execution-context slot" );
-    let document = generate_spec();
-    let schemas = component_schemas(&document);
+    set_contracts! { object_field_set(header) => asset_field_set("fixture.header.required"); }
+    member_contracts! { header; Absent => ["result_merkle_root", "sccp_commitment_root"]; }
+    for field in ["npos_effects_hash", "execution_context_hash"] {
+        assert!(header.get(field).is_some_and(|hash| hash.is_null() || hash.is_string()), "required nullable {field}");
+    }
+    let document = generate_spec(); let schemas = component_schemas(&document);
     let bytes32 = contract_schema(schemas, "SumeragiV2Bytes32");
     scalar_contracts! { bytes32.get("type") => Text("string"); bytes32.get("minLength") => Unsigned(64); bytes32.get("maxLength") => Unsigned(64); bytes32.get("pattern") => Text("^[0-9A-F]{64}$"); }
-    let fixed = contract_schema(schemas, "SumeragiV2Fixed32ByteArray");
-    scalar_contracts! { fixed.get("type") => Text("array"); }
-    assert_array_bounds(fixed, 32, 32, None);
-    let artifact = contract_object(proof_object.get("finality_artifact"), "artifact object");
-    set_contracts! { object_field_set(artifact) => asset_field_set("fixture.artifact.fields"); }
-    scalar_contracts! { artifact.get("format_version") => Unsigned(4); artifact.get("protocol_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)); }
-    let context = contract_object(artifact.get("height_context"), "height context");
-    scalar_contracts! { context.get("protocol_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)); }
-    for nullable in contract_strings("height.context.nullable") {
-        assert!( context.get(nullable).is_some_and(Value::is_null), "finalized-block fixture must carry null height-context slot `{nullable}`" );
-    }
-    let mode = contract_object(context.get("mode"), "consensus mode");
-    scalar_contracts! { mode.get("mode") => Text("npos"); }
-    assert_eq!(mode.get("details"), Some(&Value::Null));
-    let encoding = contract_object(context.get("da_layout").and_then(Value::as_object).and_then(|layout| layout.get("encoding")), "payload encoding");
-    scalar_contracts! { encoding.get("encoding") => Text("reed_solomon16"); }
-    assert_eq!(encoding.get("details"), Some(&Value::Null));
-    let roster = contract_array(context.get("roster"), "powered roster");
-    count_contracts! { roster.len() => 4; }
-    for validator in roster {
-        let validator = validator.as_object().expect("validator-power object");
-        let key = contract_text(validator.get("validator"), "validator id");
-        count_contracts! { key.len() => 102; }
-        assert!(key.starts_with("ea0130"));
+    assert_array_bounds(contract_schema(schemas, "SumeragiV2Fixed32ByteArray"), 32, 32, None);
+    let committee = contract_array(proof_object.get("committee"), "native ordered committee");
+    count_contracts! { committee.len() => 4; }
+    for (entry, member) in committee.iter().zip(&proof.committee) {
+        let entry = entry.as_object().unwrap();
+        set_contracts! { object_field_set(entry) => contract_word_set("public_key proof_of_possession"); }
+        let key = contract_text(entry.get("public_key"), "BLS key");
+        assert_eq!(key, member.public_key.to_string()); assert_eq!(key.len(), 102); assert!(key.starts_with("ea0130"));
         assert!(key[6..].bytes().all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte)));
-        assert!(validator.get("power").and_then(Value::as_u64).is_some());
+        let pop = contract_array(entry.get("proof_of_possession"), "BLS PoP"); assert_eq!(pop.len(), 96);
+        assert!(pop.iter().all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255)));
+        iroha_crypto::BlsNormalPopVerifiedKey::new(&member.public_key, &member.proof_of_possession).unwrap();
     }
-    let quorum = contract_object(context.get("quorum"), "dual quorum");
-    count_contracts! { quorum.len() => 2; }
-    assert!(quorum.get("min_signers").and_then(Value::as_u64).is_some());
-    assert!(quorum.get("total_power").and_then(Value::as_u64).is_some());
-    let subject = contract_object(artifact.get("subject"), "block subject");
-    assert!(subject.get("parent_block_hash").is_some_and(Value::is_null));
-    for field in contract_words("block_hash payload_hash") {
-        let hash = contract_text(subject.get(field), "canonical hash");
-        assert!(hash.starts_with("hash:") && hash.len() == 74);
+    let decoded: SumeragiFinalityProof = norito::json::from_value(value.clone()).expect("current JSON roundtrip");
+    assert_eq!(decoded, proof);
+    let certificate = verified.block().commit_certificate().unwrap();
+    let qc: iroha_sumeragi::message::Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+    assert_eq!(qc.kind, iroha_sumeragi::message::VoteKind::Commit); assert_eq!(qc.signers.count_ones(), 3);
+    assert_eq!(qc.agg_sig.0.len(), 96); assert_eq!(qc.result, verified.result()); assert_eq!(qc.block_hash, verified.core_hash());
+    assert_eq!(verified.execution().kagemusha_top_up_count, 0); assert_eq!(verified.execution().kagemusha_top_up_root, None);
+    let wire = verified.canonical_executed_wire().unwrap();
+    assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
+    assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));
+    let mut missing_result = proof.clone(); let mut block = decode_versioned_signed_block(&missing_result.block_wire).unwrap();
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new())));
+    missing_result.block_wire = block.encode_wire().unwrap();
+    assert!(verifier.verify_retained_decision(&missing_result).is_err(), "missing canonical execution preimage");
+    let mut forged_qc = proof.clone(); let mut block = decode_versioned_signed_block(&forged_qc.block_wire).unwrap();
+    let mut qc = qc; qc.agg_sig.0[0] ^= 0x80;
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec())));
+    forged_qc.block_wire = block.encode_wire().unwrap(); assert!(verifier.verify_retained_decision(&forged_qc).is_err(), "forged exact native QC");
+    let mut retired_header = header.clone(); retired_header.insert("result_merkle_root".to_owned(), Value::Null);
+    assert!(norito::json::from_value::<iroha_data_model::block::BlockHeader>(Value::Object(retired_header)).is_err());
+    for retired in contract_strings("fixture.retired").into_iter().chain(["version", "finality_artifact"]) {
+        let mut hostile = value.clone(); hostile.as_object_mut().unwrap().insert(retired.to_owned(), Value::Null);
+        assert!(norito::json::from_value::<SumeragiFinalityProof>(hostile).is_err(), "retired proof field {retired}");
     }
-    let qc = contract_object(artifact.get("commit_qc"), "commit QC");
-    let phase = contract_object(qc.get("phase"), "commit phase");
-    scalar_contracts! { phase.get("phase") => Text("commit"); }
-    assert_eq!(phase.get("details"), Some(&Value::Null));
-    assert!(qc.get("round").and_then(Value::as_object).and_then(|round| round.get("context_id")).and_then(Value::as_array).is_some_and(|id| id.len() == 1));
-    assert_eq!(qc.get("proposal_round"), qc.get("round"));
-    let execution = contract_object(qc.get("execution_commitment"), "execution commitment");
-    set_contracts! { object_field_set(execution) => asset_field_set("fixture.execution.fields"); }
-    for root in contract_words(concat!("parent_state_root post_state_root ordinary_writes_root ", "native_amx_application_manifest_root")) {
-        assert!(execution.get(root).and_then(Value::as_str).is_some_and(|hash| hash.starts_with("hash:") && hash.len() == 74), "canonical {root}");
-    }
-    for nullable in contract_strings("execution.nullable") {
-        assert_eq!( execution.get(nullable), Some(&Value::Null), "finalized-block fixture must carry null execution slot `{nullable}`" );
-    }
-    assert!(execution.get("executed_block_wire_len").and_then(Value::as_u64).is_some_and(|length| length > 0));
-    scalar_contracts! { execution.get("kagemusha_top_up_count") => Unsigned(0); execution.get("native_amx_application_manifest_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)); execution.get("native_amx_application_manifest_count") => Unsigned(0); }
-    let empty_root = norito::json::to_value(&iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root()).expect("serialize empty root");
-    assert_eq!(execution.get("native_amx_application_manifest_root"), Some(&empty_root));
-    assert!(qc.get("aggregate_signature").and_then(Value::as_array).is_some_and(|signature| signature.len() == 96));
-    let pops = contract_array(artifact.get("validator_set_pops"), "validator PoPs");
-    count_contracts! { pops.len() => roster.len(); }
-    assert!(pops.iter().all(|pop| pop.as_array().is_some_and(|bytes| { bytes.len() == 96 && bytes.iter().all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255)) })));
-    let mut missing = value.clone();
-    let removed = missing.as_object_mut().and_then(|proof| proof.get_mut("finality_artifact")).and_then(Value::as_object_mut).and_then(|artifact| artifact.get_mut("commit_qc")).and_then(Value::as_object_mut).expect("mutable CommitQC").remove("execution_commitment");
-    assert!(removed.is_some());
-    assert!(norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(missing).is_err(), "decoder accepted missing execution commitment");
-    let mut retired_header = header.clone();
-    retired_header.insert("result_merkle_root".to_owned(), Value::Null);
-    assert!(norito::json::from_value::<iroha_data_model::block::BlockHeader>(Value::Object(retired_header)).is_err(), "decoder accepted retired result root");
-    for retired in contract_strings("fixture.retired") {
-        let mut hostile = value.clone();
-        hostile.as_object_mut().expect("proof object").insert(retired.to_owned(), Value::Null);
-        assert!(norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(hostile).is_err(), "decoder accepted retired {retired}");
+    for required in ["block_header", "block_wire", "committee"] {
+        let mut missing = value.clone(); assert!(missing.as_object_mut().unwrap().remove(required).is_some());
+        assert!(norito::json::from_value::<SumeragiFinalityProof>(missing).is_err(), "missing native proof field {required}");
     }
 }
 #[test]
-fn ledger_state_endpoints_expose_one_closed_authenticated_v2_schema() {
+fn ledger_state_endpoints_expose_one_closed_authenticated_native_schema() {
     let document = generate_spec();
     let schemas = component_schemas(&document);
     assert_schema_shapes(schemas, &[SchemaShape { name: "StateFinalityResponse", required: "ledger.state_finality.required", optional: None }]);
     property_refs!(schemas;
         "StateFinalityResponse", "block_hash", "#/components/schemas/Hash";
-        "StateFinalityResponse", "state_root", "#/components/schemas/Hash";
+        "StateFinalityResponse", "witnessed_post_state_root", "#/components/schemas/Hash";
         "StateFinalityResponse", "block_header", "#/components/schemas/BlockHeader";
-        "StateFinalityResponse", "finality_artifact", "#/components/schemas/SumeragiV2FinalityArtifact";
+        "StateFinalityResponse", "finality_proof", "#/components/schemas/SumeragiFinalityProof";
     );
     let schema = contract_schema(schemas, "StateFinalityResponse");
     let properties = contract_object(schema.get("properties"), "state finality properties");
     member_contracts! { properties; Absent => contract_strings("ledger.state_finality.retired"); }
     member_contracts! { schemas; Absent => contract_words("StateRootResponse StateProofResponse"); }
-    scalar_contracts! { contract_property(schemas, "StateFinalityResponse", "height").get("minimum") => Unsigned(1); }
+    scalar_contracts! { contract_property(schemas, "StateFinalityResponse", "height").get("minimum") => Unsigned(2); }
     for path in contract_words("/v1/ledger/state/{height} /v1/ledger/state-proof/{height}") {
         let operation = openapi_operation(&document, path, "get");
         let description = contract_text(operation.get("description"), "ledger state endpoint description");
-        assert!(description.contains("Sumeragi-v2"));
+        assert!(description.contains("native finality"));
         assert!(description.contains("fails closed"));
         text_contracts! { operation_response_schema_ref(operation, "200", path) => "#/components/schemas/StateFinalityResponse"; }
         let content = response_content(operation, "200");
@@ -361,6 +291,9 @@ fn bridge_finality_operations_describe_current_durable_evidence() {
 fn signed_status_documents_actual_driver_fields() {
     use iroha_data_model::sumeragi::{SumeragiStatus, SumeragiFootprint, SumeragiHaltReason};
     let status = SumeragiStatus {
+        protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+        config_fingerprint: iroha_crypto::Hash::new(b"native status schema fixture"),
+        beacon_horizon: None,
         instance: [7; 32], height: 2, view: 0, stage: 0, leader: None, proxy_tail: None,
         high_qc_view: None, level: 0, start_level: 0, t_retx_ms: 500,
         committed_height: 1, applied_height: 1, awaiting: false, signer: None,
@@ -373,6 +306,9 @@ fn signed_status_documents_actual_driver_fields() {
     let properties = contract_object(schema.get("properties"), "current status properties");
     assert_eq!(object_field_set(native.as_object().expect("current status object")), object_field_set(properties));
     member_contracts! { properties; Absent => contract_strings("status.absent"); }
+    scalar_contracts! { native.get("protocol_version") => Unsigned(u64::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)); }
+    assert_eq!(native.get("beacon_horizon"), Some(&Value::Null));
+    assert_exact_closed_required_schema_fields(&schemas, "BeaconHorizonStatusV1", &contract_words("epoch_length_blocks next_required_pulse_height active_session_id session_covers_next_pulse local_provider_ready"));
     assert_eq!(native.get("instance").and_then(Value::as_str), Some("07".repeat(32).as_str()));
     let footprint = native.get("footprint").and_then(Value::as_object).unwrap();
     assert_eq!(object_field_set(footprint), object_field_set(contract_object(contract_schema(&schemas, "SumeragiFootprint").get("properties"), "footprint properties")));
@@ -391,7 +327,7 @@ fn current_finality_schemas_match_portable_wire_bounds() {
     scalar_contracts! { proof.get("additionalProperties") => Flag(false); }
     assert_eq!(schema_string_field_set(proof, "required", "proof"), contract_words("block_header block_wire committee").into_iter().collect());
     scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "block_wire").get("maxItems") => Unsigned(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64); }
-    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_sumeragi::types::MAX_COMMITTEE_SIZE as u64); }
+    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64); }
     let body = contract_schema(&schemas, "SumeragiFinalityAttestationBody");
     assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
     property_refs!(&schemas;

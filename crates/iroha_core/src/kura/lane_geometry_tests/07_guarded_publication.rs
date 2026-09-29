@@ -20,7 +20,7 @@ fn held_geometry_transition<'input>(
     let updated_bindings = kura
         .geometry_bindings(updated, updated_incarnations, updated_activations)
         .unwrap();
-    let request = ReplayGeometryBindingRequest {
+    let request = GeometryBindingRequest {
         previous,
         updated,
         previous_incarnations,
@@ -32,7 +32,7 @@ fn held_geometry_transition<'input>(
         transition_height: 9,
     };
     let prepared = lease
-        .begin_raw_geometry_attempt(&request, replaced, &BTreeMap::new())
+        .begin_raw_geometry_attempt(&request, replaced)
         .unwrap();
     (lease, prepared)
 }

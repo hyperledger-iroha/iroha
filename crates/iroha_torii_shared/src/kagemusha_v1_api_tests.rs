@@ -6,7 +6,7 @@ use iroha_data_model::{
     Level, NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::{BlockHeader, consensus_v2::HeightContextId},
+    block::BlockHeader,
     isi::{Log, kagemusha_v1::TopUpKagemushaV1},
     kagemusha::{
         KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
@@ -18,8 +18,8 @@ use iroha_data_model::{
         kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
-    testing::kagemusha::KagemushaFixtureSignerV1,
-    transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
+    testing::{kagemusha::KagemushaFixtureSignerV1, native_finality::NativeFinalityFixture},
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::domain::DomainId;
 
@@ -287,12 +287,10 @@ fn top_up_request() -> KagemushaTopUpRequestV1 {
 }
 
 fn trust_anchor() -> KagemushaFinalityTrustAnchorV1 {
+    let fixture = NativeFinalityFixture::new();
     KagemushaFinalityTrustAnchorV1 {
-        network_id: network_id(),
-        block_height: 7,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"kagemusha-v1-pinned-context",
-        ))),
+        network_id: fixture.network_id(),
+        checkpoint: fixture.checkpoint(),
     }
 }
 
@@ -513,7 +511,6 @@ fn maximum_shape_top_up_request_fits_the_fixed_v1_ceiling() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([TopUpKagemushaV1::new(request).expect("maximum-shape instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("sign maximum-shape top-up");
     let transaction_bytes = transaction
@@ -539,7 +536,6 @@ fn payer_signed_top_up_transaction_enforces_exact_envelope_authority() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("payer-signed top-up");
     assert_eq!(
@@ -556,7 +552,6 @@ fn payer_signed_top_up_transaction_enforces_exact_envelope_authority() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(other_key.private_key())
     .expect("differently authorized transaction");
     assert!(matches!(
@@ -580,7 +575,6 @@ fn payer_signed_top_up_rejects_wrong_network_signature_and_instruction_count() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([top_up.clone()])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("wrong-network top-up");
     assert!(matches!(
@@ -594,7 +588,6 @@ fn payer_signed_top_up_rejects_wrong_network_signature_and_instruction_count() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([top_up.clone()])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .build_with_signature(Signature::from_bytes(&[]));
     assert!(matches!(
         validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &invalid_signature),
@@ -607,7 +600,6 @@ fn payer_signed_top_up_rejects_wrong_network_signature_and_instruction_count() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([top_up.clone(), top_up])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("two-instruction transaction");
     assert!(matches!(
@@ -621,7 +613,6 @@ fn payer_signed_top_up_rejects_wrong_network_signature_and_instruction_count() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "not a top-up".to_owned())])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("wrong-instruction transaction");
     assert!(matches!(
@@ -645,7 +636,6 @@ fn payer_signed_top_up_rejects_an_embedded_request_for_another_network() {
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([TopUpKagemushaV1::new(request).expect("top-up instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(payer_key.private_key())
     .expect("payer-signed top-up with a foreign embedded network");
 
@@ -656,26 +646,11 @@ fn payer_signed_top_up_rejects_an_embedded_request_for_another_network() {
 }
 
 #[test]
-fn payer_signed_top_up_rejects_ordinary_admission_intent() {
-    let request = top_up_request();
-    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let transaction = TransactionBuilder::new(
-        request.network_id,
-        request.payer.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-    .try_sign(payer_key.private_key())
-    .expect("ordinary-admission top-up");
-    assert!(matches!(
-        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &transaction),
-        Err(KagemushaApiErrorV1::TopUpTransactionAdmissionIntentInvalid)
-    ));
-}
-
-#[test]
 fn operation_status_decoder_requires_an_external_finality_anchor() {
+    let anchor = trust_anchor();
+    anchor
+        .validate()
+        .expect("selected genuine native checkpoint");
     let decoder: fn(
         &[u8],
         &KagemushaFinalityTrustAnchorV1,
@@ -704,18 +679,18 @@ fn operation_status_decoder_requires_an_external_finality_anchor() {
     assert_eq!(unverified_json.state(), status.state);
     assert_eq!(unverified_json.finality_anchor_hint(), None);
     assert_eq!(
-        decoder(&encoded, &trust_anchor()).expect("decode anchored status"),
+        decoder(&encoded, &anchor).expect("decode anchored status"),
         status
     );
     assert_eq!(
-        decode_kagemusha_operation_status_json_v1(&json, &trust_anchor())
+        decode_kagemusha_operation_status_json_v1(&json, &anchor)
             .expect("decode anchored JSON status"),
         status
     );
     assert!(matches!(
         decoder(
             &vec![0; KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1 + 1],
-            &trust_anchor(),
+            &anchor,
         ),
         Err(KagemushaApiErrorV1::EncodedSizeExceeded { .. })
     ));

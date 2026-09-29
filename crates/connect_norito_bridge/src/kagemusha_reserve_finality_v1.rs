@@ -1,17 +1,17 @@
 //! Native finality for an exact, independently retained Offline reserve intent.
 //!
 //! Response coordinates are lookup hints only. A caller must independently authenticate its
-//! exact network/height/context before verification. Success authenticates the finalized reserve
+//! exact network and complete native checkpoint before verification. Success authenticates the finalized reserve
 //! receipt and returns an existing canonical wire payload; local Core still admits its release,
 //! hardware profile and monetary proof before mint staging or result retirement.
 
 use super::*;
 use iroha_data_model::{
-    block::consensus_v2::HeightContextId,
     isi::kagemusha_v1::{
         KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1, KagemushaOperationResultV1,
         KagemushaOperationStateV1,
     },
+    sumeragi_finality::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint},
 };
 use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
@@ -26,23 +26,18 @@ struct ExpectedRequest<'a> {
     canonical: &'a [u8],
 }
 
+/// Check a separately selected bounded canonical checkpoint without deriving a pin from
+/// the operation response. Decode establishes consistency, never selection provenance.
 pub(crate) fn trusted_anchor(
     network: [u8; 32],
-    height: u64,
-    context: [u8; 32],
+    checkpoint_bytes: &[u8],
 ) -> BridgeResult<KagemushaFinalityTrustAnchorV1> {
-    // Hash::prehashed sets a marker bit. Externally trusted coordinates must instead decode
-    // exactly, without silently selecting a different network or consensus context.
     let network_id = network_id_from_raw_bytes(&network).map_err(|_| BridgeError::KagemushaV1)?;
-    let context_hash = hex::encode(context)
-        .parse::<Hash>()
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(checkpoint_bytes)
         .map_err(|_| BridgeError::KagemushaV1)?;
     let anchor = KagemushaFinalityTrustAnchorV1 {
         network_id,
-        block_height: height,
-        height_context_id: HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-            context_hash,
-        )),
+        checkpoint,
     };
     anchor.validate().map_err(|_| BridgeError::KagemushaV1)?;
     Ok(anchor)
@@ -88,7 +83,7 @@ fn anchor_hint_json(response: &[u8]) -> BridgeResult<Vec<u8>> {
             "version": 1,
             "network_id": (hex::encode(hint.network_id.as_bytes())),
             "block_height": (hint.block_height.to_string()),
-            "height_context_id": (hex::encode(hint.height_context_id.0.as_ref())),
+            "block_hash": (hex::encode(hint.block_hash.as_ref())),
         }),
     };
     norito::json::to_vec(&value).map_err(|_| BridgeError::KagemushaV1)
@@ -111,7 +106,7 @@ fn verified_payload(
     {
         return Err(BridgeError::KagemushaV1);
     }
-    // The authoritative Rust implementation checks the independently pinned context, certificate
+    // The authoritative Rust implementation checks the independently pinned complete checkpoint, certificate
     // and exact reserve witness. No Java/Swift callback can substitute a structural verdict here.
     let status = unverified
         .verify_against(anchor)
@@ -140,7 +135,7 @@ fn verified_payload(
 
 /// Decode bounded untrusted lookup coordinates; pending/rejected responses return JSON `null`.
 ///
-/// The JSON object has version 1 and exact network/context hex plus unsigned decimal block height.
+/// The JSON object has version 1 and exact network/block-hash hex plus unsigned decimal block height.
 /// It contains no monetary result and must never become its own verification trust anchor.
 /// Output is empty on failure and freed with `connect_norito_free` after success.
 ///
@@ -192,9 +187,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_reserve_finality_verify_v1(
     expected_request_len: c_ulong,
     trusted_network_id: *const c_uchar,
     trusted_network_id_len: c_ulong,
-    trusted_block_height: u64,
-    trusted_context_id: *const c_uchar,
-    trusted_context_id_len: c_ulong,
+    trusted_checkpoint: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
     out_payload: *mut *mut c_uchar,
     out_payload_len: *mut c_ulong,
 ) -> c_int {
@@ -223,15 +217,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_reserve_finality_verify_v1(
                 BridgeError::KagemushaV1,
             )
         }?;
-        let context = unsafe {
-            read_fixed_array::<32>(
-                trusted_context_id,
-                trusted_context_id_len,
-                BridgeError::KagemushaV1,
+        let checkpoint = unsafe {
+            read_kagemusha_v1_bytes(
+                trusted_checkpoint,
+                trusted_checkpoint_len,
+                MAX_FINALITY_CHECKPOINT_BYTES,
             )
         }?;
-        // Validate all trust coordinates before decoding an expensive caller request.
-        let anchor = trusted_anchor(network, trusted_block_height, context)?;
+        // Authenticate the independently selected complete checkpoint before request decoding.
+        let anchor = trusted_anchor(network, checkpoint)?;
         let expected = expected_request(expected_kind, request)?;
         let payload = verified_payload(response, &expected, &anchor)?;
         unsafe { write_bytes_bridge(out_payload, out_payload_len, &payload) }
@@ -270,7 +264,7 @@ fn validate_top_up_submission(signed: &[u8], expected: &[u8]) -> BridgeResult<()
 
 /// Validate a canonical payer-signed top-up against the complete original reviewed request.
 ///
-/// Checks native signature, exact network, QueuePlanSynced admission, one top-up instruction,
+/// Checks native signature, exact network, one top-up instruction,
 /// authority=payer, request shape and byte-for-byte canonical request equality. No result or
 /// monetary authority is released. The caller still owns fee review, session, bank approval and
 /// persistence before dispatch. Returns zero only on success; there is no structural fallback.

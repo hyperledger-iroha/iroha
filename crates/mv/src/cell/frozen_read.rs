@@ -30,6 +30,12 @@ impl<V: Value, A, C: Send + Sync + 'static> Detached<V, A, C> {
         self.revert.as_ref().unwrap_or_else(|| self.get())
     }
 
+    /// Check the original exact Cell owner without acquiring a current generation.
+    /// Equal values or matching charge types grant no publication authority.
+    pub fn belongs_to(&self, cell: &Cell<V, C>) -> bool {
+        self.metadata.predecessor.belongs_to(&cell.publication)
+    }
+
     /// Observe the same opaque owner, predecessor and mode captured by the block.
     ///
     /// This only retains existing identity references. It does not acquire a

@@ -2352,7 +2352,7 @@ fn native_amx_completed_repair_after_actual_temp_cut(
     assert!(error.to_string().contains(expected_error), "{error}");
     assert!(
         !FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.get())
-            && FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX.with(|flag| flag.get().is_none()),
+            && FAIL_AFTER_NEXT_BOUND_EVIDENCE_TEMP_PREFIX.with(|flag| flag.get().is_none()),
         "the real physical writer consumed the crash cut"
     );
     assert!(!manifest_path.exists());
@@ -4057,7 +4057,7 @@ fn native_amx_retained_prepublication_is_reminted_from_durable_evidence_after_re
 fn native_amx_empty_prepublication_requires_current_durable_finality() {
     for missing in [true, false] {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next_with_results();
+        let block = NativeBlocks::new().next();
         let manifest =
             crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
                 &block,

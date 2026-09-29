@@ -105,7 +105,7 @@ fn retained_queue_plan_drain_fixture(ranked: bool) -> GloballyBoundGuardFixture 
     queue
         .install_plan_journal(&dir.path().join("plan.norito"), 1024 * 1024, true)
         .expect("install durable admission journal");
-    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    let transaction = accepted_tx_by_someone(&time_source);
     let follower_transaction = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
     let plan = queue

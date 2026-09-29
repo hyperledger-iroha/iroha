@@ -976,9 +976,9 @@ fn verify_pulse(
     let mut common = None;
     for node_file in node_files {
         let config = read_profile_node(node_file)?;
-        let mut store = BlockStore::open_read_only(
-            Kura::canonical_storage_paths(config.kura.store_dir.value()).0,
-        )?;
+        let mut store = BlockStore::open_read_only(Kura::canonical_storage_path(
+            config.kura.store_dir.value(),
+        ))?;
         let network = NetworkId::from_genesis_hash(config.genesis.expected_hash);
         ensure!(
             network == record.session.network_id,

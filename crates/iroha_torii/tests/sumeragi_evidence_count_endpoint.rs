@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/evidence/count
 #![cfg(feature = "telemetry")]
-use super::sumeragi_evidence::make_phase_vote_evidence;
+use super::sumeragi_evidence::{make_phase_vote_attribution, make_phase_vote_evidence};
 use axum::{Router, extract::State, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -74,6 +74,7 @@ async fn evidence_count_endpoint_reports_increase() {
         let ev = make_phase_vote_evidence((idx + 1) as u64, *seed);
         let record = EvidenceRecord {
             evidence: ev,
+            attribution: make_phase_vote_attribution((idx + 1) as u64, *seed),
             recorded_at_height: (idx + 1) as u64,
             recorded_at_view: 0,
             recorded_at_ms: 0,

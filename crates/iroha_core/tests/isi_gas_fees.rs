@@ -1097,7 +1097,7 @@ fn legacy_gas_limit_metadata_zero_is_rejected() {
     );
 }
 #[test]
-fn ivm_gas_fees_record_settlement_receipt() {
+fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
     // 1) Minimal world: domains, accounts, asset definition, payer balance, tech account
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
@@ -1172,8 +1172,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     )
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
     .sign(alice_kp.private_key());
-    let tx_hash = tx.hash();
-    // 4) Execute after genesis and verify settlement receipt is recorded.
+    // 4) Execute after genesis and verify exact actual asset effects.
     let executor = Executor::default();
     let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
@@ -1184,15 +1183,22 @@ fn ivm_gas_fees_record_settlement_receipt() {
         .expect("execution");
     assert!(state_tx.last_tx_gas_used > 0);
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
-    let mut receipts = state_tx.drain_settlement_records();
-    let record = receipts
-        .remove(&tx_hash)
-        .expect("settlement receipt recorded");
-    assert_eq!(record.asset_definition_id, asset_def_id);
-    assert_eq!(record.local_amount, Quantity::from(fee));
+    assert_eq!(
+        state_tx.world.assets().get(&payer_asset).unwrap().as_ref(),
+        &Quantity::from(init - fee),
+    );
+    assert_eq!(
+        state_tx
+            .world
+            .assets()
+            .get(&AssetId::new(asset_def_id, gas_id))
+            .unwrap()
+            .as_ref(),
+        &Quantity::from(fee),
+    );
 }
 #[test]
-fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded() {
+fn block_gas_rejection_rolls_back_actual_fee_and_business_effects() {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
@@ -1228,7 +1234,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     let fee = u128::from(used) * u128::from(rate);
     let init = fee.saturating_add(100);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-    let payer_balance = Asset::new(payer_asset, Quantity::from(init));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -1274,6 +1280,30 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
             ValidationFail::NotPermitted(_)
         ))
     ));
-    let receipts = block.drain_settlement_records();
-    assert!(receipts.is_empty(), "rejected tx must not emit receipts");
+    assert_eq!(
+        block.world.assets().get(&payer_asset).unwrap().as_ref(),
+        &Quantity::from(init),
+        "the rejected transaction overlay must not debit its fee payer",
+    );
+    assert!(
+        block
+            .world
+            .assets()
+            .get(&AssetId::new(asset_def_id, gas_id))
+            .is_none(),
+        "the rejected transaction overlay must not credit a fee recipient",
+    );
+    assert!(
+        block
+            .world
+            .map_account(&alice_id, |account| {
+                account
+                    .value()
+                    .metadata()
+                    .get(&"k".parse::<Name>().unwrap())
+                    .is_none()
+            })
+            .unwrap(),
+        "the rejected transaction overlay must not retain business writes"
+    );
 }

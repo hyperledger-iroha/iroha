@@ -3358,16 +3358,9 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_revalidates_resolved_route_before_enqueue() {
     // Capture one plan, then revalidate that same plan against the current view
-    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
-    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    // before local admission. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
     let route_calls = install_counting_route_queue(&mut app, None);
-    app.queue
-        .install_plan_journal(
-            &journal.path().join("route-cache.norito"),
-            1024 * 1024,
-            true,
-        )
-        .expect("install actual lifecycle admission journal on counting queue");
     let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
@@ -3435,16 +3428,9 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_entrypoint_revalidates_resolved_route_before_enqueue() {
     // Capture one plan, then revalidate that same plan against the current view
-    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
-    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    // before local admission. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
     let route_calls = install_counting_route_queue(&mut app, None);
-    app.queue
-        .install_plan_journal(
-            &journal.path().join("route-cache.norito"),
-            1024 * 1024,
-            true,
-        )
-        .expect("install actual lifecycle admission journal on counting queue");
     let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let response =
@@ -3477,9 +3463,9 @@ async fn handler_post_transaction_entrypoint_revalidates_resolved_route_before_e
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueue() {
+async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue() {
     for entrypoint_handler in [false, true] {
-        let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+        let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
         // Capture the real global route, then simulate a policy/router change to
         // a route without current catalog authority before the actual queue check.
         let route_calls = install_counting_route_queue(
@@ -3489,11 +3475,7 @@ async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueu
                 DataSpaceId::UNIVERSAL,
             )),
         );
-        let journal_path = journal.path().join("route-drift.norito");
-        app.queue
-            .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install actual drift-test journal");
-        let before = std::fs::read(&journal_path).expect("read initial journal bytes");
+        let before = lifecycle_pending_wire(&app);
         let transaction =
             lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -3518,9 +3500,9 @@ async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueu
         assert!(app.queue.routing_plan_hint(&entrypoint_hash).is_none());
         assert!(!app.state.has_committed_entrypoint(entrypoint_hash));
         assert_eq!(
-            std::fs::read(&journal_path).expect("read journal after route refusal"),
+            lifecycle_pending_wire(&app),
             before,
-            "a precomputed plan cannot bypass current route validation or append custody",
+            "a precomputed plan cannot bypass current route validation or acquire custody",
         );
     }
 }

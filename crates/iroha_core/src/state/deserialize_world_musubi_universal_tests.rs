@@ -236,7 +236,7 @@ fn musubi_universal_directory_rejects_colliding_package_selector() {
         .insert(colliding.package.clone(), colliding);
     let error = musubi_universal::validate_musubi_universal_projection_cut(
         &world.view(),
-        "current",
+        ProjectionCut::Current,
         &mv::allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),

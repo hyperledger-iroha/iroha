@@ -312,7 +312,7 @@ async function fetchTestManifest() {
 
 function fakeNative(payload = manifestPayload(), overrides = {}) {
   return {
-    connectNoritoBridgeAbiVersion: () => 24,
+    connectNoritoBridgeAbiVersion: () => 25,
     privacyCompiledProfileCatalogV1: () => Uint8Array.from(CATALOG),
     privacyValidateCompiledProfileCatalogV1: (bytes) =>
       sameBytes(bytes, CATALOG) ? 0 : 8,

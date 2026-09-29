@@ -31,22 +31,16 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Canonical(Canonical::Owner(super::WORLD_FIELDS)));
     block_hashes: BlockHashes => ("state.block_hashes",
         Role::History { source: "Canonical SignedBlockWire/finality history in height order", authentication: "Kura authenticated recovery prefix; State block-hash publication owner" });
+    native_execution_tip: native_execution_tip::TipCell => ("state.native_execution_tip",
+        Role::History { source: "Original native height, Iroha hash, core header hash and execution result; current and undo cuts outside World", authentication: "Original worker verified exact quorum and output seal, or original signed-genesis execution; restore verifies the actual certified native prefix and configured chain/network before accepting snapshot claims" });
     latest_block_header: PublicationRwLock<Option<BlockHeader>> => ("state.latest_block_header",
         Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("State::update_latest_block_header_cache from exact retained canonical tip") });
-    merge_ledger: MergeLedgerStore => ("state.merge_ledger",
-        Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("State::hydrate_verified_lane_relay_records; authenticated Kura merge carrier/QC binding") });
-    merge_admission: PublicationRwLock<MergeAdmissionState> => ("state.merge_admission",
-        Role::Canonical(Canonical::Cell(schema::<MergeAdmissionState>())));
-    replay_merge_carriers: parking_lot::RwLock<BTreeMap<HashOf<MergeLedgerEntry>, ReplayMergeCarrier>> => ("state.replay_merge_carriers",
-        Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("State::hydrate_verified_lane_relay_records; authenticated Kura merge carrier/QC binding") });
     transactions: TransactionsStorage => ("state.transactions",
         Role::Canonical(Canonical::Owner(TRANSACTION_MEMBERSHIP_FIELDS)));
     commit_topology: Cell<Vec<PeerId>> => ("state.commit_topology",
         Role::Canonical(Canonical::Cell(schema::<Vec<PeerId>>())));
     prev_commit_topology: Cell<Vec<PeerId>> => ("state.prev_commit_topology",
         Role::Canonical(Canonical::Cell(schema::<Vec<PeerId>>())));
-    lane_consensus_contexts: Cell<LaneConsensusContextsV1> => ("state.lane_consensus_contexts",
-        Role::Canonical(Canonical::Cell(schema::<LaneConsensusContextsV1>())));
     da_commitments: PublicationRwLock<DaCommitmentStore> => ("state.da_commitments",
         Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("state::da_hydration::ensure_da_indexes_hydrated; exact committed Kura prefix and rewind reconstruction") });
     da_confidential_compute: PublicationRwLock<ConfidentialComputeStore> => ("state.da_confidential_compute",
@@ -67,8 +61,6 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Physical persistence/hydration coordination; authenticated logical DA/history owners are separately classified"));
     da_pin_intents: PublicationRwLock<DaPinStore> => ("state.da_pin_intents",
         Role::Derived { sources: &["world.da_pin_intents_by_ticket", "world.da_pin_intents_by_alias"], check: DerivationCheck::Rebuild("State::da_pin_cache_from_world reconstructs ticket and exact current alias bindings after World publication") });
-    lane_relays: PublicationRwLock<LaneRelayStore> => ("state.lane_relays",
-        Role::Derived { sources: &["state.block_hashes", "world.smart_contract_state"], check: DerivationCheck::Rebuild("State::hydrate_verified_lane_relay_records_from_contract_state") });
     lane_manifests: PublicationRwLock<LaneManifestRegistryHandle> => ("state.lane_manifests",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:lane_manifests:v1", encoder: "state::authority_registry::lane_manifest_policy::canonical_preimage_once; exact installed effective/current/baseline source bytes, bound catalog and retained predecessor; rejects provisional emergency authority", layout: V1_LAYOUT })));
     provisional_emergency_lane_manifests_consumed: bool => ("state.provisional_emergency_lane_manifests_consumed",
@@ -152,12 +144,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
     geometry_publication: parking_lot::Mutex<Option<LaneGeometryPublication>> => ("state.geometry_publication",
         Role::Local("Retained physical filesystem publication/recovery plan; no independent protocol state"));
-    pending_replay_publication: Option<Box<PreparedReplayPublication>> => ("state.pending_replay_publication",
-        Role::Local("Unpublished prevalidated installation capsule; canonical State authority changes only at atomic publication"));
     tiered_startup_geometry: Option<TieredStartupGeometry> => ("state.tiered_startup_geometry",
         Role::Local("Retained physical filesystem publication/recovery plan; no independent protocol state"));
-    queue_plan_admission_persistence_lock: parking_lot::Mutex<()> => ("state.queue_plan_admission_persistence_lock",
-        Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
     state_commit_lock: Arc<PublicationMutex> => ("state.state_commit_lock",
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
     state_write_lock: PublicationMutex => ("state.state_write_lock",
@@ -168,6 +156,6 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog> => ("state.view_lock_contention_log",
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
-    sumeragi_v2_pending_evidence: parking_lot::Mutex<BTreeMap<Hash, crate::sumeragi::v2_evidence::LocalV2EvidenceRecord>> => ("state.sumeragi_v2_pending_evidence",
+    native_pending_evidence: parking_lot::Mutex<crate::sumeragi::evidence::NativeEvidencePool> => ("state.native_pending_evidence",
         Role::Local("Private gossip-timing cache; only admitted canonical evidence records enter world.consensus_evidence"));
 });

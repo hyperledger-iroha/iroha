@@ -343,7 +343,6 @@ state_test! { sync native_common_owner_executes_and_seals_pipeline_and_time_once
             assert_eq!(routes, &[groups[0].body().payload().input.routing_plan().unwrap().coordinator_route()]);
             Ok::<_, String>(super::ExecutionOutputSealMetadata {
                 committed_fragment_count: u64::try_from(overlay.committed_fragment_count()).unwrap(),
-                lane_finality_statements: Vec::new(),
             })
         }).unwrap();
         assert_eq!(carrier.execution_outputs(), rows);

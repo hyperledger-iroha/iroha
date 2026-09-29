@@ -5,19 +5,11 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidencePenaltyStatus,
-            EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
-            LaneSettlementReceipt, NposGenesisParams, SumeragiV2EquivocationEvidence,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidenceAttribution,
+            EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord, ExecKv, ExecWitness,
+            ExecWitnessMsg, NposGenesisParams,
         },
-        consensus_v2::{
-            BeaconHorizonStatusV1, BlockSubject, ConsensusMode, ConsensusRound,
-            DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext,
-            HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding,
-            QuorumCertificateRef, SumeragiV2BodyState, SumeragiV2Equivocation,
-            SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus,
-            SumeragiV2QcResponse, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutVote,
-            ValidationError, ValidatorPower,
-        },
+        consensus_v2::{SumeragiV2GenesisContextParameters, ValidationError, ValidatorPower},
     },
     isi::kagemusha_v1::{
         BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
@@ -26,21 +18,14 @@ use iroha_data_model::{
         KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
+    sumeragi::{
+        BeaconHorizonStatusV1, PROTOCOL_VERSION, SumeragiFootprint, SumeragiHaltReason,
+        SumeragiStatus,
+    },
 };
 use iroha_model_base::peer::PeerId;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use norito::{
-    DeserializePayload,
-    codec::{Decode, DecodeAll, Encode},
-};
-use std::{
-    convert::TryFrom,
-    fmt::Debug,
-    fs,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-};
-use tempfile::tempdir;
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{convert::TryFrom, fmt::Debug, num::NonZeroU64};
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
     for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -259,7 +244,68 @@ fn rng_exec_witness_msg(rng: &mut DeterministicRng) -> ExecWitnessMsg {
         witness: rng_exec_witness(rng),
     }
 }
+// Codec fixtures carry original signed artifacts; they do not establish chain admission.
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
+    use iroha_sumeragi::{
+        message::{Evidence as NativeEvidence, Vote, VoteKind},
+        types::{EpochId, Hash32, SIGNATURE_LEN, Signature as NativeSignature},
+    };
+    let key = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).unwrap();
+    let instance = Hash32(rng.array32());
+    let epoch = EpochId {
+        epoch: rng.next_u64(),
+        context: Hash32(rng.array32()),
+    };
+    let height = rng.next_u64().max(1);
+    let view = rng.next_u64();
+    let result = Hash32(rng.array32());
+    let vote = |subject: u8| {
+        let mut vote = Vote {
+            kind: VoteKind::Prepare,
+            instance,
+            epoch,
+            height,
+            view,
+            block_hash: Hash32([subject; 32]),
+            result,
+            attest: false,
+            signer: 0,
+            sig: NativeSignature([0; SIGNATURE_LEN]),
+            attestation: None,
+        };
+        vote.sig = NativeSignature(
+            iroha_crypto::Signature::new(key.private_key(), &vote.preimage())
+                .payload()
+                .try_into()
+                .unwrap(),
+        );
+        vote
+    };
+    Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0xA2), vote(0xA3))).unwrap()
+}
+fn fixture_attribution(evidence: &Evidence) -> EvidenceAttribution {
+    let iroha_sumeragi::message::Evidence::VoteEquivocation(vote, _) =
+        evidence.decode_native().unwrap()
+    else {
+        panic!("native fixture vote pair")
+    };
+    EvidenceAttribution {
+        instance: vote.instance.0,
+        height: vote.height,
+        epoch: vote.epoch.epoch,
+        context_id: vote.epoch.context.0,
+        authority_generation: [0xA4; 32],
+        offenders: vec![EvidenceOffender {
+            signer: vote.signer,
+            peer_id: checked_bls_peer_id_from_seed(0xA1),
+        }],
+        safety_violation: false,
+    }
+}
+#[test]
+fn authority_generations_and_epoch_authorizations_roundtrip() {
+    let mut rng = DeterministicRng::new(0xE1D3_0031);
+    let rng = &mut rng;
     let mut roster = [0xA1, 0xA2, 0xA3, 0xA4]
         .into_iter()
         .map(|seed| ValidatorPower {
@@ -268,110 +314,63 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let height = rng.next_u64().max(2);
-    let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
-    let authorization_case = rng.next_u64() % 3;
-    let incumbent = mint_finality_authority(network_id, 0, &roster);
-    let (mint_finality_authorization, mint_finality_authority) = if authorization_case == 0 {
-        (
-            mint_finality_genesis_authorization(&incumbent, height),
-            incumbent,
-        )
-    } else {
-        let previous = mint_finality_genesis_authorization(&incumbent, 1);
-        let retained = authorization_case == 1;
-        let authority = if retained {
-            incumbent
+    for authorization_case in 0..3 {
+        let height = rng.next_u64().max(2);
+        let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
+        let incumbent = mint_finality_authority(network_id, 0, &roster);
+        let (mint_finality_authorization, mint_finality_authority) = if authorization_case == 0 {
+            (
+                mint_finality_genesis_authorization(&incumbent, height),
+                incumbent,
+            )
         } else {
-            mint_finality_authority(network_id, 1, &roster)
-        };
-        let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch: 1,
-            first_height: 2,
-            last_height: height,
-            authority_generation: authority.generation,
-            authority_id: authority
-                .authority_id()
-                .expect("valid fixture successor authority"),
-            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: [0xB1; 32],
-                transcript_hash: [0xB2; 32],
-            }),
-            previous_authorization_id: previous
-                .authorization_id()
-                .expect("valid fixture predecessor"),
-            transition_id: if retained { [0; 32] } else { [0xB3; 32] },
-            decision: if retained {
-                KagemushaMintFinalityEpochDecisionV1::Retain
+            let previous = mint_finality_genesis_authorization(&incumbent, 1);
+            let retained = authorization_case == 1;
+            let authority = if retained {
+                incumbent
             } else {
-                KagemushaMintFinalityEpochDecisionV1::Activate
-            },
+                mint_finality_authority(network_id, 1, &roster)
+            };
+            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 1,
+                first_height: 2,
+                last_height: height,
+                authority_generation: authority.generation,
+                authority_id: authority
+                    .authority_id()
+                    .expect("valid fixture successor authority"),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [0xB1; 32],
+                    transcript_hash: [0xB2; 32],
+                }),
+                previous_authorization_id: previous
+                    .authorization_id()
+                    .expect("valid fixture predecessor"),
+                transition_id: if retained { [0; 32] } else { [0xB3; 32] },
+                decision: if retained {
+                    KagemushaMintFinalityEpochDecisionV1::Retain
+                } else {
+                    KagemushaMintFinalityEpochDecisionV1::Activate
+                },
+            };
+            authorization
+                .validate_against_authority(&authority)
+                .expect("valid successor authority binding");
+            authorization
+                .validate_successor(&previous)
+                .expect("contiguous fixture authorization");
+            (authorization, authority)
         };
-        authorization
-            .validate_against_authority(&authority)
-            .expect("valid successor authority binding");
-        authorization
-            .validate_successor(&previous)
-            .expect("contiguous fixture authorization");
-        (authorization, authority)
-    };
-    let context = HeightContext {
-        network_id,
-        protocol_version: V2_PROTOCOL_VERSION,
-        height,
-        epoch: mint_finality_authorization.epoch,
-        kagemusha_mint_finality_authorization: mint_finality_authorization,
-        kagemusha_mint_finality_authority: mint_finality_authority,
-        epoch_end_height: height,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("strict four-validator fixture quorum"),
-        roster,
-        nexus_amx_context_hash: rng_hash(rng),
-        execution_policy_hash: rng_hash(rng),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 4,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 512,
-        },
-        leader_seed: <[u8; Hash::LENGTH]>::from(rng_hash(rng)),
-    };
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height,
-        view: rng.next_u64(),
-    };
-    let proofs_of_possession = (0..context.roster.len()).map(|_| rng.bytes(96)).collect();
-    Evidence {
-        equivocation: SumeragiV2EquivocationEvidence {
-            context,
-            proofs_of_possession,
-            conflict: SumeragiV2Equivocation::TimeoutVote {
-                first: TimeoutVote {
-                    round,
-                    highest_prepare_qc: None,
-                    signer: 0,
-                    signature: rng.bytes(96),
-                },
-                second: TimeoutVote {
-                    round,
-                    highest_prepare_qc: None,
-                    signer: 0,
-                    signature: rng.bytes(96),
-                },
-            },
-        },
+
+        assert_roundtrip(&mint_finality_authority);
+        assert_roundtrip(&mint_finality_authorization);
     }
 }
 fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> EvidenceRecord {
     EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
         evidence,
         recorded_at_height: rng.next_u64(),
         recorded_at_view: rng.next_u64(),
@@ -379,77 +378,53 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         penalty_status: EvidencePenaltyStatus::Pending,
     }
 }
-fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
-    SumeragiV2Status {
-        protocol_version: V2_PROTOCOL_VERSION,
-        node_fingerprint: rng_hash(rng),
-        build_fingerprint: rng_hash(rng),
+fn rng_native_status(rng: &mut DeterministicRng) -> SumeragiStatus {
+    let key = checked_bls_peer_id_from_seed(0x71).public_key().clone();
+    SumeragiStatus {
+        protocol_version: PROTOCOL_VERSION,
         config_fingerprint: rng_hash(rng),
-        restart_required: rng.next_bool(),
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(rng_hash(rng))),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        phase: SumeragiV2StatusPhase::Prepare,
-        leader: rng.next_u32(),
-        locked_prepare_qc: None,
-        highest_prepare_qc: None,
-        last_timeout_certificate: None,
-        body_state: SumeragiV2BodyState::Validated,
-        pending_persistence_id: rng.next_bool().then(|| rng.next_u64()),
-        last_committed_height: rng.next_u64(),
-        last_committed_subject: None,
-        height_context: SumeragiV2HeightContextStatus {
-            epoch: rng.next_u64(),
-            epoch_end_height: rng.next_u64(),
-            mode: ConsensusMode::Permissioned,
-            epoch_seed: rng_hash(rng).into(),
-            validator_count: 4,
-            quorum: DualQuorum {
-                min_signers: 3,
-                total_power: 4,
-            },
-        },
-        last_commit_qc: None,
-        liveness: Default::default(),
         beacon_horizon: rng.next_bool().then(|| BeaconHorizonStatusV1 {
             epoch_length_blocks: rng.next_u64(),
             next_required_pulse_height: rng.next_bool().then(|| rng.next_u64()),
-            active_session_id: rng.next_bool().then(|| rng_hash(rng).into()),
+            active_session_id: rng.next_bool().then(|| rng.array32()),
             session_covers_next_pulse: rng.next_bool(),
             local_provider_ready: rng.next_bool(),
         }),
-    }
-}
-fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcResponse {
-    fn prepare_qc(rng: &mut DeterministicRng) -> QuorumCertificateRef {
-        let round = ConsensusRound {
-            context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(rng_hash(
-                rng,
-            ))),
-            height: rng.next_u64(),
-            view: rng.next_u64(),
-        };
-        QuorumCertificateRef {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: rng.next_bool().then(|| rng_block_hash(rng)),
-                block_hash: rng_block_hash(rng),
-                payload_hash: rng_hash(rng),
-            },
-            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                rng_hash(rng),
-                rng_hash(rng),
-                rng_hash(rng),
-                rng.next_u64().max(1),
-                rng_hash(rng),
-            ),
-        }
-    }
-    SumeragiV2QcResponse {
-        highest_prepare_qc: Some(prepare_qc(rng)),
-        locked_prepare_qc: Some(prepare_qc(rng)),
+        instance: rng.array32(),
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        stage: (rng.next_u64() % 3) as u8,
+        leader: rng.next_bool().then(|| key.clone()),
+        proxy_tail: rng.next_bool().then(|| key.clone()),
+        high_qc_view: rng.next_bool().then(|| rng.next_u64()),
+        level: rng.next_u32(),
+        start_level: rng.next_u32(),
+        t_retx_ms: rng.next_u64(),
+        committed_height: rng.next_u64(),
+        applied_height: rng.next_u64(),
+        awaiting: rng.next_bool(),
+        signer: rng.next_bool().then_some(key),
+        unanchored: rng.next_bool(),
+        abstaining: rng.next_bool(),
+        halted: rng
+            .next_bool()
+            .then(|| SumeragiHaltReason::SafetyViolation(rng.next_u64())),
+        footprint: SumeragiFootprint {
+            votes: rng.next_u64(),
+            timeouts: rng.next_u64(),
+            blocks: rng.next_u64(),
+            exec_entries: rng.next_u64(),
+            wants: rng.next_u64(),
+            pending_apply: rng.next_u64(),
+            sync_entries: rng.next_u64(),
+            sync_bytes: rng.next_u64(),
+            peers: rng.next_u64(),
+            recent_headers: rng.next_u64(),
+            configs: rng.next_u64(),
+            cert_cache: rng.next_u64(),
+            evidence_keys: rng.next_u64(),
+            probe: rng.next_u64(),
+        },
     }
 }
 #[test]
@@ -469,7 +444,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_cadence_ms: NonZeroU64::new(750).unwrap(),
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos.clone()),
-        protocol_version: u32::from(V2_PROTOCOL_VERSION),
+        protocol_version: u32::from(PROTOCOL_VERSION),
         v2_context: recommended_genesis_context(),
     };
     let without_npos = ConsensusGenesisParams {
@@ -520,6 +495,7 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
 fn consensus_persistence_norito_roundtrip() {
     let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0002));
     let evidence_record = EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
         evidence: evidence.clone(),
         recorded_at_height: 44,
         recorded_at_view: 8,
@@ -571,6 +547,7 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
 
     let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0084));
     let record = EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
         evidence,
         recorded_at_height: 84,
         recorded_at_view: 9,
@@ -591,6 +568,7 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
     );
 
     let pending_record = EvidenceRecord {
+        attribution: record.attribution.clone(),
         evidence: record.evidence.clone(),
         recorded_at_height: 86,
         recorded_at_view: 10,
@@ -613,67 +591,31 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
     );
 }
 #[test]
-fn sumeragi_v2_equivocation_evidence_json_is_closed_and_exact() {
-    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0090)).equivocation;
-    let json = norito::json::to_value(&evidence).expect("serialize current v2 evidence JSON");
+fn native_evidence_json_is_closed_and_exact() {
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0090));
+    let json = norito::json::to_value(&evidence).unwrap();
     assert_eq!(
-        norito::json::from_value::<SumeragiV2EquivocationEvidence>(json.clone())
-            .expect("decode current v2 evidence JSON"),
+        norito::json::from_value::<Evidence>(json.clone()).unwrap(),
         evidence
     );
-
-    let context = json
-        .get("context")
-        .and_then(norito::json::Value::as_object)
-        .expect("v2 evidence context JSON object");
-    for field in [
-        "next_epoch_snapshot",
-        "parent_commit_qc",
-        "snapshot_bootstrap",
-    ] {
-        assert!(
-            context.get(field).is_some_and(norito::json::Value::is_null),
-            "nullable context field {field} must remain an explicit null"
-        );
-    }
-
-    for field in ["context", "proofs_of_possession", "conflict"] {
-        let mut missing = json.clone();
-        assert!(
-            missing
-                .as_object_mut()
-                .expect("v2 evidence JSON object")
-                .remove(field)
-                .is_some()
-        );
-        assert!(
-            norito::json::from_value::<SumeragiV2EquivocationEvidence>(missing).is_err(),
-            "current v2 evidence JSON must require {field}"
-        );
-    }
-
+    assert_eq!(
+        json.as_object().unwrap().keys().collect::<Vec<_>>(),
+        vec!["native"]
+    );
+    assert!(norito::json::from_value::<Evidence>(norito::json!({})).is_err());
     let mut unknown = json;
     unknown
         .as_object_mut()
-        .expect("v2 evidence JSON object")
-        .insert(
-            "pre_release_field".to_owned(),
-            norito::json::Value::Bool(true),
-        );
-    assert!(
-        norito::json::from_value::<SumeragiV2EquivocationEvidence>(unknown).is_err(),
-        "current v2 evidence JSON must reject unknown fields"
-    );
+        .unwrap()
+        .insert("equivocation".into(), norito::json::Value::Null);
+    assert!(norito::json::from_value::<Evidence>(unknown).is_err());
 }
 #[test]
 fn consensus_roundtrip_deterministic_fuzz() {
     let mut rng = DeterministicRng::new(0xD4E5_F607_89AB_CDEF);
-    assert_roundtrip(&SumeragiV2QcResponse::default());
     for _ in 0..64 {
-        let status = rng_sumeragi_v2_status(&mut rng);
+        let status = rng_native_status(&mut rng);
         assert_roundtrip(&status);
-        let qc_response = rng_sumeragi_v2_qc_response(&mut rng);
-        assert_roundtrip(&qc_response);
         let genesis = rng_consensus_genesis_params(&mut rng);
         if let ConsensusGenesisModeParams::Npos(npos) = &genesis.mode {
             assert_roundtrip(npos);
@@ -705,355 +647,30 @@ fn consensus_roundtrip_deterministic_fuzz() {
     }
 }
 #[test]
-fn sumeragi_v2_qc_response_requires_both_current_fields() {
-    let retired = r#"{
-        "highest_qc": {"height": 10, "view": 2, "subject_block_hash": null},
-        "locked_qc": {"height": 9, "view": 1, "subject_block_hash": null}
-    }"#;
-    assert!(norito::json::from_str::<SumeragiV2QcResponse>(retired).is_err());
-    for missing in [
-        "{}",
-        r#"{"highest_prepare_qc":null}"#,
-        r#"{"locked_prepare_qc":null}"#,
+fn native_status_requires_all_twenty_one_fields_and_explicit_nullable_slots() {
+    let status = rng_native_status(&mut DeterministicRng::new(0xE1D3_0091));
+    let json = norito::json::to_value(&status).unwrap();
+    let object = json.as_object().unwrap();
+    assert_eq!(object.len(), 21);
+    for field in object.keys() {
+        let mut missing = json.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            norito::json::from_value::<SumeragiStatus>(missing).is_err(),
+            "missing {field}"
+        );
+    }
+    for retired in [
+        "highest_prepare_qc",
+        "locked_prepare_qc",
+        "height_context",
+        "phase",
     ] {
-        assert!(norito::json::from_str::<SumeragiV2QcResponse>(missing).is_err());
+        let mut unknown = json.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert(retired.into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<SumeragiStatus>(unknown).is_err());
     }
-    assert_eq!(
-        norito::json::from_str::<SumeragiV2QcResponse>(
-            r#"{"highest_prepare_qc":null,"locked_prepare_qc":null}"#,
-        )
-        .expect("explicit null PrepareQC options are canonical"),
-        SumeragiV2QcResponse::default(),
-    );
-    let canonical = norito::json::to_value(&SumeragiV2QcResponse::default())
-        .expect("render required nullable PrepareQC slots");
-    assert!(
-        canonical
-            .get("highest_prepare_qc")
-            .is_some_and(|value| value.is_null())
-    );
-    assert!(
-        canonical
-            .get("locked_prepare_qc")
-            .is_some_and(|value| value.is_null())
-    );
-}
-#[test]
-fn lane_commitment_fixtures_roundtrip() {
-    let fixtures_dir = workspace_root()
-        .join("fixtures")
-        .join("nexus")
-        .join("lane_commitments");
-    assert!(
-        fixtures_dir.is_dir(),
-        "lane commitment fixtures directory {fixtures_dir:?} must exist"
-    );
-    let seen = process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Verify);
-    assert!(
-        seen > 0,
-        "expected at least one lane commitment fixture under {fixtures_dir:?}"
-    );
-}
-#[test]
-#[ignore = "regenerates lane commitment Norito fixtures"]
-fn regenerate_lane_commitment_fixtures() {
-    let fixtures_dir = workspace_root()
-        .join("fixtures")
-        .join("nexus")
-        .join("lane_commitments");
-    assert!(
-        fixtures_dir.is_dir(),
-        "lane commitment fixtures directory {fixtures_dir:?} must exist"
-    );
-    let seen =
-        process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-    assert!(
-        seen > 0,
-        "expected at least one lane commitment fixture under {fixtures_dir:?}"
-    );
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LaneCommitmentFixtureMode {
-    Verify,
-    Regenerate,
-}
-fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFixtureMode) -> usize {
-    let mut seen = 0usize;
-    for entry in fs::read_dir(fixtures_dir).expect("read lane commitment fixtures") {
-        let entry = entry.expect("fixture entry");
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let raw = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read lane commitment fixture {}: {err}", path.display()));
-        let commitment: LaneBlockCommitment = norito::json::from_str(&raw).unwrap_or_else(|err| {
-            panic!("parse lane commitment fixture {}: {err}", path.display())
-        });
-        let reserialized =
-            norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
-        let replay: LaneBlockCommitment =
-            norito::json::from_str(&reserialized).expect("parse reserialized commitment");
-        assert_eq!(
-            commitment,
-            replay,
-            "JSON roundtrip mismatch for fixture {}",
-            path.display()
-        );
-        let norito_bytes =
-            norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
-        let archived =
-            norito::from_bytes::<LaneBlockCommitment>(&norito_bytes).expect("archive commitment");
-        let decoded = DeserializePayload::try_deserialize(archived)
-            .expect("deserialize commitment from Norito bytes");
-        assert_eq!(
-            commitment,
-            decoded,
-            "Norito roundtrip mismatch for fixture {}",
-            path.display()
-        );
-        let stem = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .expect("fixture stem");
-        let to_path = fixtures_dir.join(format!("{stem}.to"));
-        match mode {
-            LaneCommitmentFixtureMode::Verify => {
-                if to_path.is_file() {
-                    let fixture_bytes = fs::read(&to_path).unwrap_or_else(|err| {
-                        panic!("read Norito bytes {}: {err}", to_path.display())
-                    });
-                    let archived_file = norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes)
-                        .expect("archive fixture");
-                    let decoded_from_file = DeserializePayload::try_deserialize(archived_file)
-                        .expect("deserialize fixture Norito bytes");
-                    assert_eq!(
-                        commitment,
-                        decoded_from_file,
-                        "Norito fixture bytes mismatch for {}",
-                        to_path.display()
-                    );
-                    assert_eq!(
-                        norito_bytes,
-                        fixture_bytes,
-                        "canonical Norito bytes do not match fixture {}",
-                        to_path.display()
-                    );
-                }
-            }
-            LaneCommitmentFixtureMode::Regenerate => {
-                fs::write(&to_path, &norito_bytes).unwrap_or_else(|err| {
-                    panic!("write lane commitment fixture {}: {err}", to_path.display())
-                });
-            }
-        }
-        seen += 1;
-    }
-    seen
-}
-fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
-    let receipt = LaneSettlementReceipt {
-        source_id: [0xAB; 32],
-        local_amount: "4".parse().expect("valid settlement quantity"),
-        xor_due: "1.62".parse().expect("valid settlement quantity"),
-        xor_after_haircut: "1.6".parse().expect("valid settlement quantity"),
-        xor_variance: "0.02".parse().expect("valid settlement quantity"),
-        timestamp_ms: 1_726_296_400_000,
-    };
-    LaneBlockCommitment {
-        block_height: 8_642,
-        lane_id: LaneId::new(1),
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id: DataSpaceId::new(7),
-        tx_count: 1,
-        total_local_amount: receipt.local_amount.clone(),
-        total_xor_due: receipt.xor_due.clone(),
-        total_xor_after_haircut: receipt.xor_after_haircut.clone(),
-        total_xor_variance: receipt.xor_variance.clone(),
-        swap_metadata: Some(iroha_data_model::block::consensus::LaneSwapMetadata {
-            epsilon_bps: 25,
-            twap_window_seconds: 60,
-            liquidity_profile: iroha_data_model::block::consensus::LaneLiquidityProfile::Tier1,
-            twap_local_per_xor: "8123.4455".parse().expect("canonical TWAP"),
-            volatility_class: iroha_data_model::block::consensus::LaneVolatilityClass::Stable,
-        }),
-        receipts: vec![receipt],
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    }
-}
-fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
-    LaneBlockCommitment {
-        block_height: 8_643,
-        lane_id: LaneId::new(2),
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id: DataSpaceId::new(9),
-        tx_count: 0,
-        total_local_amount: "0".parse().expect("valid settlement quantity"),
-        total_xor_due: "0".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    }
-}
-fn write_lane_commitment_json_fixture(
-    fixtures_dir: &Path,
-    stem: &str,
-    commitment: &LaneBlockCommitment,
-) -> PathBuf {
-    let path = fixtures_dir.join(format!("{stem}.json"));
-    let json = norito::json::to_json_pretty(commitment).expect("serialize lane commitment fixture");
-    fs::write(&path, json)
-        .unwrap_or_else(|err| panic!("write lane commitment fixture {}: {err}", path.display()));
-    path
-}
-fn assert_lane_commitment_to_fixture_matches(
-    json_path: &Path,
-    commitment: &LaneBlockCommitment,
-    context: &str,
-) {
-    let to_path = json_path.with_extension("to");
-    let expected_bytes = norito::to_bytes(commitment).expect("encode canonical Norito bytes");
-    let actual_bytes = fs::read(&to_path).expect("read Norito fixture companion");
-    assert_eq!(
-        actual_bytes, expected_bytes,
-        "{context}: Norito companion bytes must match canonical encoding"
-    );
-}
-#[test]
-fn lane_commitment_fixture_helper_skips_non_json_and_missing_to() {
-    let dir = tempdir().expect("create temp dir");
-    let fixtures_dir = dir.path();
-    let commitment = sample_lane_commitment_fixture();
-    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
-    let ignored_path = fixtures_dir.join("notes.txt");
-    fs::write(&ignored_path, "not a fixture").expect("write ignored file");
-    let seen = process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
-    assert_eq!(seen, 1, "only JSON fixtures should be counted");
-    let to_path = json_path.with_extension("to");
-    assert!(
-        !to_path.exists(),
-        "verify mode must not create missing Norito fixture companions"
-    );
-}
-#[test]
-fn lane_commitment_fixture_helper_returns_zero_for_empty_directory() {
-    let dir = tempdir().expect("create temp dir");
-    let fixtures_dir = dir.path();
-    let verified =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
-    let regenerated =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-    assert_eq!(
-        verified, 0,
-        "empty directories should not report fixtures in verify mode"
-    );
-    assert_eq!(
-        regenerated, 0,
-        "empty directories should not report fixtures in regenerate mode"
-    );
-}
-#[test]
-fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
-    let dir = tempdir().expect("create temp dir");
-    let fixtures_dir = dir.path();
-    let commitment = sample_lane_commitment_fixture();
-    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
-    let to_path = json_path.with_extension("to");
-    fs::write(&to_path, b"stale").expect("write stale Norito fixture");
-    let seen =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-    assert_eq!(seen, 1, "regenerate mode should process the JSON fixture");
-    assert_lane_commitment_to_fixture_matches(
-        &json_path,
-        &commitment,
-        "regenerate mode must overwrite stale Norito fixture bytes",
-    );
-    let verified =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
-    assert_eq!(
-        verified, 1,
-        "regenerated fixture should verify successfully"
-    );
-}
-#[test]
-fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
-    let dir = tempdir().expect("create temp dir");
-    let fixtures_dir = dir.path();
-    let commitment = sample_lane_commitment_fixture();
-    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
-    let stale_commitment = sample_lane_commitment_fixture_without_metadata();
-    let to_path = json_path.with_extension("to");
-    let stale_bytes = norito::to_bytes(&stale_commitment).expect("encode stale Norito fixture");
-    fs::write(&to_path, stale_bytes).expect("write stale decodable Norito fixture");
-    let result = std::panic::catch_unwind(|| {
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify)
-    });
-    assert!(
-        result.is_err(),
-        "verify mode must fail when a decodable companion fixture is stale"
-    );
-}
-#[test]
-fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fixtures() {
-    let dir = tempdir().expect("create temp dir");
-    let fixtures_dir = dir.path();
-    let with_metadata = sample_lane_commitment_fixture();
-    let without_metadata = sample_lane_commitment_fixture_without_metadata();
-    let with_metadata_path =
-        write_lane_commitment_json_fixture(fixtures_dir, "with_metadata", &with_metadata);
-    let without_metadata_path =
-        write_lane_commitment_json_fixture(fixtures_dir, "without_metadata", &without_metadata);
-    let regenerated =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-    assert_eq!(
-        regenerated, 2,
-        "regenerate mode should process every JSON lane commitment fixture"
-    );
-    assert_lane_commitment_to_fixture_matches(
-        &with_metadata_path,
-        &with_metadata,
-        "regenerate mode should create a .to companion for metadata fixtures",
-    );
-    assert_lane_commitment_to_fixture_matches(
-        &without_metadata_path,
-        &without_metadata,
-        "regenerate mode should create a .to companion for metadata-free fixtures",
-    );
-    let verified =
-        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
-    assert_eq!(
-        verified, 2,
-        "generated companions should verify for every fixture"
-    );
-}
-#[test]
-fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
-    let commitment = sample_lane_commitment_fixture_without_metadata();
-    let json = norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
-    let replay: LaneBlockCommitment =
-        norito::json::from_str(&json).expect("parse reserialized commitment");
-    assert_eq!(
-        replay, commitment,
-        "JSON roundtrip must preserve commitments without optional metadata"
-    );
-    let norito_bytes = norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
-    let archived = norito::from_bytes::<LaneBlockCommitment>(&norito_bytes)
-        .expect("archive metadata-free commitment");
-    let decoded = DeserializePayload::try_deserialize(archived)
-        .expect("deserialize metadata-free commitment");
-    assert_eq!(
-        decoded, commitment,
-        "Norito roundtrip must preserve commitments without receipts"
-    );
-}
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root directory exists")
-        .to_path_buf()
 }

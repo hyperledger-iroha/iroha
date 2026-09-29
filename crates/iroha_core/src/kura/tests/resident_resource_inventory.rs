@@ -42,8 +42,8 @@ fn recount_transaction_resident_associations(index: &super::TransactionEntrypoin
 #[test]
 fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncate() {
     use super::resident_inventory::ResidentOwner;
-    let mut generator = DummyBlocks::new();
-    let block = generator.next_with_results();
+    let mut generator = NativeBlocks::new();
+    let block = generator.next();
     let distinct_entrypoints = block.network_input_hashes().collect::<BTreeSet<_>>().len();
     assert!(distinct_entrypoints > 0);
     let mut index = super::TransactionEntrypointIndex::complete_empty();
@@ -114,7 +114,7 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
     assert!(!index.kaigi_signal_candidates.contains_key(&call));
     Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(2_usize));
     assert_count(&index);
-    let replacement = generator.next_with_results();
+    let replacement = generator.next();
     Kura::insert_transaction_entrypoint_heights(&mut index, nonzero!(2_usize), &replacement);
     assert_count(&index);
     Kura::truncate_transaction_entrypoint_index_to(&mut index, 1);
@@ -331,8 +331,8 @@ fn resident_live_kura_publication_matches_real_index_owners_without_partial_snap
         kura.resource_inventory.try_snapshot(),
         Err(Unavailable::Unregistered)
     ));
-    let mut generator = DummyBlocks::new();
-    let first = generator.next_with_results();
+    let mut generator = NativeBlocks::new();
+    let first = generator.next();
     kura.store_block(Arc::clone(&first)).unwrap();
     assert_eq!(
         kura.resource_inventory
@@ -358,7 +358,7 @@ fn resident_live_kura_publication_matches_real_index_owners_without_partial_snap
             .resident_associations,
         observed
     );
-    let second = generator.next_with_results();
+    let second = generator.next();
     kura.store_block(second).unwrap();
     assert_eq!(
         kura.resource_inventory

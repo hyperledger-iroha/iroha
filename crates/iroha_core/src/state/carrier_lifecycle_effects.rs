@@ -74,16 +74,6 @@ impl PreparedLaneLifecycleEffects {
         indexes.install_registries(self.manifests, self.privacy);
         if !self.lanes_to_reset.is_empty() {
             indexes
-                .merge_admission
-                .as_mut()
-                .expect("prepared merge admission")
-                .prune_lane_progress(&self.lanes_to_reset);
-            indexes
-                .lane_relays
-                .as_mut()
-                .expect("prepared relays")
-                .prune_lanes(&self.lanes_to_reset);
-            indexes
                 .da_commitments
                 .as_mut()
                 .expect("prepared commitments")

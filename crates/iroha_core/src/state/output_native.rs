@@ -144,17 +144,8 @@ impl StateBlock<'_> {
             .map_err(MergeLedgerCommitError::NativeResourceAdmission)?;
         let mut producer =
             ExecutionOutputProducer::new(self, source, Some(host)).map_err(native_attempt_error)?;
-        // Start-hook settlement belongs to the carrier, never the first native
-        // input. An error poisons and drops this whole unpublished overlay.
-        let start_settlement = std::mem::take(&mut producer.state.settlement_accumulator);
         let executions = producer.execute_native_network_sources(admission);
         let executions = native_output_result(producer.state, executions)?;
-        if !producer.state.settlement_accumulator.is_empty() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "native execution retained unbound settlement receipts".into(),
-            ));
-        }
-        producer.state.settlement_accumulator = start_settlement;
         let result = finish_native(producer.state, executions);
         let result = native_output_result(producer.state, result)?;
         let pipeline = producer

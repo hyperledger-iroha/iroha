@@ -114,7 +114,7 @@ fn read_finalized_body(
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
     wire_response: bool,
-) -> Result<(Arc<SignedBlock>, Vec<u8>), BlockProofError> {
+) -> Result<(Arc<SignedBlock>, Vec<u8>, Hash), BlockProofError> {
     let kura = source.kura;
     let height = usize::try_from(block_height.get())
         .ok()
@@ -198,6 +198,14 @@ fn read_finalized_body(
             reason: "native target length changed after admission".into(),
         });
     }
+    // R authenticates certificate-free execution bytes. The stored transport also carries
+    // this node's independently verified quorum certificate, which is not part of that hash.
+    let executed_block_wire_hash = verified
+        .authority
+        .committed()
+        .commitment()
+        .execution
+        .executed_block_wire_hash;
     let block = Arc::clone(verified.authority.block());
     let wire = verified.wire;
     if block.header().height() != block_height {
@@ -246,7 +254,7 @@ fn read_finalized_body(
     block
         .validate_output_merkle_cache()
         .map_err(|error| invalid_outputs(block_height, error))?;
-    Ok((block, wire))
+    Ok((block, wire, executed_block_wire_hash))
 }
 
 pub(super) fn executed_block_wire_from_kura(
@@ -255,7 +263,7 @@ pub(super) fn executed_block_wire_from_kura(
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
 ) -> Result<Vec<u8>, BlockProofError> {
-    read_finalized_body(source, block_height, expected_hash, limits, true).map(|(_, wire)| wire)
+    read_finalized_body(source, block_height, expected_hash, limits, true).map(|(_, wire, _)| wire)
 }
 
 pub(super) fn block_proofs_for_entry_from_kura(
@@ -265,8 +273,8 @@ pub(super) fn block_proofs_for_entry_from_kura(
     entry_hash: HashOf<TransactionEntrypoint>,
     limits: BlockProofLimits,
 ) -> Result<BlockProofs, BlockProofError> {
-    let (block, wire) = read_finalized_body(source, block_height, expected_hash, limits, false)?;
-    let executed_block_wire_hash = Hash::new(&wire);
+    let (block, wire, executed_block_wire_hash) =
+        read_finalized_body(source, block_height, expected_hash, limits, false)?;
     // The original wire served its authentication purpose. Do not retain this
     // second representation while materializing the proof response.
     drop(wire);
@@ -380,11 +388,36 @@ mod native_proof_reader_tests {
         let target = chain.committed(2);
         let height = NonZeroU64::new(2).unwrap();
         let hash = target.block().network_entrypoint_at(0).unwrap().hash();
+        let proofs = chain
+            .state()
+            .block_proofs_for_entry(height, hash, limits())
+            .unwrap();
+        let anchor =
+            iroha_data_model::block::proofs::TrustedBlockProofAnchor::from_committed_execution(
+                target.block(),
+                target.commitment().execution.executed_block_wire_len,
+                target.commitment().execution.executed_block_wire_hash,
+                &hash,
+            )
+            .unwrap();
+        assert_eq!(
+            proofs.executed_block_wire_hash,
+            target.commitment().execution.executed_block_wire_hash
+        );
+        assert_eq!(
+            proofs.executed_block_wire_hash,
+            target.block().executed_block_wire_hash().unwrap()
+        );
+        assert_ne!(
+            proofs.executed_block_wire_hash,
+            Hash::new(target.block().encode_wire().unwrap())
+        );
+        assert!(proofs.verify(&anchor));
+        let mut substituted = proofs;
+        substituted.executed_block_wire_hash = Hash::new(target.block().encode_wire().unwrap());
         assert!(
-            chain
-                .state()
-                .block_proofs_for_entry(height, hash, limits())
-                .is_ok()
+            !substituted.verify(&anchor),
+            "the transport certificate cannot replace R's executed identity"
         );
         assert_eq!(
             chain.state().executed_block_wire(height, limits()).unwrap(),

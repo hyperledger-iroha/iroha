@@ -14,7 +14,9 @@
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
+use ivm::zk::{Constraint, DiagnosticTraceSnapshot};
+#[cfg(test)]
+use ivm::zk::{MemEvent, RegEvent, RegisterState, StepEntry};
 use norito::streaming::CapabilityFlags;
 use sha2::{Digest, Sha256};
 use std::{
@@ -26,8 +28,40 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+/// Capture optional local diagnostic records without changing execution admission.
+/// All four overlay producers use this same original-pool ownership path.
+pub(crate) fn capture_and_submit(
+    vm: &ivm::IVM,
+    budget: &mv::allocation::AllocationBudget,
+    tx_hash: Option<Hash>,
+    program: ivm::cache_memory::SharedAllocation<u8>,
+    header: Option<iroha_data_model::block::BlockHeader>,
+    transport_capabilities: Option<TransportCapabilityResolutionSnapshot>,
+    negotiated_capabilities: Option<CapabilityFlags>,
+) -> bool {
+    let snapshot = match vm.try_diagnostic_snapshot(budget) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            record_lane_drop("diagnostic_capture_refused");
+            iroha_logger::warn!(?error, "zk_lane: optional diagnostic capture refused");
+            return false;
+        }
+    };
+    if snapshot.states().is_empty() {
+        return false;
+    }
+    try_submit(ZkTask {
+        tx_hash,
+        code_hash: vm.code_hash(),
+        program,
+        header,
+        snapshot,
+        transport_capabilities,
+        negotiated_capabilities,
+    })
+}
+
 /// Task carrying a single IVM execution's formal trace and metadata.
-#[derive(Clone)]
 pub struct ZkTask {
     /// Transaction hash if available (zero when not applicable).
     pub tx_hash: Option<Hash>,
@@ -38,16 +72,8 @@ pub struct ZkTask {
     /// Optional block header associated with this trace (for warnings/events). If not provided, the
     /// ZK lane will emit a warning with a minimal header carrying height=1.
     pub header: Option<iroha_data_model::block::BlockHeader>,
-    /// Expanded register trace.
-    pub trace: Vec<RegisterState>,
-    /// Logged constraints encountered during execution.
-    pub constraints: Vec<Constraint>,
-    /// Memory access log with diagnostic path/root snapshots.
-    pub mem_log: Vec<MemEvent>,
-    /// Register access log with Merkle proofs.
-    pub reg_log: Vec<RegEvent>,
-    /// Per-step Merkle roots of registers and memory.
-    pub step_log: Vec<StepEntry>,
+    /// Move-only, prepaid diagnostic records with original-pool final-owner custody.
+    pub snapshot: DiagnosticTraceSnapshot,
     /// Transport capabilities negotiated for the session (if available).
     pub transport_capabilities: Option<TransportCapabilityResolutionSnapshot>,
     /// Negotiated feature flags advertised by the peer (if available).
@@ -85,8 +111,8 @@ impl ZkTask {
         h.finalize().into()
     }
     fn hash_trace(&self, h: &mut Sha256) {
-        h.update((self.trace.len() as u64).to_le_bytes());
-        for state in &self.trace {
+        h.update((self.snapshot.states().len() as u64).to_le_bytes());
+        for state in self.snapshot.states() {
             h.update(state.pc.to_le_bytes());
             for value in &state.gpr {
                 h.update(value.to_le_bytes());
@@ -97,8 +123,8 @@ impl ZkTask {
         }
     }
     fn hash_constraints(&self, h: &mut Sha256) {
-        h.update((self.constraints.len() as u64).to_le_bytes());
-        for constraint in &self.constraints {
+        h.update((self.snapshot.constraints().len() as u64).to_le_bytes());
+        for constraint in self.snapshot.constraints() {
             match constraint {
                 Constraint::Zero { reg, cycle } => {
                     h.update([0]);
@@ -121,68 +147,36 @@ impl ZkTask {
         }
     }
     fn hash_memory_log(&self, h: &mut Sha256) {
-        h.update((self.mem_log.len() as u64).to_le_bytes());
-        for event in &self.mem_log {
-            let (kind, addr, value, size, path, root) = match event {
-                MemEvent::Load {
-                    addr,
-                    value,
-                    size,
-                    path,
-                    root,
-                } => (0, addr, value, size, path, root),
-                MemEvent::Store {
-                    addr,
-                    value,
-                    size,
-                    path,
-                    root,
-                } => (1, addr, value, size, path, root),
-            };
-            h.update([kind]);
-            h.update(addr.to_le_bytes());
-            h.update(value.to_le_bytes());
-            h.update([*size]);
-            h.update((path.len() as u64).to_le_bytes());
-            for sibling in path {
+        h.update((self.snapshot.memory_event_count() as u64).to_le_bytes());
+        for event in self.snapshot.memory_events() {
+            h.update([u8::from(event.written)]);
+            h.update(event.address.to_le_bytes());
+            h.update(event.value.to_le_bytes());
+            h.update([event.size]);
+            h.update((event.path.len() as u64).to_le_bytes());
+            for sibling in event.path {
                 h.update(sibling);
             }
-            h.update(root.as_ref().as_ref());
+            h.update(event.root);
         }
     }
     fn hash_register_log(&self, h: &mut Sha256) {
-        h.update((self.reg_log.len() as u64).to_le_bytes());
-        for event in &self.reg_log {
-            let (kind, index, value, tag, path, root) = match event {
-                RegEvent::Read {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => (0, index, value, tag, path, root),
-                RegEvent::Write {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => (1, index, value, tag, path, root),
-            };
-            h.update([kind]);
-            h.update((*index as u64).to_le_bytes());
-            h.update(value.to_le_bytes());
-            h.update([u8::from(*tag)]);
-            h.update((path.len() as u64).to_le_bytes());
-            for sibling in path {
+        h.update((self.snapshot.register_event_count() as u64).to_le_bytes());
+        for event in self.snapshot.register_events() {
+            h.update([u8::from(event.written)]);
+            h.update((event.index as u64).to_le_bytes());
+            h.update(event.value.to_le_bytes());
+            h.update([u8::from(event.tag)]);
+            h.update((event.path.len() as u64).to_le_bytes());
+            for sibling in event.path {
                 h.update(sibling);
             }
-            h.update(root.as_ref().as_ref());
+            h.update(event.root);
         }
     }
     fn hash_step_log(&self, h: &mut Sha256) {
-        h.update((self.step_log.len() as u64).to_le_bytes());
-        for step in &self.step_log {
+        h.update((self.snapshot.steps().len() as u64).to_le_bytes());
+        for step in self.snapshot.steps() {
             h.update(step.pc.to_le_bytes());
             h.update(step.reg_root.as_ref().as_ref());
             h.update(step.mem_root.as_ref().as_ref());
@@ -444,54 +438,79 @@ impl RetryRing {
     }
     fn drain_into_pending(&self, pending: &mut Vec<ZkTask>, pending_cap: usize) -> RetryDrainStats {
         let mut stats = RetryDrainStats::default();
-        let mut queue = match self.inner.lock() {
-            Ok(queue) => queue,
-            Err(err) => {
-                iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during drain");
-                return stats;
-            }
-        };
         if pending.len() >= pending_cap {
-            for entry in queue.iter_mut() {
-                entry.attempts = entry.attempts.saturating_add(1);
-            }
-            let before = queue.len();
-            queue.retain(|entry| {
-                let keep = entry.attempts < self.max_attempts;
-                if !keep {
-                    clear_inflight_digest(entry.task.digest());
+            let expired = {
+                let mut queue = match self.inner.lock() {
+                    Ok(queue) => queue,
+                    Err(err) => {
+                        iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during drain");
+                        return stats;
+                    }
+                };
+                for entry in queue.iter_mut() {
+                    entry.attempts = entry.attempts.saturating_add(1);
                 }
-                keep
-            });
-            stats.exhausted = (before.saturating_sub(queue.len())) as u64;
-            stats.depth = queue.len();
-            return stats;
-        }
-        while pending.len() < pending_cap {
-            let Some(entry) = queue.pop_front() else {
-                break;
+                queue
+                    .iter()
+                    .filter(|entry| entry.attempts >= self.max_attempts)
+                    .count()
             };
-            pending.push(entry.task);
-            stats.replayed = stats.replayed.saturating_add(1);
+            // Detach at most the expired census. New enqueues have zero attempts
+            // and are not retired by this pass; surviving queue order is unchanged.
+            for _ in 0..expired {
+                let removed = {
+                    let mut queue = match self.inner.lock() {
+                        Ok(queue) => queue,
+                        Err(_) => break,
+                    };
+                    queue
+                        .iter()
+                        .position(|entry| entry.attempts >= self.max_attempts)
+                        .and_then(|index| queue.remove(index))
+                };
+                let Some(entry) = removed else {
+                    break;
+                };
+                clear_inflight_digest(entry.task.digest());
+                drop(entry);
+                stats.exhausted = stats.exhausted.saturating_add(1);
+            }
+        } else {
+            let initial = self.depth().min(pending_cap - pending.len());
+            for _ in 0..initial {
+                let removed = {
+                    let mut queue = match self.inner.lock() {
+                        Ok(queue) => queue,
+                        Err(_) => break,
+                    };
+                    queue.pop_front()
+                };
+                let Some(entry) = removed else {
+                    break;
+                };
+                pending.push(entry.task);
+                stats.replayed = stats.replayed.saturating_add(1);
+            }
         }
-        stats.depth = queue.len();
+        stats.depth = self.depth();
         stats
     }
     fn clear(&self) -> usize {
-        match self.inner.lock() {
-            Ok(mut queue) => {
-                let dropped = queue.len();
-                for entry in queue.iter() {
-                    clear_inflight_digest(entry.task.digest());
-                }
-                queue.clear();
-                dropped
-            }
+        // Swap the complete queue owner without allocating. Its entries and
+        // backing are dropped only after the physical mutex guard is gone.
+        let removed = match self.inner.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
             Err(err) => {
                 iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during clear");
-                0
+                return 0;
             }
+        };
+        let dropped = removed.len();
+        for entry in removed {
+            clear_inflight_digest(entry.task.digest());
+            drop(entry);
         }
+        dropped
     }
     fn depth(&self) -> usize {
         match self.inner.lock() {
@@ -690,7 +709,7 @@ fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
 }
 fn process_job(job: ZkTask) {
     let dig = job.digest();
-    let outcome = ivm::zk::check_diagnostic_trace(&job.trace, &job.constraints, &job.reg_log)
+    let outcome = ivm::zk::check_diagnostic_trace(&job.snapshot)
         .map(|()| TraceCheckOutcome::Checked)
         .unwrap_or(TraceCheckOutcome::Rejected);
     if let Some(cache) = RESULT_CACHE.get() {
@@ -719,10 +738,10 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
         negotiated_capabilities = negotiated_desc.as_deref(),
         digest = %hex::encode(dig),
         outcome = ?outcome,
-        cycles = job.trace.len(),
-        constraints = job.constraints.len(),
-        mem_events = job.mem_log.len(),
-        reg_events = job.reg_log.len(),
+        cycles = job.snapshot.states().len(),
+        constraints = job.snapshot.constraints().len(),
+        mem_events = job.snapshot.memory_event_count(),
+        reg_events = job.snapshot.register_event_count(),
         "zk_lane: checked diagnostic trace"
     );
     if let Some(es) = EVENTS.get() {
@@ -961,104 +980,143 @@ mod tests {
     fn root(byte: u8) -> HashOf<iroha_crypto::MerkleTree<[u8; 32]>> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
     }
-    fn digest_task() -> ZkTask {
-        let mut first_gpr = [0; 256];
-        first_gpr[128] = 7;
-        let mut first_tags = [false; 256];
-        first_tags[128] = true;
-        ZkTask {
-            tx_hash: Some(Hash::prehashed([0xCD; 32])),
-            code_hash: [0xAB; 32],
-            program: vec![0x55; 96].into(),
-            header: None,
-            trace: vec![RegisterState {
-                pc: 11,
-                gpr: first_gpr,
-                tags: first_tags,
-            }],
-            constraints: vec![Constraint::Range {
-                reg: 128,
-                bits: 8,
-                cycle: 0,
-            }],
-            mem_log: vec![MemEvent::Load {
-                addr: 64,
-                value: 7,
-                size: 1,
-                path: vec![[0x31; 32]],
-                root: root(0x41),
-            }],
-            reg_log: vec![RegEvent::Read {
-                index: 128,
-                value: 7,
-                tag: true,
-                path: vec![[0x51; 32]],
-                root: root(0x61),
-            }],
-            step_log: vec![
-                StepEntry {
-                    pc: 10,
-                    reg_root: root(1),
-                    mem_root: root(2),
-                },
-                StepEntry {
-                    pc: 11,
-                    reg_root: root(3),
-                    mem_root: root(4),
-                },
-                StepEntry {
-                    pc: 12,
-                    reg_root: root(5),
-                    mem_root: root(6),
-                },
-            ],
-            transport_capabilities: None,
-            negotiated_capabilities: None,
+    struct TraceFixture {
+        trace: Vec<RegisterState>,
+        constraints: Vec<Constraint>,
+        mem_log: Vec<MemEvent>,
+        reg_log: Vec<RegEvent>,
+        step_log: Vec<StepEntry>,
+    }
+    impl TraceFixture {
+        fn new() -> Self {
+            let mut gpr = [0; 256];
+            gpr[128] = 7;
+            let mut tags = [false; 256];
+            tags[128] = true;
+            Self {
+                trace: vec![RegisterState { pc: 11, gpr, tags }],
+                constraints: vec![Constraint::Range {
+                    reg: 128,
+                    bits: 8,
+                    cycle: 0,
+                }],
+                mem_log: vec![MemEvent::Load {
+                    addr: 64,
+                    value: 7,
+                    size: 1,
+                    path: vec![[0x31; 32]],
+                    root: root(0x41),
+                }],
+                reg_log: vec![RegEvent::Read {
+                    index: 128,
+                    value: 7,
+                    tag: true,
+                    path: vec![[0x51; 32]],
+                    root: root(0x61),
+                }],
+                step_log: (0..3)
+                    .map(|i| StepEntry {
+                        pc: 10 + u64::from(i),
+                        reg_root: root(1 + 2 * i),
+                        mem_root: root(2 + 2 * i),
+                    })
+                    .collect(),
+            }
         }
+        fn snapshot(&self, budget: &mv::allocation::AllocationBudget) -> DiagnosticTraceSnapshot {
+            ivm::zk::DiagnosticTraceSource {
+                registers: ivm::zk::DiagnosticRegisterSource::States(&self.trace),
+                constraints: &self.constraints,
+                memory_events: &self.mem_log,
+                register_events: &self.reg_log,
+                steps: &self.step_log,
+            }
+            .try_snapshot(budget)
+            .expect("fund lane trace fixture")
+        }
+        fn task(&self, budget: &mv::allocation::AllocationBudget) -> ZkTask {
+            ZkTask {
+                tx_hash: Some(Hash::prehashed([0xCD; 32])),
+                code_hash: [0xAB; 32],
+                program: vec![0x55; 96].into(),
+                header: None,
+                snapshot: self.snapshot(budget),
+                transport_capabilities: None,
+                negotiated_capabilities: None,
+            }
+        }
+    }
+    fn digest_task() -> ZkTask {
+        TraceFixture::new().task(&mv::allocation::AllocationBudget::new(64 * 1024))
+    }
+    fn empty_snapshot() -> DiagnosticTraceSnapshot {
+        ivm::zk::DiagnosticTraceSource {
+            registers: ivm::zk::DiagnosticRegisterSource::States(&[]),
+            constraints: &[],
+            memory_events: &[],
+            register_events: &[],
+            steps: &[],
+        }
+        .try_snapshot(&mv::allocation::AllocationBudget::new(0))
+        .expect("empty capture needs no payload credit")
     }
     #[test]
     fn digest_binds_program_trace_and_constraints() {
-        let original = digest_task();
-        let digest = original.digest();
-
-        let mut changed = original.clone();
-        let mut changed_program = changed.program.as_ref().to_vec();
-        changed_program[95] ^= 1;
-        changed.program = changed_program.into();
+        let digest = digest_task().digest();
+        let mut changed = digest_task();
+        let mut program = changed.program.as_ref().to_vec();
+        program[95] ^= 1;
+        changed.program = program.into();
         assert_ne!(
             digest,
             changed.digest(),
             "the complete program must be bound"
         );
-
-        let mut changed = original.clone();
-        changed.trace[0].gpr[128] ^= 1;
-        assert_ne!(digest, changed.digest(), "register values must be bound");
-
-        let mut changed = original.clone();
-        changed.constraints[0] = Constraint::Zero { reg: 128, cycle: 0 };
-        assert_ne!(digest, changed.digest(), "constraints must be bound");
+        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let mut fixture = TraceFixture::new();
+        fixture.trace[0].gpr[128] ^= 1;
+        assert_ne!(
+            digest,
+            fixture.task(&budget).digest(),
+            "register values must be bound"
+        );
+        let mut fixture = TraceFixture::new();
+        fixture.constraints[0] = Constraint::Zero { reg: 128, cycle: 0 };
+        assert_ne!(
+            digest,
+            fixture.task(&budget).digest(),
+            "constraints must be bound"
+        );
     }
     #[test]
     fn digest_binds_access_logs_and_intermediate_steps() {
-        let original = digest_task();
-        let digest = original.digest();
-
-        let mut changed = original.clone();
-        if let MemEvent::Load { value, .. } = &mut changed.mem_log[0] {
+        let digest = digest_task().digest();
+        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let mut fixture = TraceFixture::new();
+        if let MemEvent::Load { value, .. } = &mut fixture.mem_log[0] {
             *value ^= 1;
         }
-        assert_ne!(digest, changed.digest(), "memory events must be bound");
-
-        let mut changed = original.clone();
-        if let RegEvent::Read { value, .. } = &mut changed.reg_log[0] {
+        assert_ne!(
+            digest,
+            fixture.task(&budget).digest(),
+            "memory events must be bound"
+        );
+        let mut fixture = TraceFixture::new();
+        if let RegEvent::Read { value, .. } = &mut fixture.reg_log[0] {
             *value ^= 1;
         }
-        assert_ne!(digest, changed.digest(), "register events must be bound");
-
-        let mut changed = original;
-        changed.step_log[1].pc ^= 1;
-        assert_ne!(digest, changed.digest(), "intermediate steps must be bound");
+        assert_ne!(
+            digest,
+            fixture.task(&budget).digest(),
+            "register events must be bound"
+        );
+        let mut fixture = TraceFixture::new();
+        fixture.step_log[1].pc ^= 1;
+        assert_ne!(
+            digest,
+            fixture.task(&budget).digest(),
+            "intermediate steps must be bound"
+        );
     }
     #[test]
     fn queue_cap_defaults_scale_with_workers() {
@@ -1088,11 +1146,7 @@ mod tests {
             code_hash: [0x22; 32],
             program: vec![0x01, 0x02].into(),
             header: None,
-            trace: Vec::new(),
-            constraints: Vec::new(),
-            mem_log: Vec::new(),
-            reg_log: Vec::new(),
-            step_log: Vec::new(),
+            snapshot: empty_snapshot(),
             transport_capabilities: None,
             negotiated_capabilities: None,
         };
@@ -1113,11 +1167,7 @@ mod tests {
                 code_hash: [0xAA; 32],
                 program: vec![idx as u8].into(),
                 header: None,
-                trace: Vec::new(),
-                constraints: Vec::new(),
-                mem_log: Vec::new(),
-                reg_log: Vec::new(),
-                step_log: Vec::new(),
+                snapshot: empty_snapshot(),
                 transport_capabilities: None,
                 negotiated_capabilities: None,
             };
@@ -1128,11 +1178,7 @@ mod tests {
             code_hash: [0xFF; 32],
             program: vec![0xFF].into(),
             header: None,
-            trace: Vec::new(),
-            constraints: Vec::new(),
-            mem_log: Vec::new(),
-            reg_log: Vec::new(),
-            step_log: Vec::new(),
+            snapshot: empty_snapshot(),
             transport_capabilities: None,
             negotiated_capabilities: None,
         }];
@@ -1186,3 +1232,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod snapshot_custody_tests;

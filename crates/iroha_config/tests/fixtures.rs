@@ -387,8 +387,7 @@ fn nexus_relay_worker_requires_lane_relay_burn() {
     assert!(error.contains("nexus.relay_worker.enabled"));
 }
 #[test]
-fn nexus_relay_worker_parses_with_lane_relay_burn() {
-    use iroha_config::parameters::actual::NexusFeeSettlementMode;
+fn nexus_rejects_retired_lane_relay_burn_even_with_a_configured_worker() {
     use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
     let mut emitter = Emitter::<ParseError>::new();
@@ -404,18 +403,10 @@ fn nexus_relay_worker_parses_with_lane_relay_burn() {
         },
         ..Nexus::default()
     };
-    let parsed = nexus.parse(&mut emitter).expect("valid config");
-    emitter.into_result().expect("no parse errors");
-    assert!(parsed.relay_worker.enabled);
-    assert_eq!(parsed.relay_worker.max_retry_attempts.get(), 3);
-    assert_eq!(
-        parsed.fees.settlement_mode,
-        NexusFeeSettlementMode::LaneRelayBurn
-    );
-    assert_eq!(
-        parsed.fees.sponsor_vault_custody_account_id,
-        defaults::nexus::fees::sponsor_vault_custody_account_id()
-    );
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = format!("{:?}", emitter.into_result().expect_err("retired mode"));
+    assert!(error.contains("nexus.fees.settlement_mode"), "{error}");
+    assert!(error.contains("expected `direct`"), "{error}");
 }
 #[test]
 fn nexus_rejects_out_of_range_axt_slot_length() {
@@ -674,70 +665,6 @@ fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage(
     assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
 }
 #[test]
-fn nexus_lane_relay_emergency_rejects_zero_threshold() {
-    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
-    use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("core".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        lane_relay_emergency: LaneRelayEmergency {
-            enabled: true,
-            multisig_threshold: 0,
-            multisig_members: 5,
-            max_ttl_blocks: 20,
-        },
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter
-        .into_result()
-        .expect_err("zero threshold must be rejected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(
-        debug,
-        "nexus.lane_relay_emergency.multisig_threshold must be > 0"
-    );
-}
-#[test]
-fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
-    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
-    use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("core".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        lane_relay_emergency: LaneRelayEmergency {
-            enabled: true,
-            multisig_threshold: 6,
-            multisig_members: 5,
-            max_ttl_blocks: 20,
-        },
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter
-        .into_result()
-        .expect_err("threshold above members must be rejected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(
-        debug,
-        "nexus.lane_relay_emergency.multisig_threshold 6 must be <= multisig_members 5"
-    );
-}
-#[test]
 fn nexus_storage_weights_require_full_budget() {
     use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
     use iroha_config_base::util::Emitter;
@@ -945,15 +872,6 @@ fn nexus_profile_template_enables_multilane_defaults() {
     assert!(config.nexus.routing_policy.rules.iter().all(|rule| {
         rule.dataspace == Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
     }));
-    assert!(
-        !config.nexus.lane_relay_emergency.enabled,
-        "Nexus profile must leave lane relay emergency overrides disabled by default"
-    );
-    assert_eq!(
-        config.nexus.lane_relay_emergency.multisig_threshold.get(),
-        3
-    );
-    assert_eq!(config.nexus.lane_relay_emergency.multisig_members.get(), 5);
 }
 #[test]
 fn minamoto_mainnet_profile_keeps_logical_lanes_in_universal() {
@@ -2501,7 +2419,7 @@ fn nexus_carrier_shell_pool_preserves_zero_and_explicit_limit() {
 }
 
 #[test]
-fn nexus_evidence_preparation_pool_admits_one_plan_and_defaults_to_eight() {
+fn nexus_evidence_preparation_pool_covers_all_offenders_and_local_observations() {
     use iroha_config::parameters::{
         defaults,
         user::{Nexus, NexusStorage},
@@ -2516,18 +2434,16 @@ fn nexus_evidence_preparation_pool_admits_one_plan_and_defaults_to_eight() {
     assert_eq!(prune_plan, 3_968);
     assert_eq!(
         pending_plan,
-        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+        4 * 31 * 31 * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
     );
     assert_eq!(
         pending_peer_keys,
-        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES)
+        4 * 31 * 31 * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES)
     );
     assert_eq!(one_plan, prune_plan + pending_plan + pending_peer_keys);
     assert_eq!(
         NexusStorage::default().consensus_evidence_preparation_bytes,
-        8 * one_plan
+        8 * one_plan + 9 * 1024 * 1024
     );
     for bytes in [one_plan, 8 * one_plan] {
         let mut emitter = Emitter::<ParseError>::new();

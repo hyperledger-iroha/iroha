@@ -1,3 +1,4 @@
+//! Retained diagnostic trace and execution behavior controls.
 use ivm::{IVM, encoding};
 mod common;
 use common::assemble_zk;
@@ -14,7 +15,8 @@ fn zk_padding_extends_trace_to_max_cycles() {
     vm.load_program(&prog).unwrap();
     vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
-    let trace = vm.register_trace();
+    let snapshot = common::diagnostic_snapshot(&vm);
+    let trace = snapshot.states();
     assert_eq!(
         trace.len() as u64,
         vm.get_cycle_count(),
@@ -49,9 +51,9 @@ fn disabling_zk_trace_keeps_zk_semantics_without_formal_logs() {
     assert!(vm.zk_mode_enabled());
     assert!(!vm.zk_trace_enabled());
     assert_eq!(vm.get_cycle_count(), 32);
-    assert!(vm.register_trace().is_empty());
+    assert!(common::diagnostic_snapshot(&vm).states().is_empty());
     assert!(vm.step_log().is_empty());
     assert!(vm.memory_log().is_empty());
-    assert!(vm.register_log().is_empty());
+    assert!(common::diagnostic_snapshot(&vm).register_event_count() == 0);
     assert!(vm.constraints().is_empty());
 }

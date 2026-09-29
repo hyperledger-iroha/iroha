@@ -1326,10 +1326,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         capture: capture_public_lane_stake_custody_once,
     },
     TableMaterializer::Single {
-        id: "world.lane_relay_emergency_validators",
-        capture: native_world::capture_lane_relay_emergency_validators_once,
-    },
-    TableMaterializer::Single {
         id: "world.zk_assets",
         capture: native_world::capture_zk_assets_once,
     },
@@ -1834,7 +1830,6 @@ mod tests {
             "world.public_lane_reward_claims",
             "world.public_lane_reward_accruals",
             "world.public_lane_stake_custody",
-            "world.lane_relay_emergency_validators",
             "world.zk_assets",
             "world.elections",
             "world.citizens",

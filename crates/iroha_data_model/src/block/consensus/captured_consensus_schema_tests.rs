@@ -13,8 +13,11 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::CertPhase>(
         "iroha_data_model::block::consensus::CertPhase",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::SumeragiV2EquivocationEvidence>(
-        "iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence",
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidenceAttribution>(
+        "iroha_data_model::block::consensus::EvidenceAttribution",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidenceOffender>(
+        "iroha_data_model::block::consensus::EvidenceOffender",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::Evidence>(
         "iroha_data_model::block::consensus::Evidence",

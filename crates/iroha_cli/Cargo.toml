@@ -123,6 +123,7 @@ tempfile = { workspace = true }
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
 assert_cmd = "2.1.1"
 iroha_test_samples = { workspace = true }

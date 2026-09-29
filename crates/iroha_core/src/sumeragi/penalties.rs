@@ -20,7 +20,6 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, ValidatorIndex},
-        consensus_v2::HeightContext,
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
@@ -37,8 +36,11 @@ use mv::storage::StorageReadOnly;
 use std::collections::BTreeSet;
 use std::{alloc::Layout, collections::BTreeMap};
 #[derive(Clone, Copy, Debug, Default)]
+/// Result of applying one exact finalized penalty bundle.
 pub struct PenaltyOutcome {
+    /// Number of evidence records terminalized.
     pub applied: u64,
+    /// Number of actual custody slashes applied.
     pub slashed: u64,
 }
 #[derive(Clone, Copy)]
@@ -93,6 +95,7 @@ fn pending_peer_key_layout(peer: &PeerId) -> Result<Layout, EvidencePreparationE
         .map_err(|_| EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow))
 }
 
+/// Parent-state derivation of native evidence penalties and exact custody effects.
 pub struct PenaltyApplier<'a> {
     state: &'a State,
 }
@@ -110,21 +113,23 @@ impl<'a> PenaltyApplier<'a> {
         budget: &AllocationBudget,
         stake_budget: &AllocationBudget,
     ) -> Result<ParentPenaltySnapshot> {
-        let evidence_capacity = super::v2_evidence::v2_committed_evidence_capacity(view.world());
+        let evidence_capacity = super::evidence::committed_evidence_capacity(view.world());
         if evidence_capacity.record_capacity_exceeded {
             return Err(eyre!(
-                "committed Sumeragi v2 evidence exceeds the record capacity"
+                "committed native Sumeragi evidence exceeds the record capacity"
             ));
         }
         if evidence_capacity.byte_capacity_exceeded {
             return Err(eyre!(
-                "committed Sumeragi v2 evidence exceeds the proof-byte capacity"
+                "committed native Sumeragi evidence exceeds the proof-byte capacity"
             ));
         }
         let world = view.world();
         let slashing_delay =
-            crate::sumeragi::v2_npos::resolve_npos_slashing_delay_blocks_from_world(world)
-                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
+            crate::sumeragi::epoch::parameters::resolve_npos_slashing_delay_blocks_from_world(
+                world,
+            )
+            .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let due = |record: &EvidenceRecord| {
             !record.penalty_status.is_terminal()
                 && record.recorded_at_height < current_height
@@ -143,14 +148,12 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             due_count = due_count
-                .checked_add(1)
+                .checked_add(record.attribution.offenders.len().max(1))
                 .ok_or(EvidencePreparationError::Admission(
                     AllocationRefusal::DemandOverflow,
                 ))?;
-            let context = &record.evidence.equivocation.context;
-            if let Some((_, peer)) =
-                offender_peer(&record.evidence, record.recorded_at_height, context)
-            {
+            for offender in &record.attribution.offenders {
+                let peer = &offender.peer_id;
                 peer_key_bytes = peer_key_bytes
                     .checked_add(pending_peer_key_layout(peer)?.size())
                     .ok_or(EvidencePreparationError::Admission(
@@ -223,21 +226,28 @@ impl<'a> PenaltyApplier<'a> {
             if !due(record) {
                 continue;
             }
-            let context = &record.evidence.equivocation.context;
-            let signer = if let Some((index, peer)) =
-                offender_peer(&record.evidence, record.recorded_at_height, context)
-            {
-                let layout = pending_peer_key_layout(peer)?;
+            if record.attribution.offenders.is_empty() {
+                pending
+                    .try_push(PendingPenaltyEvidence((
+                        *key,
+                        record.attribution.height,
+                        None,
+                    )))
+                    .map_err(|_| EvidencePreparationError::Invariant)?;
+            }
+            for offender in &record.attribution.offenders {
+                let layout = pending_peer_key_layout(&offender.peer_id)?;
                 let charge = peer_key_reservation
                     .try_split(layout)
                     .map_err(|_| EvidencePreparationError::Invariant)?;
-                Some((index, peer.clone(), charge))
-            } else {
-                None
-            };
-            pending
-                .try_push(PendingPenaltyEvidence((*key, context.height, signer)))
-                .map_err(|_| EvidencePreparationError::Invariant)?;
+                pending
+                    .try_push(PendingPenaltyEvidence((
+                        *key,
+                        record.attribution.height,
+                        Some((offender.signer, offender.peer_id.clone(), charge)),
+                    )))
+                    .map_err(|_| EvidencePreparationError::Invariant)?;
+            }
         }
         if peer_key_reservation.remaining_bytes() != 0 {
             return Err(EvidencePreparationError::Invariant.into());
@@ -257,11 +267,10 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         block_header: &BlockHeader,
     ) -> Result<NposConsensusEffects> {
-        let (v2_evidence_admissions, penalty_actions, _index) =
+        let (evidence_admissions, penalty_actions, _index) =
             self.derive_from_stable_parent(block_header, true)?;
         Ok(NposConsensusEffects {
-            finalized_global_beacon_pulse: None,
-            v2_evidence_admissions,
+            evidence_admissions,
             penalty_actions,
         })
     }
@@ -278,11 +287,7 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         block_header: &BlockHeader,
         include_admissions: bool,
-    ) -> Result<(
-        Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence>,
-        Vec<NposPenaltyAction>,
-        PublicLaneStakeIndex,
-    )> {
+    ) -> Result<(Vec<Evidence>, Vec<NposPenaltyAction>, PublicLaneStakeIndex)> {
         loop {
             let generation_before = self.state.state_view_generation();
             if generation_before % 2 != 0 {
@@ -298,7 +303,7 @@ impl<'a> PenaltyApplier<'a> {
             )
             .and_then(|snapshot| {
                 let admissions = if include_admissions {
-                    super::v2_evidence::pending_v2_evidence_admissions_from_world(
+                    super::evidence::pending_evidence_admissions_from_world(
                         self.state,
                         block_header.height().get(),
                         view.world(),
@@ -443,8 +448,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     effects: &NposConsensusEffects,
     stake_index: Option<&PublicLaneStakeIndex>,
     evidence_prune_keys: &[Hash],
-    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
-    authenticated_roster: &[PeerId],
+    admitted: &[super::evidence::AdmittedEvidence],
     current_height: u64,
     current_view: u64,
     now_ms: u64,
@@ -454,8 +458,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
         effects,
         stake_index,
         evidence_prune_keys,
-        expected_beacon_anchor,
-        authenticated_roster,
+        admitted,
         current_height,
         current_view,
         now_ms,
@@ -474,8 +477,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
     state_block: &mut StateBlock<'_>,
     effects: &NposConsensusEffects,
     evidence_prune_keys: &[Hash],
-    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
-    authenticated_roster: &[PeerId],
+    admitted: &[super::evidence::AdmittedEvidence],
     current_height: u64,
     current_view: u64,
     now_ms: u64,
@@ -501,8 +503,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
         effects,
         stake_index.as_ref(),
         evidence_prune_keys,
-        expected_beacon_anchor,
-        authenticated_roster,
+        admitted,
         current_height,
         current_view,
         now_ms,
@@ -516,13 +517,22 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     effects: &NposConsensusEffects,
     stake_index: Option<&PublicLaneStakeIndex>,
     evidence_prune_keys: &[Hash],
-    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
-    authenticated_roster: &[PeerId],
+    admitted: &[super::evidence::AdmittedEvidence],
     current_height: u64,
     current_view: u64,
     now_ms: u64,
     mode: EffectsApplicationMode,
 ) -> Result<PenaltyOutcome> {
+    if admitted.len() != effects.evidence_admissions.len()
+        || admitted
+            .iter()
+            .zip(&effects.evidence_admissions)
+            .any(|(original, evidence)| original.key() != super::evidence::evidence_key(evidence))
+    {
+        return Err(eyre!(
+            "native evidence lost its independently verified pristine attribution"
+        ));
+    }
     let requires_index = effects
         .penalty_actions
         .iter()
@@ -537,14 +547,9 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     // concurrent in-process State instances cannot contaminate one another.
     let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let mut outcome = PenaltyOutcome::default();
-    if effects.finalized_global_beacon_pulse.is_some() {
-        return Err(eyre!(
-            "global beacon control must be consumed by the native pristine schedule capture"
-        ));
-    }
     if !evidence_prune_keys.windows(2).all(|pair| pair[0] < pair[1]) {
         return Err(eyre!(
-            "Sumeragi v2 parent evidence prune plan is not canonical"
+            "native Sumeragi parent evidence prune plan is not canonical"
         ));
     }
     for key in evidence_prune_keys {
@@ -552,19 +557,19 @@ fn apply_npos_consensus_effects_to_transaction_inner(
             .world
             .consensus_evidence
             .get(key)
-            .ok_or_else(|| eyre!("Sumeragi v2 parent evidence prune target is absent"))?;
+            .ok_or_else(|| eyre!("native Sumeragi parent evidence prune target is absent"))?;
         if !record.penalty_status.is_terminal() {
             return Err(eyre!(
-                "Sumeragi v2 parent evidence prune target is not terminal"
+                "native Sumeragi parent evidence prune target is not terminal"
             ));
         }
-        if !super::v2_evidence::v2_committed_evidence_record_is_prunable(
+        if !super::evidence::committed_evidence_record_is_prunable(
             &tx.world,
             record,
             current_height,
         ) {
             return Err(eyre!(
-                "Sumeragi v2 parent evidence prune target is not stale under the post-execution evidence horizon"
+                "native Sumeragi parent evidence prune target is not stale under the post-execution evidence horizon"
             ));
         }
     }
@@ -576,63 +581,62 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         .consensus_evidence
         .iter()
         .count()
-        .saturating_add(effects.v2_evidence_admissions.len())
-        > super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
+        .saturating_add(effects.evidence_admissions.len())
+        > super::evidence::MAX_COMMITTED_EVIDENCE_RECORDS
     {
         return Err(eyre!(
-            "bounded Sumeragi v2 evidence table has no reclaimable capacity"
+            "bounded native Sumeragi evidence table has no reclaimable capacity"
         ));
     }
     let mut retained_evidence_bytes = 0_usize;
     for (_, record) in tx.world.consensus_evidence.iter() {
-        let encoded_len =
-            super::v2_evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
-        if encoded_len > super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
+        let encoded_len = super::evidence::evidence_encoded_len(&record.evidence);
+        if encoded_len > super::evidence::MAX_EVIDENCE_ADMISSION_BYTES {
             return Err(eyre!(
-                "committed Sumeragi v2 evidence contains an oversized individual proof"
+                "committed native Sumeragi evidence contains an oversized individual proof"
             ));
         }
-        retained_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
+        retained_evidence_bytes = super::evidence::checked_evidence_byte_sum(
             retained_evidence_bytes,
             [encoded_len],
-            super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            super::evidence::MAX_COMMITTED_EVIDENCE_BYTES,
         )
         .ok_or_else(|| {
-            eyre!("bounded Sumeragi v2 evidence table exceeds its proof-byte capacity")
+            eyre!("bounded native Sumeragi evidence table exceeds its proof-byte capacity")
         })?;
     }
-    let incoming_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
+    let incoming_evidence_bytes = super::evidence::checked_evidence_byte_sum(
         0,
         effects
-            .v2_evidence_admissions
+            .evidence_admissions
             .iter()
-            .map(super::v2_evidence::v2_evidence_encoded_len),
-        super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
+            .map(super::evidence::evidence_encoded_len),
+        super::evidence::MAX_EVIDENCE_ADMISSION_BYTES,
     )
-    .ok_or_else(|| eyre!("Sumeragi v2 evidence admission batch exceeds its byte capacity"))?;
-    if super::v2_evidence::checked_v2_evidence_byte_sum(
+    .ok_or_else(|| eyre!("native Sumeragi evidence admission batch exceeds its byte capacity"))?;
+    if super::evidence::checked_evidence_byte_sum(
         retained_evidence_bytes,
         [incoming_evidence_bytes],
-        super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        super::evidence::MAX_COMMITTED_EVIDENCE_BYTES,
     )
     .is_none()
     {
         return Err(eyre!(
-            "bounded Sumeragi v2 evidence table has no reclaimable proof-byte capacity"
+            "bounded native Sumeragi evidence table has no reclaimable proof-byte capacity"
         ));
     }
-    for admission in &effects.v2_evidence_admissions {
-        let evidence = super::v2_evidence::canonical_v2_evidence(admission);
-        let key = super::v2_evidence::v2_evidence_admission_key(admission);
+    for (evidence, admitted) in effects.evidence_admissions.iter().zip(admitted) {
+        let key = admitted.key();
         if tx.world.consensus_evidence.get(&key).is_some() {
             return Err(eyre::eyre!(
-                "Sumeragi v2 evidence was already admitted by a committed block"
+                "native Sumeragi evidence was already admitted by a committed block"
             ));
         }
         tx.world.consensus_evidence.insert(
             key,
             EvidenceRecord {
-                evidence,
+                evidence: evidence.clone(),
+                attribution: admitted.attribution().clone(),
                 recorded_at_height: current_height,
                 recorded_at_view: current_view,
                 recorded_at_ms: now_ms,
@@ -644,15 +648,19 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         match action {
             NposPenaltyAction::ConsensusSlash(action) => {
                 ensure_evidence_penalty_is_unresolved(tx, &action.evidence_key)?;
-                let offence_height = tx
+                let record = tx
                     .world
                     .consensus_evidence
                     .get(&action.evidence_key)
-                    .expect("validated unresolved evidence exists")
-                    .evidence
-                    .equivocation
-                    .context
-                    .height;
+                    .expect("validated unresolved evidence exists");
+                if !record.attribution.offenders.iter().any(|offender| {
+                    offender.signer == action.signer && offender.peer_id == action.peer_id
+                }) {
+                    return Err(eyre!(
+                        "mandatory slash does not name an original proven signer"
+                    ));
+                }
+                let offence_height = record.attribution.height;
                 if !tx.is_lane_active_for_authority(action.lane_id) {
                     return Err(eyre!(
                         "consensus slash targets a lane made inactive by block execution"
@@ -737,35 +745,6 @@ fn ensure_evidence_penalty_is_unresolved(
     }
     Ok(())
 }
-fn evidence_context_height(evidence: &Evidence, _recorded_at_height: u64) -> u64 {
-    evidence.equivocation.context.height
-}
-/// Borrow the one canonical signer without allocating a temporary index set.
-fn offender_peer<'a>(
-    evidence: &Evidence,
-    recorded_at_height: u64,
-    context: &'a HeightContext,
-) -> Option<(ValidatorIndex, &'a PeerId)> {
-    if evidence_context_height(evidence, recorded_at_height) != context.height {
-        return None;
-    }
-    let signer = match &evidence.equivocation.conflict {
-        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::Proposal {
-            first, ..
-        } => first.proposer,
-        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
-            first, ..
-        } => first.signer,
-        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::TimeoutVote {
-            first,
-            ..
-        } => first.signer,
-    };
-    let position = usize::try_from(signer).ok()?;
-    let entry = context.roster.get(position)?;
-    Some((signer, &entry.validator))
-}
-
 #[cfg(test)]
 fn penalty_staking_fixture_ids() -> (
     iroha_data_model::asset::AssetDefinitionId,
@@ -950,18 +929,6 @@ pub(crate) fn seed_penalty_validator_for_tests(
     validator
 }
 
-/// Real due-slash source for pristine-control component tests. This fixture
-/// authenticates prior equivocation but does not admit its carrier as a block.
-#[cfg(test)]
-pub(crate) fn pristine_penalty_component_fixture_for_tests() -> (
-    State,
-    iroha_data_model::block::SignedBlock,
-    iroha_data_model::block::consensus_v2::HeightContext,
-    crate::smartcontracts::isi::staking::PublicLaneStakeShareKey,
-) {
-    tests::pristine_penalty_component_fixture()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -971,7 +938,7 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::isi::staking::apply_slash_to_validator_without_observability,
         state::{State, StateBlock, World},
-        sumeragi::v2_evidence::evidence_key,
+        sumeragi::evidence::evidence_key,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -980,12 +947,6 @@ mod tests {
         block::{
             BlockHeader, SignedBlock,
             consensus::{Evidence, EvidenceRecord},
-            consensus_v2::{
-                BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
-                DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
-                HeightContext, PayloadEncoding, QuorumCertificate, ValidatorPower,
-                finality::V2FinalityArtifact,
-            },
         },
         nexus::{
             LaneCatalog, LaneConfig, LaneVisibility, PublicLaneStakeShare, PublicLaneUnbonding,
@@ -1118,222 +1079,42 @@ mod tests {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect()
     }
-    fn test_block_hash(byte: u8) -> HashOf<BlockHeader> {
-        HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
-    }
-    fn phase_vote_evidence(context: &HeightContext, signer: ValidatorIndex, view: u64) -> Evidence {
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view,
+    /// Signed native proof used only as explicit prestate for the penalty kernel.
+    /// Native admission and restored attribution are tested against actual history separately.
+    fn fixture_vote_evidence(signer: ValidatorIndex, view: u64) -> Evidence {
+        use iroha_sumeragi::{
+            message::{Evidence as NativeEvidence, Vote, VoteKind},
+            types::{EpochId, Hash32, Signature as NativeSignature},
         };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"penalty evidence parent state"),
-            Hash::new(b"penalty evidence post state"),
-            Hash::new(b"penalty evidence ordinary writes"),
-            1,
-            Hash::new(b"penalty evidence executed block"),
-        );
         let keys = roster_keys();
         let vote = |seed: u8| {
-            let mut vote = iroha_data_model::block::consensus_v2::Vote {
-                round,
-                proposal_round: round,
-                phase: GlobalPhase::Prepare,
-                subject: BlockSubject {
-                    parent_block_hash: None,
-                    block_hash: test_block_hash(seed),
-                    payload_hash: Hash::new([seed]),
+            let mut vote = Vote {
+                kind: VoteKind::Prepare,
+                instance: Hash32([0x41; 32]),
+                epoch: EpochId {
+                    epoch: 0,
+                    context: Hash32([0x42; 32]),
                 },
-                execution_commitment,
+                height: 1,
+                view,
+                block_hash: Hash32([seed; 32]),
+                result: Hash32([0x43; 32]),
+                attest: false,
                 signer,
-                signature: Vec::new(),
+                sig: NativeSignature([0; 48]),
+                attestation: None,
             };
-            let key = &keys[usize::try_from(signer).expect("fixture signer index")];
-            vote.signature = Signature::new(key.private_key(), &vote.signature_preimage())
-                .payload()
-                .to_vec();
+            vote.sig = NativeSignature(
+                Signature::new(keys[signer as usize].private_key(), &vote.preimage())
+                    .payload()
+                    .try_into()
+                    .unwrap(),
+            );
             vote
         };
-        Evidence {
-            equivocation: iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence {
-                context: context.clone(),
-                proofs_of_possession: keys
-                    .iter()
-                    .map(|key| {
-                        iroha_crypto::bls_normal_pop_prove(key.private_key())
-                            .expect("fixture validator PoP")
-                    })
-                    .collect(),
-                conflict:
-                    iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
-                        first: vote(0x31),
-                        second: vote(0x32),
-                    },
-            },
-        }
+        Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0x31), vote(0x32))).unwrap()
     }
-    fn height_one_context(
-        network_id: NetworkId,
-        roster: &[PeerId],
-        _block_hash: HashOf<BlockHeader>,
-    ) -> HeightContext {
-        let roster = roster
-            .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id, 100, &roster,
-            );
-        HeightContext {
-            network_id,
-            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: 100,
-            next_epoch_snapshot: None,
-            mode: V2ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
-            roster,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
-            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0x42; 32],
-        }
-    }
-    fn install_height_one_artifact(state: &State, roster: &[PeerId]) -> HeightContext {
-        install_height_one_artifact_with_network(state, roster, state.network_id_ref().clone())
-    }
-    fn install_height_one_artifact_with_network(
-        state: &State,
-        roster: &[PeerId],
-        network_id: NetworkId,
-    ) -> HeightContext {
-        let roster_keys = roster_keys();
-        assert_eq!(
-            roster,
-            roster_keys
-                .iter()
-                .map(|key| PeerId::new(key.public_key().clone()))
-                .collect::<Vec<_>>(),
-            "artifact fixture roster must retain its deterministic signing keys"
-        );
-        let signing_key = &roster_keys[0];
-        let committed =
-            ValidBlock::new_dummy_and_modify_header(signing_key.private_key(), |header| {
-                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
-                header.set_prev_block_hash(None);
-                header.merkle_root = None;
-            })
-            .commit_unchecked()
-            .unpack(|_| {});
-        let mut executed_block: SignedBlock = committed.into();
-        {
-            let outputs = crate::execution_output_test_support::structural_network_outputs(
-                &executed_block,
-                &[],
-                Vec::new(),
-            );
-            let fragments =
-                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-            executed_block.set_execution_outputs(
-                outputs,
-                fragments,
-                Default::default(),
-                Vec::new(),
-                Default::default(),
-                Default::default(),
-                Vec::new(),
-                &crate::execution_output_test_support::structural_output_limits(),
-            )
-        }
-        .expect("attach deterministic penalties fixture results");
-        let block = Arc::new(executed_block);
-        state
-            .kura()
-            .store_block(Arc::clone(&block))
-            .expect("store canonical test block");
-        let context = height_one_context(network_id, roster, block.hash());
-        let subject = BlockSubject {
-            parent_block_hash: None,
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("canonical proposal wire"),
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"penalties fixture parent state"),
-            Hash::new(b"penalties fixture post state"),
-            Hash::new(b"penalties fixture ordinary writes"),
-            u64::try_from(block.encode_wire().expect("penalties block wire").len())
-                .expect("penalties block wire length fits u64"),
-            block
-                .executed_block_wire_hash()
-                .expect("canonical executed block wire"),
-        );
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: 1,
-            view: block.header().view_change_index(),
-        };
-        let mut certificate = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x5A; 48],
-        };
-        let preimage = certificate
-            .signer_preimage(&context, 0)
-            .expect("valid penalties finality fixture signer");
-        let shares = roster_keys[..3]
-            .iter()
-            .map(|key| {
-                Signature::new(key.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        certificate.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                .expect("aggregate fixture CommitQC");
-        let validator_set_pops = roster_keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator PoP")
-            })
-            .collect();
-        let _receipt = state
-            .kura()
-            .store_v2_finality_artifact(&V2FinalityArtifact::new(
-                context.clone(),
-                subject,
-                certificate,
-                validator_set_pops,
-            ))
-            .expect("persist canonical v2 finality artifact");
-        context
-    }
+
     fn set_commit_topology(state: &State, peers: Vec<PeerId>) {
         let mut topology = state.commit_topology.block();
         topology.clear();
@@ -1342,8 +1123,26 @@ mod tests {
     }
     fn insert_evidence(state: &State, evidence: Evidence, recorded_at_height: u64) -> Hash {
         let key = evidence_key(&evidence);
+        let iroha_sumeragi::message::Evidence::VoteEquivocation(first, _) =
+            evidence.decode_native().unwrap()
+        else {
+            panic!("component vote proof");
+        };
+        let attribution = iroha_data_model::block::consensus::EvidenceAttribution {
+            instance: first.instance.0,
+            height: first.height,
+            epoch: first.epoch.epoch,
+            context_id: first.epoch.context.0,
+            authority_generation: [0x44; 32],
+            offenders: vec![iroha_data_model::block::consensus::EvidenceOffender {
+                signer: first.signer,
+                peer_id: roster()[first.signer as usize].clone(),
+            }],
+            safety_violation: false,
+        };
         let record = EvidenceRecord {
             evidence,
+            attribution,
             recorded_at_height,
             recorded_at_view: 0,
             recorded_at_ms: recorded_at_height.saturating_mul(1_000),
@@ -1420,41 +1219,6 @@ mod tests {
             0,
         )
     }
-    pub(super) fn pristine_penalty_component_fixture() -> (
-        State,
-        SignedBlock,
-        HeightContext,
-        crate::smartcontracts::isi::staking::PublicLaneStakeShareKey,
-    ) {
-        let state = fresh_state();
-        install_one_block_delay_npos(&state);
-        let peers = roster();
-        let context = height_one_context(*state.network_id_ref(), &peers, test_block_hash(0xE3));
-        let validator = add_validator_record(&state, &peers[1]);
-        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
-        let effects = PenaltyApplier::new(&state, None)
-            .derive_npos_consensus_effects(&penalty_header(2))
-            .expect("derive real due-slash component fixture");
-        assert!(
-            effects
-                .penalty_actions
-                .iter()
-                .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
-        );
-        let key = roster_keys().remove(0);
-        let mut block = SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-            key.private_key(),
-            |header| header.creation_time_ms = 2_000,
-        ));
-        block.set_npos_consensus_effects(Some(effects));
-        (
-            state,
-            block,
-            context,
-            (LaneId::SINGLE, validator.clone(), validator),
-        )
-    }
-
     fn height_two_state_block(state: &State) -> StateBlock<'_> {
         state.block(penalty_header(2))
     }
@@ -1481,7 +1245,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_two_pass_stake_index_retains_exact_exposure() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
         let first = add_validator_record(&state, &peers[0]);
@@ -1616,7 +1380,7 @@ mod tests {
     }
     #[test]
     fn parent_stake_index_backing_refusal_preserves_source_and_retries_after_release() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
@@ -1698,7 +1462,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_corrupt_stake_share_outside_candidate_set() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let validator = AccountId::new(
             KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
@@ -1747,7 +1511,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_orphan_stake_share_aggregate() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let validator = AccountId::new(
             KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519)
@@ -1890,7 +1654,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_enforces_retained_validator_capacity() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         // This negative fixture exceeds the retained, consensus-visible owner
         // capacity. Changing the local Nexus cache cannot change that policy.
         let mut runtime = state.canonical_runtime.block();
@@ -1919,7 +1683,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_non_canonical_pending_unbond() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
@@ -1958,7 +1722,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_non_validator_self_stake_account() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
@@ -2008,7 +1772,7 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_validator_totals_that_disagree_with_index() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
@@ -2036,16 +1800,11 @@ mod tests {
         );
     }
     #[test]
-    fn admitted_self_contained_evidence_does_not_require_a_kura_reread() {
-        let state = fresh_state();
+    fn admitted_native_attribution_does_not_require_a_kura_reread() {
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            *state.network_id_ref(),
-            &frozen_roster,
-            test_block_hash(0x81),
-        );
-        let evidence = phase_vote_evidence(&context, 1, 0);
+        let evidence = fixture_vote_evidence(1, 0);
         let key = insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::new(
             &state,
@@ -2056,7 +1815,7 @@ mod tests {
         );
         let actions = applier
             .derive_npos_consensus_effects(&penalty_header(2))
-            .expect("admitted proof is self-contained")
+            .expect("admitted native attribution is retained")
             .penalty_actions;
         assert!(actions.iter().any(|action| matches!(
             action,
@@ -2066,17 +1825,12 @@ mod tests {
     }
     #[test]
     fn parent_penalty_plan_retains_only_due_evidence_metadata() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            *state.network_id_ref(),
-            &frozen_roster,
-            test_block_hash(0x82),
-        );
-        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
-        let terminal = insert_evidence(&state, phase_vote_evidence(&context, 2, 1), 1);
-        let future = insert_evidence(&state, phase_vote_evidence(&context, 0, 2), 2);
+        let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
+        let terminal = insert_evidence(&state, fixture_vote_evidence(2, 1), 1);
+        let future = insert_evidence(&state, fixture_vote_evidence(0, 2), 2);
         let mut rows = state.world.consensus_evidence.block();
         let mut terminal_record = rows.get(&terminal).cloned().expect("terminal row exists");
         terminal_record.penalty_status = EvidencePenaltyStatus::Applied { height: 1 };
@@ -2102,12 +1856,12 @@ mod tests {
                 .map(|(index, _, _)| *index),
             Some(1)
         );
-        let signer_key_layout = pending_peer_key_layout(&context.roster[1].validator)
-            .expect("canonical retained peer key layout");
+        let signer_key_layout =
+            pending_peer_key_layout(&frozen_roster[1]).expect("canonical retained peer key layout");
         assert_eq!(signer_key_layout.align(), 1);
         assert_eq!(
             signer_key_layout.size(),
-            context.roster[1].validator.public_key().to_bytes().1.len() + 1
+            frozen_roster[1].public_key().to_bytes().1.len() + 1
         );
         assert_eq!(
             state.evidence_preparation_budget().reserved_bytes(),
@@ -2145,7 +1899,7 @@ mod tests {
     fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
         use mv::allocation::AllocationRefusal;
 
-        let max_rows = super::super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS;
+        let max_rows = super::super::evidence::MAX_COMMITTED_EVIDENCE_RECORDS * 31;
         let max_layout = std::alloc::Layout::array::<PendingPenaltyEvidence>(max_rows)
             .expect("bounded penalty metadata layout");
         assert_eq!(
@@ -2157,10 +1911,9 @@ mod tests {
             std::mem::align_of::<PendingPenaltyEntry>()
         );
 
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
-        let context = height_one_context(*state.network_id_ref(), &roster(), test_block_hash(0x83));
-        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let original = state
             .world
             .consensus_evidence
@@ -2223,10 +1976,9 @@ mod tests {
     fn pending_penalty_peer_key_refusal_preserves_source_and_retries_after_original_release() {
         use mv::allocation::AllocationRefusal;
 
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
-        let context = height_one_context(*state.network_id_ref(), &roster(), test_block_hash(0x84));
-        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let original = state
             .world
             .consensus_evidence
@@ -2236,7 +1988,7 @@ mod tests {
             .expect("original evidence row");
         let budget = state.evidence_preparation_budget();
         let backing = std::mem::size_of::<PendingPenaltyEvidence>();
-        let peer_key_bytes = pending_peer_key_layout(&context.roster[1].validator)
+        let peer_key_bytes = pending_peer_key_layout(&roster()[1])
             .expect("canonical peer key layout")
             .size();
         let occupied_bytes = budget.limit_bytes() - backing - peer_key_bytes + 1;
@@ -2288,72 +2040,17 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), 0);
     }
     #[test]
-    fn signer_indices_are_canonical_and_do_not_rotate_with_view() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
-        let view_zero = phase_vote_evidence(&context, 2, 0);
-        let late_view = phase_vote_evidence(&context, 2, u64::MAX);
-        assert_eq!(
-            offender_peer(&view_zero, 1, &context).map(|(index, _)| index),
-            Some(2)
-        );
-        assert_eq!(
-            offender_peer(&late_view, 1, &context).map(|(index, _)| index),
-            Some(2)
-        );
-    }
-    #[test]
-    fn npos_mode_does_not_remap_equal_vote_evidence_signer_indices() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let mut context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0x90),
-        );
-        context.mode = V2ConsensusMode::Npos;
-        context.validate().expect("valid equal-vote NPoS context");
-        let evidence = phase_vote_evidence(&context, 1, 47);
-        assert_eq!(
-            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
-            Some(1)
-        );
-    }
-    #[test]
-    fn offender_peer_requires_matching_height_and_in_range_roster() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
-        let evidence = phase_vote_evidence(&context, 1, 0);
-        assert_eq!(
-            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
-            Some(1)
-        );
-        let mut wrong_height = context.clone();
-        wrong_height.height += 1;
-        assert!(offender_peer(&evidence, 1, &wrong_height).is_none());
-        let mut missing_signer = context.clone();
-        missing_signer.roster.truncate(1);
-        assert!(offender_peer(&evidence, 1, &missing_signer).is_none());
-    }
-    #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
         set_commit_topology(
             &state,
             vec![PeerId::new(checked_keypair().public_key().clone())],
         );
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let evidence = phase_vote_evidence(&context, 1, 37);
-        assert_eq!(
-            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
-            Some(1)
-        );
+        let evidence = fixture_vote_evidence(1, 37);
         let key = insert_evidence(&state, evidence, 1);
         {
             let view = state.view();
@@ -2424,14 +2121,13 @@ mod tests {
     }
     #[test]
     fn multiple_due_evidence_records_slash_only_remaining_custody() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let first_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 37), 1);
-        let second_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 38), 1);
+        let first_key = insert_evidence(&state, fixture_vote_evidence(1, 37), 1);
+        let second_key = insert_evidence(&state, fixture_vote_evidence(1, 38), 1);
         assert_ne!(first_key, second_key);
 
         let actions = PenaltyApplier::new(
@@ -2472,10 +2168,9 @@ mod tests {
             .kura()
             .get_block(core::num::NonZeroUsize::new(1).unwrap())
             .unwrap();
-        let context = height_one_context(*state.network_id_ref(), &frozen_roster, source.hash());
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
-        insert_evidence(&state, phase_vote_evidence(&context, 1, 37), 1);
+        insert_evidence(&state, fixture_vote_evidence(1, 37), 1);
         let (asset_definition, _, _) = penalty_staking_ids();
         let mut definitions = state.world.asset_definitions.block();
         definitions
@@ -2499,10 +2194,9 @@ mod tests {
     }
     #[test]
     fn evidence_cannot_slash_a_peer_tenure_activated_after_the_offence() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
         let validator_key = (LaneId::SINGLE, validator.clone());
@@ -2514,7 +2208,7 @@ mod tests {
         record.activation_height = 2;
         records.insert(validator_key, record);
         records.commit();
-        let evidence = phase_vote_evidence(&context, 1, 37);
+        let evidence = fixture_vote_evidence(1, 37);
         let key = insert_evidence(&state, evidence, 1);
 
         let actions = PenaltyApplier::new(
@@ -2544,14 +2238,13 @@ mod tests {
     }
     #[test]
     fn multiple_due_evidence_for_fully_slashed_signer_is_sequential_and_terminal() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let first_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 7), 1);
-        let second_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 8), 1);
+        let first_key = insert_evidence(&state, fixture_vote_evidence(1, 7), 1);
+        let second_key = insert_evidence(&state, fixture_vote_evidence(1, 8), 1);
         assert_ne!(first_key, second_key);
 
         let actions = PenaltyApplier::new(
@@ -2612,10 +2305,9 @@ mod tests {
         let state = fresh_state_with_shared_public_staking_lanes();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record_on_lane(&state, LaneId::new(1), &offender);
-        let evidence = phase_vote_evidence(&context, 1, 37);
+        let evidence = fixture_vote_evidence(1, 37);
         let key = insert_evidence(&state, evidence, 1);
 
         let actions = PenaltyApplier::new(
@@ -2650,17 +2342,12 @@ mod tests {
     }
     #[test]
     fn post_execution_lane_retirement_rejects_the_entire_consensus_penalty_bundle() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0xA1),
-        );
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let evidence_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let evidence_key = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let effects = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
@@ -2677,7 +2364,7 @@ mod tests {
         )));
 
         let evidence_prune_keys =
-            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::evidence::committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         retire_primary_lane_in_candidate(&mut state_block);
@@ -2685,8 +2372,7 @@ mod tests {
             &mut state_block,
             &effects,
             evidence_prune_keys.as_slice(),
-            None,
-            &frozen_roster,
+            &[],
             2,
             0,
             2_000,
@@ -2707,17 +2393,12 @@ mod tests {
     }
     #[test]
     fn post_execution_evidence_cancellation_rejects_slash_and_mark_atomically() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0xA2),
-        );
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let evidence_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let evidence_key = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let effects = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
@@ -2728,7 +2409,7 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::evidence::committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         {
@@ -2751,8 +2432,7 @@ mod tests {
             &mut state_block,
             &effects,
             evidence_prune_keys.as_slice(),
-            None,
-            &frozen_roster,
+            &[],
             2,
             0,
             2_000,
@@ -2780,17 +2460,12 @@ mod tests {
     }
     #[test]
     fn post_execution_penalty_validation_cannot_write_an_active_global_witness() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0xA3),
-        );
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
-        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let effects = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
@@ -2801,7 +2476,7 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::evidence::committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
@@ -2811,8 +2486,7 @@ mod tests {
             &mut state_block,
             &effects,
             evidence_prune_keys.as_slice(),
-            None,
-            &frozen_roster,
+            &[],
             2,
             0,
             2_000,
@@ -2828,17 +2502,12 @@ mod tests {
     }
     #[test]
     fn committed_consensus_penalty_cannot_publish_transaction_execution_evidence() {
-        let state = fresh_state();
+        let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        let context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0xA4),
-        );
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
-        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let (penalty_actions, stake_index) = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
@@ -2849,12 +2518,11 @@ mod tests {
         .derive_npos_penalty_actions(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let effects = NposConsensusEffects {
-            finalized_global_beacon_pulse: None,
-            v2_evidence_admissions: Vec::new(),
+            evidence_admissions: Vec::new(),
             penalty_actions,
         };
         let evidence_prune_keys =
-            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::evidence::committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
@@ -2868,8 +2536,7 @@ mod tests {
             &effects,
             Some(&stake_index),
             evidence_prune_keys.as_slice(),
-            None,
-            &frozen_roster,
+            &[],
             2,
             0,
             2_000,

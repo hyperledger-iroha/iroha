@@ -1321,8 +1321,6 @@ mod tests {
                 lane_history_retention:
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 debug_output_new_blocks: false,
-                merge_ledger_cache_capacity:
-                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
                 native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,

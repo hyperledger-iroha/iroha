@@ -6,7 +6,7 @@ fn committed_cleanup_preserves_losing_globally_bound_reservation_until_kura_term
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let (fee_beneficiary, _) = gen_account_in("terminalized_queue_owner_fee");
@@ -133,7 +133,7 @@ fn kura_terminalized_cleanup_before_state_commit_is_consumed_after_commit() {
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let (fee_beneficiary, _) = gen_account_in("terminalized_before_commit_fee");
@@ -255,10 +255,10 @@ fn kura_terminalized_partial_group_cleanup_removes_only_state_committed_member()
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let first_hash = first.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, first);
-    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let second_hash = second.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, second);
     let keys = queue
@@ -355,7 +355,7 @@ fn release_recomputes_fifo_after_unrelated_admission_during_append() {
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let reserved_transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let reserved_transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let reserved_hash = reserved_transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, reserved_transaction);
     let key = *queue
@@ -370,7 +370,7 @@ fn release_recomputes_fifo_after_unrelated_admission_during_append() {
         )
         .expect("reserve release-race transaction")[0]
         .key();
-    let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash_as_entrypoint();
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -510,10 +510,10 @@ fn release_recomputes_fifo_while_unrelated_pop_is_held() {
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let reserved_transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let reserved_transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let reserved_hash = reserved_transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, reserved_transaction);
-    let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     let key = *queue
@@ -575,7 +575,7 @@ fn ordinary_candidate_snapshot_leaves_queue_plan_autonomous_reservation_availabl
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    let transaction = accepted_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let (snapshot, lease) = queue
@@ -604,7 +604,7 @@ fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
     let mut state = lane_reservation_test_state();
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
-    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    let transaction = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
@@ -668,7 +668,7 @@ fn globally_admitted_transaction_commits_from_a_later_reservation_height() {
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     assert_eq!(
         binding.admission_context.proposal_height, 1,
@@ -713,7 +713,7 @@ fn lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff() 
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(
@@ -778,7 +778,7 @@ fn durable_reservation_diagnostics_hash_exact_fifo_group_and_reconstruct_after_r
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+                accepted_unique_entrypoint_tx_by_someone(&time_source),
             );
         }
         let reserved = queue
@@ -895,7 +895,7 @@ fn durable_reservation_diagnostics_are_bounded_and_report_same_slot_conflicts() 
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
         );
         let mut scope = lane_reservation_scope(
             &state,
@@ -924,7 +924,7 @@ fn durable_reservation_diagnostics_are_bounded_and_report_same_slot_conflicts() 
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
         );
         let mut scope = lane_reservation_scope(&state, identity_seed, identity_seed);
         scope.lane_block_height = 4;
@@ -1111,7 +1111,7 @@ fn ordered_release_barrier_is_nonselectable_idempotent_and_aba_safe() {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
     }
     let reserved = queue
@@ -1212,7 +1212,7 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
     }
     let reserved = queue
@@ -1295,7 +1295,7 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             .expect("exact terminal FIFO release retry is a stutter"),
         0
     );
-    let unrelated = accepted_queue_plan_tx_by_someone(&time_source);
+    let unrelated = accepted_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     {
@@ -1371,7 +1371,7 @@ fn ordered_release_restart_retains_barrier_until_explicit_evidence_gated_finaliz
                     &queue,
                     &state,
                     &dir,
-                    accepted_queue_plan_tx_by_someone(&time_source),
+                    accepted_tx_by_someone(&time_source),
                 );
             }
             let reserved = queue
@@ -1548,7 +1548,7 @@ fn lane_reservation_is_durable_before_fifo_transfer_and_preserves_accounting() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let txs: Vec<_> = (0..4)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect();
     let hashes: Vec<_> = txs
         .iter()
@@ -1682,7 +1682,7 @@ fn reservation_group_commit_preflights_later_identity_before_any_prefix_mutation
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
     }
     let keys = queue
@@ -1753,7 +1753,7 @@ fn canonical_cleanup_rejects_empty_and_oversized_group_batches_before_mutation()
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(
@@ -1820,7 +1820,7 @@ fn canonical_cleanup_replays_two_finalized_carriers_beyond_live_queue_capacity()
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+                accepted_unique_entrypoint_tx_by_someone(&time_source),
             );
         }
         let mut scope = lane_reservation_scope(
@@ -1997,12 +1997,12 @@ fn canonical_cleanup_later_replica_conflict_preserves_every_ordinary_owner() {
     install_globally_certified_test_reservation_journals(&producer, &producer_dir);
     install_globally_certified_test_reservation_journals(&replica, &replica_dir);
 
-    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let first_hash = first.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&producer, &state, &producer_dir, first.clone());
     push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, first);
     time_handle.advance(Duration::from_millis(1));
-    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let second_hash = second.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(
         &producer,
@@ -2168,12 +2168,12 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
     install_globally_certified_test_reservation_journals(&producer, &producer_dir);
     install_globally_certified_test_reservation_journals(&replica, &replica_dir);
 
-    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let first_hash = first.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&producer, &state, &producer_dir, first.clone());
     push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, first);
     time_handle.advance(Duration::from_millis(1));
-    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let second_hash = second.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(
         &producer,
@@ -2290,7 +2290,7 @@ fn replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay() 
     let replica = Arc::new(Queue::test(config_factory(), &time_source));
     let replica_dir = tempdir().expect("replica tempdir");
     install_globally_certified_test_reservation_journals(&replica, &replica_dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     let entrypoint = transaction.entrypoint().clone();
     let admission_binding =
@@ -2402,7 +2402,7 @@ fn finalized_canonical_group_rejects_dangling_queue_owners_and_metadata() {
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(
@@ -2466,7 +2466,7 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
     }
     let keys = queue
@@ -2584,7 +2584,7 @@ fn reservation_group_forget_prefix_replays_and_resumes_exactly_once() {
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_tx_by_someone(&time_source),
+                accepted_tx_by_someone(&time_source),
             );
         }
         keys = queue
@@ -2682,7 +2682,7 @@ fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_tx_by_someone(&time_source),
+                accepted_tx_by_someone(&time_source),
             )
         })
         .collect::<Vec<_>>();
@@ -2737,7 +2737,7 @@ fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_tx_by_someone(&time_source),
+                accepted_tx_by_someone(&time_source),
             )
         })
         .collect::<Vec<_>>();
@@ -2960,7 +2960,7 @@ fn lane_reservation_excludes_locked_global_entrypoints_and_releases_in_payload_o
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let txs = (0..4)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3040,7 +3040,7 @@ fn released_prefix_precedes_work_enqueued_after_reservation() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let txs = (0..5)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3096,7 +3096,7 @@ fn interleaved_reservation_batches_restore_one_global_fifo() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let txs = (0..4)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3279,7 +3279,7 @@ fn startup_completion_observation_rejects_new_owner_and_commit_barrier() {
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(
@@ -3415,7 +3415,7 @@ fn reservation_restart_release_restores_exact_global_fifo() {
     let plan_path = dir.path().join("fifo-plans.norito");
     let reservation_path = dir.path().join("fifo-reservations.norito");
     let txs = (0..5)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3574,7 +3574,7 @@ fn reservation_restart_fits_ordinary_fifo_around_middle_anchor() {
     let plan_path = dir.path().join("middle-fifo-plans.norito");
     let reservation_path = dir.path().join("middle-fifo-reservations.norito");
     let txs = (0..3)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3676,7 +3676,7 @@ fn bounded_lane_reservation_charges_scans_bytes_and_gas() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let txs = (0..3)
-        .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
+        .map(|_| accepted_tx_by_someone(&time_source))
         .collect::<Vec<_>>();
     let hashes = txs
         .iter()
@@ -3758,7 +3758,7 @@ fn bounded_lane_reservation_rejects_4097_before_fifo_or_journal_mutation() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
     let reservation_path = install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    let transaction = accepted_tx_by_someone(&time_source);
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction.clone());
     let journal_len_before = std::fs::metadata(&reservation_path)
         .expect("stat empty reservation journal")
@@ -3803,7 +3803,7 @@ fn committing_reservation_owned_transaction_does_not_create_fifo_tombstone() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let reserved = queue
@@ -3834,7 +3834,7 @@ fn nexus_revalidation_preserves_committed_live_reservation_teu_until_terminal_cl
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
 
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let key = *queue
@@ -3931,11 +3931,11 @@ fn nexus_revalidation_preserves_commit_barrier_teu_until_resumed_cleanup() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
 
-    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let first_hash = first.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, first);
     time_handle.advance(Duration::from_millis(1));
-    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let second_hash = second.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, second);
     let keys = queue
@@ -4004,7 +4004,7 @@ fn nexus_revalidation_preserves_teu_during_reservation_fsync_window() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
 
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let reached = Arc::new(Barrier::new(2));
@@ -4069,7 +4069,7 @@ fn nexus_revalidation_observes_reservation_published_after_teu_snapshot() {
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
 
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let reached = Arc::new(Barrier::new(2));
@@ -4135,10 +4135,10 @@ fn lane_reservation_drains_committed_physical_fifo_tombstone() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let committed = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let committed = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let committed_hash = committed.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, committed);
-    let candidate = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let candidate = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let candidate_hash = candidate.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, candidate);
     assert_eq!(queue.remove_committed_hashes([committed_hash], None), 1);
@@ -4191,7 +4191,7 @@ fn lane_reservation_rejects_tracked_fifo_hash_without_order_identity() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     assert!(queue.fifo_order_by_hash.remove(&hash).is_some());
@@ -4235,7 +4235,7 @@ fn lane_pending_work_snapshot_separates_ordinary_and_exact_reservation_ownership
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_tx_by_someone(&time_source),
+        accepted_tx_by_someone(&time_source),
     );
     let scope = lane_reservation_scope(&state, b"pending-work-owner", b"pending-work-proposal");
     let other_incarnation = Hash::new(b"pending-work-recreated-incarnation");
@@ -4466,7 +4466,7 @@ fn ambiguous_reservation_put_disables_global_and_lane_selection_until_restart_re
         queue
             .install_lane_reservation_journal(&path, 1024 * 1024)
             .expect("install reservation journal");
-        let tx = accepted_queue_plan_tx_by_someone(&time_source);
+        let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash_as_entrypoint();
         push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, tx);
         queue
@@ -4560,7 +4560,7 @@ fn lane_retirement_release_tracks_exact_incarnation_and_retains_early_release() 
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
         );
     }
     let scope = lane_reservation_scope(
@@ -4643,7 +4643,7 @@ fn lane_retirement_release_waits_for_ordinary_work_removal() {
     let state = lane_reservation_test_state();
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let scope = lane_reservation_scope(
@@ -4677,7 +4677,7 @@ fn lane_retirement_fault_wakes_waiters_and_is_not_retryable_contention() {
         &queue,
         &state,
         &dir,
-        accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        accepted_unique_entrypoint_tx_by_someone(&time_source),
     );
     let scope = lane_reservation_scope(&state, b"fault-release-owner", b"fault-release-proposal");
     let mut wait = queue
@@ -4735,7 +4735,7 @@ pub(crate) fn lane_retirement_release_fixture_for_test() -> (
         &queue,
         &state,
         &directory,
-        accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        accepted_unique_entrypoint_tx_by_someone(&time_source),
     );
     let scope = lane_reservation_scope(
         &state,
@@ -4755,5 +4755,3 @@ pub(crate) fn lane_retirement_release_fixture_for_test() -> (
         .expect("exact reservation blocks lane retirement");
     (queue, wait, key, directory)
 }
-
-include!("source_packing_tests.rs");

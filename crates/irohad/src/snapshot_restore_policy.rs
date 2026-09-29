@@ -14,8 +14,12 @@ pub(super) fn snapshot_read_error_is_recoverable_for_bootstrap(
         | TryReadSnapshotError::StateAdmission(_)
         | TryReadSnapshotError::StateExecutionDeferred(_)
         | TryReadSnapshotError::StateNativeSchedule(_)
+        | TryReadSnapshotError::ChainIdMismatch { .. }
         | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
+        // The caller additionally requires Strict mode and a complete genesis-backed
+        // prefix, then node::prepare executes original signed genesis and every certified block.
+        TryReadSnapshotError::NativeExecutionReplayRequired => !hard_fork_snapshot_bootstrap,
         TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
         _ => true,
     }
@@ -31,6 +35,32 @@ mod tests {
         pin::pin,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn native_identity_mismatch_halts_but_execution_replay_uses_only_strict_complete_history() {
+        let wrong_chain = TryReadSnapshotError::ChainIdMismatch {
+            expected: "configured-native-chain".parse().unwrap(),
+            actual: "foreign-native-chain".parse().unwrap(),
+        };
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &wrong_chain,
+            false,
+            false
+        ));
+        let replay = TryReadSnapshotError::NativeExecutionReplayRequired;
+        assert!(snapshot_failure_allows_empty_state_fallback(
+            &replay, false, false
+        ));
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &replay, true, false
+        ));
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &replay, false, true
+        ));
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &replay, true, true
+        ));
+    }
 
     #[test]
     fn snapshot_local_refusal_never_authorizes_empty_state_fallback() {

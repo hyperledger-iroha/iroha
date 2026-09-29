@@ -58,7 +58,7 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     );
     kura.restore_published_lane_geometry_for_test(&lane_config)
         .expect("publish the exact initial merge receipt instance");
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let parent = blocks.next();
     let header = crate::merge::merge_application_header_from_carrier(&blocks.next().header());
     let raw_carrier = Arc::new(

@@ -18,7 +18,7 @@ fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
                 &RuntimeLaneConfig::default(),
                 &BTreeMap::new(),
             );
-            let mut blocks = DummyBlocks::new();
+            let mut blocks = NativeBlocks::new();
             kura.store_block(blocks.next()).expect("store merge parent");
             let mut entry = sample_merge_entry(1);
             let carrier = next_merge_carrier(&mut blocks, &mut entry);
@@ -61,7 +61,7 @@ fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
 #[test]
 fn replace_top_block_does_not_depend_on_writer_channel() {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let block_hash = block.hash();
     kura.store_block(block).expect("store block");
     kura.block_notify_rx.lock().take();
@@ -83,7 +83,7 @@ fn replace_top_block_does_not_depend_on_writer_channel() {
 #[test]
 fn replace_top_block_does_not_depend_on_writer_fault() {
     let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let block_hash = block.hash();
     kura.store_block(block).expect("store block");
     kura.record_writer_fault("test", &Error::BlockWriterUnavailable);
@@ -106,7 +106,7 @@ fn replace_top_block_does_not_depend_on_writer_fault() {
 fn store_block_with_merge_entry_does_not_depend_on_writer_channel() {
     let kura = Kura::blank_kura_for_testing();
     kura.block_notify_rx.lock().take();
-    let mut blocks = DummyBlocks::new();
+    let mut blocks = NativeBlocks::new();
     let parent = blocks.next();
     let mut entry = sample_merge_entry(1);
     let block = next_merge_carrier(&mut blocks, &mut entry);
@@ -218,7 +218,7 @@ fn append_block_to_chain_roundtrip_decodes() {
     let dir = tempfile::tempdir().unwrap();
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     block_store.append_block_to_chain(&block).unwrap();
     let BlockIndex { start, length } = block_store.read_block_index(0).unwrap();
     let len: usize = length.try_into().expect("block length fits in usize");
@@ -684,8 +684,6 @@ fn strict_init_kura() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
@@ -730,8 +728,6 @@ fn kura_not_miss_replace_block() {
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
-                merge_ledger_cache_capacity:
-                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
                 lane_history_retention:
@@ -779,8 +775,6 @@ fn get_block_caches_loaded_block() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
@@ -837,8 +831,6 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
@@ -887,7 +879,7 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
 }
 #[test]
 fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let mut block_data: BlockData = (0..4)
         .map(|_| {
             let block = generator.next();
@@ -915,7 +907,7 @@ fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
 }
 #[test]
 fn drop_persisted_blocks_keeps_unpersisted_blocks() {
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let mut block_data: BlockData = (0..6)
         .map(|_| {
             let block = generator.next();
@@ -955,8 +947,6 @@ fn get_block_returns_none_when_data_missing() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
@@ -992,7 +982,6 @@ fn eviction_requires_remote_replicas() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,
@@ -1554,56 +1543,50 @@ fn merge_reads_reject_canonical_storage_poison() {
     ));
 }
 #[test]
-fn canonical_bind_before_poison_closes_the_consensus_guard_immediately() {
-    let unbound = Kura::blank_kura_for_testing();
-    let unrelated_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    assert!(unbound.ensure_canonical_storage_not_poisoned().is_ok());
-    assert!(unrelated_guard.acquire().is_some());
+fn canonical_poison_closes_every_handle_of_its_permanent_native_gate() {
+    let unrelated = Kura::blank_kura_for_testing();
     let kura = Kura::blank_kura_for_testing();
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    kura.bind_consensus_output_guard(Arc::clone(&output_guard))
-        .expect("bind authoritative output guard");
-    assert!(output_guard.acquire().is_some());
-    let poison = Error::CanonicalStoragePoisoned;
-    kura.poison_canonical_storage("injected canonical poison", &poison);
-    assert!(output_guard.restart_required());
-    assert!(
-        output_guard.acquire().is_none(),
-        "Kura poison must close consensus admission before returning"
+    let global = kura.native_consensus_gate();
+    let lane = kura.native_consensus_gate();
+    assert!(Arc::ptr_eq(&global, &lane));
+    assert!(global.enter().is_some());
+    kura.poison_canonical_storage(
+        "injected canonical poison",
+        &Error::CanonicalStoragePoisoned,
     );
-    kura.poison_canonical_storage("duplicate canonical poison", &poison);
-    assert!(output_guard.acquire().is_none());
-    assert!(matches!(
-        kura.bind_consensus_output_guard(
-            crate::sumeragi::output_guard::ConsensusOutputGuard::isolated()
-        ),
-        Err(Error::ConsensusOutputGuardAlreadyBound)
-    ));
+    assert!(global.is_closed());
+    assert!(global.enter().is_none());
+    assert!(lane.enter().is_none());
+    assert!(unrelated.native_consensus_gate().enter().is_some());
+    kura.poison_canonical_storage(
+        "duplicate canonical poison",
+        &Error::CanonicalStoragePoisoned,
+    );
+    assert!(global.enter().is_none());
 }
+
 #[test]
-fn canonical_poison_before_bind_closes_the_new_consensus_guard() {
+fn native_gate_obtained_after_canonical_poison_cannot_open_admission() {
     let kura = Kura::blank_kura_for_testing();
-    let poison = Error::CanonicalStoragePoisoned;
-    kura.poison_canonical_storage("poison before guard binding", &poison);
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    assert!(output_guard.acquire().is_some());
-    kura.bind_consensus_output_guard(Arc::clone(&output_guard))
-        .expect("bind authoritative output guard after poison");
-    assert!(output_guard.restart_required());
-    assert!(
-        output_guard.acquire().is_none(),
-        "binding after poison must not return with consensus admission open"
+    kura.poison_canonical_storage(
+        "poison before instance startup",
+        &Error::CanonicalStoragePoisoned,
     );
+    let later = kura.native_consensus_gate();
+    assert!(later.is_closed());
+    assert!(later.enter().is_none());
+    assert!(Arc::ptr_eq(&later, &kura.native_consensus_gate()));
 }
+
 #[test]
-fn canonical_poison_bind_interleaving_cannot_leave_admission_open() {
+fn published_canonical_poison_already_closes_native_admission() {
     let kura = Kura::blank_kura_for_testing();
     kura.pause_canonical_poison_after_latch
         .store(true, Ordering::Release);
     let poison_kura = Arc::clone(&kura);
     let poisoner = thread::spawn(move || {
         poison_kura.poison_canonical_storage(
-            "poison racing guard binding",
+            "poison racing native startup",
             &Error::CanonicalStoragePoisoned,
         );
     });
@@ -1614,24 +1597,20 @@ fn canonical_poison_bind_interleaving_cannot_leave_admission_open() {
     {
         assert!(
             Instant::now() < deadline,
-            "canonical poison did not reach the post-latch race barrier"
+            "canonical poison missed the post-latch barrier"
         );
         thread::yield_now();
     }
-    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    assert!(kura.consensus_output_guard.get().is_none());
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    let bind_result = kura.bind_consensus_output_guard(Arc::clone(&output_guard));
-    let restart_required_before_poison_resumes = output_guard.restart_required();
-    let admission_closed_before_poison_resumes = output_guard.acquire().is_none();
+    let published = kura.canonical_storage_poisoned.load(Ordering::Acquire);
+    let late = kura.native_consensus_gate();
+    let closed_before_resume = late.is_closed() && late.enter().is_none();
     kura.canonical_poison_paused_after_latch
         .store(false, Ordering::Release);
     poisoner.join().expect("canonical poison thread completes");
-    bind_result.expect("bind while poison is paused before guard lookup");
-    assert!(restart_required_before_poison_resumes);
+    assert!(published);
     assert!(
-        admission_closed_before_poison_resumes,
-        "the bind-side latch recheck must close admission before returning"
+        closed_before_resume,
+        "no late binding can reopen the storage owner's gate"
     );
-    assert!(output_guard.acquire().is_none());
+    assert!(late.enter().is_none());
 }

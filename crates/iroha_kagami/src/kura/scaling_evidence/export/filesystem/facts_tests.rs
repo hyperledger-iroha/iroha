@@ -21,7 +21,6 @@ fn run(
         fixture.journal(),
         fixture.verification_limits(),
         fixture.block_store(),
-        fixture.merge_log(),
         fixture.reader_limits(),
         fixture.caps(),
         hook,
@@ -330,7 +329,6 @@ fn facts_source_and_output_reservations_fail_before_any_file_hook() {
                 fixture.journal(),
                 fixture.verification_limits(),
                 fixture.block_store(),
-                fixture.merge_log(),
                 fixture.reader_limits(),
                 caps,
                 |_, _| {
@@ -352,7 +350,7 @@ fn facts_source_and_output_reservations_fail_before_any_file_hook() {
 fn facts_admit_all_proof_and_core_work_limits_before_any_file_hook() {
     with_facts_assembly_stack(|| {
         let fixture = Fixture::new(1);
-        for choice in 0..22 {
+        for choice in 0..20 {
             let mut verification = fixture.verification_limits();
             let mut reader = fixture.reader_limits();
             match choice {
@@ -374,10 +372,8 @@ fn facts_admit_all_proof_and_core_work_limits_before_any_file_hook() {
                 15 => reader.max_store_data_bytes = 0,
                 16 => reader.max_store_data_bytes = verification.input_bytes + 1,
                 17 => reader.max_carrier_bytes = 32 * 1024 * 1024 + 1,
-                18 => reader.max_merge_log_bytes = verification.input_bytes + 1,
-                19 => reader.max_merge_frames = reader.max_committed_blocks + 1,
-                20 => reader.max_output_bytes = 0,
-                21 => reader.max_decode_allocation_bytes = 0,
+                18 => reader.max_output_bytes = 0,
+                19 => reader.max_decode_allocation_bytes = 0,
                 _ => unreachable!(),
             }
             let mut observed = 0;
@@ -389,7 +385,6 @@ fn facts_admit_all_proof_and_core_work_limits_before_any_file_hook() {
                     fixture.journal(),
                     verification,
                     fixture.block_store(),
-                    fixture.merge_log(),
                     reader,
                     fixture.caps(),
                     |_, _| {
@@ -421,7 +416,6 @@ fn facts_reject_wrong_core_uid_before_any_file_hook() {
                 fixture.journal(),
                 fixture.verification_limits(),
                 fixture.block_store(),
-                fixture.merge_log(),
                 limits,
                 fixture.caps(),
                 |_, _| {
@@ -458,7 +452,6 @@ fn facts_reject_duplicate_paths_and_original_output_stage_or_core_roles_before_r
                     fixture.journal(),
                     fixture.verification_limits(),
                     fixture.block_store(),
-                    fixture.merge_log(),
                     fixture.reader_limits(),
                     fixture.caps(),
                     |_, phase| {
@@ -500,7 +493,6 @@ fn facts_reject_wrong_raw_pin_for_every_original_before_assembly_or_stage() {
                     fixture.journal(),
                     fixture.verification_limits(),
                     fixture.block_store(),
-                    fixture.merge_log(),
                     fixture.reader_limits(),
                     fixture.caps(),
                     |_, phase| {
@@ -618,15 +610,10 @@ fn facts_reject_actual_core_content_and_fresh_inode_changes_during_publication()
             "blocks.index",
             "blocks.hashes",
             "blocks.count.norito",
-            "merge.log",
         ] {
             for fresh_inode in [false, true] {
                 let fixture = Fixture::new(4);
-                let path = if core_file == "merge.log" {
-                    fixture.merge_log().to_owned()
-                } else {
-                    fixture.block_store().join(core_file)
-                };
+                let path = fixture.block_store().join(core_file);
                 let mut fired = false;
                 assert!(
                     run(&fixture, |role, phase| {
@@ -664,7 +651,6 @@ fn facts_reject_publication_inside_real_core_namespace_before_creating_a_stage()
                 fixture.journal(),
                 fixture.verification_limits(),
                 fixture.block_store(),
-                fixture.merge_log(),
                 fixture.reader_limits(),
                 fixture.caps(),
                 |_, phase| {
@@ -902,7 +888,6 @@ fn facts_exact_serialized_cap_succeeds_and_one_byte_small_creates_no_truncated_s
                 fixture.journal(),
                 fixture.verification_limits(),
                 fixture.block_store(),
-                fixture.merge_log(),
                 fixture.reader_limits(),
                 caps,
             );
@@ -938,7 +923,6 @@ fn facts_malformed_peer_config_errors_do_not_render_secret_source() {
             fixture.journal(),
             fixture.verification_limits(),
             fixture.block_store(),
-            fixture.merge_log(),
             fixture.reader_limits(),
             fixture.caps(),
             |role, phase| {

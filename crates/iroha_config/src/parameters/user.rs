@@ -6396,10 +6396,7 @@ pub struct SumeragiV2RuntimeLimits {
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     #[config(default = "defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY")]
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
-    /// QueuePlan admission certificates retained before canonical carrier commitment.
-    #[config(default = "defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY")]
-    pub pending_queue_plan_admission_capacity: NonZeroUsize,
-    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    /// Aggregate bytes retained by pending Kura control-sidecar stores.
     #[config(default = "defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES")]
     pub pending_control_sidecar_bytes: NonZeroUsize,
     /// Durable merge-signing decisions retained before committed-frontier GC.
@@ -7012,7 +7009,6 @@ impl Sumeragi {
                     .merge_sidecar_server_request_gates_per_source,
                 pending_certified_merge_entry_capacity: limits
                     .pending_certified_merge_entry_capacity,
-                pending_queue_plan_admission_capacity: limits.pending_queue_plan_admission_capacity,
                 pending_control_sidecar_bytes: limits.pending_control_sidecar_bytes,
                 merge_signing_guard_record_capacity: limits.merge_signing_guard_record_capacity,
                 merge_signing_guard_record_bytes: limits.merge_signing_guard_record_bytes,
@@ -9152,9 +9148,6 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
-    /// Maximum queue-plan journal size before atomic compaction is considered.
-    #[config(default = "defaults::queue::PLAN_JOURNAL_MAX_BYTES")]
-    pub plan_journal_max_bytes: u64,
 }
 impl Queue {
     /// Convert this user configuration into the runtime representation.
@@ -9166,7 +9159,6 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
-            plan_journal_max_bytes,
         } = self;
         actual::Queue {
             capacity,
@@ -9175,7 +9167,6 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
-            plan_journal_max_bytes,
         }
     }
 }
@@ -10196,9 +10187,6 @@ pub struct Nexus {
     /// Governed atomic private cross-dataspace settlement policy.
     #[config(nested)]
     pub atomic_private_settlement: NexusAtomicPrivateSettlement,
-    /// Lane-relay emergency override configuration.
-    #[config(nested)]
-    pub lane_relay_emergency: LaneRelayEmergency,
     /// Lane routing policy configuration.
     #[config(default)]
     pub routing_policy: RoutingPolicy,
@@ -10253,7 +10241,6 @@ impl_default!(Nexus {
     endorsement: NexusEndorsement::default(),
     axt: NexusAxt::default(),
     atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
-    lane_relay_emergency: LaneRelayEmergency::default(),
     routing_policy: RoutingPolicy::default(),
     registry: LaneRegistryConfig::default(),
     governance: GovernanceCatalogConfig::default(),
@@ -10766,7 +10753,7 @@ pub struct NexusFees {
     /// Protocol account that physically custodies isolated sponsor-program vault assets.
     #[config(default = "defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_string()")]
     pub sponsor_vault_custody_account_id: String,
-    /// Fee settlement mode: `direct` or `lane_relay_burn`.
+    /// Fee settlement mode: `direct`; receipt-only relay settlement is retired.
     #[config(default = "defaults::nexus::fees::SETTLEMENT_MODE.to_string()")]
     pub settlement_mode: String,
     /// Canonical I105 authorities allowed to submit fee-free successful SORA v2 XOR claim mint
@@ -10902,10 +10889,9 @@ impl NexusFees {
         }
         let settlement_mode = match self.settlement_mode.as_str() {
             "direct" => actual::NexusFeeSettlementMode::Direct,
-            "lane_relay_burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
             other => {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "invalid nexus.fees.settlement_mode `{other}`: expected `direct` or `lane_relay_burn`"
+                    "invalid nexus.fees.settlement_mode `{other}`: expected `direct`"
                 )));
                 return None;
             }
@@ -11981,74 +11967,6 @@ impl_default!(NexusAtomicPrivateSettlement {
     permitted_policy_versions:
         defaults::nexus::atomic_private_settlement::permitted_policy_versions(),
 });
-/// Lane-relay emergency override configuration.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct LaneRelayEmergency {
-    /// Whether emergency validator overrides are enabled.
-    #[config(default = "defaults::nexus::lane_relay_emergency::ENABLED")]
-    pub enabled: bool,
-    /// Minimum multisig threshold required for override transactions.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD")]
-    pub multisig_threshold: u16,
-    /// Minimum multisig member count required for override transactions.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS")]
-    pub multisig_members: u16,
-    /// Maximum number of blocks an emergency override may remain active.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS")]
-    pub max_ttl_blocks: u32,
-}
-impl_default!(LaneRelayEmergency {
-    enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-    multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-    multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-    max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
-});
-impl LaneRelayEmergency {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::LaneRelayEmergency> {
-        let mut invalid = false;
-        let threshold = NonZeroU16::new(self.multisig_threshold).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.multisig_threshold must be > 0"),
-            );
-            None
-        });
-        let members = NonZeroU16::new(self.multisig_members).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.multisig_members must be > 0"),
-            );
-            None
-        });
-        let max_ttl_blocks = NonZeroU32::new(self.max_ttl_blocks).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.max_ttl_blocks must be > 0"),
-            );
-            None
-        });
-        if let (Some(threshold), Some(members)) = (threshold, members)
-            && threshold.get() > members.get()
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.lane_relay_emergency.multisig_threshold {threshold} must be <= multisig_members {members}"
-            )));
-        }
-        if invalid || threshold.is_none() || members.is_none() || max_ttl_blocks.is_none() {
-            return None;
-        }
-        Some(actual::LaneRelayEmergency {
-            enabled: self.enabled,
-            multisig_threshold: threshold.expect("validated"),
-            multisig_members: members.expect("validated"),
-            max_ttl_blocks: max_ttl_blocks.expect("validated"),
-        })
-    }
-}
 impl NexusAtomicPrivateSettlement {
     fn parse(
         self,
@@ -12426,7 +12344,6 @@ impl Nexus {
             endorsement: endorsement_cfg,
             axt,
             atomic_private_settlement,
-            lane_relay_emergency,
             routing_policy,
             registry,
             governance,
@@ -12460,7 +12377,6 @@ impl Nexus {
         let storage = storage.parse(emitter)?;
         let axt_cfg = axt.parse(emitter)?;
         let atomic_private_settlement = atomic_private_settlement.parse(emitter)?;
-        let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
         let relay_worker = relay_worker.parse(emitter)?;
@@ -12526,7 +12442,6 @@ impl Nexus {
             da,
             axt: axt_cfg,
             atomic_private_settlement,
-            lane_relay_emergency,
         })
     }
     fn normalize_opt(value: Option<String>) -> Option<String> {
@@ -19317,7 +19232,6 @@ impl AccountOnboarding {
         const UNSCOPED_DEFAULT_PERMISSIONS: &[&str] = &[
             "DpnUser",
             "CanManagePeers",
-            "CanManageLaneRelayEmergency",
             "CanResolveEscrowDispute",
             "CanManageKagemushaReserve",
             "CanSetParameters",
@@ -35789,5 +35703,21 @@ mod merge_authority_geometry_tests {
                 assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod native_fee_mode_tests {
+    use super::*;
+
+    #[test]
+    fn retired_lane_relay_burn_mode_is_a_configuration_error() {
+        let mut emitter = Emitter::new();
+        let fees = NexusFees {
+            settlement_mode: "lane_relay_burn".to_owned(),
+            ..NexusFees::default()
+        };
+        assert!(fees.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }

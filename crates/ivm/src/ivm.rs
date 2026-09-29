@@ -42,10 +42,11 @@ use crate::{
     },
     vector,
     vector::SimdChoice,
-    zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
+    zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog},
 };
 #[path = "call_runtime.rs"]
 mod call_runtime;
+mod input_cursor;
 #[cfg(test)]
 mod snapshot;
 use likely_stable::unlikely;
@@ -1116,9 +1117,12 @@ pub enum TraceMode {
     PcOnly,
     DeltaRegisters,
 }
+mod private_cleanup;
+#[cfg(test)]
+mod private_disposal_tests;
 mod runtime_template;
 pub use runtime_template::RuntimeTemplate;
-use runtime_template::RuntimeTemplateData;
+use runtime_template::{RuntimeTemplateBacking, RuntimeTemplateData};
 /// A warmed VM cannot be reset from a different program or memory baseline.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
@@ -1817,11 +1821,15 @@ impl IVM {
     ///
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
-    pub fn set_zk_mode(&mut self, enabled: bool) {
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
-        if !enabled && !self.scrub_private_state() {
-            return;
+    ///
+    /// # Errors
+    /// Private-range corruption or exhausted local diagnostic capacity leaves the
+    /// mode, private bytes, tags and execution state unchanged.
+    pub fn set_zk_mode(&mut self, enabled: bool) -> Result<(), VMError> {
+        if !enabled {
+            self.scrub_private_state()?;
         }
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.zk_mode = enabled;
         if enabled {
             if self.max_cycles == 0 {
@@ -1830,6 +1838,7 @@ impl IVM {
         } else {
             self.max_cycles = 0;
         }
+        Ok(())
     }
     /// Enable or disable formal ZK trace collection.
     ///
@@ -1875,9 +1884,7 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
-        if !self.scrub_private_state() {
-            return Err(VMError::PrivacyViolation);
-        }
+        self.scrub_private_state()?;
         self.metadata = ProgramMetadata::default();
         self.vector_enabled = false;
         self.vector_length = default_vector_length();
@@ -2030,10 +2037,8 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
+        self.scrub_private_state()?;
         self.memory.call_frames.clear();
-        if !self.scrub_private_state() {
-            return Err(VMError::PrivacyViolation);
-        }
         self.metadata = image.metadata.clone();
         self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
@@ -2085,7 +2090,7 @@ impl IVM {
         self.cycles = 0;
         // Recompute the INPUT bump allocator based on any preloaded TLVs so that
         // host allocations append instead of overwriting existing entries.
-        self.recompute_input_bump_from_memory();
+        self.recompute_input_bump_from_memory()?;
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
                 "[IVM] input_bump_next set to 0x{off:x}",
@@ -2459,34 +2464,6 @@ impl IVM {
         self.private_memory_bytes
             .try_prepare_update(&range, self.zk_mode && private)
     }
-    /// Zero private stack bytes before a reset or program replacement.
-    fn scrub_private_memory(&mut self) -> bool {
-        let mut previous = None;
-        while let Some((start, end)) = self.private_memory_bytes.next_after(previous) {
-            for addr in start..end {
-                if self.memory.store_u8(addr, 0).is_err() {
-                    // Preserve all tags when a corrupted memory invariant stops
-                    // the scrub, including bytes not visited yet.
-                    return false;
-                }
-            }
-            previous = Some(start);
-        }
-        self.private_memory_bytes.clear();
-        true
-    }
-    /// Scrub every private value before a mode transition or program replacement.
-    fn scrub_private_state(&mut self) -> bool {
-        let had_private_context =
-            self.zk_mode || self.registers.has_private() || !self.private_memory_bytes.is_empty();
-        let memory_scrubbed = self.scrub_private_memory();
-        self.registers.scrub_private();
-        if had_private_context {
-            self.clear_zk_trace_logs();
-            self.memory.clear_tracking();
-        }
-        memory_scrubbed
-    }
     /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
     /// Register tags catch scalar arguments. This additional check prevents a
@@ -2761,7 +2738,9 @@ impl IVM {
         let header = self
             .memory
             .load_region(address, HEADER_BYTES)
-            .map_err(|_| VMError::NoritoInvalid)?;
+            .map_err(|error| {
+                crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+            })?;
         let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
         let total = 7usize
             .checked_add(payload_len)
@@ -2779,7 +2758,9 @@ impl IVM {
         self.memory
             .load_region(address, total_u64)
             .map(<[u8]>::to_vec)
-            .map_err(|_| VMError::NoritoInvalid)
+            .map_err(|error| {
+                crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+            })
     }
     /// Require a raw compiler-owned object to fit wholly within allocated HEAP.
     ///
@@ -2808,10 +2789,9 @@ impl IVM {
     fn inspect_owned_public_tlv_header(&self, ptr: u64) -> Result<(u64, u8), VMError> {
         ptr.checked_add(7).ok_or(VMError::NoritoInvalid)?;
         self.ensure_public_memory(ptr, 7)?;
-        let hdr = self
-            .memory
-            .load_region(ptr, 7)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let hdr = self.memory.load_region(ptr, 7).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+        })?;
         let len = u64::from(u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]));
         let total = 7_u64
             .checked_add(len)
@@ -2853,6 +2833,7 @@ impl IVM {
                     }
                 }
                 Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
+                Err(error) if error.execution_deferral().is_some() => return Err(error),
                 Err(_) => malformed = true,
             }
         }
@@ -2880,10 +2861,9 @@ impl IVM {
                 )
             })
             .ok_or(VMError::NoritoInvalid)?;
-        let envelope = self
-            .memory
-            .load_region(ptr, total)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let envelope = self.memory.load_region(ptr, total).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+        })?;
         match crate::pointer_abi::validate_tlv_bytes(envelope) {
             Ok(tlv) => {
                 let (policy, abi_version) = crate::pointer_abi::current_policy()
@@ -2902,9 +2882,8 @@ impl IVM {
             Err(err) => Err(err),
         }
     }
-    /// Validate a public cryptographic operand without changing the legacy
-    /// boolean-result behavior for malformed public TLVs. Privacy violations
-    /// are never converted into a public verification failure.
+    /// Validate a public cryptographic operand with a boolean result for malformed TLVs.
+    /// Privacy violations and operational refusals never become verification failures.
     fn validate_public_crypto_tlv(
         &self,
         ptr: u64,
@@ -2912,6 +2891,7 @@ impl IVM {
         match self.validate_tlv(ptr) {
             Ok(tlv) => Ok(Some(tlv)),
             Err(VMError::PrivacyViolation) => Err(VMError::PrivacyViolation),
+            Err(error) if error.execution_deferral().is_some() => Err(error),
             Err(_) => Ok(None),
         }
     }
@@ -2937,59 +2917,6 @@ impl IVM {
         out.extend_from_slice(&hash);
         Ok(out)
     }
-    /// Recompute the simple INPUT bump pointer based on existing TLVs.
-    ///
-    /// Scans the INPUT region from the start and advances `input_bump_next`
-    /// past any valid TLVs found. This allows hosts/tests that preloaded TLVs
-    /// before `load_program()` to avoid new allocations overwriting them.
-    fn recompute_input_bump_from_memory(&mut self) {
-        let mut off: u64 = 0;
-        loop {
-            if off + 7 > Memory::INPUT_SIZE {
-                break;
-            }
-            // Read tentative header; abort on failure
-            let hdr = match self.memory.load_region(Memory::INPUT_START + off, 7) {
-                Ok(h) => h,
-                Err(_) => break,
-            };
-            // Decode header; stop if it doesn't look like a TLV (unknown type ids are fine)
-            let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as u64;
-            let total = 7u64.saturating_add(len).saturating_add(32);
-            if Memory::INPUT_START + off + total > Memory::INPUT_START + Memory::INPUT_SIZE {
-                break;
-            }
-            // Try to validate hash quickly; if it fails, stop scanning
-            let ok = self
-                .memory
-                .load_region(Memory::INPUT_START + off + 7, len)
-                .ok()
-                .and_then(|payload| {
-                    self.memory
-                        .load_region(Memory::INPUT_START + off + 7 + len, 32)
-                        .ok()
-                        .map(|hash| (payload, hash))
-                })
-                .map(|(payload, hash)| {
-                    let mut hb = [0u8; 32];
-                    hb.copy_from_slice(hash);
-                    let expected: [u8; 32] = iroha_crypto::Hash::new(payload).into();
-                    hb == expected
-                })
-                .unwrap_or(false);
-            if !ok {
-                break;
-            }
-            // Advance to next aligned slot
-            let mut next = off + total;
-            let rem = next % 8;
-            if rem != 0 {
-                next += 8 - rem;
-            }
-            off = next;
-        }
-        self.input_bump_next = off;
-    }
     /// ABI version extracted from the program header.
     pub fn abi_version(&self) -> u8 {
         self.metadata.abi_version
@@ -3002,14 +2929,25 @@ impl IVM {
         debug_assert_eq!(self.metadata.abi_version, 1);
         SyscallPolicy::AbiV1
     }
-    /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
-    pub fn reset(&mut self) {
-        self.memory.call_frames.clear();
-        let _ = self.scrub_private_state();
+    /// Reset registers, PC and cycles while preserving loaded program and host.
+    ///
+    /// # Errors
+    /// Private-range corruption or exhausted local diagnostic capacity leaves
+    /// all execution state unchanged. The caller may retry after the local
+    /// diagnostic owner is replaced or discard the VM.
+    pub fn reset(&mut self) -> Result<(), VMError> {
+        self.scrub_private_state()?;
+        self.reset_execution_state();
+        Ok(())
+    }
+    /// Reset transient state after the memory owner has completed its cleanup.
+    fn reset_execution_state(&mut self) {
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
             .unwrap_or(0);
+        let _logger_mask = zk::RegLoggerGuard::mask();
+        self.clear_zk_trace_logs();
         self.registers.reset_to_zero();
         self.registers.set(31, self.memory.stack_top());
         self.pc = resume_pc;
@@ -3058,10 +2996,7 @@ impl IVM {
         // Exclusive access prevents interior read-log or Merkle-cache growth
         // between the allocation plan and the copy. No caller-supplied pool can
         // substitute equal-looking limits for the original State pool.
-        let owner_bytes = norito::core::owned_arc_allocation_bytes::<RuntimeTemplateData>()
-            .map_err(|_| {
-                VMError::AllocationDeferred(mv::allocation::AllocationRefusal::DemandOverflow)
-            })?;
+        let owner_bytes = RuntimeTemplate::owner_allocation_bytes()?;
         let mut allocation_lease = self
             .memory
             .allocation_budget()
@@ -3085,22 +3020,26 @@ impl IVM {
             .try_clone_for_runtime_template(allocation_lease.as_mut())?;
         let registers = self.registers.try_clone_for_runtime_template()?;
         let private_memory_bytes = self.private_memory_bytes.try_clone()?;
-        Ok(RuntimeTemplate::new(RuntimeTemplateData {
-            cache_reservation,
-            _allocation_lease: allocation_lease,
-            memory,
-            registers,
-            private_memory_bytes,
-            code_hash: self.code_hash,
-            pc: self.pc,
-            gas_limit: self.gas_limit,
-            max_cycles: self.max_cycles,
-            trace_mode: self.trace_mode,
-            zk_mode: self.zk_mode,
-            zk_trace_enabled: self.zk_trace_enabled,
-            entrypoint_pc: self.entrypoint_pc,
-            input_bump_next: self.input_bump_next,
-        }))
+        Ok(RuntimeTemplate::new(
+            RuntimeTemplateData {
+                memory,
+                registers,
+                private_memory_bytes,
+                code_hash: self.code_hash,
+                pc: self.pc,
+                gas_limit: self.gas_limit,
+                max_cycles: self.max_cycles,
+                trace_mode: self.trace_mode,
+                zk_mode: self.zk_mode,
+                zk_trace_enabled: self.zk_trace_enabled,
+                entrypoint_pc: self.entrypoint_pc,
+                input_bump_next: self.input_bump_next,
+            },
+            RuntimeTemplateBacking {
+                cache_reservation,
+                _allocation_lease: allocation_lease,
+            },
+        ))
     }
     /// Restore a warmed VM to a previously captured post-load baseline.
     ///
@@ -3159,7 +3098,7 @@ impl IVM {
         self.entrypoint_pc = template.entrypoint_pc;
         self.input_bump_next = template.input_bump_next;
         self.set_host(DefaultHost::default());
-        self.reset();
+        self.reset_execution_state();
         self.zk_mode = template.zk_mode;
         self.registers.restore_from_template(&template.registers);
         self.private_memory_bytes = private_memory_bytes;
@@ -3428,12 +3367,40 @@ impl IVM {
     pub fn memory_log(&self) -> &[MemEvent] {
         &self.mem_log.events
     }
-    /// Return an owned snapshot of register events collected during the last run.
+    /// Capture detached diagnostics through the original State/cache allocation pool.
     ///
-    /// The snapshot cannot alias the active logger while a host callback reads
-    /// registers or replaces the VM.
-    pub fn register_log(&self) -> Vec<zk::RegEvent> {
-        self.reg_log.lock().events.clone()
+    /// The register logger stays locked during complete demand calculation and
+    /// copying. Its source remains unchanged; all refund callbacks run after the
+    /// guard leaves. This is optional local diagnostic data, never proof admission.
+    ///
+    /// # Errors
+    /// Refuses foreign parent custody, unavailable original credit, malformed
+    /// internal trace geometry or physical allocation before publishing a copy.
+    pub fn try_diagnostic_snapshot(
+        &self,
+        budget: &mv::allocation::AllocationBudget,
+    ) -> Result<zk::DiagnosticTraceSnapshot, VMError> {
+        if self
+            .memory
+            .allocation_budget()
+            .is_some_and(|original| !original.same_pool(budget))
+        {
+            return Err(VMError::HostUnavailable);
+        }
+        budget.with_deferred_refund_notifications(|_| {
+            let register_log = self.reg_log.lock();
+            let source = zk::DiagnosticTraceSource {
+                registers: zk::DiagnosticRegisterSource::Deltas(&self.trace_log.entries),
+                constraints: &self.constraints.list,
+                memory_events: &self.mem_log.events,
+                register_events: &register_log.events,
+                steps: &self.step_log.steps,
+            };
+            let plan = source.allocation_plan()?;
+            let mut parent = crate::execution_memory::ExecutionMemoryLease::reserve(budget, plan)
+                .map_err(VMError::AllocationDeferred)?;
+            source.try_snapshot_from_parent(&mut parent)
+        })
     }
     fn proof_register_log_handle(&self) -> zk::SharedRegLog {
         if self.host_trace_log_detached
@@ -3663,10 +3630,6 @@ impl IVM {
     }
     pub fn delta_register_trace(&self) -> &[zk::DeltaEntry] {
         &self.delta_trace.entries
-    }
-    /// Access the register trace collected during the last run when zero-knowledge padding was enabled.
-    pub fn register_trace(&self) -> Vec<RegisterState> {
-        self.trace_log.expand()
     }
     /// Access per-cycle Merkle roots collected during the last run.
     pub fn step_log(&self) -> &[zk::StepEntry] {
@@ -5972,6 +5935,9 @@ impl IVM {
                             Err(VMError::PrivacyViolation) => {
                                 return Err(VMError::PrivacyViolation);
                             }
+                            Err(error) if error.execution_deferral().is_some() => {
+                                return Err(error);
+                            }
                             Err(_) => None,
                         };
                         let ok = if let Some(payload_len) = payload_len {
@@ -6869,9 +6835,9 @@ mod tests {
             .try_insert(invalid..invalid + 1)
             .unwrap();
         let before = vm.private_memory_bytes.try_clone().unwrap();
-        assert!(!vm.scrub_private_memory());
+        assert_eq!(vm.scrub_private_memory(), Err(VMError::PrivacyViolation));
         assert_eq!(vm.private_memory_bytes, before);
-        assert_eq!(vm.memory.load_u8(start).unwrap(), 0);
+        assert_eq!(vm.memory.load_u8(start).unwrap(), 0xA5);
     }
     #[test]
     fn missing_allowed_syscall_metering_entry_fails_closed() {
@@ -7170,7 +7136,8 @@ mod tests {
     #[test]
     fn syscall_output_privacy_finalization_uses_only_normative_signatures() {
         let mut vm = IVM::new(u64::MAX);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         for register in 10..=12 {
             vm.registers.set_tag(register, true);
         }
@@ -7746,6 +7713,7 @@ mod tests {
         vm.run().expect("negative compact jump reaches halt");
         assert_eq!(vm.register(7), 9);
     }
+    mod read_deferrals;
     mod runtime_memory;
 
     #[test]
@@ -8411,7 +8379,7 @@ seiyaku Demo {
         assert!(vm.predecoded.is_some());
         assert!(vm.prepared_contains_pc(literal_pc));
         vm.set_register(31, 0);
-        vm.reset();
+        vm.reset().expect("private lifecycle cleanup succeeds");
         assert_eq!(vm.pc(), literal_pc);
         assert_eq!(vm.register(31), vm.memory.stack_top());
         assert!(vm.prepared_contains_pc(literal_pc));

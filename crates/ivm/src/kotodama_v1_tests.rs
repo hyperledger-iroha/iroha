@@ -50,7 +50,7 @@ fn run_transaction<H: IVMHost + 'static>(
     host::<H>(vm).begin_tx(declared).expect("begin transaction");
     vm.load_program(code).expect("load transaction");
     vm.set_gas_limit(1_000_000_000);
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     vm.select_entrypoint("main")
         .expect("select public transaction entrypoint");
     let ran = vm.run().is_ok();

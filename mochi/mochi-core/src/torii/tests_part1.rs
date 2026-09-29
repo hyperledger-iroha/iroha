@@ -1376,7 +1376,6 @@ fn sample_block_with_result(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &SAMPLE_OUTPUT_LIMITS,
         )
         .expect("attach aligned sample transaction result");
@@ -1456,7 +1455,6 @@ fn block_summary_and_smoke_join_keep_scheduled_outputs_separate_from_network_inp
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &SAMPLE_OUTPUT_LIMITS,
         )
         .expect("attach distinct network and time outputs");

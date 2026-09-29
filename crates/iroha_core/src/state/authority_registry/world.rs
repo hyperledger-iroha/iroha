@@ -494,8 +494,6 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Table { key: schema::<(LaneId, AccountId)>(), value: schema::<(AssetId, Quantity)>() }));
     public_lane_stake_reserves: Storage<AssetId, Quantity> => ("world.public_lane_stake_reserves",
         Role::Derived { sources: &["world.public_lane_stake_custody", "world.public_lane_stake_shares", "world.public_lane_validators", "world.assets"], check: DerivationCheck::Rebuild("state::stake_reserves::validate_public_lane_stake_reserves reconstructs exact pinned custody aggregate and checks bonded/pending shares and asset backing at both cuts") });
-    lane_relay_emergency_validators: Storage<LaneId, LaneRelayEmergencyValidatorSet> => ("world.lane_relay_emergency_validators",
-        Role::Canonical(Canonical::Table { key: schema::<LaneId>(), value: schema::<LaneRelayEmergencyValidatorSet>() }));
     zk_assets: Storage<AssetDefinitionId, ZkAssetState> => ("world.zk_assets",
         Role::Canonical(Canonical::Table { key: schema::<AssetDefinitionId>(), value: schema::<ZkAssetState>() }));
     confidential_policy_transition_index: Storage<(u64, AssetDefinitionId), ()> => ("world.confidential_policy_transition_index",

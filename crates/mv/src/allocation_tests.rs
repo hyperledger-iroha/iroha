@@ -1024,3 +1024,20 @@ fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
 
 #[path = "allocation/refund_batch_tests.rs"]
 mod refund_batch_tests;
+
+#[test]
+fn pool_identity_requires_same_owner_and_never_admits_credit() {
+    let original = AllocationBudget::new(0);
+    let shared = original.clone();
+    let independent = AllocationBudget::new(0);
+    assert!(original.same_pool(&shared));
+    assert!(shared.same_pool(&original));
+    assert!(!original.same_pool(&independent));
+    assert!(!independent.same_pool(&shared));
+    shared.set_limit_bytes(17);
+    assert!(original.same_pool(&shared));
+    assert_eq!(original.limit_bytes(), 17);
+    assert_eq!(independent.limit_bytes(), 0);
+    assert_eq!(original.reserved_bytes(), 0);
+    assert_eq!(independent.reserved_bytes(), 0);
+}

@@ -15,7 +15,6 @@ use std::{
 struct Disk {
     _temp: tempfile::TempDir,
     store: PathBuf,
-    merge: PathBuf,
     genesis: PathBuf,
     context: PathBuf,
     carrier: PathBuf,
@@ -44,8 +43,6 @@ impl Disk {
             disk.append_block_to_chain(&height.block).unwrap();
         }
         drop(disk);
-        let merge = store.join("merge.log");
-        write(&merge, &[]);
         let archive = store.join("native-contexts");
         fs::create_dir(&archive).unwrap();
         fs::set_permissions(&archive, fs::Permissions::from_mode(0o700)).unwrap();
@@ -94,7 +91,6 @@ impl Disk {
         Self {
             _temp: temp,
             store,
-            merge,
             genesis,
             context,
             carrier: output.join("carrier.nrt"),
@@ -127,8 +123,6 @@ impl Disk {
             max_committed_blocks: 1024,
             max_store_data_bytes: 16 * 1024 * 1024,
             max_carrier_bytes: 1024 * 1024,
-            max_merge_log_bytes: 1024 * 1024,
-            max_merge_frames: 1024,
             max_output_bytes: 16 * 1024 * 1024,
             max_decode_allocation_bytes: 32 * 1024 * 1024,
             owner_uid: fs::metadata(&self.store).unwrap().uid(),
@@ -147,7 +141,6 @@ impl Disk {
             plan.network_id,
             plan.genesis_epoch_context_id,
             &self.store,
-            &self.merge,
             self.reader(),
             limits,
             CollectedOutputPair::admit(&self.carrier, &self.queries, limits)?,
@@ -312,7 +305,6 @@ fn collection_rejects_independent_epoch_network_original_genesis_and_all_work_bo
                 epoch,
                 &genesis,
                 &disk.store,
-                &disk.merge,
                 reader,
                 limits
             )

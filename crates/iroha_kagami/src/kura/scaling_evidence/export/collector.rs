@@ -81,7 +81,6 @@ pub(crate) fn collect_native_inputs(
     genesis_epoch_context_id: [u8; 32],
     original_genesis: &[u8],
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     limits: CollectionLimits,
 ) -> Result<CollectedNativeInputs> {
@@ -126,7 +125,7 @@ pub(crate) fn collect_native_inputs(
         budget,
         NonZeroUsize::new(limits.context_bytes).ok_or_else(|| eyre!("zero context admission"))?,
     )?;
-    let mut reader = CanonicalKuraEvidenceReader::open(block_store, merge_log, reader_limits)?;
+    let mut reader = CanonicalKuraEvidenceReader::open(block_store, reader_limits)?;
     let mut native = NativeExecutionEvidenceVerifier::new(
         chain_id.clone(),
         network,
@@ -310,11 +309,6 @@ pub(crate) fn collect_native_inputs(
             lane_evidence,
         });
     }
-    reader.scan_merge_entries(&[], |_, _, _| {
-        Err(CanonicalKuraEvidenceError::Invalid(
-            "unexpected native merge selection",
-        ))
-    })?;
     let disk = reader.finish()?;
     ensure!(
         disk.committed_height() == reader_limits.last_height

@@ -252,12 +252,11 @@ fn open_kura_read_only(config: &Config) -> Result<Arc<Kura>, String> {
     kura_config.init_mode = InitMode::Fast;
     // TODO: Fast mode refuses imported hash-only history; stores that were bootstrapped from a
     // signed snapshot lineage cannot be checked until a read-only provisional opener exists.
-    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
         &kura_config,
         &config.nexus.lane_config,
         &config.nexus.configured_lane_catalog,
         &config.snapshot.bootstrap,
-        &config.sumeragi.limits,
     )
     .map(|(kura, _)| kura)
     .map_err(|error| {
@@ -291,7 +290,7 @@ fn verify_retained_bodies(store_root: &Path, kura: &Kura, tip_height: u64) -> Re
     }
     let canonical = std::fs::canonicalize(store_root)
         .map_err(|error| format!("cannot resolve {}: {error}", store_root.display()))?;
-    let mut store = BlockStore::open_read_only(Kura::canonical_storage_paths(&canonical).0)
+    let mut store = BlockStore::open_read_only(Kura::canonical_storage_path(&canonical))
         .map_err(|error| format!("cannot open the Kura block journals read-only: {error}"))?;
     let mut indices = vec![
         BlockIndex {
@@ -413,6 +412,7 @@ fn snapshot_restore_dry_run(
         config.snapshot.max_payload_bytes,
         config.snapshot.resources,
         verification_key,
+        &config.common.chain,
         &NetworkId::from_genesis_hash(config.genesis.expected_hash),
         &config.zk,
         &config.snapshot.bootstrap,

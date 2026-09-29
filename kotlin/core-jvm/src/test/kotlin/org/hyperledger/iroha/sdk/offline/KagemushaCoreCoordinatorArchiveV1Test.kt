@@ -81,9 +81,29 @@ class KagemushaCoreCoordinatorArchiveV1Test {
         val value = KagemushaCoreCoordinatorArchiveV1.decodeRedemptionReceiptShapeExact(archive("redemption_terminal_receipt"))
         val high = KagemushaDeviceRedemptionTerminalReceiptV1(1, value.networkId(), value.operationId(), value.redemptionId(),
             value.terminalNullifier(), value.envelopeDigest(), value.reserveReceiptDigest(), value.authenticatedStatusDigest(),
-            -1L, value.heightContextId())
+            -1L, value.finalizedBlockHash(), value.finalizedCoreHash(), value.finalizedResult())
         assertEquals(-1L, KagemushaCoreCoordinatorArchiveV1.decodeRedemptionReceiptShapeExact(
             KagemushaCoreCoordinatorArchiveV1.encodeRedemptionReceiptShape(high)).finalizedBlockHeight)
+    }
+
+    @Test fun `native receipt facts are required and defensively copied`() {
+        val value = KagemushaCoreCoordinatorArchiveV1.decodeRedemptionReceiptShapeExact(archive("redemption_terminal_receipt"))
+        fun copy(height: Long = value.finalizedBlockHeight,
+            block: ByteArray = value.finalizedBlockHash(), core: ByteArray = value.finalizedCoreHash(),
+            result: ByteArray = value.finalizedResult()) = KagemushaDeviceRedemptionTerminalReceiptV1(
+                1, value.networkId(), value.operationId(), value.redemptionId(), value.terminalNullifier(),
+                value.envelopeDigest(), value.reserveReceiptDigest(), value.authenticatedStatusDigest(),
+                height, block, core, result)
+        for (height in listOf(0L, 1L)) assertFailsWith<IllegalArgumentException> { copy(height = height) }
+        assertFailsWith<IllegalArgumentException> { copy(block = ByteArray(32)) }
+        assertFailsWith<IllegalArgumentException> { copy(core = ByteArray(32)) }
+        assertFailsWith<IllegalArgumentException> { copy(result = ByteArray(32)) }
+        val block = value.finalizedBlockHash(); val core = value.finalizedCoreHash(); val result = value.finalizedResult()
+        val copied = copy(block = block, core = core, result = result)
+        block.fill(0); core.fill(0); result.fill(0)
+        copied.finalizedBlockHash().fill(0); copied.finalizedCoreHash().fill(0); copied.finalizedResult().fill(0)
+        assertContentEquals(archive("redemption_terminal_receipt"),
+            KagemushaCoreCoordinatorArchiveV1.encodeRedemptionReceiptShape(copied))
     }
 
     @Test fun `public projection arrays remain defensive and terminal digest is domain bound`() {

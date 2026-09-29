@@ -56,11 +56,6 @@ fn captured_signed_transaction_owner_identities() {
         "b2af78f4ab51dfb6898be9939425dfe4",
         "b2af78f4ab51dfb6898be9939425dfe4",
     );
-    check::<super::signed::TransactionAdmissionIntent>(
-        "iroha_data_model::transaction::signed::model::TransactionAdmissionIntent",
-        "cc5f0f24d7a1702f574e228e683feae0",
-        "cc5f0f24d7a1702f574e228e683feae0",
-    );
     check::<super::signed::TransactionPayload>(
         "iroha_data_model::transaction::signed::model::TransactionPayload",
         "6bb8ee3fc1560f7ab7a11c3ec37b1d36",

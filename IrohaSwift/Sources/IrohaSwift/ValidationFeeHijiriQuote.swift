@@ -6,7 +6,7 @@ import Darwin
 
 /// Errors raised by the authoritative native-Norito Hijiri quote boundary.
 public enum ValidationFeeHijiriQuoteError: Error, Equatable, Sendable {
-    /// The exact ABI-24 bridge or either additive quote symbol is unavailable.
+    /// The exact ABI-25 bridge or either additive quote symbol is unavailable.
     case bridgeUnavailable
     /// Native request encoding or response verification rejected the supplied bytes.
     case nativeRejected(Int32)
@@ -175,7 +175,7 @@ public struct ValidationFeeHijiriQuoteV1: Decodable, Equatable, Sendable {
 /// Authoritative native-Norito codec and verifier for V1 Hijiri quotes.
 public enum ValidationFeeHijiriQuoteNative {
     /// Native bridge ABI carrying the additive quote symbols.
-    public static let requiredBridgeAbiVersion: UInt32 = 24
+    public static let requiredBridgeAbiVersion: UInt32 = 25
 
     /// Encodes one exact canonical bare-Norito request.
     public static func encodeRequestV1(

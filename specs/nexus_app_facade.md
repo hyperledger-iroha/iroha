@@ -8,7 +8,7 @@ V1 covers app-role Connect plus numeric asset transfers:
 
 1. Create a Connect app session and wallet launch URI.
 2. Wait for wallet approval and capture the approved account/signing key.
-3. Build canonical signable transfer payload bytes with `Ordinary` admission and a payload hash.
+3. Build canonical nine-field signable transfer payload bytes and a payload hash.
 4. Request a wallet signature.
 5. Finalize the signed transaction, submit it to Torii, and wait for a terminal
    pipeline status.

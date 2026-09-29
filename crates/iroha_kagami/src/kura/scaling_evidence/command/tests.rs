@@ -90,8 +90,6 @@ fn reader_limits_preserve_each_independently_supplied_bound() {
         max_committed_blocks: 9,
         max_store_data_bytes: 1000,
         max_carrier_bytes: 100,
-        max_merge_log_bytes: 200,
-        max_merge_frames: 7,
         reader_max_output_bytes: 900,
         max_decode_allocation_bytes: 500,
         owner_uid: 42,
@@ -107,21 +105,16 @@ fn reader_limits_preserve_each_independently_supplied_bound() {
         (2, 4, 9)
     );
     assert_eq!(
-        (
-            limits.max_store_data_bytes,
-            limits.max_carrier_bytes,
-            limits.max_merge_log_bytes
-        ),
-        (1000, 100, 200)
+        (limits.max_store_data_bytes, limits.max_carrier_bytes),
+        (1000, 100)
     );
     assert_eq!(
         (
-            limits.max_merge_frames,
             limits.max_output_bytes,
             limits.max_decode_allocation_bytes,
             limits.owner_uid
         ),
-        (7, 900, 500, 42)
+        (900, 500, 42)
     );
 }
 

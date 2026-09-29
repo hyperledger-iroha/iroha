@@ -23,9 +23,7 @@ impl CommittedNetworkProofFixture {
 
     /// Inject malformed stored wire below live admission, then sign its exact bytes.
     /// This models hostile persisted state without requiring the live writer to accept it.
-    pub(crate) fn with_malformed_target(
-        target: impl FnOnce(&SignedBlock) -> SignedBlock,
-    ) -> Self {
+    pub(crate) fn with_malformed_target(target: impl FnOnce(&SignedBlock) -> SignedBlock) -> Self {
         Self::build(target, true, true)
     }
 
@@ -36,7 +34,7 @@ impl CommittedNetworkProofFixture {
     ) -> Self {
         let (root, _config, kura) = kura_root_fixture(nonzero!(4_usize));
         establish_dummy_store_primary_anchor(&kura);
-        let parent = DummyBlocks::new().next_with_results();
+        let parent = NativeBlocks::new().next();
         let target = Arc::new(target(&parent));
         assert_eq!(target.header().height().get(), 2);
         assert_eq!(target.header().prev_block_hash(), Some(parent.hash()));
@@ -49,13 +47,19 @@ impl CommittedNetworkProofFixture {
                 );
                 {
                     let mut store = kura.block_store.lock();
-                    store.append_block_to_chain(block)
+                    store
+                        .append_block_to_chain(block)
                         .expect("inject malformed canonical wire into the physical fixture");
-                    store.flush_pending_fsync(true)
+                    store
+                        .flush_pending_fsync(true)
                         .expect("retain the malformed fixture's exact durable slot");
                 }
-                kura.block_data.lock().push((block.hash(), Some(Arc::clone(block))));
-                kura.block_height_index.lock().insert(block.hash(), nonzero!(2_usize));
+                kura.block_data
+                    .lock()
+                    .push((block.hash(), Some(Arc::clone(block))));
+                kura.block_height_index
+                    .lock()
+                    .insert(block.hash(), nonzero!(2_usize));
                 continue;
             }
             kura.store_block(Arc::clone(block))

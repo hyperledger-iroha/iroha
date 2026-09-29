@@ -79,6 +79,17 @@ pub enum EntrypointReturnDecodeError {
         /// Structured VM error rendered without exposing private data.
         reason: ivm::VMError,
     },
+    /// Local resource admission could not complete return collection.
+    ///
+    /// This is an unfinished local attempt, not malformed guest data. The
+    /// original refusal retains its allocation pool and release observation.
+    #[error("contract return collection deferred at word {word_index}: {reason}")]
+    ExecutionDeferred {
+        /// Result-table word whose access could not be admitted locally.
+        word_index: usize,
+        /// Original VM deferral, including its resource retry owner.
+        reason: ivm::VMError,
+    },
     /// An Option/Result tag or boolean is not the canonical scalar zero or one.
     #[error(
         "contract return at word {word_index} has non-canonical {role} value {value}; expected 0 or 1"
@@ -403,7 +414,12 @@ fn handle_decode_error(
     kind: &'static str,
     error: ivm::VMError,
 ) -> EntrypointReturnDecodeError {
-    if error == ivm::VMError::PrivacyViolation {
+    if error.execution_deferral().is_some() {
+        EntrypointReturnDecodeError::ExecutionDeferred {
+            word_index,
+            reason: error,
+        }
+    } else if error == ivm::VMError::PrivacyViolation {
         EntrypointReturnDecodeError::Privacy {
             word_index,
             reason: error,
@@ -416,6 +432,25 @@ fn handle_decode_error(
         }
     }
 }
+impl EntrypointReturnDecodeError {
+    /// Recover the nested-call VM failure before local attempt classification.
+    ///
+    /// Local resource refusals and privacy failures retain their original VM
+    /// reason. Only the caller's lower gas-affordability record bound becomes
+    /// out-of-gas; malformed values and the protocol size cap remain decode errors.
+    pub(crate) fn into_nested_vm_error(self) -> ivm::VMError {
+        match self {
+            Self::ExecutionDeferred { reason, .. } | Self::Privacy { reason, .. } => reason,
+            Self::RecordTooLarge { max_bytes, .. }
+                if max_bytes < MAX_ENTRYPOINT_RETURN_RECORD_BYTES =>
+            {
+                ivm::VMError::OutOfGas
+            }
+            _ => ivm::VMError::DecodeError,
+        }
+    }
+}
+
 fn list_shape_error(word_index: usize, reason: impl Into<String>) -> EntrypointReturnDecodeError {
     EntrypointReturnDecodeError::InvalidValue {
         word_index,
@@ -1384,6 +1419,7 @@ fn collect_entrypoint_return_record(
 /// # Errors
 /// Returns an error for malformed schemas, private values, non-canonical
 /// tags/booleans, malformed typed pointer payloads, or a record over 1 MiB.
+/// Local memory admission failures retain the original execution deferral.
 pub fn encode_entrypoint_return_record(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
@@ -2000,7 +2036,8 @@ pub fn decode_entrypoint_return_record(
 ///
 /// # Errors
 /// Returns an error for malformed schemas, non-canonical words, private
-/// values/TLVs, schema-binding failures, or typed decode failures.
+/// values/TLVs, schema-binding failures, or typed decode failures. Local memory
+/// admission failures retain the original execution deferral.
 pub fn decode_entrypoint_return(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
@@ -3159,7 +3196,8 @@ mod tests {
             ],
         };
         let mut vm = completed_return_vm(1);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         let none =
             ivm::sum::allocate_words(&mut vm, SumLayoutV1::option(1).unwrap(), 0, &[]).unwrap();
         set_result_word(&mut vm, 0, none);
@@ -3296,3 +3334,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+pub(crate) mod resource_tests;

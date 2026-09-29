@@ -109,7 +109,7 @@ test("fee verification binds every projection to the selected prefix before ente
   const calls = [];
   const stop = new Error("owner reached");
   const runtime = createNativeRuntime({
-    connectNoritoBridgeAbiVersion: () => 24,
+    connectNoritoBridgeAbiVersion: () => 25,
     validationFeeCurrentPolicyProofRequestV1() {},
     validationFeeHijiriQuoteRequestV1() {},
     validationFeeVerifyCurrentPolicyProofV1(...args) { calls.push(["policy", args.at(-1)]); throw stop; },
@@ -121,7 +121,7 @@ test("fee verification binds every projection to the selected prefix before ente
     schema: "iroha.validation-fee-ledger-binding.v1",
     networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)),
     policyChainGenesisHash: "35".repeat(32),
-    checkpoint: { height: 100, contextId: "57".repeat(32) },
+    checkpoint: { checkpointNorito: Buffer.of(1, 2, 3) },
   };
   for (const prefix of [undefined, null, "369", 369n, -1, 65536, 0.5, NaN, Infinity]) {
     assert.throws(() => policy.verifyValidationFeeCurrentPolicyProofV1(Buffer.of(1), binding, binding.checkpoint, prefix), /networkPrefix/);

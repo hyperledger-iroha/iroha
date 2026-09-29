@@ -2254,7 +2254,7 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
             .expect("evidence-list kind schema");
         assert_eq!(
             kind.get("enum").and_then(Value::as_array),
-            Some(&vec![Value::from("SumeragiV2Equivocation")])
+            Some(&vec![Value::from("NativeSumeragiEvidence")])
         );
         let count = openapi_operation(document, COUNT_PATH, "get");
         let count_description = count
@@ -2309,13 +2309,14 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
         &[
             "kind",
             "class",
+            "instance",
             "height",
-            "view",
             "epoch",
-            "signer",
             "context_id",
-            "artifact_hash_1",
-            "artifact_hash_2",
+            "authority_generation",
+            "offenders",
+            "safety_violation",
+            "native_frame_hash",
             "recorded_height",
             "recorded_view",
             "recorded_ms",
@@ -2331,6 +2332,12 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
         &[],
     );
     assert_strict_object_schema(schemas, "SumeragiEvidenceCountResponse", &["count"], &[]);
+    assert_strict_object_schema(
+        schemas,
+        "SumeragiEvidenceOffender",
+        &["signer", "peer_id"],
+        &[],
+    );
     let record = schemas
         .get("SumeragiEvidenceAuditRecord")
         .and_then(Value::as_object)
@@ -2353,7 +2360,7 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("const"))
             .and_then(Value::as_str),
-        Some("SumeragiV2Equivocation")
+        Some("NativeSumeragiEvidence")
     );
     let classes = properties
         .get("class")
@@ -2366,11 +2373,22 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         classes,
-        ["proposal", "phase_vote", "timeout_vote"]
-            .into_iter()
-            .collect()
+        [
+            "proposal",
+            "phase_vote",
+            "timeout_vote",
+            "invalid_proposal",
+            "conflicting_certificates"
+        ]
+        .into_iter()
+        .collect()
     );
-    for hash in ["context_id", "artifact_hash_1", "artifact_hash_2"] {
+    for hash in [
+        "instance",
+        "context_id",
+        "authority_generation",
+        "native_frame_hash",
+    ] {
         assert_eq!(
             properties
                 .get(hash)

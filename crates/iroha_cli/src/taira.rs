@@ -1,7 +1,5 @@
 //! Taira public testnet diagnostics and write canaries.
-use crate::{
-    CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_admission_and_expiry,
-};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_expiry};
 use eyre::{Context, Result, eyre};
 use iroha::{
     blocking::Client as BlockingIrohaClient,
@@ -21,7 +19,7 @@ use iroha::{
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         prelude::{SignedTransaction, TransactionEntrypoint},
-        transaction::{Executable, FeePaymentIntent, TransactionAdmissionIntent},
+        transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -1843,7 +1841,7 @@ fn submit_prepared_inrou_until(
                 if observation_transport_unavailable(&error)
                     || error.chain().any(|cause| {
                         cause
-                            .downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
+                            .downcast_ref::<iroha::client::TransactionDispatchOutcomeUnknownError>()
                             .is_some()
                     }) => {}
             Err(error) => return Err(error),
@@ -4407,12 +4405,11 @@ fn prepare_final_canary_operation(
     insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
     let instruction = Log::new(LogLevel::INFO, message);
     let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) = quote_and_sign_transaction_with_admission_and_expiry(
+    let (transaction, fee_quote) = quote_and_sign_transaction_with_expiry(
         &client,
         executable,
         fee_payment.clone(),
         metadata,
-        TransactionAdmissionIntent::Ordinary,
         binding.execution_expires_at_unix_ms,
     )
     .wrap_err("failed to quote and sign exact Taira canary transaction")?;
@@ -4863,9 +4860,6 @@ fn validate_prepared_transaction_closure(
     }
     match operation {
         PreparedTransactionOperationV1::FinalCanary(operation) => {
-            if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
-                eyre::bail!("prepared final canary requires Ordinary admission");
-            }
             let expected_message = prepared_canary_message(&operation.binding)?;
             let expected_semantic = prepared_semantic_sha256(
                 &operation.binding,
@@ -9249,7 +9243,6 @@ mod tests {
                 .into(),
             ))
             .with_metadata(metadata.clone())
-            .with_admission_intent(intent)
             .try_sign(key_pair.private_key())
             .unwrap();
             let wire = transaction.encode_wire_v1().unwrap();

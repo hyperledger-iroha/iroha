@@ -3518,8 +3518,6 @@ impl MaybeTelemetry {
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
                 debug_output_new_blocks: false,
-                merge_ledger_cache_capacity:
-                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             };
@@ -7600,7 +7598,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list (0..=10000). Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by the sole first-release kind: `SumeragiV2Equivocation`.
+    /// Optional filter by the sole first-release kind: `NativeSumeragiEvidence`.
     pub kind: Option<String>,
 }
 ( Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
@@ -7640,13 +7638,13 @@ fn parse_evidence_list_usize(value: &str, field: &'static str) -> Result<usize, 
     })
 }
 fn validate_evidence_list_kind(value: &str) -> Result<(), Error> {
-    if value == "SumeragiV2Equivocation" {
+    if value == "NativeSumeragiEvidence" {
         Ok(())
     } else {
         Err(Error::AppQueryValidation {
             code: "sumeragi_evidence_kind_invalid",
             message: format!(
-                "unsupported evidence kind `{value}`; expected SumeragiV2Equivocation"
+                "unsupported evidence kind `{value}`; expected NativeSumeragiEvidence"
             ),
         })
     }
@@ -7794,10 +7792,11 @@ mod evidence_list_query_contract_tests {
         EvidenceListQuery::try_from(raw_query(
             Some("1"),
             Some("0"),
-            Some("SumeragiV2Equivocation"),
+            Some("NativeSumeragiEvidence"),
         ))
         .expect("the sole current evidence kind must be accepted");
         for kind in [
+            "SumeragiV2Equivocation",
             "DoublePrepare",
             "DoubleCommit",
             "InvalidQc",
@@ -7914,7 +7913,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
     let items: Vec<norito::json::Value> = records
         .iter()
         .map(|record| evidence_to_json(record))
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let payload = json_object(vec![json_entry("total", total), json_entry("items", items)]);
     bounded_sumeragi_evidence_list_json_response(
         &payload,
@@ -9203,71 +9202,39 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
     lifecycle.insert("details".into(), details);
     Value::Object(lifecycle)
 }
-fn evidence_to_json(rec: &EvidenceRecord) -> Value {
-    use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
-    use norito::codec::Encode as _;
-    let evidence = &rec.evidence.equivocation;
-    let (class, round, signer, first, second) = match &evidence.conflict {
-        SumeragiV2Equivocation::Proposal { first, second } => (
-            "proposal",
-            first.round,
-            first.proposer,
-            first.encode(),
-            second.encode(),
-        ),
-        SumeragiV2Equivocation::PhaseVote { first, second } => (
-            "phase_vote",
-            first.round,
-            first.signer,
-            first.encode(),
-            second.encode(),
-        ),
-        SumeragiV2Equivocation::TimeoutVote { first, second } => (
-            "timeout_vote",
-            first.round,
-            first.signer,
-            first.encode(),
-            second.encode(),
-        ),
+fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
+    use iroha_sumeragi::message::Evidence as NativeEvidence;
+    let native = rec.evidence.decode_native().map_err(|error| {
+        conversion_error(format!("stored native evidence is not canonical: {error}"))
+    })?;
+    let class = match native {
+        NativeEvidence::ProposalEquivocation(..) => "proposal",
+        NativeEvidence::VoteEquivocation(..) => "phase_vote",
+        NativeEvidence::TimeoutEquivocation(..) => "timeout_vote",
+        NativeEvidence::InvalidProposal { .. } => "invalid_proposal",
+        NativeEvidence::ConflictingCertificates(..) => "conflicting_certificates",
     };
-    let mut map = json::Map::new();
-    map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
-    map.insert("class".into(), Value::from(class));
-    map.insert("height".into(), Value::from(round.height));
-    map.insert("view".into(), Value::from(round.view));
-    map.insert("epoch".into(), Value::from(evidence.context.epoch));
-    map.insert("signer".into(), Value::from(signer));
-    map.insert(
-        "context_id".into(),
-        Value::from(hash_to_hex(round.context_id.0)),
-    );
-    map.insert(
-        "artifact_hash_1".into(),
-        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-            iroha_crypto::Hash::new(first),
-        ))),
-    );
-    map.insert(
-        "artifact_hash_2".into(),
-        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-            iroha_crypto::Hash::new(second),
-        ))),
-    );
-    map.insert(
-        "recorded_height".into(),
-        Value::from(rec.recorded_at_height),
-    );
-    map.insert("recorded_view".into(), Value::from(rec.recorded_at_view));
-    map.insert("recorded_ms".into(), Value::from(rec.recorded_at_ms));
-    map.insert(
-        "consensus_admitted_height".into(),
-        Value::from(rec.recorded_at_height),
-    );
-    map.insert(
-        "penalty_status".into(),
-        evidence_penalty_status_to_json(rec.penalty_status),
-    );
-    Value::Object(map)
+    let attribution = &rec.attribution;
+    let offenders = attribution
+        .offenders
+        .iter()
+        .map(|offender| {
+            norito::json!({
+                "signer": (offender.signer), "peer_id": (offender.peer_id.to_string())
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(norito::json!({
+        "kind": "NativeSumeragiEvidence", "class": class,
+        "instance": (hex::encode(attribution.instance)), "height": (attribution.height),
+        "epoch": (attribution.epoch), "context_id": (hex::encode(attribution.context_id)),
+        "authority_generation": (hex::encode(attribution.authority_generation)),
+        "offenders": offenders, "safety_violation": (attribution.safety_violation),
+        "native_frame_hash": (hash_to_hex(iroha_crypto::Hash::new(rec.evidence.native_frame()))),
+        "recorded_height": (rec.recorded_at_height), "recorded_view": (rec.recorded_at_view),
+        "recorded_ms": (rec.recorded_at_ms), "consensus_admitted_height": (rec.recorded_at_height),
+        "penalty_status": (evidence_penalty_status_to_json(rec.penalty_status))
+    }))
 }
 fn reject_direct_multisig_signing(
     state: &CoreState,
@@ -9426,7 +9393,7 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let decode_started = std::time::Instant::now();
     let tx = tx.into();
-    super::require_current_transaction_admission(tx.admission_intent())?;
+
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
         telemetry,
@@ -9561,7 +9528,7 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     precheck_rejection: Option<AcceptTransactionFail>,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     reject_emergency_fast_transaction_ingress(state.as_ref())?;
-    super::require_current_transaction_admission(tx.signed().admission_intent())?;
+
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -9733,91 +9700,16 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
-    push_accepted_transaction_for_ingress_with_durability(
+    push_accepted_transaction_for_ingress_with_routing(
         queue,
         state,
         accepted_tx,
         routing_plan.map_or(IngressRouting::Derived, IngressRouting::Planned),
     )
 }
-pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_plan: RoutingPlan,
-) -> Result<RoutingDecision> {
-    push_accepted_transaction_for_ingress_with_durability(
-        queue,
-        state,
-        accepted_tx,
-        IngressRouting::StrictDurable(routing_plan),
-    )
-}
-pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_plan: RoutingPlan,
-    expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV1,
-) -> Result<queue::QueuePlanDurableAdmissionV1> {
-    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
-    super::require_current_transaction_route(&routing_plan)?;
-    let pressure = {
-        let block_time = state.sumeragi_block_cadence();
-        queue.refresh_pressure_budget_from_block_time(block_time)
-    };
-    if pressure.saturated_by_age {
-        iroha_logger::debug!(
-            tx_hash = %accepted_tx.hash(),
-            queued = pressure.queued_tx_count,
-            tracked = pressure.tracked_tx_count,
-            capacity = pressure.capacity.get(),
-            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "local queue is latency-saturated; keeping strict durable ingress open until capacity is exhausted"
-        );
-    }
-    queue
-        .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
-            accepted_tx,
-            state.as_ref(),
-            routing_plan,
-            expected_admission_binding,
-        )
-        .map_err(|queue::Failure { tx, err }| {
-            if matches!(err, queue::Error::Full) {
-                iroha_logger::debug!(
-                    tx_hash = %tx.as_ref().hash(),
-                    "queue rejected strict durable transaction due to backpressure"
-                );
-            } else {
-                iroha_logger::warn!(
-                    tx_hash = %tx.as_ref().hash(),
-                    ?err,
-                    "failed to durably admit transaction with an exact queue-plan claim"
-                );
-            }
-            drop(tx);
-            (err, queue.current_backpressure())
-        })
-        .map_err(|(err, backpressure)| Error::PushIntoQueue {
-            source: Box::new(err),
-            backpressure,
-        })
-        .inspect(|claim| {
-            let route = claim.routing_plan.coordinator_route();
-            iroha_logger::debug!(
-                lane = route.lane_id.as_u32(),
-                dataspace = route.dataspace_id.as_u64(),
-                authority_height = claim.context.authority_height,
-                proposal_height = claim.context.proposal_height,
-                "transaction enqueued with a durable queue-plan admission claim"
-            );
-        })
-}
 enum IngressRouting {
     Derived,
     Planned(RoutingPlan),
-    StrictDurable(RoutingPlan),
 }
 impl IngressRouting {
     fn dispatch<A, R>(
@@ -9825,22 +9717,19 @@ impl IngressRouting {
         value: A,
         derived: impl FnOnce(A) -> R,
         planned: impl FnOnce(A, RoutingPlan) -> R,
-        strict_durable: impl FnOnce(A, RoutingPlan) -> R,
     ) -> R {
         match self {
             Self::Derived => derived(value),
             Self::Planned(plan) => planned(value, plan),
-            Self::StrictDurable(plan) => strict_durable(value, plan),
         }
     }
 }
-fn push_accepted_transaction_for_ingress_with_durability(
+fn push_accepted_transaction_for_ingress_with_routing(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing: IngressRouting,
 ) -> Result<RoutingDecision> {
-    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
     match &routing {
         IngressRouting::Derived => {
             let plan = queue
@@ -9853,7 +9742,7 @@ fn push_accepted_transaction_for_ingress_with_durability(
                 })?;
             super::require_current_transaction_route(&plan)?;
         }
-        IngressRouting::Planned(plan) | IngressRouting::StrictDurable(plan) => {
+        IngressRouting::Planned(plan) => {
             super::require_current_transaction_route(plan)?;
         }
     }
@@ -9875,13 +9764,6 @@ fn push_accepted_transaction_for_ingress_with_durability(
         accepted_tx,
         |tx| queue.push_with_lane_with_state(tx, state.as_ref()),
         |tx, plan| queue.push_with_lane_with_state_and_routing_plan(tx, state.as_ref(), plan),
-        |tx, plan| {
-            queue.push_with_lane_with_state_and_routing_plan_strict_durable(
-                tx,
-                state.as_ref(),
-                plan,
-            )
-        },
     );
     result
         .map_err(|queue::Failure { tx, err }| {
@@ -9911,16 +9793,16 @@ fn push_accepted_transaction_for_ingress_with_durability(
             );
         })
 }
+
 #[cfg(test)]
 mod ingress_routing_tests {
     use super::IngressRouting;
     use iroha_core::queue::{RoutingDecision, RoutingPlan};
-    routing_test! { sync strict_durable_routing_always_carries_its_plan
+    routing_test! { sync explicit_routing_preserves_its_exact_plan
         let expected = RoutingDecision::default();
-        let selected = IngressRouting::StrictDurable(RoutingPlan::single(expected)).dispatch(
+        let selected = IngressRouting::Planned(RoutingPlan::single(expected)).dispatch(
             7_u8,
-            |_| panic!("strict durable routing must not use state-derived routing"),
-            |_, _| panic!("strict durable routing must not use an ordinary routing plan"),
+            |_| panic!("explicit routing must not use state-derived routing"),
             |value, plan| (value, plan.coordinator_route()),
         );
         assert_eq!(selected, (7, expected));
@@ -15009,9 +14891,7 @@ pub(crate) fn prepare_contract_call_request(
         arguments,
     };
     let builder = builder
-        .with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-        )
+
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
@@ -21504,8 +21384,7 @@ mod multisig_selector_tests {
             payload["transaction_payload_b64"].as_str().expect("canonical draft"),
         ).expect("decode payload");
         let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
-        assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
+
     }
     fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
         let key = checked_multisig_selector_keypair(0x6c, "derive public contract-call key");
@@ -21557,7 +21436,7 @@ mod multisig_selector_tests {
         let transaction = prepared.transaction.expect("detached transaction");
         transaction.verify_signature().expect("retained signature verifies");
         assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
-        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
+
         assert_eq!(transaction.creation_time(), Duration::from_millis(prepared.response.creation_time_ms));
         assert_eq!(builder.payload().creation_time_ms, prepared.response.creation_time_ms);
         assert!(!prepared.response.submitted, "preparation cannot claim public admission");
@@ -21589,9 +21468,7 @@ mod multisig_selector_tests {
     routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let retired = builder.clone().with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-        );
+        let retired = builder.clone();
         let signature = Signature::try_new(key.private_key(), &retired.payload_hash_bytes()).expect("sign other intent");
         let mut changed = exact.clone();
         changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(retired.encode_payload()));
@@ -21773,8 +21650,7 @@ mod multisig_selector_tests {
         let builder = TransactionBuilder::decode_payload(&bytes).expect("prepared builder");
         assert_eq!(builder.encode_payload(), bytes);
         assert_eq!(builder.payload().creation_time_ms, response.creation_time_ms);
-        assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
+
         let signing_message = base64::engine::general_purpose::STANDARD.decode(
             response.signing_message_b64.as_deref().expect("signing message"),
         ).expect("canonical signing message base64");
@@ -41518,28 +41394,28 @@ enum ExplorerStreamKind {
 }
 app_api_items! {
 pub fn handle_v1_explorer_blocks_stream(
-    kura: Arc<Kura>,
+    source: Arc<iroha_core::state::State>,
     events: EventsSender,
     visibility: ToriiDataspaceReadContext,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(kura, events, visibility, ExplorerStreamKind::Blocks)
+    explorer_stream(source, events, visibility, ExplorerStreamKind::Blocks)
 }
 pub fn handle_v1_explorer_transactions_stream(
-    kura: Arc<Kura>,
+    source: Arc<iroha_core::state::State>,
     events: EventsSender,
     visibility: ToriiDataspaceReadContext,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(kura, events, visibility, ExplorerStreamKind::Transactions)
+    explorer_stream(source, events, visibility, ExplorerStreamKind::Transactions)
 }
 pub fn handle_v1_explorer_instructions_stream(
-    kura: Arc<Kura>,
+    source: Arc<iroha_core::state::State>,
     events: EventsSender,
     visibility: ToriiDataspaceReadContext,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(kura, events, visibility, ExplorerStreamKind::Instructions)
+    explorer_stream(source, events, visibility, ExplorerStreamKind::Instructions)
 }
 fn explorer_stream(
-    kura: Arc<Kura>,
+    source: Arc<iroha_core::state::State>,
     events: EventsSender,
     visibility: ToriiDataspaceReadContext,
     kind: ExplorerStreamKind,
@@ -41552,7 +41428,7 @@ fn explorer_stream(
     let stream = stream::unfold(
         ExplorerStreamState {
             rx: events.subscribe(),
-            kura,
+            source,
             pending: None,
             kind,
             keepalive_interval,
@@ -41588,7 +41464,7 @@ fn explorer_stream(
                                     if !explorer_height_is_new(state.last_block_height, height) {
                                         continue;
                                     }
-                                    match explorer_pending_block(&state.kura, height) {
+                                    match explorer_pending_block(&state.source, height) {
                                         Ok(pending) => {
                                             state.last_block_height = Some(height);
                                             state.pending = Some(pending);
@@ -41634,7 +41510,7 @@ fn explorer_stream(
 }
 struct ExplorerStreamState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
-    kura: Arc<Kura>,
+    source: Arc<iroha_core::state::State>,
     pending: Option<ExplorerPendingBlock>,
     kind: ExplorerStreamKind,
     keepalive_interval: tokio::time::Interval,
@@ -41654,7 +41530,7 @@ struct ExplorerPendingBlock {
     instruction_index: usize,
     block_emitted: bool,
 }
-fn explorer_pending_block(kura: &Kura, height: u64) -> Result<ExplorerPendingBlock> {
+fn explorer_pending_block(source: &iroha_core::state::State, height: u64) -> Result<ExplorerPendingBlock> {
     let height_usize: usize = match height.try_into() {
         Ok(value) => value,
         Err(_) => {
@@ -41672,10 +41548,9 @@ fn explorer_pending_block(kura: &Kura, height: u64) -> Result<ExplorerPendingBlo
         );
         return Err(conversion_error("invalid Explorer carrier height".into()));
     };
-    let hash = kura.get_durable_block_hash(nonzero_height).ok_or_else(explorer_not_found)?;
     let maximum = app_query_limits().max_fetch_size;
-    let carrier = iroha_core::smartcontracts::isi::tx::read_finalized_execution_carrier(
-        kura, nonzero_height, hash, maximum,
+    let carrier = source.read_finalized_execution_carrier(
+        nonzero_height, maximum,
         iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(maximum),
     ).map_err(history_query_error)?;
     Ok(ExplorerPendingBlock {
@@ -44362,7 +44237,10 @@ mod sse_stream_tests {
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let sse = handle_v1_explorer_blocks_stream(
-            Kura::blank_kura_for_testing(),
+            Arc::new(iroha_core::state::State::new(
+                iroha_core::state::World::new(), Kura::blank_kura_for_testing(),
+                iroha_core::query::store::LiveQueryStore::start_test(),
+            )),
             events.clone(),
             ToriiDataspaceReadContext::all_for_tests(),
         );
@@ -45954,8 +45832,6 @@ mod validation_fee_torii_ingress_tests {
             &validation_fee_policy_asset(&policy),
             &policy,
             true,
-        ).with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
         ).sign(user_key_pair.private_key());
         let response = submit_via_public_transaction_handler(Arc::clone(&app), exact_fee_tx).await;
         assert_eq!(
@@ -54591,10 +54467,10 @@ mod prepared_transaction_signature_fixture_tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
+
         .with_metadata(metadata)
         .with_instructions(instructions)
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        ;
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
         builder.set_ttl(Duration::from_secs(3_600));
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
@@ -56188,11 +56064,7 @@ pub(crate) fn validate_current_prepared_transaction_payload(
     queue: &Queue,
     state: &CoreState,
 ) -> Result<()> {
-    if payload.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    {
-        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
-    }
+
     let plan = queue.route_payload_plan_with_state(payload, state)
         .map_err(|error| conversion_error(format!("prepared transaction route is unavailable: {error}")))?;
     if !matches!(plan, RoutingPlan::Single(_)) {
@@ -56208,16 +56080,12 @@ pub(crate) fn prepared_submit_outcome(
     app: &crate::SharedAppState,
     transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
-    if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    {
-        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
-    }
+
     let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
     if app.state.has_committed_entrypoint(entrypoint_hash) {
-        let status = crate::pipeline_status_from_state(&app.state, &app.kura, &transaction_hash)?
+        let status = crate::pipeline_status_from_state(&app.state, &transaction_hash)?
             .ok_or(Error::AppServiceUnavailable {
                 code: "prepared_transaction_status_unavailable",
                 message: "the exact prepared transaction is committed but its canonical outcome is unavailable"
@@ -56453,9 +56321,7 @@ pub async fn handle_v1_accounts_onboard_prepare(
         signer.authority.clone(),
         request.fee_payment.clone(),
     )
-    .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-    )
+
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -56546,13 +56412,7 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    {
-        return Err(prepared_transaction_invalid(
-            "prepared onboarding transaction requires Ordinary admission",
-        ));
-    }
+
     // A known hash is still scoped to the credential that prepared its signed receipt. Only the
     // time-sensitive/live-state checks below are skipped while reconciling response-loss replay.
     validate_onboarding_prepared_receipt_context(
@@ -56887,9 +56747,7 @@ pub async fn handle_v1_accounts_faucet_prepare(
         faucet.authority.clone(),
         request.fee_payment.clone(),
     )
-    .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-    )
+
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -56982,13 +56840,7 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    {
-        return Err(prepared_transaction_invalid(
-            "prepared faucet transaction requires Ordinary admission",
-        ));
-    }
+
     if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
         return Ok((
             StatusCode::OK,

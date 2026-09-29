@@ -392,6 +392,10 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
             tip_hash: [9; 32],
             ..merge
         },
+        SumeragiLaneMerge {
+            tip_result: [9; 32],
+            ..merge
+        },
         SumeragiLaneMerge { from: 2, ..merge },
         SumeragiLaneMerge {
             incarnation: [7; 32],

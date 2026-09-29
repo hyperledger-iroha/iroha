@@ -68,6 +68,8 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
+# Synthetic portable-proof fixtures remain test-only; production exports no fixture constructors.
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 iroha_core = { path = "../iroha_core", default-features = false, features = ["node", "iroha-core-tests"] }
 sorafs_chunker = { workspace = true }

@@ -399,7 +399,7 @@ mod lane_retirement_observer {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
         let scope = lane_reservation_scope(&state, b"cut-owner", b"cut-proposal");
         let other = Hash::new(b"cut-recreated-incarnation");
@@ -563,7 +563,7 @@ mod lane_retirement_observer {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
         );
         let scope = lane_reservation_scope(&state, b"try-observer-owner", b"try-observer-proposal");
         let other_incarnation = Hash::new(b"try-observer-recreated-incarnation");

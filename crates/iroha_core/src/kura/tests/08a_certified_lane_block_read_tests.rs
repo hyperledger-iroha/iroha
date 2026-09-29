@@ -1243,7 +1243,7 @@ fn latest_lane_block_artifact_returns_highest_valid_height() {
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let first = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,

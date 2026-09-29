@@ -15,6 +15,10 @@ use mv::storage::StorageReadOnly;
 const BLOCK_HISTORY_SOURCE: &str = "Canonical SignedBlockWire/finality history in height order";
 const BLOCK_HISTORY_AUTHENTICATION: &str =
     "Kura authenticated recovery prefix; State block-hash publication owner";
+// These exact descriptors audit classification only; the opaque native execution
+// owner and verified restore prefix remain the source of execution authority.
+const NATIVE_EXECUTION_HISTORY_SOURCE: &str = "Original native height, Iroha hash, core header hash and execution result; current and undo cuts outside World";
+const NATIVE_EXECUTION_HISTORY_AUTHENTICATION: &str = "Original worker verified exact quorum and output seal, or original signed-genesis execution; restore verifies the actual certified native prefix and configured chain/network before accepting snapshot claims";
 const SNAPSHOT_HISTORY_SOURCE: &str = "Snapshot-policy-authorized V2 bootstrap trust root bound to exact WSV/Kura network and finality";
 const SNAPSHOT_HISTORY_AUTHENTICATION: &str =
     "snapshot authenticated envelope owner and State startup prevalidation/install boundary";
@@ -96,6 +100,10 @@ fn check_history_field(
     }
     let expected = match field.id {
         "state.block_hashes" => (BLOCK_HISTORY_SOURCE, BLOCK_HISTORY_AUTHENTICATION),
+        "state.native_execution_tip" => (
+            NATIVE_EXECUTION_HISTORY_SOURCE,
+            NATIVE_EXECUTION_HISTORY_AUTHENTICATION,
+        ),
         "state.authenticated_snapshot_v2_bootstrap"
         | "state.authenticated_snapshot_bootstrap_payload" => {
             (SNAPSHOT_HISTORY_SOURCE, SNAPSHOT_HISTORY_AUTHENTICATION)
@@ -254,6 +262,10 @@ pub(crate) fn require_complete_state_inventory() -> Result<(), CompleteInventory
 
 mod composition;
 mod table_capture;
+
+#[cfg(test)]
+#[path = "complete/native_history_tests.rs"]
+mod native_history_tests;
 
 #[cfg(test)]
 mod tests {
@@ -430,10 +442,12 @@ mod tests {
 
     #[test]
     fn actual_state_cannot_claim_complete_authority_while_any_projection_is_required() {
-        assert!(matches!(
+        assert_eq!(
             require_complete_state_inventory(),
-            Err(CompleteInventoryError::RequiredSchema(_))
-        ));
+            Err(CompleteInventoryError::RequiredSchema(
+                "state.kagemusha_v1_runtime_verifier"
+            ))
+        );
     }
 
     #[test]
@@ -470,6 +484,7 @@ mod tests {
     fn historical_derivation_base_is_closed_and_bound_to_its_state_field() {
         for id in [
             "state.block_hashes",
+            "state.native_execution_tip",
             "state.authenticated_snapshot_v2_bootstrap",
             "state.authenticated_snapshot_bootstrap_payload",
         ] {

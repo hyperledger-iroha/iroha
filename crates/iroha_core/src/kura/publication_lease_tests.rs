@@ -382,7 +382,7 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
     let kura = Kura::blank_kura_for_testing();
     for count in 1..=4 {
         for unwind in [false, true] {
-            let mut owner = AcquiredKuraPublicationFences::new(&kura);
+            let mut owner = AcquiredKuraPublicationFences::new();
             owner.prune = Some(kura.prune_lock.lock());
             if count >= 2 {
                 owner.canonical = Some(kura.canonical_chain_lock.lock());
@@ -455,26 +455,21 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
 }
 
 #[test]
-fn cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal() {
-    for failure in [None, Some(false), Some(true)] {
-        let (_directory, kura, expected, hash) =
-            super::super::tests::pending_canonical_merge_capacity_fixture();
-        if let Some(corrupt) = failure {
-            let path = kura.pending_merge_entry_path(hash);
-            if corrupt {
-                std::fs::write(path, b"corrupt exact pending entry").unwrap();
-            } else {
-                std::fs::remove_file(path).unwrap();
-            }
+fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
+    for corrupt in [false, true] {
+        let (_directory, kura, expected) = super::super::tests::pending_native_capacity_fixture();
+        if corrupt {
+            kura.overwrite_commit_marker_for_tests(b"corrupt exact marker")
+                .unwrap();
         }
-        let sidecar = kura.sidecar_lock.lock();
+        let canonical = kura.canonical_chain_lock.lock();
         let mut wait = kura
-            .sidecar_lock
+            .canonical_chain_lock
             .try_lock_or_wait()
             .err()
             .unwrap()
             .wait_for_release();
-        let initial = sidecar.release_deferred();
+        let initial = canonical.release_deferred();
         let callback = Arc::new(ReenterEveryKuraFence {
             kura: Arc::clone(&kura),
             blocked: None,
@@ -486,15 +481,14 @@ fn cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal() {
                 .poll(&mut Context::from_waker(&waker))
                 .is_pending()
         );
-        let result = kura.try_publication_lease();
-        match result {
+        match kura.try_publication_lease() {
             Ok(lease) => {
-                assert!(failure.is_none());
+                assert!(!corrupt);
                 assert_eq!(lease.pending_canonical_bytes(), expected);
                 assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
                 drop(lease);
             }
-            Err(KuraPublicationPreparationError::Storage(_)) => assert!(failure.is_some()),
+            Err(KuraPublicationPreparationError::Storage(_)) => assert!(corrupt),
             Err(error) => panic!("storage refusal must not become Busy: {error:?}"),
         }
         assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
@@ -509,17 +503,16 @@ fn cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal() {
 }
 
 #[test]
-fn repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind() {
-    let (_directory, kura, expected, _) =
-        super::super::tests::pending_canonical_merge_capacity_fixture();
-    let sidecar = kura.sidecar_lock.lock();
+fn repeated_native_pending_lookups_retain_original_fences_through_unwind() {
+    let (_directory, kura, expected) = super::super::tests::pending_native_capacity_fixture();
+    let canonical = kura.canonical_chain_lock.lock();
     let mut wait = kura
-        .sidecar_lock
+        .canonical_chain_lock
         .try_lock_or_wait()
         .err()
         .unwrap()
         .wait_for_release();
-    let initial = sidecar.release_deferred();
+    let initial = canonical.release_deferred();
     let callback = Arc::new(ReenterEveryKuraFence {
         kura: Arc::clone(&kura),
         blocked: None,
@@ -531,27 +524,26 @@ fn repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind() {
             .poll(&mut Context::from_waker(&waker))
             .is_pending()
     );
-    let mut owner = AcquiredKuraPublicationFences::new(&kura);
+    let mut owner = AcquiredKuraPublicationFences::new();
     owner.prune = Some(kura.prune_lock.lock());
     owner.canonical = Some(kura.canonical_chain_lock.lock());
     for _ in 0..3 {
         kura.invalidate_pending_budget_cache();
         assert_eq!(
-            kura.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(&mut owner)
+            kura.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
                 .unwrap(),
             expected
         );
         assert!(owner.sidecar.is_none());
         assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
-        // The real sidecar is physically available before merge-log operations.
-        owner.sidecar = Some(kura.sidecar_lock.try_lock_or_wait().unwrap());
-        owner.release_cold_sidecar().unwrap();
     }
+    owner.geometry = Some(kura.lane_geometry_lock.lock());
+    owner.sidecar = Some(kura.sidecar_lock.lock());
     assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 3);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _original = owner;
-            panic!("cold scan caller unwound");
+            panic!("native pending scan caller unwound");
         }))
         .is_err()
     );
@@ -563,39 +555,4 @@ fn repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind() {
     );
     drop(wait);
     drop(initial);
-}
-
-#[test]
-fn foreign_cold_batch_returns_original_guard_for_joint_cleanup() {
-    let kura = Kura::blank_kura_for_testing();
-    let foreign = Kura::blank_kura_for_testing();
-    let mut owner = AcquiredKuraPublicationFences::new(&kura);
-    owner.prune = Some(kura.prune_lock.lock());
-    owner.sidecar = Some(kura.sidecar_lock.lock());
-    owner.cold_sidecar = Some(foreign.sidecar_lock.deferred_releases());
-    assert!(matches!(
-        owner.release_cold_sidecar(),
-        Err(KuraPublicationPreparationError::Storage(_))
-    ));
-    assert!(owner.sidecar.is_some());
-    assert!(kura.sidecar_lock.try_lock_or_wait().is_err());
-    let callback = Arc::new(ReenterEveryKuraFence {
-        kura: Arc::clone(&kura),
-        blocked: None,
-        wakes: AtomicUsize::new(0),
-    });
-    let waker = Waker::from(Arc::clone(&callback));
-    let mut wait = kura
-        .sidecar_lock
-        .try_lock_or_wait()
-        .err()
-        .unwrap()
-        .wait_for_release();
-    assert!(
-        Pin::new(&mut wait)
-            .poll(&mut Context::from_waker(&waker))
-            .is_pending()
-    );
-    drop(owner);
-    assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
 }

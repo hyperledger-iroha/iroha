@@ -139,17 +139,10 @@ final class UpdatePlainConvictionRustGoldenTests: XCTestCase {
         XCTAssertEqual(signedReader.remaining(), 0)
         var payloadReader = CanonicalNoritoReader(data: transactionPayload)
         var fields: [Data] = []
-        for _ in 0..<10 {
+        for _ in 0..<9 {
             fields.append(try payloadReader.readCompactField())
         }
         XCTAssertEqual(payloadReader.remaining(), 0)
-        var admissionReader = CanonicalNoritoReader(data: fields[7])
-        XCTAssertEqual(
-            try admissionReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.ordinary.rawValue
-        )
-        XCTAssertEqual(admissionReader.remaining(), 0)
-
         var executable = CanonicalNoritoReader(data: fields[3])
         XCTAssertEqual(try executable.readUInt32LE(), 0) // Native Instructions
         var instructions = CanonicalNoritoReader(data: try executable.readCompactField())

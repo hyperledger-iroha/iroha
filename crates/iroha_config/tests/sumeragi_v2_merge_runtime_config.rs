@@ -32,7 +32,6 @@ merge_sidecar_outbound_sessions_per_source = 5
 merge_sidecar_outbound_bytes_per_source = 20000000
 merge_sidecar_server_request_gates_per_source = 7
 pending_certified_merge_entry_capacity = 37
-pending_queue_plan_admission_capacity = 41
 pending_control_sidecar_bytes = 30000000
 merge_signing_guard_record_capacity = 31
 merge_signing_guard_record_bytes = 17000000
@@ -67,7 +66,6 @@ merge_signing_guard_total_bytes = 18000000
         7
     );
     assert_eq!(limits.pending_certified_merge_entry_capacity.get(), 37);
-    assert_eq!(limits.pending_queue_plan_admission_capacity.get(), 41);
     assert_eq!(limits.pending_control_sidecar_bytes.get(), 30_000_000);
     assert_eq!(limits.merge_signing_guard_record_capacity.get(), 31);
     assert_eq!(limits.merge_signing_guard_record_bytes.get(), 17_000_000);
@@ -96,7 +94,6 @@ merge_sidecar_outbound_sessions_per_source = 1
 merge_sidecar_outbound_bytes_per_source = {outbound_bytes}
 merge_sidecar_server_request_gates_per_source = 1
 pending_certified_merge_entry_capacity = 1
-pending_queue_plan_admission_capacity = 1
 pending_control_sidecar_bytes = {pending_control_bytes}
 merge_signing_guard_record_capacity = 1
 merge_signing_guard_record_bytes = {record_bytes}
@@ -131,7 +128,6 @@ merge_signing_guard_total_bytes = {total_bytes}
         1
     );
     assert_eq!(limits.pending_certified_merge_entry_capacity.get(), 1);
-    assert_eq!(limits.pending_queue_plan_admission_capacity.get(), 1);
     assert_eq!(
         limits.pending_control_sidecar_bytes.get(),
         pending_control_bytes
@@ -139,4 +135,15 @@ merge_signing_guard_total_bytes = {total_bytes}
     assert_eq!(limits.merge_signing_guard_record_capacity.get(), 1);
     assert_eq!(limits.merge_signing_guard_record_bytes.get(), record_bytes);
     assert_eq!(limits.merge_signing_guard_total_bytes.get(), total_bytes);
+}
+
+#[test]
+fn retired_pending_queue_plan_admission_capacity_is_unknown_configuration() {
+    let error =
+        parse_actual_config("[sumeragi.limits]\npending_queue_plan_admission_capacity = 41\n")
+            .expect_err("retired pending certificate store has no configuration field");
+    assert!(
+        error.contains("pending_queue_plan_admission_capacity"),
+        "{error}"
+    );
 }

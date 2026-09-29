@@ -96,9 +96,6 @@ fn native_preparation_new_admission(
                 11u32,
                 fixture.economic.destination.account().clone(),
             )])
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
             .sign(signer.private_key()),
     );
     let (binding, bytes) = queue_plan_admission_certificate_for_entrypoint_state_test(
@@ -807,7 +804,6 @@ fn native_preparation_publish_later_admission(
             Vec::new(),
             AxtPolicySnapshot::default(),
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();

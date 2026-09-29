@@ -84,7 +84,6 @@ fn fifo(path: &Path) -> File {
 struct Disk {
     files: Files,
     root: PathBuf,
-    log: PathBuf,
     signed: fixture::Fixture,
     request_sequence: Cell<u64>,
 }
@@ -103,12 +102,11 @@ impl Disk {
             store.append_block_to_chain(&height.block).unwrap();
         }
         drop(store);
-        let log = root.join("merge.log");
-        fs::write(&log, []).unwrap();
+
         Self {
             files,
             root,
-            log,
+
             signed,
             request_sequence: Cell::new(0),
         }
@@ -190,8 +188,6 @@ impl Disk {
             max_committed_blocks: 1025,
             max_store_data_bytes: 2 * 1024 * 1024,
             max_carrier_bytes: 1024 * 1024,
-            max_merge_log_bytes: 2 * 1024 * 1024,
-            max_merge_frames: 8,
             max_output_bytes: 2 * 1024 * 1024,
             max_decode_allocation_bytes: 8 * 1024 * 1024,
             owner_uid: fs::metadata(&self.root).unwrap().uid(),
@@ -208,7 +204,6 @@ impl Disk {
             self.signed.plan(),
             self.limits(),
             &self.root,
-            &self.log,
             self.reader_limits(),
             &self.bindings(),
             self.supplied(),
@@ -250,7 +245,6 @@ impl Disk {
         export_bound_request(
             self.request_with(self.signed.plan(), self.limits(), &self.bindings()),
             &self.root,
-            &self.log,
             self.reader_limits(),
             self.bundle_file(),
         )
@@ -476,7 +470,6 @@ fn actual_signed_export_files_and_replay_finish_before_projection() {
         let retained = export_bound_request(
             disk.request_with(disk.signed.plan(), fixture::limits(), &disk.bindings()),
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             disk.bundle_file(),
         )
@@ -591,7 +584,6 @@ fn canonical_bundle_role_mismatch_rejects_after_bounded_read_before_core() {
     let positive = export_bound_request(
         disk.request_with(disk.signed.plan(), fixture::limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         disk.bundle_file(),
     )
@@ -604,7 +596,6 @@ fn canonical_bundle_role_mismatch_rejects_after_bounded_read_before_core() {
     let result = export_bound_request(
         disk.request_with(disk.signed.plan(), fixture::limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         binding(&path),
     );
@@ -815,7 +806,6 @@ fn one_canonical_bundle_authenticates_128_requests_without_per_leaf_files() {
     let retained = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         input,
     )
@@ -840,7 +830,6 @@ fn supplied_bundle_requires_exact_canonical_v1_framing() {
     let positive = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         disk.bundle_file(),
     )
@@ -864,7 +853,6 @@ fn supplied_bundle_requires_exact_canonical_v1_framing() {
             export_bound_request(
                 disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
                 &disk.root,
-                &disk.log,
                 disk.reader_limits(),
                 binding(&path)
             )
@@ -880,7 +868,6 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
     let positive = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         disk.bundle_file(),
     )
@@ -907,7 +894,6 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
             export_bound_request(
                 disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
                 &disk.root,
-                &disk.log,
                 disk.reader_limits(),
                 binding(&path)
             )
@@ -922,7 +908,6 @@ fn supplied_bundle_one_byte_under_admitted_size_rejects_after_actual_positive() 
     let positive = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         disk.bundle_file(),
     )
@@ -934,7 +919,6 @@ fn supplied_bundle_one_byte_under_admitted_size_rejects_after_actual_positive() 
     let failure = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
-        &disk.log,
         disk.reader_limits(),
         input,
     );
@@ -1004,16 +988,14 @@ fn output_equal_to_or_below_actual_core_store_is_rejected_before_stage_creation(
 }
 
 #[test]
-fn separately_located_merge_log_namespace_is_also_protected() {
+fn relocated_native_canonical_namespace_is_protected() {
     let mut disk = Disk::new(1);
-    let log_root = disk.files.ancestor.join("merge-scope");
-    fs::create_dir(&log_root).unwrap();
-    let moved = log_root.join("merge.log");
-    fs::rename(&disk.log, &moved).unwrap();
-    disk.log = moved;
+    let relocated = disk.files.ancestor.join("canonical-scope");
+    fs::rename(&disk.root, &relocated).unwrap();
+    disk.root = relocated.clone();
     let proof = disk.bound_export();
     assert!(!proof.json_projection(MAX_INPUT_BYTES).unwrap().is_empty());
-    let output = log_root.join("proof.norito");
+    let output = relocated.join("proof.norito");
     assert!(
         ProofOutput::admit(&output, MAX_INPUT_BYTES)
             .unwrap()
@@ -1021,7 +1003,7 @@ fn separately_located_merge_log_namespace_is_also_protected() {
             .is_err()
     );
     assert!(!output.exists());
-    assert!(!log_root.join("proof.norito.publishing").exists());
+    assert!(!relocated.join("proof.norito.publishing").exists());
 }
 
 #[test]
@@ -1276,7 +1258,6 @@ fn retained_launcher_has_real_descriptors_and_no_shared_read_offset() {
         let proof = export_bound_request(
             request,
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             disk.bundle_file(),
         )
@@ -1432,7 +1413,6 @@ fn export_and_replay_recheck_request_through_input_and_verification() {
                 export_with_hook(
                     request,
                     &disk.root,
-                    &disk.log,
                     disk.reader_limits(),
                     disk.bundle_file(),
                     hook,
@@ -1483,14 +1463,7 @@ fn aggregate_request_reservation_exact_boundary_and_overflow_precede_second_open
             let result = if replay {
                 replay_with_hook(request, Hash::new(expected.canonical_bytes()), input, hook)
             } else {
-                export_with_hook(
-                    request,
-                    &disk.root,
-                    &disk.log,
-                    disk.reader_limits(),
-                    input,
-                    hook,
-                )
+                export_with_hook(request, &disk.root, disk.reader_limits(), input, hook)
             };
             if excess == 0 {
                 assert!(reached.get());
@@ -1537,7 +1510,6 @@ fn duplicate_request_path_and_inode_cannot_be_read_as_evidence() {
                 export_with_hook(
                     request,
                     &disk.root,
-                    &disk.log,
                     disk.reader_limits(),
                     binding(&other),
                     hook,
@@ -1688,7 +1660,6 @@ fn caught_request_verification_and_publication_panics_return_no_success() {
                 export_with_hook(
                     request,
                     &disk.root,
-                    &disk.log,
                     disk.reader_limits(),
                     disk.bundle_file(),
                     |phase| {
@@ -1888,7 +1859,6 @@ fn scaling_command_arguments(
         let limits = disk.reader_limits();
         for (flag, value) in [
             ("--block-store", disk.root.to_str().unwrap().to_owned()),
-            ("--merge-log", disk.log.to_str().unwrap().to_owned()),
             ("--output", disk.files.output().to_str().unwrap().to_owned()),
             ("--output-max-bytes", (2 * 1024 * 1024).to_string()),
             ("--first-height", limits.first_height.to_string()),
@@ -1902,11 +1872,6 @@ fn scaling_command_arguments(
                 limits.max_store_data_bytes.to_string(),
             ),
             ("--max-carrier-bytes", limits.max_carrier_bytes.to_string()),
-            (
-                "--max-merge-log-bytes",
-                limits.max_merge_log_bytes.to_string(),
-            ),
-            ("--max-merge-frames", limits.max_merge_frames.to_string()),
             (
                 "--reader-max-output-bytes",
                 limits.max_output_bytes.to_string(),

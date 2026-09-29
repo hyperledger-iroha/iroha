@@ -18,8 +18,7 @@ import scaling_proof_sequence as sequence
 
 def stopped_reader(c):
     store = c.inputs.roles[3].block_store
-    return sequence.StoppedReader(store, store / 'merge.log', 1, 100, 100,
-        8 * 1024 * 1024, 65536, 65536, 100, 65536, 65536, os.geteuid())
+    return sequence.StoppedReader(store, 1, 100, 100, 8 * 1024 * 1024, 65536, 65536, 65536, os.geteuid())
 
 
 @pytest.fixture
@@ -107,7 +106,7 @@ def test_complete_native_sequence_binds_original_inputs_and_retains_every_output
     assert prepare['--total-max-bytes'] == str(3 * 65536)
     export = dict(zip(calls[1][0][7::2], calls[1][0][8::2], strict=True))
     assert export['--block-store'] == str(p.stopped.block_store)
-    assert export['--merge-log'] == str(p.stopped.merge_log)
+
     assert export['--first-height'] == '1' and export['--last-height'] == '100'
     assert export['--owner-uid'] == str(os.geteuid())
     assert export['--request-sha256'] == p.outputs.artifact('request').sha256
@@ -159,10 +158,7 @@ def test_original_plan_is_owned_before_callbacks_and_native_operations(pipeline,
     assert receipt.row_count == 8 and p.plan.seed == 'f' * 64
 
 
-@pytest.mark.parametrize('field,bad', [('first_height', 2), ('last_height', 0),
-    ('last_height', 1000001), ('max_committed_blocks', 99), ('max_merge_frames', 0),
-    ('max_carrier_bytes', True), ('max_store_data_bytes', 1 << 64), ('owner_uid', -1),
-    ('owner_uid', 1 << 32), ('merge_log', Path('relative'))])
+@pytest.mark.parametrize('field,bad', [('first_height', 2), ('last_height', 0), ('last_height', 1000001), ('max_committed_blocks', 99), ('max_carrier_bytes', True), ('max_store_data_bytes', 1 << 64), ('owner_uid', -1), ('owner_uid', 1 << 32)])
 def test_stopped_reader_requires_original_bounded_interval_before_commands(pipeline, field, bad):
     p = pipeline
     p.stopped = replace(p.stopped, **{field: bad})

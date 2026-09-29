@@ -1,13 +1,14 @@
 //! Authenticated, non-authorizing finality anchors for testnet mint observation.
 //!
-//! The first height-context ID must be pinned independently of Torii's operation status and
-//! finality-bundle response. This module checks every consecutive signed bundle before the
-//! native diagnostic owner may pin the last context for a pre-reserved operation.
+//! The complete initial checkpoint must be pinned independently of Torii's operation status and
+//! finality response. This module checks every consecutive signed native decision before the
+//! diagnostic owner may pin the resulting checkpoint for a pre-reserved operation.
 
 use iroha_core::zk::kagemusha_v1_recursion::KagemushaVerifiedFinalityChainV1;
 use iroha_data_model::{
-    NetworkId, block::consensus_v2::HeightContextId, bridge::BridgeFinalityBundle,
+    NetworkId,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
+    sumeragi_finality::{SumeragiFinalityCheckpoint, SumeragiFinalityProof},
 };
 
 use crate::committed_transaction_inclusion::MAX_CHAIN_JSON_BYTES;
@@ -21,7 +22,7 @@ const MAX_CHAIN_BUNDLES: usize = 4096;
 
 fn verify_chain_token_from_json_v1(
     expected_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: &SumeragiFinalityCheckpoint,
     chain_json: &[u8],
 ) -> Result<KagemushaVerifiedFinalityChainV1, String> {
     if chain_json.is_empty() || chain_json.len() > MAX_CHAIN_JSON_BYTES {
@@ -29,37 +30,37 @@ fn verify_chain_token_from_json_v1(
     }
     let chain_json = std::str::from_utf8(chain_json)
         .map_err(|_| "KAGEMUSHA finality chain is not UTF-8".to_owned())?;
-    let chain: Vec<BridgeFinalityBundle> = norito::json::from_json(chain_json)
+    let chain: Vec<SumeragiFinalityProof> = norito::json::from_json(chain_json)
         .map_err(|error| format!("invalid KAGEMUSHA finality chain: {error}"))?;
     if chain.is_empty() || chain.len() > MAX_CHAIN_BUNDLES {
         return Err("KAGEMUSHA finality chain must contain 1..4096 bundles".to_owned());
     }
-    KagemushaVerifiedFinalityChainV1::verify(expected_network_id, trusted_first_context_id, &chain)
+    KagemushaVerifiedFinalityChainV1::verify(expected_network_id, trusted_checkpoint, &chain)
         .map_err(|error| format!("KAGEMUSHA signed finality chain failed: {error}"))
 }
 
-/// Verify a consecutive Sumeragi-v2 finality chain from an independent first context.
+/// Verify a consecutive native Sumeragi proof page from an independently selected checkpoint.
 ///
-/// `trusted_first_context_id` must come from an authenticated operator checkpoint, never the
-/// supplied JSON, an operation-status hint, or a local journal. The returned context is
+/// `trusted_checkpoint` must come from an authenticated operator checkpoint, never the
+/// supplied JSON, an operation-status hint, or a local journal. The returned checkpoint is
 /// inspectable evidence only; it grants neither hardware nor monetary authority.
 ///
 /// # Errors
 ///
-/// Rejects an empty or oversized chain, malformed JSON, wrong network or context, invalid
+/// Rejects an empty or oversized chain, malformed JSON, wrong network or selected checkpoint, invalid
 /// validator certificates, nonconsecutive heights, or inconsistent commitments.
 pub fn verify_kagemusha_testnet_finality_anchor_from_chain_v1(
     expected_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: &SumeragiFinalityCheckpoint,
     chain_json: &[u8],
 ) -> Result<KagemushaFinalityTrustAnchorV1, String> {
-    verify_chain_token_from_json_v1(expected_network_id, trusted_first_context_id, chain_json)
-        .map(|verified| verified.anchor())
+    verify_chain_token_from_json_v1(expected_network_id, trusted_checkpoint, chain_json)
+        .map(|verified| verified.anchor().clone())
 }
 
-/// Verify a finality chain and pin its last context for an already reserved testnet top-up.
+/// Verify a finality chain and pin its resulting checkpoint for an already reserved testnet top-up.
 ///
-/// Only a trusted Rust host may call this method. The host must obtain the first context from
+/// Only a trusted Rust host may call this method. The host must obtain the complete initial checkpoint from
 /// separately authenticated configuration and the operation ID from its private reservation.
 /// The owner rejects missing reservations, changed pins, and a network outside its signed release.
 /// The C/JNI caller cannot install a pin or substitute finality coordinates.
@@ -75,13 +76,13 @@ pub(crate) fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
     publication: &TestnetPublicationPermitV1<'_>,
     operation_id: [u8; 32],
     expected_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: &SumeragiFinalityCheckpoint,
     chain_json: &[u8],
 ) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
     publication.require_valid()?;
     verify_then_pin_chain(
         expected_network_id,
-        trusted_first_context_id,
+        trusted_checkpoint,
         chain_json,
         |verified| {
             pin_kagemusha_testnet_authenticated_finality_anchor_v1(
@@ -96,39 +97,48 @@ pub(crate) fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
 #[cfg(unix)]
 pub(crate) fn verify_then_pin_chain(
     expected_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
+    trusted_checkpoint: &SumeragiFinalityCheckpoint,
     chain_json: &[u8],
     pin: impl FnOnce(&KagemushaVerifiedFinalityChainV1) -> Result<bool, String>,
 ) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
     let verified =
-        verify_chain_token_from_json_v1(expected_network_id, trusted_first_context_id, chain_json)?;
+        verify_chain_token_from_json_v1(expected_network_id, trusted_checkpoint, chain_json)?;
     let newly_pinned = pin(&verified)?;
-    Ok((newly_pinned, verified.anchor()))
+    Ok((newly_pinned, verified.anchor().clone()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Hash, HashOf};
 
     fn network() -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([3; 32])))
+        checkpoint(1).network_id()
     }
 
-    fn first_context() -> HeightContextId {
-        HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([5; 32])))
+    fn checkpoint(height: u64) -> SumeragiFinalityCheckpoint {
+        let bytes: &[u8] = match height {
+            1 => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+            )),
+            2 => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+            )),
+            _ => panic!("fixture checkpoint height"),
+        };
+        SumeragiFinalityCheckpoint::decode_canonical(bytes).unwrap()
     }
-
     #[test]
     fn finality_chain_requires_bounded_authenticated_bundles() {
         assert!(
-            verify_kagemusha_testnet_finality_anchor_from_chain_v1(network(), first_context(), b"")
+            verify_kagemusha_testnet_finality_anchor_from_chain_v1(network(), &checkpoint(1), b"")
                 .is_err()
         );
         assert!(
             verify_kagemusha_testnet_finality_anchor_from_chain_v1(
                 network(),
-                first_context(),
+                &checkpoint(1),
                 b"[]"
             )
             .is_err()
@@ -136,7 +146,7 @@ mod tests {
         assert!(
             verify_kagemusha_testnet_finality_anchor_from_chain_v1(
                 network(),
-                first_context(),
+                &checkpoint(1),
                 b"[{}]"
             )
             .is_err()
@@ -144,7 +154,7 @@ mod tests {
         assert!(
             verify_kagemusha_testnet_finality_anchor_from_chain_v1(
                 network(),
-                first_context(),
+                &checkpoint(1),
                 &[0xff]
             )
             .is_err()
@@ -161,7 +171,7 @@ mod tests {
                 &publication.permit(),
                 [7; 32],
                 network(),
-                first_context(),
+                &checkpoint(1),
                 b"[]"
             )
             .is_err()
@@ -173,12 +183,57 @@ mod tests {
     fn invalid_chain_never_reaches_native_pin() {
         let mut called = false;
         assert!(
-            verify_then_pin_chain(network(), first_context(), b"[]", |_| {
+            verify_then_pin_chain(network(), &checkpoint(1), b"[]", |_| {
                 called = true;
                 Ok(true)
             })
             .is_err()
         );
         assert!(!called);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn genuine_native_page_is_verified_before_pin_and_rejects_replay() {
+        let root = checkpoint(1);
+        let tip = checkpoint(2);
+        let proofs = vec![root.tip().clone(), tip.tip().clone()];
+        let json = norito::json::to_json(&proofs).unwrap();
+        let anchor = verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            root.network_id(),
+            &root,
+            json.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(anchor.network_id, root.network_id());
+        assert_eq!(anchor.checkpoint, tip);
+        let mut called = 0;
+        let (new_pin, pinned) =
+            verify_then_pin_chain(root.network_id(), &root, json.as_bytes(), |verified| {
+                assert_eq!(verified.first_checkpoint(), &root);
+                assert_eq!(verified.anchor(), &anchor);
+                called += 1;
+                Ok(true)
+            })
+            .unwrap();
+        assert!(new_pin);
+        assert_eq!(pinned, anchor);
+        assert_eq!(called, 1);
+        let replay = norito::json::to_json(&vec![root.tip(), root.tip()]).unwrap();
+        assert!(
+            verify_then_pin_chain(root.network_id(), &root, replay.as_bytes(), |_| {
+                called += 1;
+                Ok(true)
+            })
+            .is_err()
+        );
+        assert_eq!(called, 1);
+        assert!(
+            verify_then_pin_chain(root.network_id(), &tip, json.as_bytes(), |_| {
+                called += 1;
+                Ok(true)
+            })
+            .is_err()
+        );
+        assert_eq!(called, 1);
     }
 }

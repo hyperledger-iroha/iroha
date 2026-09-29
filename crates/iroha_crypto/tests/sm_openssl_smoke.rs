@@ -11,12 +11,15 @@ struct PreviewGuard {
 }
 impl PreviewGuard {
     fn enable() -> Self {
+        Self::set(true)
+    }
+    fn set(enabled: bool) -> Self {
         static PREVIEW_FLAG_LOCK: Mutex<()> = Mutex::new(());
         let lock = PREVIEW_FLAG_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = OpenSslProvider::is_enabled();
-        OpenSslProvider::set_preview_enabled(true);
+        OpenSslProvider::set_preview_enabled(enabled);
         Self {
             previous,
             _lock: lock,
@@ -34,9 +37,11 @@ fn openssl_sm3_digest_matches_pure_rust() {
         eprintln!("skipping OpenSSL SM3 smoke: OpenSSL runtime symbols unavailable");
         return;
     }
-    let _preview = PreviewGuard::enable();
+    let _preview = PreviewGuard::set(false);
     let message = b"iroha sm openssl smoke test";
     let expected = Sm3Digest::hash(message);
+    // Keep the oracle on the Rust path before enabling the compared backend.
+    OpenSslProvider::set_preview_enabled(true);
     let first = OpenSslSmBackend::sm3_digest(message).expect("OpenSSL SM3 digest must succeed");
     let second =
         OpenSslSmBackend::sm3_digest(message).expect("second OpenSSL SM3 digest must succeed");
@@ -108,7 +113,7 @@ fn openssl_sm4_gcm_roundtrip() {
         eprintln!("skipping OpenSSL SM4 smoke: OpenSSL runtime symbols unavailable");
         return;
     }
-    let _preview = PreviewGuard::enable();
+    let _preview = PreviewGuard::set(false);
     match openssl::cipher::Cipher::fetch(None, "SM4-GCM", None) {
         Ok(_) => {}
         Err(err) => eprintln!("OpenSSL Cipher::fetch(SM4-GCM) failed: {err}"),
@@ -121,6 +126,8 @@ fn openssl_sm4_gcm_roundtrip() {
     let (expected_ciphertext, expected_tag) = key
         .encrypt_gcm(&nonce, aad, plaintext)
         .expect("Rust SM4 GCM encrypt must succeed");
+    // Keep the oracle on the Rust path before enabling the compared backend.
+    OpenSslProvider::set_preview_enabled(true);
     let (ciphertext, tag) =
         match OpenSslSmBackend::sm4_gcm_encrypt(&key_bytes, &nonce, aad, plaintext) {
             Ok(pair) => pair,
@@ -190,7 +197,7 @@ fn openssl_sm4_ccm_roundtrip() {
         eprintln!("skipping OpenSSL SM4 CCM smoke: OpenSSL runtime symbols unavailable");
         return;
     }
-    let _preview = PreviewGuard::enable();
+    let _preview = PreviewGuard::set(false);
     match openssl::cipher::Cipher::fetch(None, "SM4-CCM", None) {
         Ok(_) => {}
         Err(err) => eprintln!("OpenSSL Cipher::fetch(SM4-CCM) failed: {err}"),
@@ -204,6 +211,8 @@ fn openssl_sm4_ccm_roundtrip() {
     let (expected_ciphertext, expected_tag) = key
         .encrypt_ccm(&nonce, aad, plaintext, tag_len)
         .expect("Rust SM4 CCM encrypt must succeed");
+    // Keep the oracle on the Rust path before enabling the compared backend.
+    OpenSslProvider::set_preview_enabled(true);
     let (ciphertext, tag) =
         match OpenSslSmBackend::sm4_ccm_encrypt(&key_bytes, &nonce, aad, plaintext, tag_len) {
             Ok(pair) => pair,

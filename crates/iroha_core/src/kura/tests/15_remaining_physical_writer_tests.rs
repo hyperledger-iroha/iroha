@@ -124,7 +124,7 @@ fn physical_debug_dump_counts_each_actual_append_including_identical_lines() {
             .unwrap();
     let path = kura.block_plain_text_path.lock().clone().unwrap();
     let before = metadata_physical_register(&kura);
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     let _prune = kura.prune_lock.lock();
     let _canonical = kura.canonical_chain_lock.lock();
     kura.append_debug_block_dump(&block);

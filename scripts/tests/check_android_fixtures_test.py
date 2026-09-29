@@ -100,7 +100,7 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
                 "authority": entry.get("authority"),
                 "network_id": entry.get("network_id"),
                 "creation_time_ms": entry.get("creation_time_ms"),
-                "admission_intent": {"intent": "ordinary", "value": None},
+
                 "executable": {"Instructions": []},
                 "fee_payment": {
                     "payer": "authority",
@@ -281,22 +281,13 @@ def test_fee_payment_requires_exact_charge_limit_fields_and_nonempty_asset() -> 
             )
 
 
-def test_admission_intent_requires_exact_ordinary_shape() -> None:
-    MODULE.validate_admission_intent(
-        {"intent": "ordinary", "value": None}, "admission intent"
-    )
-    invalid = [
-        None,
-        {},
-        {"intent": "ordinary"},
-        {"intent": "ordinary", "value": None, "legacy": True},
-        {"intent": "queue_plan_synced", "value": None},
-        {"intent": "Ordinary", "value": None},
-        {"intent": "ordinary", "value": 0},
-    ]
-    for value in invalid:
-        with pytest.raises(ValueError, match="admission intent"):
-            MODULE.validate_admission_intent(value, "admission intent")
+@pytest.mark.parametrize("field", ["admission_intent", "admissionIntent"])
+@pytest.mark.parametrize("value", [None, {"intent": "ordinary", "value": None}, {"intent": "queue_plan_synced", "value": None}])
+def test_payload_rejects_retired_admission_field(field: str, value: object) -> None:
+    payload = dict.fromkeys(MODULE.PAYLOAD_FIELDS)
+    payload[field] = value
+    with pytest.raises(ValueError, match=field):
+        MODULE.validate_payload_descriptor({"payload": payload}, "retired", Path("fixture.json"))
 
 
 def _write_manifest(path: Path, fixtures: list[dict]) -> Path:

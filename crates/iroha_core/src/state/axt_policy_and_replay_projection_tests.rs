@@ -506,7 +506,6 @@ state_test! { consensus_stack axt_post_validation_envelope_replacement_cannot_pu
             vec![envelope],
             snapshot,
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("structurally attach a post-validation envelope");

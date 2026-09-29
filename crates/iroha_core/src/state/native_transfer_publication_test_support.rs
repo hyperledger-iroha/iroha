@@ -91,7 +91,6 @@ fn native_transfer_output_mutant_for_test(
             original.axt_envelopes().unwrap().to_vec(),
             original.axt_policy_snapshot().unwrap().clone(),
             original.axt_transitioned_dataspaces().unwrap().clone(),
-            original.lane_finality_statements().to_vec(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("tampered result remains structurally canonical for its negative control");

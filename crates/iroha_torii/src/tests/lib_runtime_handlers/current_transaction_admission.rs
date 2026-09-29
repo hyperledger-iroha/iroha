@@ -78,49 +78,37 @@ async fn assert_unsupported_current_admission(response: Response) {
 
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn current_http_admission_rejects_unsupported_intent_before_any_durable_promise() {
-    let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
-    let ordinary = lifecycle_ordinary_transaction(
-        &app,
-        &key,
-        vec![Log::new(Level::INFO, "current admission control".to_owned()).into()],
-    );
-    let unsupported = TransactionBuilder::from_payload(ordinary.payload().clone())
-        .unwrap()
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-        .sign(key.private_key());
-    let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
+async fn current_http_admission_retains_exact_canonical_input_in_local_custody() {
+    use iroha_version::codec::EncodeVersioned as _;
     for endpoint in [
         uri::TRANSACTION,
         uri::TRANSACTION_ENTRYPOINT,
         uri::TRANSACTIONS_BATCH,
     ] {
-        assert_unsupported_current_admission(
-            current_admission_http(app.clone(), &unsupported, endpoint).await,
-        )
-        .await;
-        assert_eq!(app.queue.active_len(), 0);
+        let (app, key, _, _) = lifecycle_ordinary_fixture(true);
+        let transaction = lifecycle_ordinary_transaction(
+            &app,
+            &key,
+            vec![Log::new(Level::INFO, "current admission control".to_owned()).into()],
+        );
+        assert!(lifecycle_pending_wire(&app).is_empty());
+        let response = current_admission_http(app.clone(), &transaction, endpoint).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
         assert_eq!(
-            std::fs::read(journal.path().join("queue.norito")).unwrap(),
-            before
+            lifecycle_pending_wire(&app),
+            vec![TransactionEntrypoint::External(transaction.clone()).encode_versioned()]
+        );
+        assert!(
+            !app.state
+                .has_committed_entrypoint(transaction.hash_as_entrypoint())
         );
     }
-    let accepted = current_admission_http(app.clone(), &ordinary, uri::TRANSACTION).await;
-    assert_eq!(
-        accepted.status(),
-        StatusCode::ACCEPTED,
-        "supported single-route work remains durable"
-    );
-    assert_eq!(app.queue.active_len(), 1);
-    assert_ne!(
-        std::fs::read(journal.path().join("queue.norito")).unwrap(),
-        before
-    );
 }
 
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn current_http_admission_rejects_actual_multiroute_before_journal_write() {
+async fn current_http_admission_rejects_actual_multiroute_before_local_custody() {
     let domains = [
         DomainId::try_new("first", "universal").unwrap(),
         DomainId::try_new("second", "secondary").unwrap(),
@@ -159,12 +147,7 @@ async fn current_http_admission_rejects_actual_multiroute_before_journal_write()
         !matches!(plan, RoutingPlan::Single(_)),
         "exercise actual two-dataspace routing"
     );
-    let journal = tempfile::tempdir().unwrap();
-    let path = journal.path().join("queue.norito");
-    app.queue
-        .install_plan_journal(&path, 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&path).unwrap();
+    let before = lifecycle_pending_wire(&app);
     for endpoint in [
         uri::TRANSACTION,
         uri::TRANSACTION_ENTRYPOINT,
@@ -175,40 +158,6 @@ async fn current_http_admission_rejects_actual_multiroute_before_journal_write()
         )
         .await;
         assert_eq!(app.queue.active_len(), 0);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(lifecycle_pending_wire(&app), before);
     }
-}
-
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn current_peer_and_canonical_retry_reject_unsupported_admission_without_custody() {
-    // A retained registry record cannot turn unsupported intent into a fresh accepted response.
-    let (app, request, _) = canonical_queue_plan_retry_fixture(0x74);
-    let journal = tempfile::tempdir().unwrap();
-    let path = journal.path().join("queue.norito");
-    app.queue
-        .install_plan_journal(&path, 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&path).unwrap();
-    let TransactionEntrypoint::External(transaction) = queue_plan_synced_test_entrypoint(&request)
-    else {
-        panic!("signed fixture")
-    };
-    for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
-    ] {
-        assert_unsupported_current_admission(
-            current_admission_http(app.clone(), transaction, endpoint).await,
-        )
-        .await;
-    }
-    let sender = request.visited_peer_ids.last().cloned();
-    assert_unsupported_current_admission(
-        super::execute_incoming_torii_proxy_request(&app, request, sender).await,
-    )
-    .await;
-    assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(std::fs::read(&path).unwrap(), before);
 }

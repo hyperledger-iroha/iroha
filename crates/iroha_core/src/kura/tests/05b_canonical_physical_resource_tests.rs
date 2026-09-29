@@ -76,7 +76,7 @@ fn canonical_physical_append_uses_only_fixed_and_actual_written_height() {
     for evicted in [false, true] {
         let (_directory, kura, blocks) = canonical_physical_fixture(1);
         let next = canonical_physical_block_at(&blocks, 2);
-        let before = initialize_retained_physical_fixture(&kura);
+        let before = initialize_physical_fixture(&kura);
         let cached_total = kura.kura_total_disk_usage_bytes().unwrap();
         kura.resolve_canonical_storage_before_mutation().unwrap();
         assert!(kura.disk_usage_total_initialized.load(Ordering::Acquire));
@@ -100,7 +100,7 @@ fn canonical_physical_append_uses_only_fixed_and_actual_written_height() {
         let resources = kura.begin_canonical_physical_mutation(&mut store, operation);
         assert!(resources.complete);
         assert_eq!(resources.leaves.len(), 1);
-        assert_retained_physical_unavailable(&kura);
+        assert_physical_unavailable(&kura);
         store
             .append_block_batch_at(1, std::slice::from_ref(&next), u64::from(evicted))
             .unwrap();
@@ -108,7 +108,7 @@ fn canonical_physical_append_uses_only_fixed_and_actual_written_height() {
         assert_eq!(store.read_block_index(1).unwrap().is_evicted(), evicted);
         resources.finish_resources_before_disk_rescan();
         drop(store);
-        let after = assert_retained_physical_fixture(&kura);
+        let after = assert_physical_fixture(&kura);
         assert!(
             after[ResourceFamily::StorageBytes as usize].storage_bytes
                 > before[ResourceFamily::StorageBytes as usize].storage_bytes
@@ -123,7 +123,7 @@ fn canonical_physical_rewrite_preobserves_multiple_chunks_and_keeps_fence_busy()
     canonical_physical_seed_da_suffix(&kura, &blocks);
     let replacement = canonical_physical_block_at(&blocks, 2);
     canonical_physical_leave_rewrite(&kura, &replacement, false);
-    initialize_retained_physical_fixture(&kura);
+    initialize_physical_fixture(&kura);
     let _write = kura.block_store_write_lock.lock();
     let mut store = kura.block_store.lock();
     let operation = CanonicalPhysicalOperation::Append {
@@ -149,10 +149,10 @@ fn canonical_physical_rewrite_preobserves_multiple_chunks_and_keeps_fence_busy()
         "new inline image consumes the old evicted body"
     );
     resources.leaves.pop().unwrap().finish().unwrap();
-    assert_retained_physical_unavailable(&kura);
+    assert_physical_unavailable(&kura);
     resources.finish_resources_before_disk_rescan();
     drop(store);
-    assert_retained_physical_fixture(&kura);
+    assert_physical_fixture(&kura);
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn canonical_physical_recovery_preserves_both_exact_marker_and_carrier_pin_choic
             canonical_physical_seed_da_suffix(&kura, &blocks);
             let replacement = canonical_physical_block_at(&blocks, 2);
             canonical_physical_leave_rewrite(&kura, &replacement, new_marker);
-            initialize_retained_physical_fixture(&kura);
+            initialize_physical_fixture(&kura);
             let _write = kura.block_store_write_lock.lock();
             let mut store = kura.block_store.lock();
             let selected = if new_marker {
@@ -190,7 +190,7 @@ fn canonical_physical_recovery_preserves_both_exact_marker_and_carrier_pin_choic
                 assert!(!store.da_block_rewrite_stage_path().exists());
                 assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![selected]);
                 drop(store);
-                assert_retained_physical_fixture(&kura);
+                assert_physical_fixture(&kura);
             } else {
                 assert!(
                     result
@@ -204,7 +204,7 @@ fn canonical_physical_recovery_preserves_both_exact_marker_and_carrier_pin_choic
                     fs::read(store.da_block_rewrite_stage_path()).unwrap(),
                     stage_before
                 );
-                assert_retained_physical_unavailable(&kura);
+                assert_physical_unavailable(&kura);
             }
         }
     }
@@ -216,7 +216,7 @@ fn canonical_physical_invalid_plan_changed_stage_and_unfinished_leaf_stay_unavai
         let (_directory, kura, blocks) = canonical_physical_fixture(2);
         let replacement = canonical_physical_block_at(&blocks, 2);
         canonical_physical_leave_rewrite(&kura, &replacement, false);
-        initialize_retained_physical_fixture(&kura);
+        initialize_physical_fixture(&kura);
         let _write = kura.block_store_write_lock.lock();
         let mut store = kura.block_store.lock();
         match case {
@@ -263,7 +263,7 @@ fn canonical_physical_invalid_plan_changed_stage_and_unfinished_leaf_stay_unavai
                 drop(resources);
             }
         }
-        assert_retained_physical_unavailable(&kura);
+        assert_physical_unavailable(&kura);
     }
 }
 
@@ -271,7 +271,7 @@ fn canonical_physical_invalid_plan_changed_stage_and_unfinished_leaf_stay_unavai
 fn canonical_physical_committed_recovery_fault_never_publishes_complete_resources() {
     let (_directory, kura, blocks) = canonical_physical_fixture(1);
     let replacement = canonical_physical_block_at(&blocks, 1);
-    initialize_retained_physical_fixture(&kura);
+    initialize_physical_fixture(&kura);
     {
         let store = kura.block_store.lock();
         store
@@ -295,7 +295,7 @@ fn canonical_physical_committed_recovery_fault_never_publishes_complete_resource
         kura.block_data.lock().first().map(|(hash, _)| *hash),
         Some(blocks[0].hash())
     );
-    assert_retained_physical_unavailable(&kura);
+    assert_physical_unavailable(&kura);
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn canonical_physical_prune_counts_actual_da_suffix_and_failed_prefix_recovers()
     ] {
         let (_directory, kura, blocks) = canonical_physical_fixture(4);
         canonical_physical_seed_da_suffix(&kura, &blocks);
-        initialize_retained_physical_fixture(&kura);
+        initialize_physical_fixture(&kura);
         let _write = kura.block_store_write_lock.lock();
         let mut store = kura.block_store.lock();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -321,12 +321,12 @@ fn canonical_physical_prune_counts_actual_da_suffix_and_failed_prefix_recovers()
         }));
         assert_eq!(result.is_ok(), fail_stage == 0);
         if fail_stage != 0 {
-            assert_retained_physical_unavailable(&kura);
+            assert_physical_unavailable(&kura);
             store.prune(2).unwrap();
             drop(store);
             // Reconciliation is explicit and complete, after the real idempotent
             // recovery finished; a later incremental delta cannot clear a fault.
-            initialize_retained_physical_fixture(&kura);
+            initialize_physical_fixture(&kura);
             store = kura.block_store.lock();
         }
         assert_eq!(store.read_durable_index_count().unwrap(), 2);
@@ -334,7 +334,7 @@ fn canonical_physical_prune_counts_actual_da_suffix_and_failed_prefix_recovers()
         assert!(!store.da_block_path(3).exists());
         assert!(!store.da_block_path(4).exists());
         drop(store);
-        assert_retained_physical_fixture(&kura);
+        assert_physical_fixture(&kura);
     }
 }
 
@@ -344,19 +344,19 @@ fn canonical_physical_cache_authenticates_signed_wire_and_counts_exact_retry() {
     let (_, length) = advertise_required_replicas(&kura, nonzero!(2_usize));
     kura.evict_block_bodies(length).unwrap();
     kura.block_store.lock().remove_da_block_file(2).unwrap();
-    let before = initialize_retained_physical_fixture(&kura);
+    let before = initialize_physical_fixture(&kura);
     let wrong = canonical_physical_block_at(&blocks, 2);
     assert!(kura.cache_block_body(&wrong).is_err());
-    assert_eq!(assert_retained_physical_fixture(&kura), before);
+    assert_eq!(assert_physical_fixture(&kura), before);
     kura.cache_block_body(&blocks[1]).unwrap();
-    let after = assert_retained_physical_fixture(&kura);
+    let after = assert_physical_fixture(&kura);
     assert_eq!(
         after[ResourceFamily::StorageBytes as usize].storage_bytes
             - before[ResourceFamily::StorageBytes as usize].storage_bytes,
         length
     );
     kura.cache_block_body(&blocks[1]).unwrap();
-    assert_eq!(assert_retained_physical_fixture(&kura), after);
+    assert_eq!(assert_physical_fixture(&kura), after);
     assert_eq!(
         kura.get_block(nonzero!(2_usize)).unwrap().hash(),
         blocks[1].hash()
@@ -367,7 +367,7 @@ fn canonical_physical_cache_authenticates_signed_wire_and_counts_exact_retry() {
 fn canonical_physical_eviction_zero_after_authority_expiry_keeps_published_copy_bytes() {
     let (_directory, kura, _blocks) = canonical_physical_fixture(4);
     let (_, length) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    let before = initialize_retained_physical_fixture(&kura);
+    let before = initialize_physical_fixture(&kura);
     kura.pause_next_eviction_before_stage_publication_for_tests();
     let worker_kura = Arc::clone(&kura);
     let worker = thread::spawn(move || worker_kura.evict_block_bodies(length));
@@ -377,7 +377,7 @@ fn canonical_physical_eviction_zero_after_authority_expiry_keeps_published_copy_
         assert!(Instant::now() < deadline);
         thread::yield_now();
     }
-    assert_retained_physical_unavailable(&kura);
+    assert_physical_unavailable(&kura);
     let expired = Instant::now()
         .checked_sub(kura.replica_advert_ttl() + Duration::from_secs(1))
         .unwrap();
@@ -394,7 +394,7 @@ fn canonical_physical_eviction_zero_after_authority_expiry_keeps_published_copy_
     assert!(!store.eviction_compaction_stage_path().exists());
     drop(store);
     assert!(kura.retained_block_record_path(2).is_file());
-    let after = assert_retained_physical_fixture(&kura);
+    let after = assert_physical_fixture(&kura);
     assert!(
         after[ResourceFamily::StorageBytes as usize].storage_bytes
             > before[ResourceFamily::StorageBytes as usize].storage_bytes
@@ -428,7 +428,7 @@ fn canonical_physical_periodic_forced_and_empty_eviction_flush_publish_pending_m
             .lock()
             .push((next.hash(), Some(Arc::clone(&next))));
         assert_eq!(kura.block_data.lock().len(), 2);
-        initialize_retained_physical_fixture(&kura);
+        initialize_physical_fixture(&kura);
         if mode == 2 {
             // Genesis and the retained newest body leave no eviction candidates;
             // the initial flush must still publish the real pending marker.
@@ -442,7 +442,7 @@ fn canonical_physical_periodic_forced_and_empty_eviction_flush_publish_pending_m
             kura.block_store.lock().read_durable_index_count().unwrap(),
             2
         );
-        assert_retained_physical_fixture(&kura);
+        assert_physical_fixture(&kura);
         assert!(!kura.disk_usage_total_initialized.load(Ordering::Acquire));
     }
 }

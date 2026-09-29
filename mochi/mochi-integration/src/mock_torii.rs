@@ -81,7 +81,6 @@ fn canonical_block_stream_message() -> Vec<u8> {
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &ExecutionOutputLimits {
                 max_outputs: 1,
                 max_output_bytes: 64 * 1024,

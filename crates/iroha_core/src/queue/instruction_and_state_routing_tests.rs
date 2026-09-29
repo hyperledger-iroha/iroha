@@ -72,23 +72,6 @@ fn accepted_tx_with(
         None,
     )
 }
-fn accepted_queue_plan_tx_with(
-    account_id: AccountId,
-    key_pair: &KeyPair,
-    time_source: &TimeSource,
-    instructions: Vec<InstructionBox>,
-    metadata: Metadata,
-) -> AcceptedTransaction<'static> {
-    accepted_tx_with_attachments_and_intent(
-        account_id,
-        key_pair,
-        time_source,
-        instructions,
-        metadata,
-        None,
-        TransactionAdmissionIntent::QueuePlanSynced,
-    )
-}
 fn accepted_tx_with_attachments(
     account_id: AccountId,
     key_pair: &KeyPair,
@@ -96,25 +79,6 @@ fn accepted_tx_with_attachments(
     instructions: Vec<InstructionBox>,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
-) -> AcceptedTransaction<'static> {
-    accepted_tx_with_attachments_and_intent(
-        account_id,
-        key_pair,
-        time_source,
-        instructions,
-        metadata,
-        attachments,
-        TransactionAdmissionIntent::Ordinary,
-    )
-}
-fn accepted_tx_with_attachments_and_intent(
-    account_id: AccountId,
-    key_pair: &KeyPair,
-    time_source: &TimeSource,
-    instructions: Vec<InstructionBox>,
-    metadata: Metadata,
-    attachments: Option<ProofAttachmentList>,
-    admission_intent: TransactionAdmissionIntent,
 ) -> AcceptedTransaction<'static> {
     let network_id = queue_test_network_id();
     let mut builder = TransactionBuilder::new_with_time_source(
@@ -124,8 +88,7 @@ fn accepted_tx_with_attachments_and_intent(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
-    .with_metadata(metadata)
-    .with_admission_intent(admission_intent);
+    .with_metadata(metadata);
     if let Some(att) = attachments {
         builder = builder.with_attachments(att);
     }
@@ -320,8 +283,7 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = fresh.lane_id;
     nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-    let state =
-        State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
+    let state = State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue.routing_policy.read().default_lane,
@@ -432,11 +394,8 @@ fn route_plan_with_state_rejects_stale_policy_even_when_old_lane_still_exists() 
     current_nexus.lane_catalog = (*lane_catalog).clone();
     current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
     current_nexus.routing_policy.rules = vec![current_rule.clone()];
-    let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
-        current_nexus,
-        query_handle,
-    );
+    let state =
+        State::new_with_nexus_for_testing(world_with_test_domains(), current_nexus, query_handle);
     let current_nexus = state.nexus_snapshot();
     let mut stale_nexus = current_nexus;
     stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
@@ -501,11 +460,8 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
         dataspace: Some(current_route.dataspace_id),
         matcher: matcher.clone(),
     }];
-    let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
-        current_nexus,
-        query_handle,
-    );
+    let state =
+        State::new_with_nexus_for_testing(world_with_test_domains(), current_nexus, query_handle);
     let current_nexus = state.nexus_snapshot();
     let mut stale_nexus = current_nexus;
     stale_nexus.routing_policy.rules = vec![LaneRoutingRule {

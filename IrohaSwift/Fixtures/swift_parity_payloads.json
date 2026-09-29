@@ -27,10 +27,6 @@
           "gas_limit": null
         }
       },
-      "admission_intent": {
-        "intent": "ordinary",
-        "value": null
-      },
       "metadata": {}
     }
   },
@@ -62,10 +58,6 @@
           "gas_limit": null
         }
       },
-      "admission_intent": {
-        "intent": "ordinary",
-        "value": null
-      },
       "metadata": {}
     }
   },
@@ -96,10 +88,6 @@
           "charge_limits": [],
           "gas_limit": null
         }
-      },
-      "admission_intent": {
-        "intent": "ordinary",
-        "value": null
       },
       "metadata": {}
     }

@@ -233,32 +233,24 @@ use iroha_core::{
         SoracloudRuntimeExecutionErrorKind, authoritative_soracloud_sequence,
     },
     state::{
-        BlockProofError, BlockProofLimits, BlockProofResource,
-        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome,
-        QueuePlanAdmissionRegistryMatch, State as CoreState, StateReadOnly, TransactionsReadOnly,
-        WorldReadOnly,
+        BlockProofError, BlockProofLimits, BlockProofResource, State as CoreState, StateReadOnly,
+        TransactionsReadOnly, WorldReadOnly,
     },
     torii_proxy::{
-        QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-        QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionAttestationV1,
-        QueuePlanAdmissionBindingV1, QueuePlanAdmissionCertificateStrengthV1,
-        QueuePlanAdmissionCertificateV1, QueuePlanAdmissionPublicationV1,
         TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1, TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1,
         TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
         ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
-        ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
-        ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
-        ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
-        ToriiRoutingPlanHintV1, queue_plan_admission_attestation_signing_bytes_v1,
-        validate_queue_plan_admission_certificate_for_network_digest_v1,
+        ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+        ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
+        ToriiRouteHintV1, ToriiRoutingPlanHintV1,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
         SignatureVerificationFail, external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     },
 };
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 use iroha_crypto::Signature;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, blake2::digest::Digest};
 use iroha_data_model::NetworkId;
@@ -295,7 +287,7 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
-        TransactionSubmissionReceiptPayload, signed::TransactionAdmissionIntent,
+        TransactionSubmissionReceiptPayload,
     },
 };
 use iroha_data_model::{
@@ -2567,7 +2559,6 @@ struct PendingToriiProxyRequest {
     waiter_token: Arc<()>,
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
     max_body_bytes: usize,
-    strict_queue_plan_synced: bool,
 }
 #[cfg(feature = "connect")]
 struct CompletedToriiProxyRequest {
@@ -2807,7 +2798,7 @@ impl PipelineStatusCache {
     fn record_block_event(
         &self,
         event: &iroha_data_model::events::pipeline::BlockEvent,
-        kura: &Kura,
+        state: &CoreState,
     ) {
         if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
             return;
@@ -2820,7 +2811,7 @@ impl PipelineStatusCache {
         let height = event.header.height();
         let block_hash = event.header.hash();
         let now = Instant::now();
-        match self.record_block_results(height, block_hash, kind, kura, now) {
+        match self.record_block_results(height, block_hash, kind, state, now) {
             BlockRecordOutcome::Recorded => {
                 self.remove_pending_by_height(&height);
                 self.prune_if_needed(now);
@@ -2908,7 +2899,7 @@ impl PipelineStatusCache {
         }
         order.push_back((observed_at, height));
     }
-    fn refresh_pending_blocks(&self, kura: &Kura) {
+    fn refresh_pending_blocks(&self, state: &CoreState) {
         if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
             return;
         }
@@ -2922,7 +2913,7 @@ impl PipelineStatusCache {
             .map(|entry| (*entry.key(), entry.value().clone()))
             .collect();
         for (height, pending) in pending {
-            match self.record_block_results(height, pending.block_hash, pending.kind, kura, now) {
+            match self.record_block_results(height, pending.block_hash, pending.kind, state, now) {
                 BlockRecordOutcome::Recorded => {
                     self.remove_pending_by_height(&height);
                 }
@@ -3134,7 +3125,7 @@ impl PipelineStatusCache {
         height: NonZeroU64,
         expected_hash: HashOf<BlockHeader>,
         kind: PipelineStatusKind,
-        kura: &Kura,
+        state: &CoreState,
         now: Instant,
     ) -> BlockRecordOutcome {
         let height_usize = match usize::try_from(height.get()) {
@@ -3152,7 +3143,7 @@ impl PipelineStatusCache {
         };
         let work = routing::app_query_limits().max_fetch_size;
         let result = iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
-            kura,
+            state,
             height_nz,
             expected_hash,
             work,
@@ -3208,7 +3199,7 @@ fn reconcile_iso_bridge_transactions(
                 "ISO bridge retained a non-canonical signed transaction hash: {transaction_hash}"
             ))
         })?;
-        let Some(outcome) = canonical_transaction_outcome(state, kura, &hash)? else {
+        let Some(outcome) = canonical_transaction_outcome(state, &hash)? else {
             continue;
         };
         match outcome {
@@ -3348,18 +3339,18 @@ fn start_iso_bridge_projection_worker(
 }
 fn process_pipeline_status_event(
     cache: &PipelineStatusCache,
-    kura: &Kura,
+    state: &CoreState,
     event: &PipelineEventBox,
 ) {
     match event {
         PipelineEventBox::Transaction(event) => cache.record_transaction_event(event),
-        PipelineEventBox::Block(event) => cache.record_block_event(event, kura),
+        PipelineEventBox::Block(event) => cache.record_block_event(event, state),
         _ => {}
     }
 }
 fn start_pipeline_status_projection_worker(
     cache: Arc<PipelineStatusCache>,
-    kura: Arc<Kura>,
+    state: Arc<CoreState>,
     events: &EventsSender,
     shutdown_signal: ShutdownSignal,
 ) -> tokio::task::JoinHandle<ToriiCriticalWorkerExit> {
@@ -3374,11 +3365,11 @@ fn start_pipeline_status_projection_worker(
             };
             match received {
                 Ok(EventBox::Pipeline(event)) => {
-                    process_pipeline_status_event(&cache, &kura, &event);
+                    process_pipeline_status_event(&cache, &state, &event);
                 }
                 Ok(EventBox::PipelineBatch(events)) => {
                     for event in &events {
-                        process_pipeline_status_event(&cache, &kura, event);
+                        process_pipeline_status_event(&cache, &state, event);
                     }
                 }
                 Ok(_) => {}
@@ -14968,253 +14959,7 @@ fn transaction_submission_receipt_response(
     );
     response
 }
-#[cfg(feature = "connect")]
-mod queue_plan_retry_authentication;
-#[cfg(feature = "connect")]
-use queue_plan_retry_authentication::AuthenticatedQueuePlanRetry;
 
-#[cfg(feature = "connect")]
-fn canonical_queue_plan_submission_response(
-    app: &AppState,
-    authenticated: &AuthenticatedQueuePlanRetry,
-    minimal_response: bool,
-    format: ResponseFormat,
-) -> Option<Response> {
-    let entrypoint_hash = authenticated.entrypoint_hash();
-    match app
-        .state
-        .queue_plan_admission_registry_entrypoint_present(entrypoint_hash)
-    {
-        Ok(false) => None,
-        Ok(true) => Some(transaction_submission_receipt_response(
-            app,
-            entrypoint_hash,
-            Some(authenticated.signed_transaction_hash()),
-            minimal_response,
-            format,
-        )),
-        Err(error) => Some(queue_plan_admission_registry_conflict_response(
-            entrypoint_hash,
-            format!("canonical QueuePlan admission marker is malformed: {error}"),
-        )),
-    }
-}
-#[cfg(feature = "connect")]
-fn canonical_queue_plan_synced_response(
-    app: &SharedAppState,
-    authenticated: &AuthenticatedQueuePlanRetry,
-    binding: &QueuePlanAdmissionBindingV1,
-    routing_decision: RoutingDecision,
-    proxy_memory: Option<&ToriiProxyMemoryReservation>,
-    read_deadline: tokio::time::Instant,
-) -> Option<Response> {
-    if authenticated.entrypoint_hash() != binding.entrypoint_hash
-        || Some(authenticated.signed_transaction_hash()) != binding.signed_transaction_hash
-    {
-        return Some(torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            "QueuePlanSynced binding differs from the authenticated retry identity",
-        ));
-    }
-    match app
-        .state
-        .queue_plan_admission_binding_registry_match(binding)
-    {
-        Ok(QueuePlanAdmissionRegistryMatch::Absent) => return None,
-        Ok(QueuePlanAdmissionRegistryMatch::Exact) => {}
-        Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
-            return Some(queue_plan_admission_registry_conflict_response(
-                binding.entrypoint_hash,
-                "canonical WSV already binds this transaction entrypoint to a different QueuePlan admission",
-            ));
-        }
-        Err(error) => {
-            return Some(queue_plan_admission_registry_conflict_response(
-                binding.entrypoint_hash,
-                format!("canonical QueuePlan admission marker is malformed: {error}"),
-            ));
-        }
-    }
-    // A replicated registry owner is sufficient for a public acknowledgement,
-    // but the peer collector requires the original availability certificate.
-    // Return its authenticated bytes without creating a new queue claim or vote.
-    let reservation = match proxy_memory
-        .cloned()
-        .map(Ok)
-        .unwrap_or_else(|| acquire_torii_proxy_memory(app))
-    {
-        Ok(reservation) => reservation,
-        Err(_) => {
-            return Some(queue_plan_outcome_unknown_response(
-                binding.entrypoint_hash,
-                binding.signed_transaction_hash,
-                "canonical QueuePlan certificate read capacity is occupied",
-            ));
-        }
-    };
-    // Keep physical I/O and its complete working set on this future's stack.
-    // A cancelled caller cannot detach the read and release its reservation.
-    let read = match tokio::runtime::Handle::try_current() {
-        Ok(runtime) if runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| {
-                app.state
-                    .canonical_queue_plan_admitted_input(binding.entrypoint_hash)
-            })
-        }
-        _ => Err("canonical QueuePlan reads require a multi-thread Tokio runtime".to_owned()),
-    };
-    let input = match read {
-        Ok(Some(input)) if &input.input().certificate.binding == binding => input,
-        Ok(_) => {
-            return Some(queue_plan_outcome_unknown_response(
-                binding.entrypoint_hash,
-                binding.signed_transaction_hash,
-                "canonical QueuePlan admission changed while reading its original certificate",
-            ));
-        }
-        Err(error) => {
-            return Some(queue_plan_outcome_unknown_response(
-                binding.entrypoint_hash,
-                binding.signed_transaction_hash,
-                format!("canonical QueuePlan admission certificate is unavailable: {error}"),
-            ));
-        }
-    };
-    // Blocking physical work cannot be preempted by timeout_at. Preserve its
-    // original monotonic deadline (including reserved response-egress time)
-    // after the read; late completion grants no new delivery budget.
-    if tokio::time::Instant::now() >= read_deadline {
-        return Some(queue_plan_outcome_unknown_response(
-            binding.entrypoint_hash,
-            binding.signed_transaction_hash,
-            "canonical QueuePlan certificate read exhausted its original execution deadline",
-        ));
-    }
-    let mut response = (
-        StatusCode::ACCEPTED,
-        utils::NoritoBody(input.into_input().certificate),
-    )
-        .into_response();
-    insert_transaction_submission_identity_headers(
-        &mut response,
-        &binding.entrypoint_hash,
-        binding.signed_transaction_hash.as_ref(),
-    );
-    insert_routing_headers(&mut response, routing_decision, "proxy");
-    Some(hold_torii_proxy_memory_in_response_body(
-        response,
-        reservation,
-    ))
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_admission_response(
-    app: &AppState,
-    routing_decision: RoutingDecision,
-    expected_binding: QueuePlanAdmissionBindingV1,
-    durable_admission: queue::QueuePlanDurableAdmissionV1,
-) -> Response {
-    let receipt_signer = PeerId::new(app.torii_proxy_bridge_signer.public_key().clone());
-    let durable_binding = match iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(
-        &durable_admission,
-    ) {
-        Ok(binding) => binding,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "queue_plan_synced_receipt_signing_failed",
-                format!("durable admission binding is malformed: {error}"),
-            );
-        }
-    };
-    if durable_binding != expected_binding {
-        return torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "queue_plan_synced_receipt_signing_failed",
-            "durable queue admission claim does not match the exact ingress binding",
-        );
-    }
-    let coordinator = expected_binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .expect("validated QueuePlan binding has a coordinator");
-    let Some(validator_index) = coordinator
-        .validator_set
-        .iter()
-        .position(|validator| validator == &receipt_signer)
-        .and_then(|index| u16::try_from(index).ok())
-    else {
-        return torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "queue_plan_synced_signer_mismatch",
-            format!(
-                "QueuePlanSynced receipt signer `{receipt_signer}` is not in the exact coordinator roster"
-            ),
-        );
-    };
-    let signing_bytes = match queue_plan_admission_attestation_signing_bytes_v1(
-        expected_binding.canonical_hash(),
-        validator_index,
-    ) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "queue_plan_synced_receipt_signing_failed",
-                format!("failed to encode QueuePlan attestation: {error}"),
-            );
-        }
-    };
-    let response = match app.local_peer_id.as_ref() {
-        Some(local_peer_id) if *local_peer_id == receipt_signer => {
-            Signature::try_new(app.torii_proxy_bridge_signer.private_key(), &signing_bytes)
-                .map(|signature| QueuePlanAdmissionCertificateV1 {
-                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                    binding: expected_binding.clone(),
-                    attestations: vec![QueuePlanAdmissionAttestationV1 {
-                        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-                        validator_index,
-                        signature,
-                    }],
-                })
-                .map_err(|error| {
-                    (
-                        "queue_plan_synced_receipt_signing_failed",
-                        error.to_string(),
-                    )
-                })
-        }
-        Some(local_peer_id) => Err((
-            "queue_plan_synced_signer_mismatch",
-            format!(
-                "configured local peer `{local_peer_id}` does not match the QueuePlanSynced receipt signer `{receipt_signer}`"
-            ),
-        )),
-        None => Err((
-            "queue_plan_synced_signer_mismatch",
-            "QueuePlanSynced admission requires a configured local peer id".to_owned(),
-        )),
-    };
-    let mut response = match response {
-        Ok(certificate) => (StatusCode::ACCEPTED, utils::NoritoBody(certificate)).into_response(),
-        Err((code, error)) => utils::respond_with_status_and_format(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ErrorEnvelope::new(
-                code,
-                format!("failed to produce QueuePlanSynced admission receipt: {error}"),
-            ),
-            ResponseFormat::Norito,
-        ),
-    };
-    insert_transaction_submission_identity_headers(
-        &mut response,
-        &expected_binding.entrypoint_hash,
-        expected_binding.signed_transaction_hash.as_ref(),
-    );
-    insert_routing_headers(&mut response, routing_decision, "proxy");
-    response
-}
 fn routing_resolve_error_to_torii_error(
     app: &SharedAppState,
     error: queue::RoutingResolveError,
@@ -15984,137 +15729,6 @@ fn torii_proxy_candidate_peer_ids(
         loop_prevention_drops,
         unavailable_reason,
     }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_bound_authorities(
-    request: &ToriiProxyRequestV1,
-) -> Result<Option<(&[PeerId], u64)>, &'static str> {
-    match &request.request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            admission_binding: Some(binding),
-            ..
-        } => {
-            let coordinator = binding
-                .admission_context
-                .route_incarnations
-                .first()
-                .ok_or("QueuePlanSynced binding has no coordinator route")?;
-            Ok(Some((
-                coordinator.validator_set.as_slice(),
-                binding.admission_context.proposal_height,
-            )))
-        }
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => Err("QueuePlanSynced request is missing its exact admission binding"),
-        _ => Ok(None),
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_proxy_candidate_peer_ids(
-    app: &AppState,
-    local_peer_id: &PeerId,
-    routing_decision: RoutingDecision,
-    authoritative_peer_ids: &[PeerId],
-    proposal_height: u64,
-    immediate_sender_peer_id: Option<&PeerId>,
-    visited_peer_ids: &[PeerId],
-    include_local: bool,
-) -> ToriiProxyCandidatePeers {
-    let exclusion_set = immediate_sender_peer_id
-        .into_iter()
-        .chain(visited_peer_ids)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let bridge_urls =
-        authoritative_lane_peer_statuses_at_height(app, routing_decision, proposal_height)
-            .into_iter()
-            .filter_map(|status| status.torii_url.map(|url| (status.peer_id, url)))
-            .collect::<BTreeMap<_, _>>();
-    let mut peers = Vec::with_capacity(authoritative_peer_ids.len());
-    let mut offline_authoritative_count = 0_usize;
-    let mut bridge_authoritative_count = 0_usize;
-    let mut loop_prevention_drops = 0_usize;
-    app.online_peers.with_snapshot(|online_peers| {
-        for peer_id in authoritative_peer_ids {
-            if peer_id == local_peer_id {
-                if include_local {
-                    peers.push(ToriiProxyCandidate::Local(peer_id.clone()));
-                }
-                continue;
-            }
-            if exclusion_set.contains(peer_id) {
-                loop_prevention_drops = loop_prevention_drops.saturating_add(1);
-                continue;
-            }
-            if online_peers.iter().any(|online| online.id() == peer_id) {
-                peers.push(ToriiProxyCandidate::P2p(peer_id.clone()));
-                continue;
-            }
-            offline_authoritative_count = offline_authoritative_count.saturating_add(1);
-            if let Some(torii_url) = bridge_urls.get(peer_id) {
-                bridge_authoritative_count = bridge_authoritative_count.saturating_add(1);
-                peers.push(ToriiProxyCandidate::HttpBridge {
-                    peer_id: peer_id.clone(),
-                    torii_url: torii_url.clone(),
-                });
-            }
-        }
-    });
-    let authoritative_total_count = authoritative_peer_ids.len();
-    let authoritative_count = peers.len();
-    let unavailable_reason = if authoritative_count > 0 {
-        None
-    } else if authoritative_total_count == 0 {
-        Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
-    } else if loop_prevention_drops > 0 {
-        Some(ToriiProxyUnavailableReason::LoopPreventionExhausted)
-    } else {
-        Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
-    };
-    ToriiProxyCandidatePeers {
-        peers,
-        authoritative_count,
-        authoritative_total_count,
-        offline_authoritative_count,
-        bridge_authoritative_count,
-        loop_prevention_drops,
-        unavailable_reason,
-    }
-}
-#[cfg(feature = "connect")]
-fn torii_proxy_candidate_peer_ids_for_request(
-    app: &AppState,
-    local_peer_id: &PeerId,
-    routing_decision: RoutingDecision,
-    immediate_sender_peer_id: Option<&PeerId>,
-    visited_peer_ids: &[PeerId],
-    request: &ToriiProxyRequestV1,
-    include_local_queue_plan_authority: bool,
-) -> Result<ToriiProxyCandidatePeers, &'static str> {
-    if let Some((authoritative_peer_ids, proposal_height)) =
-        queue_plan_synced_bound_authorities(request)?
-    {
-        return Ok(queue_plan_synced_proxy_candidate_peer_ids(
-            app,
-            local_peer_id,
-            routing_decision,
-            authoritative_peer_ids,
-            proposal_height,
-            immediate_sender_peer_id,
-            visited_peer_ids,
-            include_local_queue_plan_authority,
-        ));
-    }
-    Ok(torii_proxy_candidate_peer_ids(
-        app,
-        local_peer_id,
-        routing_decision,
-        immediate_sender_peer_id,
-        visited_peer_ids,
-    ))
 }
 #[cfg(any(feature = "app_api", feature = "connect"))]
 fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerId]) -> bool {
@@ -17384,41 +16998,6 @@ fn next_torii_proxy_request_id(
     ))
 }
 #[cfg(feature = "connect")]
-fn queue_plan_synced_proxy_request_id(
-    app: &AppState,
-    request: &ToriiProxyRequestKindV1,
-) -> Option<Hash> {
-    match request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => Some(queue_plan_synced_proxy_request_id_for_entrypoint(
-            app,
-            transaction.hash(),
-        )),
-        _ => None,
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_proxy_request_id_for_entrypoint(
-    app: &AppState,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> Hash {
-    iroha_core::torii_proxy::queue_plan_synced_request_id(
-        app.state.network_id_ref(),
-        entrypoint_hash,
-    )
-}
-#[cfg(feature = "connect")]
-fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
-    app.state
-        .sumeragi_block_cadence()
-        .checked_div(2)
-        .unwrap_or(Duration::ZERO)
-        .clamp(Duration::from_millis(50), Duration::from_millis(250))
-}
-#[cfg(feature = "connect")]
 async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
     let now = Instant::now();
     let mut completed = app.torii_proxy_completed.lock().await;
@@ -17430,7 +17009,6 @@ fn register_torii_proxy_pending_waiter(
     pending_key: (Hash, PeerId),
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
     max_body_bytes: usize,
-    strict_queue_plan_synced: bool,
 ) -> ToriiProxyPendingWaiter {
     let waiter_token = Arc::new(());
     app.torii_proxy_pending
@@ -17441,7 +17019,6 @@ fn register_torii_proxy_pending_waiter(
             waiter_token: Arc::clone(&waiter_token),
             sender,
             max_body_bytes,
-            strict_queue_plan_synced,
         });
     ToriiProxyPendingWaiter {
         pending: Arc::clone(&app.torii_proxy_pending),
@@ -17474,7 +17051,7 @@ impl Drop for ToriiProxyPendingWaiter {
 }
 #[cfg(feature = "connect")]
 async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Hash) {
-    // A deterministic semantic request id can have multiple independent local callers. Their
+    // Independent callers retain independent response waiters. Their
     // response waiters are removed by their own response or attempt cleanup, never by another
     // caller completing the same request id.
     let mut completed = app.torii_proxy_completed.lock().await;
@@ -17492,25 +17069,10 @@ fn new_torii_proxy_request(
             "Torii ingress routing requires a configured local peer id",
         ));
     };
-    let request_id = match queue_plan_synced_proxy_request_id(app, &request) {
-        Some(request_id) => request_id,
-        None => next_torii_proxy_request_id(app, local_peer_id, &request).map_err(|error| {
+    let request_id =
+        next_torii_proxy_request_id(app, local_peer_id, &request).map_err(|error| {
             torii_proxy_error_response(StatusCode::SERVICE_UNAVAILABLE, "route_unavailable", error)
-        })?,
-    };
-    if let ToriiProxyRequestKindV1::SubmitTransaction {
-        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        admission_binding: Some(binding),
-        ..
-    } = &request
-        && binding.request_id != request_id
-    {
-        return Err(torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            "QueuePlanSynced binding request ID differs from its deterministic proxy identity",
-        ));
-    }
+        })?;
     let now_unix_ms = torii_proxy_now_unix_ms().map_err(|error| {
         torii_proxy_error_response(StatusCode::SERVICE_UNAVAILABLE, "route_unavailable", error)
     })?;
@@ -17536,6 +17098,7 @@ fn new_torii_proxy_request(
         request,
     })
 }
+
 #[cfg(feature = "connect")]
 fn torii_proxy_now_unix_ms() -> Result<u64, &'static str> {
     let millis = SystemTime::now()
@@ -20236,670 +19799,6 @@ impl std::fmt::Display for ToriiProxyAttemptError {
         }
     }
 }
-/// Fixed bound on simultaneous strict-admission responses, independent of roster size.
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS: usize = 4;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1: usize =
-    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_MAX_HEADERS_V1: usize = 16;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1: usize = 4 * 1024;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1: usize = 128;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1: usize = 512;
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1: norito::DecodeLimits =
-    norito::DecodeLimits::new(
-        iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-        iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES,
-        64,
-    );
-#[cfg(feature = "connect")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(clippy::struct_field_names)]
-struct QueuePlanSyncedAcceptanceExpectation {
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
-    admission_binding: QueuePlanAdmissionBindingV1,
-    durability_threshold: usize,
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_acceptance_expectation(
-    request: &ToriiProxyRequestV1,
-) -> Result<Option<QueuePlanSyncedAcceptanceExpectation>, String> {
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        expected_plan,
-        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        admission_binding,
-    } = &request.request
-    else {
-        return Ok(None);
-    };
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(
-            "QueuePlanSynced proxy request carries an ordinary signature-bound admission intent"
-                .to_owned(),
-        );
-    }
-    let admission_binding = admission_binding.clone().ok_or_else(|| {
-        "QueuePlanSynced request is missing its exact admission binding".to_owned()
-    })?;
-    let routing_plan = expected_plan
-        .clone()
-        .try_into_routing_plan()
-        .map_err(|error| format!("QueuePlanSynced routing plan is malformed: {error}"))?;
-    iroha_core::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(
-        &admission_binding,
-        transaction,
-        &routing_plan,
-    )?;
-    if admission_binding.request_id != request.request_id {
-        return Err(
-            "QueuePlanSynced binding request ID differs from its proxy envelope".to_owned(),
-        );
-    }
-    let coordinator = admission_binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .ok_or_else(|| "QueuePlanSynced binding has no coordinator route".to_owned())?;
-    let durability_threshold = usize::from(coordinator.durability_threshold);
-    let entrypoint_hash = transaction.hash();
-    Ok(Some(QueuePlanSyncedAcceptanceExpectation {
-        entrypoint_hash,
-        signed_transaction_hash: signed_transaction_hash_for_entrypoint(transaction),
-        admission_binding,
-        durability_threshold,
-    }))
-}
-#[cfg(feature = "connect")]
-fn queue_plan_complete_input_capacity_error(
-    entrypoint: &TransactionEntrypoint,
-    binding: &QueuePlanAdmissionBindingV1,
-) -> Option<Response> {
-    match iroha_core::torii_proxy::maximum_lane_admitted_input_encoded_len_v1(entrypoint, binding) {
-        Ok(size) if size <= iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES => None,
-        Ok(size) => Some(torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "queue_plan_admission_input_too_large",
-            format!(
-                "complete QueuePlan input requires {size} bytes, exceeding the {}-byte carrier control bound",
-                iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
-            ),
-        )),
-        Err(error) => Some(torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            error,
-        )),
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_service_input_capacity(
-    app: &AppState,
-    entrypoint: &TransactionEntrypoint,
-    binding: &QueuePlanAdmissionBindingV1,
-) -> Result<(), iroha_core::sumeragi::QueuePlanInputCapacityErrorV1> {
-    // TODO(WP8a): QueuePlan admission is deleted with the lanes; Sumeragi admits its inputs
-    // as ordinary transactions and reserves no capacity for them.
-    let _ = (app, entrypoint, binding);
-    Ok(())
-}
-#[cfg(feature = "connect")]
-async fn queue_plan_service_input_capacity_error(
-    app: &AppState,
-    entrypoint: &TransactionEntrypoint,
-    binding: &QueuePlanAdmissionBindingV1,
-    deadline: tokio::time::Instant,
-    deadline_unix_ms: u64,
-) -> Option<Response> {
-    use iroha_core::sumeragi::QueuePlanInputCapacityErrorV1;
-    let error = queue_plan_capacity_wait::wait(
-        || queue_plan_service_input_capacity(app, entrypoint, binding),
-        || queue_plan_capacity_wait::remaining(deadline, deadline_unix_ms),
-    )
-    .await
-    .err()?;
-    let error = match error {
-        queue_plan_capacity_wait::WaitError::Capacity(error) => error,
-        queue_plan_capacity_wait::WaitError::Deadline(error) => {
-            // The exact request may already have a partial durable claim from
-            // an earlier attempt. A closed owner cannot prove non-admission.
-            return Some(queue_plan_outcome_unknown_response(
-                binding.entrypoint_hash,
-                binding.signed_transaction_hash,
-                format!("QueuePlan admission owner wait deadline expired: {error}"),
-            ));
-        }
-    };
-    let (status, code) = match &error {
-        QueuePlanInputCapacityErrorV1::Unavailable(_) | QueuePlanInputCapacityErrorV1::Inactive => {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "queue_plan_admission_capacity_unavailable",
-            )
-        }
-        QueuePlanInputCapacityErrorV1::Invalid(_) => {
-            (StatusCode::BAD_REQUEST, "invalid_proxy_request")
-        }
-        QueuePlanInputCapacityErrorV1::Oversized { .. }
-        | QueuePlanInputCapacityErrorV1::Availability(_) => (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "queue_plan_admission_input_too_large",
-        ),
-    };
-    Some(torii_proxy_error_response(status, code, error.to_string()))
-}
-#[cfg(feature = "connect")]
-async fn queue_plan_request_service_capacity_error(
-    app: &AppState,
-    request: &ToriiProxyRequestKindV1,
-    deadline: tokio::time::Instant,
-    deadline_unix_ms: u64,
-) -> Option<Response> {
-    if let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        admission_binding: Some(binding),
-        ..
-    } = request
-    {
-        queue_plan_service_input_capacity_error(
-            app,
-            transaction,
-            binding,
-            deadline,
-            deadline_unix_ms,
-        )
-        .await
-    } else {
-        None
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_entrypoint_hash(
-    request: &ToriiProxyRequestKindV1,
-) -> Option<HashOf<TransactionEntrypoint>> {
-    match request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => Some(transaction.hash()),
-        _ => None,
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_outcome_unknown_response(
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
-    reason: impl Into<String>,
-) -> Response {
-    let reason = reason.into();
-    iroha_logger::warn!(
-        %entrypoint_hash,
-        ?signed_transaction_hash,
-        internal_reason = %reason,
-        "transaction admission outcome is unknown"
-    );
-    let source = queue::Error::PlanJournalDurabilityIndeterminate {
-        entrypoint_hash: entrypoint_hash.clone(),
-        signed_transaction_hash: signed_transaction_hash.clone(),
-        reason,
-    };
-    let status = Error::status_code_for_queue_error(&source);
-    // A distributed admission ambiguity has no authoritative point-in-time
-    // queue snapshot. Omit queue telemetry instead of fabricating local load.
-    let envelope = Error::queue_error_envelope(&source, None);
-    let mut response =
-        utils::respond_with_status_and_format(status, envelope, utils::current_response_format());
-    let (reject_code, _detail) = queue_rejection_metadata(&source);
-    if let Ok(header) = HeaderValue::from_str(reject_code) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("x-iroha-reject-code"), header);
-    }
-    insert_transaction_submission_identity_headers(
-        &mut response,
-        &entrypoint_hash,
-        signed_transaction_hash.as_ref(),
-    );
-    response
-}
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
-#[cfg(feature = "connect")]
-const QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE: &str = "queue_plan_journal_outcome_unknown";
-#[cfg(feature = "connect")]
-fn is_queue_plan_outcome_unknown_response(response: &Response) -> bool {
-    torii_response_has_reject_code(response, QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
-}
-#[cfg(feature = "connect")]
-fn validate_queue_plan_synced_response_header(
-    snapshot: &ToriiProxyHttpResponseV1,
-    header_name: &'static str,
-    expected_value: Option<&str>,
-) -> Result<(), String> {
-    let mut values = snapshot
-        .headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case(header_name));
-    let first = values.next();
-    let duplicated = values.next().is_some();
-    match expected_value {
-        Some(expected_value)
-            if !duplicated
-                && first
-                    .is_some_and(|header| header.value.as_slice() == expected_value.as_bytes()) =>
-        {
-            Ok(())
-        }
-        Some(_) => Err(format!(
-            "`{header_name}` is missing, duplicated, or does not match the submitted transaction"
-        )),
-        None if first.is_none() => Ok(()),
-        None => Err(format!(
-            "`{header_name}` is present for an entrypoint without an inner signed transaction"
-        )),
-    }
-}
-#[cfg(feature = "connect")]
-fn validate_queue_plan_synced_snapshot_bounds(
-    snapshot: &ToriiProxyHttpResponseV1,
-) -> Result<(), String> {
-    if snapshot.headers.len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V1 {
-        return Err("QueuePlanSynced response contains too many headers".to_owned());
-    }
-    let mut total_header_bytes = 0_usize;
-    for header in &snapshot.headers {
-        if header.name.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1
-            || header.value.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1
-        {
-            return Err("QueuePlanSynced response header exceeds its field limit".to_owned());
-        }
-        total_header_bytes = total_header_bytes
-            .checked_add(header.name.len())
-            .and_then(|bytes| bytes.checked_add(header.value.len()))
-            .ok_or_else(|| "QueuePlanSynced response header size overflow".to_owned())?;
-    }
-    if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1 {
-        return Err("QueuePlanSynced response headers exceed their aggregate limit".to_owned());
-    }
-    if snapshot.body.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
-        return Err("QueuePlanSynced response body exceeds its V1 limit".to_owned());
-    }
-    let content_encodings = snapshot
-        .headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case("content-encoding"))
-        .collect::<Vec<_>>();
-    if content_encodings.len() > 1
-        || content_encodings.first().is_some_and(|header| {
-            !std::str::from_utf8(&header.value)
-                .is_ok_and(|encoding| encoding.eq_ignore_ascii_case("identity"))
-        })
-    {
-        return Err("QueuePlanSynced response uses a non-identity content encoding".to_owned());
-    }
-    let content_lengths = snapshot
-        .headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case("content-length"))
-        .collect::<Vec<_>>();
-    if content_lengths.len() > 1 {
-        return Err(
-            "QueuePlanSynced response contains duplicate Content-Length headers".to_owned(),
-        );
-    }
-    if let Some(content_length) = content_lengths.first() {
-        let declared = std::str::from_utf8(&content_length.value)
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .ok_or_else(|| {
-                "QueuePlanSynced response contains an invalid Content-Length header".to_owned()
-            })?;
-        if declared != snapshot.body.len() {
-            return Err(
-                "QueuePlanSynced response Content-Length does not match its exact body".to_owned(),
-            );
-        }
-    }
-    Ok(())
-}
-#[cfg(feature = "connect")]
-fn canonical_queue_plan_synced_certificate_headers(
-    expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
-    let mut headers = vec![
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "content-type".to_owned(),
-            value: utils::NORITO_MIME_TYPE.as_bytes().to_vec(),
-        },
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-entrypoint-hash".to_owned(),
-            value: expected.entrypoint_hash.to_string().into_bytes(),
-        },
-    ];
-    if let Some(signed_transaction_hash) = expected.signed_transaction_hash.as_ref() {
-        headers.push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-signed-transaction-hash".to_owned(),
-            value: signed_transaction_hash.to_string().into_bytes(),
-        });
-    }
-    headers
-}
-#[cfg(feature = "connect")]
-fn decode_queue_plan_synced_certificate(
-    bytes: &[u8],
-) -> Result<QueuePlanAdmissionCertificateV1, String> {
-    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
-        return Err("QueuePlanSynced certificate body is empty or oversized".to_owned());
-    }
-    let certificate = norito::decode_from_bytes_with_limits::<QueuePlanAdmissionCertificateV1>(
-        bytes,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1,
-    )
-    .map_err(|error| format!("body is not a bounded QueuePlanSynced certificate: {error}"))?;
-    let canonical = norito::to_bytes(&certificate)
-        .map_err(|error| format!("QueuePlanSynced certificate cannot be encoded: {error}"))?;
-    if canonical != bytes {
-        return Err("QueuePlanSynced certificate is not canonical Norito".to_owned());
-    }
-    Ok(certificate)
-}
-#[cfg(feature = "connect")]
-fn validate_queue_plan_synced_acceptance(
-    snapshot: &ToriiProxyHttpResponseV1,
-    expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> Result<Vec<QueuePlanAdmissionAttestationV1>, String> {
-    validate_queue_plan_synced_snapshot_bounds(snapshot)?;
-    if snapshot.status_code != StatusCode::ACCEPTED.as_u16() {
-        return Err("status is not 202 Accepted".to_owned());
-    }
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "content-type",
-        Some(utils::NORITO_MIME_TYPE),
-    )?;
-    let entrypoint_hash_literal = expected.entrypoint_hash.to_string();
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-entrypoint-hash",
-        Some(entrypoint_hash_literal.as_str()),
-    )?;
-    let signed_transaction_hash_literal = expected
-        .signed_transaction_hash
-        .as_ref()
-        .map(ToString::to_string);
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-signed-transaction-hash",
-        signed_transaction_hash_literal.as_deref(),
-    )?;
-    if snapshot
-        .headers
-        .iter()
-        .any(|header| header.name.eq_ignore_ascii_case("x-iroha-reject-code"))
-    {
-        return Err("durable acceptance contains contradictory rejection evidence".to_owned());
-    }
-    let certificate = decode_queue_plan_synced_certificate(&snapshot.body)?;
-    if certificate.binding != expected.admission_binding {
-        return Err(
-            "QueuePlanSynced certificate binding differs from the exact proxy request".to_owned(),
-        );
-    }
-    let validated = validate_queue_plan_admission_certificate_for_network_digest_v1(
-        expected.admission_binding.network_id_digest,
-        certificate,
-        QueuePlanAdmissionCertificateStrengthV1::Partial,
-    )?;
-    Ok(validated.certificate.attestations)
-}
-/// Bounded authority-local retry hints; neither proves non-admission or adds an attestation.
-#[cfg(feature = "connect")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QueuePlanSyncedAuthorityRetryReason {
-    /// The exact immutable context is ahead of this authority.
-    ContextCatchUp,
-    /// This authority could not reserve its bounded proxy working set.
-    ProxyCapacity,
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_authority_retry_reason(
-    snapshot: &ToriiProxyHttpResponseV1,
-) -> Option<QueuePlanSyncedAuthorityRetryReason> {
-    validate_queue_plan_synced_snapshot_bounds(snapshot).ok()?;
-    if torii_proxy_has_exact_capacity_rejection(snapshot) {
-        return Some(QueuePlanSyncedAuthorityRetryReason::ProxyCapacity);
-    }
-    (snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
-        && validate_queue_plan_synced_response_header(
-            snapshot,
-            "x-iroha-reject-code",
-            Some("queue_plan_admission_context_future"),
-        )
-        .is_ok())
-    .then_some(QueuePlanSyncedAuthorityRetryReason::ContextCatchUp)
-}
-#[cfg(feature = "connect")]
-fn merge_queue_plan_synced_attestations(
-    durable_attestations: &mut BTreeMap<u16, QueuePlanAdmissionAttestationV1>,
-    attestations: Vec<QueuePlanAdmissionAttestationV1>,
-) -> Result<(), u16> {
-    for attestation in attestations {
-        let validator_index = attestation.validator_index;
-        match durable_attestations.entry(validator_index) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(attestation);
-            }
-            std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &attestation => {}
-            std::collections::btree_map::Entry::Occupied(_) => return Err(validator_index),
-        }
-    }
-    Ok(())
-}
-#[cfg(feature = "connect")]
-enum QueuePlanOutcomeUnknownEvidenceValidation {
-    NotClaimed,
-    Valid,
-    Invalid(&'static str),
-}
-#[cfg(feature = "connect")]
-fn validate_queue_plan_outcome_unknown_evidence(
-    snapshot: &ToriiProxyHttpResponseV1,
-    expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> QueuePlanOutcomeUnknownEvidenceValidation {
-    use QueuePlanOutcomeUnknownEvidenceValidation::{Invalid, NotClaimed, Valid};
-
-    let mut reject_code_header_count = 0_usize;
-    let mut first_reject_code_header_value = None;
-    let mut header_claims_outcome_unknown = false;
-    for header in &snapshot.headers {
-        if !header.name.eq_ignore_ascii_case("x-iroha-reject-code") {
-            continue;
-        }
-        reject_code_header_count += 1;
-        if first_reject_code_header_value.is_none() {
-            first_reject_code_header_value = Some(header.value.as_slice());
-        }
-        header_claims_outcome_unknown |= header.value.as_slice()
-            == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes()
-            || header.value.as_slice() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE.as_bytes();
-    }
-    let decoded_envelope = validate_queue_plan_synced_snapshot_bounds(snapshot)
-        .ok()
-        .and_then(|()| {
-            norito::decode_from_bytes_with_limits::<ErrorEnvelope>(
-                &snapshot.body,
-                QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1,
-            )
-            .ok()
-        });
-    let envelope_claims_outcome_unknown = decoded_envelope.as_ref().is_some_and(|envelope| {
-        envelope.code() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
-            || envelope.details.as_ref().is_some_and(|details| {
-                details.reject_code.as_deref() == Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
-            })
-    });
-    if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
-        return NotClaimed;
-    }
-    if snapshot.status_code != StatusCode::SERVICE_UNAVAILABLE.as_u16() {
-        return Invalid("status is not 503 Service Unavailable");
-    }
-    if validate_queue_plan_synced_response_header(
-        snapshot,
-        "content-type",
-        Some(utils::NORITO_MIME_TYPE),
-    )
-    .is_err()
-    {
-        return Invalid("content-type header is missing, duplicated, or non-canonical");
-    }
-    if reject_code_header_count != 1
-        || first_reject_code_header_value != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes())
-    {
-        return Invalid("reject-code header is missing, duplicated, or non-canonical");
-    }
-    let expected_entrypoint_hash_literal = expected.entrypoint_hash.to_string();
-    if validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-entrypoint-hash",
-        Some(expected_entrypoint_hash_literal.as_str()),
-    )
-    .is_err()
-    {
-        return Invalid(
-            "entrypoint identity header is missing, duplicated, or does not match the submitted entrypoint",
-        );
-    }
-    let expected_signed_transaction_hash_literal = expected
-        .signed_transaction_hash
-        .as_ref()
-        .map(ToString::to_string);
-    if validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-signed-transaction-hash",
-        expected_signed_transaction_hash_literal.as_deref(),
-    )
-    .is_err()
-    {
-        return Invalid(
-            "signed-transaction identity header is missing, duplicated, or does not match the submitted transaction",
-        );
-    }
-    let Some(envelope) = decoded_envelope.as_ref() else {
-        return Invalid("body is not a decodable Norito error envelope");
-    };
-    if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE {
-        return Invalid("error-envelope code is not canonical");
-    }
-    if !norito::to_bytes(envelope)
-        .is_ok_and(|canonical| canonical.as_slice() == snapshot.body.as_slice())
-    {
-        return Invalid("error-envelope body is not the canonical Norito encoding");
-    }
-    let Some(details) = envelope.details.as_ref() else {
-        return Invalid("error envelope is missing details");
-    };
-    if details.reject_code.as_deref() != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) {
-        return Invalid("error-envelope reject code is missing or non-canonical");
-    }
-    if details.entrypoint_hash.as_deref() != Some(expected_entrypoint_hash_literal.as_str()) {
-        return Invalid("error-envelope entrypoint hash does not match the submitted entrypoint");
-    }
-    if details.tx_hash.as_deref() != expected_signed_transaction_hash_literal.as_deref() {
-        return Invalid("error-envelope transaction hash does not match the submitted transaction");
-    }
-    Valid
-}
-#[cfg(feature = "connect")]
-fn queue_plan_synced_snapshot_to_response(
-    snapshot: ToriiProxyHttpResponseV1,
-    expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> Response {
-    if validate_queue_plan_synced_acceptance(&snapshot, expected)
-        .is_ok_and(|receipts| receipts.len() >= expected.durability_threshold)
-    {
-        return torii_proxy_snapshot_to_response(snapshot);
-    }
-    match validate_queue_plan_outcome_unknown_evidence(&snapshot, expected) {
-        QueuePlanOutcomeUnknownEvidenceValidation::NotClaimed => {
-            // The current strict proxy response schema has no authenticated
-            // admission-phase evidence for rejections. A complete response can
-            // therefore still have been produced after durable queue admission
-            // (for example, when receipt signing fails).
-            queue_plan_outcome_unknown_response(
-                expected.entrypoint_hash.clone(),
-                expected.signed_transaction_hash.clone(),
-                format!(
-                    "authenticated authority returned HTTP {} without exact durable-acceptance or outcome-unknown evidence",
-                    snapshot.status_code
-                ),
-            )
-        }
-        QueuePlanOutcomeUnknownEvidenceValidation::Invalid(reason) => {
-            queue_plan_outcome_unknown_response(
-                expected.entrypoint_hash.clone(),
-                expected.signed_transaction_hash.clone(),
-                format!(
-                    "authenticated authority returned invalid QueuePlanSynced outcome evidence: {reason}"
-                ),
-            )
-        }
-        QueuePlanOutcomeUnknownEvidenceValidation::Valid => queue_plan_outcome_unknown_response(
-            expected.entrypoint_hash.clone(),
-            expected.signed_transaction_hash.clone(),
-            "authenticated authority reported an indeterminate durable-admission outcome",
-        ),
-    }
-}
-#[cfg(feature = "connect")]
-fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: Response) {
-    let candidate_is_unknown = is_queue_plan_outcome_unknown_response(&candidate);
-    let current_is_unknown = slot
-        .as_ref()
-        .is_some_and(is_queue_plan_outcome_unknown_response);
-    if slot.is_none() || candidate_is_unknown || !current_is_unknown {
-        *slot = Some(candidate);
-    }
-}
-#[cfg(feature = "connect")]
-fn retain_strongest_queue_plan_synced_failure(
-    slot: &mut Option<(u8, usize, Response)>,
-    candidate_index: usize,
-    candidate: Response,
-) {
-    // An indeterminate admission dominates every proof-carrying definite
-    // pre-admission failure because any dispatched authority may already own
-    // the exact transaction. Among definite failures, retain an authenticated
-    // non-retryable response ahead of a generic retryable response. Candidate
-    // order breaks equal-priority ties so asynchronous completion order cannot
-    // change the public result.
-    let priority = if is_queue_plan_outcome_unknown_response(&candidate) {
-        2
-    } else if should_retry_torii_proxy_status(candidate.status()) {
-        0
-    } else {
-        1
-    };
-    let replace = slot
-        .as_ref()
-        .is_none_or(|(current_priority, current_index, _)| {
-            priority > *current_priority
-                || (priority == *current_priority && candidate_index < *current_index)
-        });
-    if replace {
-        *slot = Some((priority, candidate_index, candidate));
-    }
-}
 #[cfg(feature = "connect")]
 fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV1) -> &'static str {
     match request {
@@ -20924,10 +19823,7 @@ fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequest
 #[cfg(feature = "connect")]
 fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
     match request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => DEFAULT_ROUTE_TIMEOUT,
+        ToriiProxyRequestKindV1::SubmitTransaction { .. } => DEFAULT_ROUTE_TIMEOUT,
         ToriiProxyRequestKindV1::SignedQuery { .. }
         | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
         | ToriiProxyRequestKindV1::Read(_)
@@ -21003,68 +19899,8 @@ fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, Strin
 async fn reqwest_response_to_torii_proxy_snapshot(
     mut response: reqwest::Response,
     max_body_bytes: usize,
-    strict_queue_plan_synced: bool,
 ) -> Result<ToriiProxyHttpResponseV1, String> {
     let headers = bounded_torii_proxy_headers(response.headers())?;
-    if strict_queue_plan_synced {
-        if response
-            .headers()
-            .get_all(axum::http::header::CONTENT_LENGTH)
-            .iter()
-            .count()
-            > 1
-        {
-            return Err(
-                "QueuePlanSynced HTTP bridge response contains duplicate Content-Length headers"
-                    .to_owned(),
-            );
-        }
-        let content_encodings = response
-            .headers()
-            .get_all(axum::http::header::CONTENT_ENCODING)
-            .iter()
-            .collect::<Vec<_>>();
-        if content_encodings.len() > 1
-            || content_encodings.first().is_some_and(|value| {
-                !value
-                    .to_str()
-                    .is_ok_and(|encoding| encoding.eq_ignore_ascii_case("identity"))
-            })
-        {
-            return Err(
-                "QueuePlanSynced HTTP bridge response uses a non-identity content encoding"
-                    .to_owned(),
-            );
-        }
-        let mut total_header_bytes = 0_usize;
-        if response.headers().len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V1 {
-            return Err(
-                "QueuePlanSynced HTTP bridge response contains too many headers".to_owned(),
-            );
-        }
-        for (name, value) in response.headers() {
-            if name.as_str().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1
-                || value.as_bytes().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1
-            {
-                return Err(
-                    "QueuePlanSynced HTTP bridge response header exceeds its field limit"
-                        .to_owned(),
-                );
-            }
-            total_header_bytes = total_header_bytes
-                .checked_add(name.as_str().len())
-                .and_then(|bytes| bytes.checked_add(value.as_bytes().len()))
-                .ok_or_else(|| {
-                    "QueuePlanSynced HTTP bridge response header size overflow".to_owned()
-                })?;
-        }
-        if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1 {
-            return Err(
-                "QueuePlanSynced HTTP bridge response headers exceed their aggregate limit"
-                    .to_owned(),
-            );
-        }
-    }
     let status_code = response.status().as_u16();
     let body = read_reqwest_response_body_bounded(
         &mut response,
@@ -21101,16 +19937,10 @@ async fn execute_torii_proxy_request_via_peer(
     let attempt_deadline = tokio::time::Instant::now() + attempt_timeout_cap;
     let max_body_bytes =
         torii_proxy_p2p_response_body_limit(app.as_ref(), network, &request.request);
-    let strict_queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
+
     let (tx, rx) = tokio::sync::oneshot::channel();
     prune_completed_torii_proxy_requests(app).await;
-    let _waiter = register_torii_proxy_pending_waiter(
-        app,
-        pending_key.clone(),
-        tx,
-        max_body_bytes,
-        strict_queue_plan_synced,
-    );
+    let _waiter = register_torii_proxy_pending_waiter(app, pending_key.clone(), tx, max_body_bytes);
     iroha_logger::debug!(
         request_id = %pending_key.0,
         peer_id = %target_peer_id,
@@ -21167,14 +19997,6 @@ async fn execute_torii_proxy_request_via_peer(
                     pending_key.0
                 ))
             })?;
-            if strict_queue_plan_synced {
-                validate_queue_plan_synced_snapshot_bounds(&response).map_err(|error| {
-                    ToriiProxyAttemptError::after_dispatch(format!(
-                        "Torii proxy response for request `{}` from peer `{target_peer_id}` violates QueuePlanSynced bounds: {error}",
-                        pending_key.0
-                    ))
-                })?;
-            }
             Ok(response)
         }
         Ok(Err(_)) => Err(ToriiProxyAttemptError::after_dispatch(format!(
@@ -21271,7 +20093,7 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
         attempt_timeout_cap_ms = attempt_timeout_cap.as_millis() as u64,
         "sending Torii proxy request over authoritative HTTP bridge"
     );
-    let queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
+
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -21322,7 +20144,7 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
     }
     tokio::time::timeout(
         response_timeout,
-        reqwest_response_to_torii_proxy_snapshot(response, response_body_limit, queue_plan_synced),
+        reqwest_response_to_torii_proxy_snapshot(response, response_body_limit),
     )
     .await
     .map_err(|_| {
@@ -21350,7 +20172,7 @@ async fn execute_torii_proxy_request_locally_with_proxy_memory(
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     let max_body_bytes = torii_proxy_response_body_limit(app.as_ref(), &request.request);
-    let strict_queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
+
     let request_id = request.request_id.clone();
     // Local delivery may execute a Nexus fanout whose remote legs re-enter the
     // ordinary proxy candidate pipeline. Hop history and candidate filtering
@@ -21364,13 +20186,6 @@ async fn execute_torii_proxy_request_locally_with_proxy_memory(
     ))
     .await;
     let snapshot = response_to_admitted_torii_proxy_snapshot(response, max_body_bytes).await;
-    if strict_queue_plan_synced {
-        validate_queue_plan_synced_snapshot_bounds(&snapshot.snapshot).map_err(|error| {
-            ToriiProxyAttemptError::after_dispatch(format!(
-                "local Torii proxy response for request `{request_id}` from peer `{local_peer_id}` violates QueuePlanSynced bounds: {error}"
-            ))
-        })?;
-    }
     Ok(snapshot)
 }
 #[cfg(feature = "connect")]
@@ -21383,28 +20198,15 @@ async fn execute_torii_proxy_request_with_fallback(
 }
 #[cfg(feature = "connect")]
 fn take_local_torii_proxy_fast_path(
-    request: &ToriiProxyRequestV1,
     candidate_peers: &mut Vec<ToriiProxyCandidate>,
 ) -> Option<PeerId> {
-    let local_index = candidate_peers
+    let index = candidate_peers
         .iter()
         .position(|candidate| matches!(candidate, ToriiProxyCandidate::Local(_)))?;
-    // A strict QueuePlan acknowledgement is an f+1 certificate. The local authority
-    // contributes one attestation, but must stay in the shared candidate aggregator so
-    // remote attestations can join it before the public response is returned. Put the
-    // known-good local authority first so an earlier unavailable remote cannot consume
-    // the strict request budget before the local journal record is fsynced.
-    if queue_plan_synced_entrypoint_hash(&request.request).is_some() {
-        if local_index != 0 {
-            let local = candidate_peers.remove(local_index);
-            candidate_peers.insert(0, local);
-        }
-        return None;
-    }
-    let ToriiProxyCandidate::Local(local_peer_id) = candidate_peers.swap_remove(local_index) else {
-        unreachable!("selected candidate is local");
+    let ToriiProxyCandidate::Local(peer) = candidate_peers.swap_remove(index) else {
+        unreachable!("selected candidate is local")
     };
-    Some(local_peer_id)
+    Some(peer)
 }
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_with_fallback_admitted(
@@ -21418,32 +20220,17 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         Ok(request) => request,
         Err(response) => return response,
     };
-    let persistence_deadline = queue_plan_publication_wait::PersistenceDeadline::new(
-        request_started,
-        request.deadline_unix_ms,
-    );
     let local_peer_id = app
         .local_peer_id
         .as_ref()
         .expect("new_torii_proxy_request validated local peer id");
-    let candidates = match torii_proxy_candidate_peer_ids_for_request(
+    let candidates = torii_proxy_candidate_peer_ids(
         app,
         local_peer_id,
         routing_decision,
         None,
         &request.visited_peer_ids,
-        &request,
-        true,
-    ) {
-        Ok(candidates) => candidates,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_proxy_request",
-                error,
-            );
-        }
-    };
+    );
     iroha_logger::debug!(
         request_id = %request.request_id,
         hop_count = request.hop_count,
@@ -21478,20 +20265,8 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
             Err(response) => return response,
         },
     };
-    // Canonical envelope sizing allocates bounded complete inputs; retain the
-    // same request-memory owner through sizing, dispatch and final persistence.
-    if let Some(response) = queue_plan_request_service_capacity_error(
-        app,
-        &request.request,
-        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,
-        request.deadline_unix_ms,
-    )
-    .await
-    {
-        return response;
-    }
     let mut candidate_peers = candidates.peers;
-    if let Some(local_peer_id) = take_local_torii_proxy_fast_path(&request, &mut candidate_peers) {
+    if let Some(local_peer_id) = take_local_torii_proxy_fast_path(&mut candidate_peers) {
         let request_id = request.request_id.clone();
         let mut response = match execute_torii_proxy_request_locally_with_proxy_memory(
             app,
@@ -21512,17 +20287,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         mark_torii_proxy_request_completed(app, request_id).await;
         return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
     }
-    // The aggregator consumes the request. Retain its exact original entrypoint
-    // beside the binding until a quorum certificate can become a complete control.
-    let admission_source = match &request.request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            admission_binding: Some(binding),
-            ..
-        } => Some((binding.clone(), transaction.clone())),
-        _ => None,
-    };
     let candidate_proxy_memory = proxy_memory.clone();
     let response = execute_torii_proxy_request_across_candidates(
         tokio::time::Instant::from_std(request_started),
@@ -21531,7 +20295,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         request,
         app.torii_proxy_http_ingress_envelope
             .forwarding_transient_bytes,
-        torii_proxy_hedge_delay(app.as_ref()),
         |candidate, request| {
             let proxy_memory = candidate_proxy_memory.clone();
             async move {
@@ -21563,26 +20326,12 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         },
     )
     .await;
-    // The complete W owner spans aggregation, body extraction, authentication,
-    // durable persistence and dissemination. Only the final public response owns
-    // it through a Body; consuming the intermediate certificate cannot release W.
-    proxy_response_finalization::complete(response, proxy_memory, |response| async move {
-        match admission_source {
-            Some((binding, entrypoint)) => {
-                persist_queue_plan_admission_certificate(
-                    app,
-                    response,
-                    &binding,
-                    &entrypoint,
-                    persistence_deadline,
-                )
-                .await
-            }
-            None => response,
-        }
+    proxy_response_finalization::complete(response, proxy_memory, |response| {
+        std::future::ready(response)
     })
     .await
 }
+
 #[cfg(all(feature = "app_api", not(feature = "connect")))]
 async fn execute_torii_proxy_request_with_fallback(
     _app: &SharedAppState,
@@ -21646,24 +20395,13 @@ async fn forward_incoming_torii_proxy_request(
         );
     }
     let forwarded_request = forwarded_torii_proxy_request_owned(request, local_peer_id);
-    let candidates = match torii_proxy_candidate_peer_ids_for_request(
-        app.as_ref(),
+    let candidates = torii_proxy_candidate_peer_ids(
+        app,
         local_peer_id,
         routing_decision,
         Some(immediate_sender_peer_id),
         &forwarded_request.visited_peer_ids,
-        &forwarded_request,
-        false,
-    ) {
-        Ok(candidates) => candidates,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_proxy_request",
-                error,
-            );
-        }
-    };
+    );
     iroha_logger::debug!(
         request_id = %forwarded_request.request_id,
         hop_count = forwarded_request.hop_count,
@@ -21703,16 +20441,6 @@ async fn forward_incoming_torii_proxy_request(
             candidates.loop_prevention_drops,
         );
     }
-    if let Some(response) = queue_plan_request_service_capacity_error(
-        app,
-        &forwarded_request.request,
-        request_started + TORII_PROXY_EXECUTION_BUDGET,
-        forwarded_request.deadline_unix_ms,
-    )
-    .await
-    {
-        return response;
-    }
     execute_torii_proxy_request_across_candidates(
         request_started,
         candidates.peers,
@@ -21720,7 +20448,6 @@ async fn forward_incoming_torii_proxy_request(
         forwarded_request,
         app.torii_proxy_http_ingress_envelope
             .forwarding_transient_bytes,
-        torii_proxy_hedge_delay(app.as_ref()),
         |candidate, request| async move {
             match candidate {
                 ToriiProxyCandidate::Local(_) => {
@@ -21743,6 +20470,7 @@ async fn forward_incoming_torii_proxy_request(
     )
     .await
 }
+
 #[cfg(feature = "connect")]
 #[derive(Clone)]
 struct SharedToriiProxyAttemptRequest {
@@ -21779,7 +20507,6 @@ async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
     routing_decision: RoutingDecision,
     request: ToriiProxyRequestV1,
     max_encoded_request_bytes: usize,
-    hedge_delay: Duration,
     mut execute: F,
     complete_request: C,
 ) -> Response
@@ -21790,54 +20517,17 @@ where
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
-    let budget_observed_at = tokio::time::Instant::now();
-    let execution_budget = match queue_plan_capacity_wait::remaining(
-        execution_started + TORII_PROXY_EXECUTION_BUDGET,
-        request.deadline_unix_ms,
-    ) {
-        Ok(budget) => budget,
-        Err(error) => {
-            return queue_plan_capacity_wait::deadline_response(&request.request, error);
-        }
-    };
-    let execution_deadline = (budget_observed_at + execution_budget)
-        .min(execution_started + TORII_PROXY_EXECUTION_BUDGET);
-    let queue_plan_synced_expectation = match queue_plan_synced_acceptance_expectation(&request) {
-        Ok(expectation) => expectation,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_proxy_request",
-                error,
-            );
-        }
-    };
-    // Enforce the protocol bound in this transport-independent aggregator.
-    // Production dispatchers and direct receivers additionally check the actual
-    // recovered service's native and publication envelopes before any receipt.
-    if let (Some(expected), ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. }) =
-        (&queue_plan_synced_expectation, &request.request)
-    {
-        if let Some(response) =
-            queue_plan_complete_input_capacity_error(transaction, &expected.admission_binding)
-        {
-            return response;
-        }
+    if let Err(error) = validate_torii_proxy_deadline(request.deadline_unix_ms) {
+        return torii_proxy_error_response(
+            StatusCode::REQUEST_TIMEOUT,
+            "proxy_deadline_exceeded",
+            error,
+        );
     }
-    let queue_plan_synced = queue_plan_synced_expectation.is_some();
-    let strict_durable = queue_plan_synced;
+    let execution_deadline = execution_started + TORII_PROXY_EXECUTION_BUDGET;
     let request = match SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes) {
         Ok(request) => request,
         Err(error) => {
-            if let Some(expected) = queue_plan_synced_expectation.as_ref() {
-                // The expectation derives identity from the actual transaction.
-                // Refusal to encode this attempt cannot undo a previous claim.
-                return queue_plan_outcome_unknown_response(
-                    expected.entrypoint_hash,
-                    expected.signed_transaction_hash,
-                    error,
-                );
-            }
             return torii_proxy_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "proxy_capacity_exceeded",
@@ -21848,6 +20538,9 @@ where
     if torii_proxy_request_carries_one_shot_signed_query(&request.request) {
         let mut last_pre_dispatch_error = None;
         for candidate in candidate_peers {
+            if tokio::time::Instant::now() >= execution_deadline {
+                break;
+            }
             let peer_id = candidate.peer_id().clone();
             let transport = candidate.transport_label();
             match execute(candidate, request.clone()).await {
@@ -21912,758 +20605,82 @@ where
             ),
         );
     }
-    if !strict_durable {
-        // Generic proxy responses may be as large as the configured body
-        // ceiling. Execute candidates sequentially so neither delayed hedges
-        // nor FuturesUnordered's ready queue can retain one large snapshot per
-        // authority. QueuePlanSynced is handled below under its much smaller
-        // protocol-fixed certificate response bound.
-        let mut last_retryable = None;
-        for candidate in candidate_peers {
-            let peer_id = candidate.peer_id().clone();
-            let transport = candidate.transport_label();
-            match execute(candidate, request.clone()).await {
-                Ok(snapshot) => {
-                    let retryable = should_retry_generic_torii_proxy_snapshot(&snapshot);
-                    let snapshot = if retryable {
-                        bound_retained_retryable_torii_proxy_snapshot(snapshot)
-                    } else {
-                        snapshot
-                    };
-                    let mut response = torii_proxy_snapshot_to_response(snapshot);
-                    insert_route_transport_header(&mut response, transport);
-                    if retryable {
-                        retain_strongest_retryable_response(&mut last_retryable, response);
-                        continue;
-                    }
-                    complete_request(request_id.clone()).await;
-                    return response;
-                }
-                Err(error) => {
-                    iroha_logger::warn!(
-                        peer_id = %peer_id,
-                        transport,
-                        %error,
-                        "Torii ingress proxy attempt failed"
-                    );
-                }
-            }
+    let mut last_retryable = None;
+    for candidate in candidate_peers {
+        if tokio::time::Instant::now() >= execution_deadline {
+            break;
         }
-        complete_request(request_id).await;
-        return last_retryable.unwrap_or_else(|| {
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                format!(
-                    "no authoritative peers responded for lane {} dataspace {}",
-                    routing_decision.lane_id.as_u32(),
-                    routing_decision.dataspace_id.as_u64()
-                ),
-            )
-        });
-    }
-    let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV1>::new();
-    let mut last_retryable: Option<Response> = None;
-    let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
-    let retry_delay = hedge_delay.clamp(Duration::from_millis(50), Duration::from_millis(250));
-    let mut attempt_budget = retry_delay;
-    'catch_up: loop {
-        let mut retry_authority = false;
-        let mut pending = futures_util::stream::FuturesUnordered::new();
-        let mut next_candidate = 0;
-        loop {
-            if tokio::time::Instant::now() >= execution_deadline {
-                break 'catch_up;
-            }
-            // The full ingress envelope charges every in-flight response and
-            // reduction scratch before dispatch. A silent prefix cannot retain
-            // all slots until the global deadline: each round gives attempts a
-            // bounded share, then increases that share for slower honest peers.
-            while pending.len() < QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS
-                && next_candidate < candidate_peers.len()
-            {
-                let candidate_index = next_candidate;
-                next_candidate += 1;
-                let peer_id = candidate_peers[candidate_index].clone();
-                if queue_plan_synced_expectation
-                    .as_ref()
-                    .is_some_and(|expected| {
-                        let coordinator = &expected
-                            .admission_binding
-                            .admission_context
-                            .route_incarnations[0];
-                        durable_attestations.keys().any(|validator_index| {
-                            coordinator.validator_set.get(usize::from(*validator_index))
-                                == Some(peer_id.peer_id())
-                        })
-                    })
+        let peer_id = candidate.peer_id().clone();
+        let transport = candidate.transport_label();
+        match execute(candidate, request.clone()).await {
+            Ok(snapshot) => {
+                if let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } =
+                    &request.request
                 {
+                    if snapshot.status_code == StatusCode::ACCEPTED.as_u16() {
+                        if let Err(error) =
+                            validate_native_transaction_submission_identity(&snapshot, transaction)
+                        {
+                            complete_request(request_id).await;
+                            return transaction_dispatch_outcome_unknown_response(
+                                transaction.hash(),
+                                signed_transaction_hash_for_entrypoint(transaction),
+                                error,
+                            );
+                        }
+                    }
+                }
+                let retryable = should_retry_generic_torii_proxy_snapshot(&snapshot);
+                let snapshot = if retryable {
+                    bound_retained_retryable_torii_proxy_snapshot(snapshot)
+                } else {
+                    snapshot
+                };
+                let mut response = torii_proxy_snapshot_to_response(snapshot);
+                insert_route_transport_header(&mut response, transport);
+                if retryable {
+                    last_retryable = Some(response);
                     continue;
                 }
-                let attempt_deadline =
-                    (tokio::time::Instant::now() + attempt_budget).min(execution_deadline);
-                let attempt = execute(peer_id.clone(), request.clone());
-                pending.push(async move {
-                    (
-                        candidate_index,
-                        peer_id,
-                        tokio::time::timeout_at(attempt_deadline, attempt).await,
-                    )
-                });
+                complete_request(request_id.clone()).await;
+                return response;
             }
-            let Some((candidate_index, peer_id, outcome)) = pending.next().await else {
-                break;
-            };
-            let outcome = match outcome {
-                Ok(outcome) => outcome,
-                Err(_) => {
-                    retry_authority = true;
-                    if let Some(expected) = queue_plan_synced_expectation.as_ref() {
-                        let mut response = queue_plan_outcome_unknown_response(
-                            expected.entrypoint_hash.clone(),
-                            expected.signed_transaction_hash.clone(),
-                            "authority attempt exhausted its bounded share of the original admission deadline",
-                        );
-                        insert_route_transport_header(&mut response, peer_id.transport_label());
-                        retain_strongest_queue_plan_synced_failure(
-                            &mut queue_plan_synced_failure,
-                            candidate_index,
-                            response,
-                        );
-                    }
-                    continue;
-                }
-            };
-            match outcome {
-                Ok(mut snapshot) => {
-                    let retry_reason = queue_plan_synced_authority_retry_reason(&snapshot);
-                    retry_authority |= retry_reason.is_some();
-                    if !StatusCode::from_u16(snapshot.status_code)
-                        .is_ok_and(|status| status.is_success())
+            Err(error) => {
+                if error.may_have_reached_authority() {
+                    if let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } =
+                        &request.request
                     {
-                        // Public routing/status metadata only. Never record request bodies,
-                        // statements, credentials, signatures or returned error payloads.
-                        iroha_logger::debug!(
-                            target: "iroha_torii::queue_plan_admission",
-                            request_id = %request_id,
-                            entrypoint_hash = ?queue_plan_synced_expectation
-                                .as_ref()
-                                .map(|expected| &expected.entrypoint_hash),
-                            signed_transaction_hash = ?queue_plan_synced_expectation
-                                .as_ref()
-                                .and_then(|expected| expected.signed_transaction_hash.as_ref()),
-                            peer_id = %peer_id.peer_id(),
-                            transport = peer_id.transport_label(),
-                            candidate_index,
-                            status_code = snapshot.status_code,
-                            ?retry_reason,
-                            attempt_budget_ms = attempt_budget.as_millis() as u64,
-                            remaining_deadline_ms = execution_deadline
-                                .saturating_duration_since(tokio::time::Instant::now())
-                                .as_millis() as u64,
-                            durable_authority_count = durable_attestations.len(),
-                            "strict QueuePlan authority attempt returned a rejection"
-                        );
-                    }
-                    if let Some(expected) = queue_plan_synced_expectation.as_ref() {
-                        match validate_queue_plan_synced_acceptance(&snapshot, expected) {
-                            Ok(receipts) => {
-                                if let Err(validator_index) = merge_queue_plan_synced_attestations(
-                                    &mut durable_attestations,
-                                    receipts,
-                                ) {
-                                    let mut response = queue_plan_outcome_unknown_response(
-                                        expected.entrypoint_hash.clone(),
-                                        expected.signed_transaction_hash.clone(),
-                                        format!(
-                                            "coordinator validator index `{validator_index}` produced conflicting durable admission claims"
-                                        ),
-                                    );
-                                    insert_route_transport_header(
-                                        &mut response,
-                                        peer_id.transport_label(),
-                                    );
-                                    complete_request(request_id.clone()).await;
-                                    return response;
-                                }
-                                if durable_attestations.len() >= expected.durability_threshold {
-                                    let certificate = QueuePlanAdmissionCertificateV1 {
-                                        version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                                        binding: expected.admission_binding.clone(),
-                                        attestations: durable_attestations
-                                            .values()
-                                            .take(expected.durability_threshold)
-                                            .cloned()
-                                            .collect(),
-                                    };
-                                    let body = match norito::core::to_bytes_bounded(
-                                        &certificate,
-                                        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-                                    ) {
-                                        Ok(body) => body,
-                                        Err(norito::core::BoundedEncodeError::FrameTooLarge {
-                                            ..
-                                        }) => {
-                                            let mut response = queue_plan_outcome_unknown_response(
-                                                expected.entrypoint_hash.clone(),
-                                                expected.signed_transaction_hash.clone(),
-                                                "durable admission certificate exceeds its protocol bound",
-                                            );
-                                            insert_route_transport_header(
-                                                &mut response,
-                                                peer_id.transport_label(),
-                                            );
-                                            retain_strongest_queue_plan_synced_failure(
-                                                &mut queue_plan_synced_failure,
-                                                candidate_index,
-                                                response,
-                                            );
-                                            continue;
-                                        }
-                                        Err(error) => {
-                                            let mut response = queue_plan_outcome_unknown_response(
-                                                expected.entrypoint_hash.clone(),
-                                                expected.signed_transaction_hash.clone(),
-                                                format!(
-                                                    "failed to encode durable admission certificate: {error}"
-                                                ),
-                                            );
-                                            insert_route_transport_header(
-                                                &mut response,
-                                                peer_id.transport_label(),
-                                            );
-                                            retain_strongest_queue_plan_synced_failure(
-                                                &mut queue_plan_synced_failure,
-                                                candidate_index,
-                                                response,
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    // The distinct durable certificate is encoded. This does
-                                    // not establish response delivery or transaction application.
-                                    iroha_logger::debug!(
-                                        target: "iroha_torii::queue_plan_admission",
-                                        request_id = %request_id,
-                                        entrypoint_hash = %expected.entrypoint_hash,
-                                        signed_transaction_hash = ?expected.signed_transaction_hash,
-                                        peer_id = %peer_id.peer_id(),
-                                        transport = peer_id.transport_label(),
-                                        candidate_index,
-                                        durable_authority_count = durable_attestations.len(),
-                                        durability_threshold = expected.durability_threshold,
-                                        certificate_authority_count = certificate.attestations.len(),
-                                        remaining_deadline_ms = execution_deadline
-                                            .saturating_duration_since(tokio::time::Instant::now())
-                                            .as_millis() as u64,
-                                        "strict QueuePlan durable admission certificate ready"
-                                    );
-                                    snapshot.status_code = StatusCode::ACCEPTED.as_u16();
-                                    snapshot.headers =
-                                        canonical_queue_plan_synced_certificate_headers(expected);
-                                    snapshot.body = body;
-                                    let mut response = torii_proxy_snapshot_to_response(snapshot);
-                                    insert_route_transport_header(
-                                        &mut response,
-                                        peer_id.transport_label(),
-                                    );
-                                    complete_request(request_id.clone()).await;
-                                    return response;
-                                }
-                                continue;
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    let mut response = match queue_plan_synced_expectation.as_ref() {
-                        Some(expected) => {
-                            queue_plan_synced_snapshot_to_response(snapshot, expected)
-                        }
-                        None => torii_proxy_snapshot_to_response(snapshot),
-                    };
-                    let status = response.status();
-                    insert_route_transport_header(&mut response, peer_id.transport_label());
-                    if strict_durable && !status.is_success() {
-                        retain_strongest_queue_plan_synced_failure(
-                            &mut queue_plan_synced_failure,
-                            candidate_index,
-                            response,
-                        );
-                        continue;
-                    }
-                    if should_retry_torii_proxy_status(status) {
-                        retain_strongest_retryable_response(&mut last_retryable, response);
-                        continue;
-                    }
-                    complete_request(request_id.clone()).await;
-                    return response;
-                }
-                Err(error) => {
-                    iroha_logger::warn!(
-                        peer_id = %peer_id.peer_id(),
-                        transport = peer_id.transport_label(),
-                        %error,
-                        "Torii ingress proxy attempt failed"
-                    );
-                    if error.may_have_reached_authority()
-                        && let Some((entrypoint_hash, signed_transaction_hash)) =
-                            queue_plan_synced_expectation.as_ref().map(|expected| {
-                                (
-                                    &expected.entrypoint_hash,
-                                    expected.signed_transaction_hash.as_ref(),
-                                )
-                            })
-                    {
-                        let mut response = queue_plan_outcome_unknown_response(
-                            entrypoint_hash.clone(),
-                            signed_transaction_hash.cloned(),
+                        complete_request(request_id).await;
+                        return transaction_dispatch_outcome_unknown_response(
+                            transaction.hash(),
+                            signed_transaction_hash_for_entrypoint(transaction),
                             error.to_string(),
                         );
-                        insert_route_transport_header(&mut response, peer_id.transport_label());
-                        retain_strongest_queue_plan_synced_failure(
-                            &mut queue_plan_synced_failure,
-                            candidate_index,
-                            response,
-                        );
                     }
                 }
+                iroha_logger::warn!(
+                    peer_id = %peer_id,
+                    transport,
+                    %error,
+                    "Torii ingress proxy attempt failed"
+                );
             }
         }
-        if !retry_authority {
-            break;
-        }
-        // Retry exact catch-up/capacity hints or timed-out attempts without renewing
-        // the signed request, binding, identity, or absolute deadline. The next
-        // round skips already-attested authorities and gives slow peers more time.
-        let retry_at = tokio::time::Instant::now() + retry_delay;
-        if retry_at >= execution_deadline {
-            break;
-        }
-        tokio::time::sleep_until(retry_at).await;
-        attempt_budget = attempt_budget.saturating_mul(2).min(execution_budget);
     }
     complete_request(request_id).await;
-    if let Some(expected) = queue_plan_synced_expectation.as_ref()
-        && !durable_attestations.is_empty()
-    {
-        return queue_plan_outcome_unknown_response(
-            expected.entrypoint_hash.clone(),
-            expected.signed_transaction_hash.clone(),
+    return last_retryable.unwrap_or_else(|| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
             format!(
-                "recovered {} of {} required distinct durable authority attestations",
-                durable_attestations.len(),
-                expected.durability_threshold
+                "no authoritative peers responded for lane {} dataspace {}",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
             ),
-        );
-    }
-    queue_plan_synced_failure
-        .map(|(_, _, response)| response)
-        .or(last_retryable)
-        .unwrap_or_else(|| {
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                format!(
-                    "no authoritative peers responded for lane {} dataspace {}",
-                    routing_decision.lane_id.as_u32(),
-                    routing_decision.dataspace_id.as_u64()
-                ),
-            )
-        })
-}
-#[cfg(feature = "connect")]
-fn queue_plan_admission_registry_conflict_response(
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    reason: impl Into<String>,
-) -> Response {
-    let mut response = torii_proxy_error_response(
-        StatusCode::CONFLICT,
-        "queue_plan_admission_conflict",
-        reason,
-    );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-iroha-reject-code"),
-        HeaderValue::from_static("PRTRY:QUEUE_PLAN_ADMISSION_CONFLICT"),
-    );
-    insert_transaction_submission_identity_headers(&mut response, &entrypoint_hash, None);
-    response
-}
-#[cfg(test)]
-#[cfg(feature = "connect")]
-fn queue_plan_admission_publication_targets(
-    local_peer_id: &PeerId,
-    online_peer_ids: &BTreeSet<PeerId>,
-    binding: &QueuePlanAdmissionBindingV1,
-) -> Result<Vec<PeerId>, String> {
-    let coordinator = binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .ok_or_else(|| "QueuePlan admission publication has no coordinator route".to_owned())?;
-    Ok(coordinator
-        .validator_set
-        .iter()
-        .filter(|peer_id| *peer_id != local_peer_id && online_peer_ids.contains(*peer_id))
-        .cloned()
-        .collect())
-}
-#[cfg(feature = "connect")]
-fn queue_plan_admission_publication_targets_from_snapshot(
-    local_peer_id: &PeerId,
-    online_peers: &HashSet<Peer>,
-    binding: &QueuePlanAdmissionBindingV1,
-) -> Result<Vec<PeerId>, String> {
-    let coordinator = binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .ok_or_else(|| "QueuePlan admission publication has no coordinator route".to_owned())?;
-    Ok(coordinator
-        .validator_set
-        .iter()
-        .filter(|peer_id| {
-            *peer_id != local_peer_id && online_peers.iter().any(|online| online.id() == *peer_id)
-        })
-        .cloned()
-        .collect())
-}
-#[cfg(feature = "connect")]
-fn disseminate_queue_plan_admission_publication(
-    app: &SharedAppState,
-    certificate: &[u8],
-    binding: &QueuePlanAdmissionBindingV1,
-) -> Result<usize, String> {
-    let network = app
-        .p2p
-        .as_ref()
-        .ok_or_else(|| "QueuePlan admission publication has no P2P transport".to_owned())?;
-    let local_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
-        "QueuePlan admission publication has no configured local peer identity".to_owned()
-    })?;
-    let targets = app.online_peers.with_snapshot(|online_peers| {
-        queue_plan_admission_publication_targets_from_snapshot(local_peer_id, online_peers, binding)
-    })?;
-    let publication = Arc::new(QueuePlanAdmissionPublicationV1 {
-        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
-        certificate: certificate.to_vec(),
-    });
-    for peer_id in &targets {
-        network.post(iroha_p2p::Post {
-            peer_id: peer_id.clone(),
-            priority: iroha_p2p::Priority::High,
-            data: iroha_core::NetworkMessage::QueuePlanAdmissionPublication(Arc::clone(
-                &publication,
-            )),
-        });
-    }
-    Ok(targets.len())
-}
-#[cfg(feature = "connect")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QueuePlanAdmissionPublicationIngestOutcome {
-    AlreadyCommitted,
-    Durable {
-        certificate_hash: Hash,
-        sumeragi_notified: bool,
-    },
-}
-#[cfg(feature = "connect")]
-#[derive(Debug, thiserror::Error)]
-enum QueuePlanAdmissionPublicationIngestError {
-    #[error("{0}")]
-    Invalid(String),
-    #[error("QueuePlan publication persistence failed: {0}")]
-    Persistence(#[from] iroha_core::state::MergeLedgerCommitError),
-}
-#[cfg(feature = "connect")]
-fn ingest_queue_plan_admission_publication(
-    app: &SharedAppState,
-    publication: &QueuePlanAdmissionPublicationV1,
-) -> Result<QueuePlanAdmissionPublicationIngestOutcome, QueuePlanAdmissionPublicationIngestError> {
-    if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
-        return Err(QueuePlanAdmissionPublicationIngestError::Invalid(format!(
-            "unsupported QueuePlan admission publication schema_version `{}`",
-            publication.schema_version
-        )));
-    }
-    let local_peer = app.local_peer_id.as_ref().ok_or_else(|| {
-        QueuePlanAdmissionPublicationIngestError::Invalid(
-            "QueuePlan admission publication receiver has no configured peer identity".to_owned(),
         )
-    })?;
-    // Authentication, receiver authorization and durable classification share one State-owned
-    // graph. The bounded canonical complete input is decoded once by that owner.
-    let outcome = app.state.persist_classified_queue_plan_admission(
-        &publication.certificate,
-        iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(local_peer),
-    )?;
-    let certificate_hash = match outcome {
-        PendingQueuePlanAdmissionPersistenceOutcome::Applied { .. } => {
-            return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
-        }
-        PendingQueuePlanAdmissionPersistenceOutcome::Rejected { disposition, .. } => {
-            return Err(QueuePlanAdmissionPublicationIngestError::Invalid(
-                match disposition {
-                    PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
-                        "canonical WSV raced this publication with another QueuePlan admission"
-                            .to_owned()
-                    }
-                    PendingQueuePlanAdmissionDisposition::Stale => {
-                        "QueuePlan admission became stale during publication ingestion".to_owned()
-                    }
-                    _ => "QueuePlan admission persistence returned an invalid rejection state"
-                        .to_owned(),
-                },
-            ));
-        }
-        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
-            certificate_hash, ..
-        } => certificate_hash,
-    };
-    let sumeragi_notified = app.sumeragi.as_ref().is_some_and(|sumeragi| {
-        sumeragi.transactions_available();
-        true
     });
-    Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
-        certificate_hash,
-        sumeragi_notified,
-    })
 }
-#[cfg(feature = "connect")]
-async fn persist_queue_plan_admission_certificate(
-    app: &SharedAppState,
-    response: Response,
-    expected_binding: &QueuePlanAdmissionBindingV1,
-    expected_entrypoint: &TransactionEntrypoint,
-    deadline: queue_plan_publication_wait::PersistenceDeadline,
-) -> Response {
-    if response.status() != StatusCode::ACCEPTED {
-        return response;
-    }
-    let snapshot =
-        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
-            .await;
-    let certificate = match decode_queue_plan_synced_certificate(&snapshot.body) {
-        Ok(certificate) if certificate.binding == *expected_binding => certificate,
-        Ok(_) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                "aggregated QueuePlan certificate differs from the exact ingress binding",
-            );
-        }
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                format!("aggregated QueuePlan certificate is malformed: {error}"),
-            );
-        }
-    };
-    let certificate = match validate_queue_plan_admission_certificate_for_network_digest_v1(
-        expected_binding.network_id_digest,
-        certificate,
-        QueuePlanAdmissionCertificateStrengthV1::Quorum,
-    ) {
-        Ok(validated) => validated.certificate,
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
-            );
-        }
-    };
-    let input = iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
-        entrypoint: expected_entrypoint.clone(),
-        certificate,
-    };
-    if let Err(error) = queue_plan_capacity_wait::wait(
-        || queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding),
-        || deadline.remaining(),
-    )
-    .await
-    {
-        // Remote journals may already own this exact request. A changed/failed
-        // process owner is indeterminate here, never a definitive rejection.
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash,
-            expected_binding.signed_transaction_hash,
-            format!("QueuePlan capacity unavailable after quorum: {error}"),
-        );
-    }
-    let input_bytes = match norito::encode_canonical(&input) {
-        Ok(bytes) if bytes.len() <= iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES => {
-            bytes
-        }
-        Ok(_) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                "complete QueuePlan input exceeds the per-control carrier bound after quorum",
-            );
-        }
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                format!("complete QueuePlan input cannot be encoded after quorum: {error}"),
-            );
-        }
-    };
-    let outcome = match deadline.persist(&app.state, &input_bytes).await {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                format!(
-                    "failed to classify and persist the complete QueuePlan input before carrier wake: {error}"
-                ),
-            );
-        }
-    };
-    let (certificate_hash, durable_input) = match outcome {
-        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
-            if admission.certificate.binding != *expected_binding {
-                return queue_plan_outcome_unknown_response(
-                    expected_binding.entrypoint_hash.clone(),
-                    expected_binding.signed_transaction_hash.clone(),
-                    "canonical QueuePlan application differs from the exact ingress binding",
-                );
-            }
-            return queue_plan_completed_admission_response(snapshot, expected_binding, &deadline);
-        }
-        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
-            admission,
-            disposition,
-        } => {
-            if admission.certificate.binding != *expected_binding {
-                return queue_plan_outcome_unknown_response(
-                    expected_binding.entrypoint_hash.clone(),
-                    expected_binding.signed_transaction_hash.clone(),
-                    "rejected QueuePlan admission differs from the exact ingress binding",
-                );
-            }
-            if disposition == PendingQueuePlanAdmissionDisposition::DefinitiveConflict {
-                return queue_plan_admission_registry_conflict_response(
-                    expected_binding.entrypoint_hash.clone(),
-                    "canonical WSV already binds this transaction entrypoint to a different QueuePlan admission",
-                );
-            }
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                expected_binding.signed_transaction_hash.clone(),
-                "the aggregated QueuePlan certificate became stale before durable persistence",
-            );
-        }
-        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
-            admission,
-            certificate_hash,
-            certificate,
-            ..
-        } => {
-            if admission.certificate.binding != *expected_binding {
-                return queue_plan_outcome_unknown_response(
-                    expected_binding.entrypoint_hash.clone(),
-                    expected_binding.signed_transaction_hash.clone(),
-                    "durable QueuePlan admission differs from the exact ingress binding",
-                );
-            }
-            (certificate_hash, certificate)
-        }
-    };
-    // State's retained bytes are the complete input, while the public HTTP body
-    // remains its original exact quorum certificate. Never replace a response
-    // certificate with a transaction-bearing publication control.
-    match disseminate_queue_plan_admission_publication(app, &durable_input, expected_binding) {
-        Ok(target_count) => {
-            iroha_logger::debug!(
-                %certificate_hash,
-                target_count,
-                "disseminated certified QueuePlan admission to live authoritative validators"
-            );
-        }
-        Err(error) => {
-            iroha_logger::warn!(
-                %certificate_hash,
-                %error,
-                "could not disseminate certified QueuePlan admission; retaining the local durable carrier"
-            );
-        }
-    }
-    let notification_delivered = app.sumeragi.as_ref().map(|sumeragi| {
-        sumeragi.transactions_available();
-        true
-    });
-    match notification_delivered {
-        Some(true) => {}
-        Some(false) => {
-            // The certificate is already durable. A false wake only means that
-            // Sumeragi is between ingress owners; startup/owner replay still
-            // consumes the carrier.
-            iroha_logger::warn!(
-                %certificate_hash,
-                entrypoint_hash = %expected_binding.entrypoint_hash,
-                "Sumeragi QueuePlan wake was deferred; preserving the durable input"
-            );
-        }
-        None => {
-            iroha_logger::warn!(
-                %certificate_hash,
-                entrypoint_hash = %expected_binding.entrypoint_hash,
-                "Sumeragi QueuePlan wake could not be delivered because no owner is attached; preserving the durable input"
-            );
-        }
-    }
-    match deadline
-        .wait_for_canonical_admission(&app.state, &durable_input)
-        .await
-    {
-        Ok(
-            PendingQueuePlanAdmissionDisposition::ExactPending
-            | PendingQueuePlanAdmissionDisposition::Applied,
-        ) => queue_plan_completed_admission_response(snapshot, expected_binding, &deadline),
-        Ok(PendingQueuePlanAdmissionDisposition::DefinitiveConflict) => {
-            queue_plan_admission_registry_conflict_response(
-                expected_binding.entrypoint_hash.clone(),
-                "canonical WSV committed a different QueuePlan admission for this transaction",
-            )
-        }
-        Ok(PendingQueuePlanAdmissionDisposition::Stale) => queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            expected_binding.signed_transaction_hash.clone(),
-            "the durable QueuePlan input became stale before canonical inclusion",
-        ),
-        Ok(other) => queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            expected_binding.signed_transaction_hash.clone(),
-            format!("durable QueuePlan input still awaits canonical inclusion: {other:?}"),
-        ),
-        Err(error) => queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            expected_binding.signed_transaction_hash.clone(),
-            format!("durable QueuePlan input awaits canonical inclusion: {error}"),
-        ),
-    }
-}
-#[cfg(feature = "connect")]
-fn queue_plan_completed_admission_response(
-    snapshot: ToriiProxyHttpResponseV1,
-    expected_binding: &QueuePlanAdmissionBindingV1,
-    deadline: &queue_plan_publication_wait::PersistenceDeadline,
-) -> Response {
-    if let Err(error) = deadline.remaining() {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            expected_binding.signed_transaction_hash.clone(),
-            format!(
-                "{error}; canonical QueuePlan admission is preserved; reconcile the exact transaction status"
-            ),
-        );
-    }
-    torii_proxy_snapshot_to_response(snapshot)
-}
+
 #[cfg(feature = "connect")]
 fn normalize_proxied_transaction_submission_response(
     app: &AppState,
@@ -22694,7 +20711,7 @@ fn normalize_proxied_transaction_submission_response(
         iroha_logger::error!(
             status = %response.status(),
             entrypoint_hash = %entrypoint_hash,
-            "failed to produce the public submission receipt after authenticated durable admission; preserving known Accepted outcome"
+            "failed to produce the public submission receipt after authenticated queue admission; preserving known Accepted outcome"
         );
         response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::ACCEPTED;
@@ -22719,7 +20736,6 @@ fn normalize_proxied_transaction_submission_response(
     }
     response
 }
-#[cfg(feature = "connect")]
 mod ordinary_transaction_ingress;
 
 #[cfg(feature = "connect")]
@@ -22727,24 +20743,11 @@ async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
-    durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>,
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Response {
-    if let Err(error) =
-        require_current_transaction_admission(accepted_transaction.entrypoint().admission_intent())
-            .and_then(|()| require_current_transaction_route(&routing_plan))
-    {
-        return error.into_response();
-    }
-    let ingress_validation_timestamp_ms = app
-        .queue
-        .queue_plan_admission_timestamp_ms_for(&accepted_transaction);
-    let transaction = accepted_transaction.entrypoint().clone();
-    let routing_decision = routing_plan.coordinator_route();
-    let entrypoint_hash = transaction.hash();
-    let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+    let route = routing_plan.coordinator_route();
+    if should_execute_route_locally(app, route) {
         return ordinary_transaction_ingress::submit(
             app.clone(),
             accepted_transaction,
@@ -22754,155 +20757,24 @@ async fn execute_torii_transaction_via_proxy(
         )
         .await;
     }
-    // An ordinary durable ingress/gossip claim deliberately has no global identity yet. It is
-    // not a public QueuePlanSynced retry: construct the canonical global binding below and let
-    // strict admission atomically promote the exact unbound journal owner. Only an already
-    // globally bound claim may enter the retry reconstruction branch.
-    let durable_retry_claim =
-        durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some());
-    let already_durably_admitted = durable_retry_claim.is_some();
-    if durable_retry_claim.is_none() {
-        let authenticated = match AuthenticatedQueuePlanRetry::from_accepted(
-            app.state.network_id_ref(),
-            &accepted_transaction,
-        ) {
-            Ok(Some(authenticated)) => authenticated,
-            Ok(None) => unreachable!("QueuePlanSynced intent was checked above"),
-            Err(error) => return error.into_response(),
-        };
-        if let Some(response) = canonical_queue_plan_submission_response(
-            app.as_ref(),
-            &authenticated,
-            minimal_response,
-            format,
-        ) {
-            return response;
-        }
-    }
-    let request_id =
-        queue_plan_synced_proxy_request_id_for_entrypoint(app.as_ref(), entrypoint_hash.clone());
-    let binding = if let Some(claim) = durable_retry_claim {
-        let binding =
-            match iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim) {
-                Ok(binding) => binding,
-                Err(error) => {
-                    return torii_proxy_error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "route_unavailable",
-                        format!("indexed durable-admission retry claim is malformed: {error}"),
-                    );
-                }
-            };
-        if binding.request_id != request_id {
-            return torii_proxy_error_response(
-                StatusCode::CONFLICT,
-                "queue_plan_admission_binding_mismatch",
-                "indexed durable-admission retry claim has a different global request identity",
-            );
-        }
-        binding
-    } else {
-        let context = match app
-            .queue
-            .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
-        {
-            Ok(context) => context,
-            Err(error) => {
-                return torii_proxy_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "route_unavailable",
-                    format!(
-                        "failed to capture an exact durable-admission context for lane {} dataspace {}: {error}",
-                        routing_decision.lane_id.as_u32(),
-                        routing_decision.dataspace_id.as_u64()
-                    ),
-                );
-            }
-        };
-        match iroha_core::torii_proxy::new_queue_plan_admission_binding(
-            app.state.network_id_ref(),
-            &transaction,
-            &routing_plan,
-            context,
-            ingress_validation_timestamp_ms,
-        ) {
-            Ok(binding) => binding,
-            Err(error) => {
-                return torii_proxy_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "route_unavailable",
-                    format!("failed to construct exact QueuePlan admission binding: {error}"),
-                );
-            }
-        }
-    };
-    if let Err(error) = iroha_core::torii_proxy::validate_queue_plan_binding_for_request(
-        &binding,
-        app.state.network_id_ref(),
-        &transaction,
-        &routing_plan,
-    ) {
-        return torii_proxy_error_response(
-            StatusCode::CONFLICT,
-            "queue_plan_admission_binding_mismatch",
-            error,
-        );
-    }
-    match app
-        .state
-        .queue_plan_admission_binding_registry_match(&binding)
-    {
-        Ok(QueuePlanAdmissionRegistryMatch::Exact) => {
-            return transaction_submission_response(
-                app.as_ref(),
-                entrypoint_hash,
-                signed_transaction_hash,
-                routing_decision,
-                "proxy",
-                minimal_response,
-                format,
-            );
-        }
-        Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
-            return queue_plan_admission_registry_conflict_response(
-                entrypoint_hash,
-                "canonical WSV already binds this transaction entrypoint to a different QueuePlan admission",
-            );
-        }
-        Err(error) => {
-            return queue_plan_admission_registry_conflict_response(
-                entrypoint_hash,
-                format!("canonical QueuePlan admission marker is malformed: {error}"),
-            );
-        }
-        Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
-    }
-    if !already_durably_admitted {
-        if let Err(error) = routing::reject_ingress_if_queue_capacity_saturated(
-            app.queue.as_ref(),
-            app.state.as_ref(),
-            1,
-        ) {
-            return error.into_response();
-        }
-    }
+    let transaction = accepted_transaction.entrypoint().clone();
+    let hash = transaction.hash();
+    let signed_hash = signed_transaction_hash_for_entrypoint(&transaction);
     let response = execute_torii_proxy_request_with_fallback(
         app,
-        routing_decision,
+        route,
         ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            admission_binding: Some(binding),
+            expected_plan: routing_plan.into(),
         },
     )
     .await;
     normalize_proxied_transaction_submission_response(
-        app.as_ref(),
+        app,
         response,
-        entrypoint_hash,
-        signed_transaction_hash,
-        routing_decision,
+        hash,
+        signed_hash,
+        route,
         minimal_response,
         format,
     )
@@ -24978,15 +22850,6 @@ async fn execute_incoming_torii_proxy_request_with_admission(
             ),
         );
     }
-    if matches!(
-        &proxy_request.request,
-        ToriiProxyRequestKindV1::SubmitTransaction { .. }
-    ) {
-        return unsupported_transaction_admission(
-            "QueuePlanSynced peer admission is unsupported by the current consensus driver; no durable transaction promise was issued",
-        )
-        .into_response();
-    }
     let budget_observed_at = tokio::time::Instant::now();
     let absolute_budget = match validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)
         .and_then(|remaining| {
@@ -24997,17 +22860,17 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         }) {
         Ok(remaining) => remaining,
         Err(error) => {
-            return queue_plan_capacity_wait::deadline_response(&proxy_request.request, error);
+            return torii_proxy_error_response(
+                StatusCode::REQUEST_TIMEOUT,
+                "proxy_deadline_exceeded",
+                error,
+            );
         }
     };
     let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);
     let request_id = proxy_request.request_id.clone();
-    let queue_plan_identity = match &proxy_request.request {
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => Some((
+    let transaction_identity = match &proxy_request.request {
+        ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } => Some((
             transaction.hash(),
             signed_transaction_hash_for_entrypoint(transaction),
         )),
@@ -25032,10 +22895,10 @@ async fn execute_incoming_torii_proxy_request_with_admission(
             let reason = format!(
                 "Torii proxy request `{request_id}` exhausted its authenticated absolute deadline"
             );
-            if let Some((entrypoint_hash, signed_transaction_hash)) = queue_plan_identity {
-                // Cancellation may follow an earlier or partially completed
-                // durable claim. Retain exact ambiguity across the timeout race.
-                queue_plan_outcome_unknown_response(
+            if let Some((entrypoint_hash, signed_transaction_hash)) = transaction_identity {
+                // Physical queue admission can outlive a cancelled transport wait.
+                // Preserve the original transaction identity for status reconciliation.
+                transaction_dispatch_outcome_unknown_response(
                     entrypoint_hash,
                     signed_transaction_hash,
                     reason,
@@ -25050,6 +22913,7 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         }
     }
 }
+
 #[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request_with_admission_inner(
     app: &SharedAppState,
@@ -25209,227 +23073,68 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
         ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
             expected_plan,
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            admission_binding,
         } => {
-            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-                return torii_proxy_error_response(
-                    StatusCode::CONFLICT,
-                    "queue_plan_admission_intent_mismatch",
-                    "QueuePlanSynced proxy request carries an ordinary signature-bound admission intent",
-                );
-            }
             let ingress_plan = match validate_proxy_routing_plan_hint(expected_plan) {
                 Ok(plan) => plan,
                 Err(error) => {
                     return torii_proxy_error_response(
                         StatusCode::BAD_REQUEST,
                         "invalid_proxy_request",
-                        format!("invalid routing plan hint: {error}"),
+                        error.to_string(),
                     );
                 }
             };
-            let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(
-                app.state.network_id_ref(),
-                &transaction,
-            ) {
-                Ok(Some(authenticated)) => authenticated,
-                Ok(None) => unreachable!("QueuePlanSynced intent was checked above"),
-                Err(error) => return error.into_response(),
-            };
-            let Some(admission_binding) = admission_binding else {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    "QueuePlanSynced proxy admission requires an exact admission binding",
-                );
-            };
-            if admission_binding.request_id != request_head.request_id {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    "QueuePlanSynced binding request ID differs from its proxy envelope",
-                );
+            if let Err(error) = require_current_transaction_route(&ingress_plan) {
+                return error.into_response();
             }
-            let canonical_request_id = queue_plan_synced_proxy_request_id_for_entrypoint(
-                app.as_ref(),
-                authenticated.entrypoint_hash(),
-            );
-            if admission_binding.request_id != canonical_request_id {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    "QueuePlanSynced request ID is not the deterministic network/entrypoint identity",
-                );
-            }
-            if let Err(error) = iroha_core::torii_proxy::validate_queue_plan_binding_for_request(
-                &admission_binding,
-                app.state.network_id_ref(),
-                &transaction,
-                &ingress_plan,
-            ) {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    error,
-                );
-            }
-            // Canonical ownership precedes fresh route and capacity policy. A
-            // retry on an empty local Queue must not reopen a closed lane.
-            if let Some(response) = canonical_queue_plan_synced_response(
-                app,
-                &authenticated,
-                &admission_binding,
-                ingress_plan.coordinator_route(),
-                proxy_memory.as_ref(),
-                execution_deadline,
-            ) {
-                return response;
-            }
-            // Wait without issuing a claim while the predecessor owner is closed.
-            if let Some(response) = queue_plan_service_input_capacity_error(
-                app,
-                &transaction,
-                &admission_binding,
-                execution_deadline,
-                request_head.deadline_unix_ms,
-            )
-            .await
-            {
-                return response;
-            }
-            // Another exact request may have acquired canonical ownership while
-            // this future waited. Resolve it before fresh acceptance/route policy.
-            if let Some(response) = canonical_queue_plan_synced_response(
-                app,
-                &authenticated,
-                &admission_binding,
-                ingress_plan.coordinator_route(),
-                proxy_memory.as_ref(),
-                execution_deadline,
-            ) {
-                return response;
-            }
-            // Only an absent canonical owner enters current admission policy.
-            let accepted_tx = match routing::accept_transaction_for_ingress(
+            let accepted = match routing::accept_transaction_for_ingress(
                 app.state.clone(),
                 transaction,
                 &app.telemetry,
             ) {
-                Ok(accepted_tx) => accepted_tx,
+                Ok(accepted) => accepted,
                 Err(error) => return error.into_response(),
             };
-            let routing_plan = match app
+            let plan = match app
                 .queue
-                .route_plan_with_state(&accepted_tx, app.state.as_ref())
+                .route_plan_with_state(&accepted, app.state.as_ref())
             {
                 Ok(plan) => plan,
                 Err(error) => {
                     return routing_resolve_error_to_torii_error(app, error).into_response();
                 }
             };
-            let routing_plan =
-                match validate_proxy_routing_plan("submit_transaction", routing_plan, ingress_plan)
-                {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        return torii_proxy_error_response(
-                            StatusCode::CONFLICT,
-                            "routing_plan_mismatch",
-                            format!(
-                                "routing plan mismatch: ingress digest {}, receiver digest {}",
-                                error.ingress_digest, error.receiver_digest,
-                            ),
-                        );
-                    }
-                };
-            let routing_decision = routing_plan.coordinator_route();
-            let locally_owned = app.queue.has_revalidatable_durable_plan_claim_with_state(
-                &accepted_tx,
-                app.state.as_ref(),
-                &routing_plan,
-                &admission_binding.admission_context,
-            );
-            match app.queue.classify_plan_admission_context_with_state(
-                app.state.as_ref(),
-                &routing_plan,
-                &admission_binding.admission_context,
-            ) {
-                Ok(
-                    queue::QueuePlanAdmissionContextDisposition::Current
-                    | queue::QueuePlanAdmissionContextDisposition::Historical,
-                ) => {}
-                Err(_) if locally_owned => {}
-                Ok(queue::QueuePlanAdmissionContextDisposition::Future) => {
-                    return torii_proxy_error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "queue_plan_admission_context_future",
-                        "QueuePlanSynced admission context is ahead of the local canonical frontier; retry after catch-up",
-                    );
-                }
-                Err(error) => {
-                    return torii_proxy_error_response(
-                        StatusCode::CONFLICT,
-                        "queue_plan_admission_context_mismatch",
-                        format!(
-                            "QueuePlanSynced admission context is not canonical at the local frontier: {error}"
-                        ),
-                    );
-                }
-            }
-            let coordinator = admission_binding
-                .admission_context
-                .route_incarnations
-                .first()
-                .expect("validated binding has a coordinator");
-            let execute_locally = app
-                .local_peer_id
-                .as_ref()
-                .is_some_and(|local_peer_id| coordinator.validator_set.contains(local_peer_id));
-            if !execute_locally {
-                let request =
-                    request_head.with_request(ToriiProxyRequestKindV1::SubmitTransaction {
-                        transaction: accepted_tx.into_entrypoint(),
-                        expected_plan: routing_plan.into(),
-                        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-                        admission_binding: Some(admission_binding),
-                    });
-                return forward_incoming_torii_proxy_request_from_sender(
-                    app,
-                    immediate_sender_peer_id.as_ref(),
-                    routing_decision,
-                    request,
-                )
-                .await;
-            }
-            let receipt_signer = PeerId::new(app.torii_proxy_bridge_signer.public_key().clone());
-            if app.local_peer_id.as_ref() != Some(&receipt_signer) {
+            if plan != ingress_plan {
                 return torii_proxy_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "queue_plan_synced_signer_mismatch",
-                    format!(
-                        "configured local peer does not match the QueuePlanSynced receipt signer `{receipt_signer}`"
-                    ),
+                    StatusCode::CONFLICT,
+                    "routing_plan_mismatch",
+                    "proxied transaction route differs from current authenticated routing state",
                 );
             }
-            match routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(
-                app.queue.clone(), app.state.clone(), accepted_tx, routing_plan, &admission_binding,
-            ) {
-                Ok(durable_claim) => {
-                    let durable_binding = iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&durable_claim);
-                    if durable_binding.as_ref() != Ok(&admission_binding) {
-                        return queue_plan_outcome_unknown_response(
-                            admission_binding.entrypoint_hash,
-                            admission_binding.signed_transaction_hash,
-                            "exact QueuePlan binding changed across strict durable admission",
-                        );
-                    }
-                    queue_plan_synced_admission_response(
-                        app.as_ref(), routing_decision, admission_binding, durable_claim,
-                    )
-                }
-                Err(error) => error.into_response(),
+            let route = plan.coordinator_route();
+            if !should_execute_route_locally(app, route) {
+                let forwarded =
+                    request_head.with_request(ToriiProxyRequestKindV1::SubmitTransaction {
+                        transaction: accepted.entrypoint().clone(),
+                        expected_plan: plan.into(),
+                    });
+                let Some(sender) = immediate_sender_peer_id.as_ref() else {
+                    return torii_proxy_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proxy_request",
+                        "forwarded admission has no authenticated sender",
+                    );
+                };
+                return forward_incoming_torii_proxy_request(app, sender, route, forwarded).await;
             }
+            ordinary_transaction_ingress::submit(
+                app.clone(),
+                accepted,
+                plan,
+                true,
+                ResponseFormat::Json,
+            )
+            .await
         }
         ToriiProxyRequestKindV1::SignedQuery {
             query_bytes,
@@ -25635,6 +23340,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
         }
     }
 }
+
 #[cfg(feature = "connect")]
 fn reject_incoming_torii_proxy_request_capacity(
     network: &iroha_core::IrohaNetwork,
@@ -25879,17 +23585,6 @@ async fn process_incoming_torii_proxy_response(
             );
             continue;
         }
-        if pending.strict_queue_plan_synced
-            && let Err(error) = validate_queue_plan_synced_snapshot_bounds(&proxy_response.response)
-        {
-            iroha_logger::warn!(
-                peer_id = %responder_peer_id,
-                request_id = %proxy_response.request_id,
-                %error,
-                "dropping Torii proxy response that violates QueuePlanSynced bounds"
-            );
-            continue;
-        }
         let response = unsupported_schema_response
             .as_ref()
             .unwrap_or(&proxy_response.response)
@@ -25898,91 +23593,16 @@ async fn process_incoming_torii_proxy_response(
     }
 }
 #[cfg(feature = "connect")]
-async fn process_incoming_queue_plan_admission_publication(
-    app: &SharedAppState,
-    sender_peer_id: &PeerId,
-    publication: &QueuePlanAdmissionPublicationV1,
-) {
-    let deadline = tokio::time::Instant::now() + TORII_PROXY_EXECUTION_BUDGET;
-    let outcome = loop {
-        let result = ingest_queue_plan_admission_publication(app, publication);
-        let Some(required_height) = result.as_ref().err().and_then(|error| match error {
-            QueuePlanAdmissionPublicationIngestError::Persistence(error) => {
-                queue_plan_publication_wait::publication_overlap_height(error)
-            }
-            QueuePlanAdmissionPublicationIngestError::Invalid(_) => None,
-        }) else {
-            break result;
-        };
-        // Kura may durably store a block before State publishes its view. The
-        // authenticated publication remains owned by this bounded worker while
-        // State catches up; a wakeup grants no authority without reclassification.
-        if tokio::time::timeout_at(
-            deadline,
-            app.state.wait_for_committed_height(required_height),
-        )
-        .await
-        .is_err()
-        {
-            iroha_logger::warn!(
-                peer_id = %sender_peer_id,
-                required_height,
-                "deferred QueuePlan publication after State did not catch up; sender and gossip retain the durable input"
-            );
-            return;
-        }
-    };
-    match outcome {
-        Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted) => {
-            iroha_logger::debug!(
-                peer_id = %sender_peer_id,
-                "ignored an idempotent QueuePlan admission publication already present in canonical WSV"
-            );
-        }
-        Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
-            certificate_hash,
-            sumeragi_notified: true,
-        }) => {
-            iroha_logger::debug!(
-                peer_id = %sender_peer_id,
-                %certificate_hash,
-                "persisted a certified QueuePlan admission publication and woke Sumeragi"
-            );
-        }
-        Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
-            certificate_hash,
-            sumeragi_notified: false,
-        }) => {
-            iroha_logger::warn!(
-                peer_id = %sender_peer_id,
-                %certificate_hash,
-                "persisted a certified QueuePlan admission publication but Sumeragi is not ready; durable startup replay will retain it"
-            );
-        }
-        Err(error) => {
-            iroha_logger::warn!(
-                peer_id = %sender_peer_id,
-                %error,
-                "rejected an invalid QueuePlan admission publication"
-            );
-        }
-    }
-}
-#[cfg(feature = "connect")]
 mod proxy_network_workers;
 #[cfg(feature = "connect")]
 mod proxy_response_finalization;
-#[cfg(feature = "connect")]
-mod queue_plan_capacity_wait;
-#[cfg(feature = "connect")]
-mod queue_plan_publication_wait;
 
 #[cfg(feature = "connect")]
 fn attach_torii_proxy_network(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     shutdown_signal: ShutdownSignal,
-) -> Result<[ToriiCriticalWorker; 3], &'static str> {
+) -> Result<[ToriiCriticalWorker; 2], &'static str> {
     proxy_network_workers::start(app, network, shutdown_signal)
 }
 #[cfg(feature = "app_api")]
@@ -28231,7 +25851,7 @@ async fn handler_explorer_transactions_stream(
     )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
-            app.kura.clone(),
+            app.state.clone(),
             app.events.clone(),
             visibility,
         )
@@ -28250,7 +25870,7 @@ async fn handler_explorer_transactions_stream(
         )));
     }
     Ok(routing::handle_v1_explorer_transactions_stream(
-        app.kura.clone(),
+        app.state.clone(),
         app.events.clone(),
         visibility,
     )
@@ -28274,7 +25894,7 @@ async fn handler_explorer_blocks_stream(
     )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_blocks_stream(
-            app.kura.clone(),
+            app.state.clone(),
             app.events.clone(),
             visibility,
         )
@@ -28293,8 +25913,12 @@ async fn handler_explorer_blocks_stream(
         )));
     }
     Ok(
-        routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone(), visibility)
-            .into_response(),
+        routing::handle_v1_explorer_blocks_stream(
+            app.state.clone(),
+            app.events.clone(),
+            visibility,
+        )
+        .into_response(),
     )
 }
 #[cfg(feature = "app_api")]
@@ -28315,7 +25939,7 @@ async fn handler_explorer_instructions_stream(
     )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
-            app.kura.clone(),
+            app.state.clone(),
             app.events.clone(),
             visibility,
         )
@@ -28334,7 +25958,7 @@ async fn handler_explorer_instructions_stream(
         )));
     }
     Ok(routing::handle_v1_explorer_instructions_stream(
-        app.kura.clone(),
+        app.state.clone(),
         app.events.clone(),
         visibility,
     )
@@ -31237,33 +28861,6 @@ macro_rules! iso_payment_submission_handlers {
                 if let Err(err) =
                     routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
                 {
-                    if let Error::PushIntoQueue { source, .. } = &err
-                        && let queue::Error::PlanJournalDurabilityIndeterminate {
-                            entrypoint_hash,
-                            signed_transaction_hash,
-                            reason,
-                        } = source.as_ref()
-                    {
-                        let queue_signed_hash =
-                            signed_transaction_hash.as_ref().map(ToString::to_string);
-                        let hash_evidence = match queue_signed_hash.as_deref() {
-                            Some(hash) if hash == tx_hash_str => {
-                                "queue signed-transaction hash matched the reserved identity"
-                                    .to_owned()
-                            }
-                            Some(hash) => format!(
-                                "queue signed-transaction hash `{hash}` did not match reserved identity `{tx_hash_str}`"
-                            ),
-                            None => format!(
-                                "queue omitted the signed-transaction hash; reserved identity is `{tx_hash_str}`"
-                            ),
-                        };
-                        let detail = format!(
-                            "queue plan journal outcome unknown for entrypoint {entrypoint_hash}: {reason}; {hash_evidence}"
-                        );
-                        runtime.mark_queue_outcome_unknown(&msg_id, &tx_hash_str, detail);
-                        return Err(err);
-                    }
                     let (detail, reason_code) = match &err {
                         Error::PushIntoQueue { source, .. } => {
                             let (code, detail) = queue_rejection_metadata(source.as_ref());
@@ -32718,7 +30315,6 @@ async fn reserve_verified_transaction_authorities(
         .ok_or_else(transaction_rate_limit_error)
 }
 
-#[cfg(feature = "connect")]
 async fn reserve_verified_transaction_authority(
     limiter: &limits::RateLimiter,
     authority: Option<&AccountId>,
@@ -32777,27 +30373,10 @@ pub(crate) async fn submit_signed_transaction_for_ingress(
     accept: Option<crate::utils::extractors::ExtractAccept>,
     transaction: SignedTransaction,
 ) -> Result<Response, Error> {
-    submit_signed_transaction_for_ingress_queue_plan_certified(app, headers, accept, transaction)
-        .await
+    admit_signed_transaction_for_ingress(app, headers, accept, transaction).await
 }
-/// Admit a caller-signed transaction only after its exact queue plan is durable.
-///
-/// Dedicated native-command adapters use the same quorum-certified
-/// admission path after validating their one-ISI contract.
-pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
-    app: SharedAppState,
-    headers: axum::http::HeaderMap,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    transaction: SignedTransaction,
-) -> Result<Response, Error> {
-    submit_signed_transaction_for_ingress_queue_plan_certified(app, headers, accept, transaction)
-        .await
-}
-/// Physical ingress work either acknowledges existing custody or completes all
-/// fresh policy checks. Authentication-only retry identities cannot become Queue inputs.
+/// Physical ingress work retains the original authenticated transaction after fresh policy checks.
 enum PreparedTransactionIngress {
-    #[cfg(feature = "connect")]
-    Canonical(Response),
     Fresh(iroha_core::tx::AcceptedTransaction<'static>),
 }
 
@@ -32806,17 +30385,6 @@ fn unsupported_transaction_admission(message: &str) -> Error {
         code: "unsupported_transaction_admission",
         message: message.to_owned(),
     }
-}
-
-/// Reject an intent for which the current consensus driver has no execution consumer.
-/// This must precede canonical retry lookup as well as fresh durable queue admission.
-fn require_current_transaction_admission(intent: TransactionAdmissionIntent) -> Result<(), Error> {
-    if intent != TransactionAdmissionIntent::Ordinary {
-        return Err(unsupported_transaction_admission(
-            "QueuePlanSynced admission is unsupported by the current consensus driver; only signature-bound Ordinary transactions with one resolved route can execute",
-        ));
-    }
-    Ok(())
 }
 
 fn require_current_transaction_route(plan: &RoutingPlan) -> Result<(), Error> {
@@ -32828,7 +30396,7 @@ fn require_current_transaction_route(plan: &RoutingPlan) -> Result<(), Error> {
     Ok(())
 }
 
-async fn submit_signed_transaction_for_ingress_queue_plan_certified(
+async fn admit_signed_transaction_for_ingress(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -32844,10 +30412,6 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
-    #[cfg(feature = "connect")]
-    let retry_app = app.clone();
-    #[cfg(feature = "connect")]
-    let minimal_response = transaction_submission_prefers_minimal_response(&headers);
     let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_admission_worker_failed",
@@ -32871,19 +30435,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
                         .to_owned(),
                 });
             }
-            require_current_transaction_admission(transaction.signed().admission_intent())?;
-            #[cfg(feature = "connect")]
-            if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
-                state.network_id_ref(),
-                transaction.signed(),
-            )? && let Some(response) = canonical_queue_plan_submission_response(
-                retry_app.as_ref(),
-                &authenticated,
-                minimal_response,
-                format,
-            ) {
-                return Ok(PreparedTransactionIngress::Canonical(response));
-            }
+
             let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
                 state,
                 transaction,
@@ -32904,8 +30456,6 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     .await?;
     drop(compute_permit);
     let accepted_tx = match prepared {
-        #[cfg(feature = "connect")]
-        PreparedTransactionIngress::Canonical(response) => return Ok(response),
         PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
     };
     let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
@@ -32922,44 +30472,25 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
 struct PreparedFreshTransactionIngress {
     transaction: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
-    durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>,
 }
 
 fn prepare_fresh_transaction_ingress(
     app: &SharedAppState,
     transaction: iroha_core::tx::AcceptedTransaction<'static>,
 ) -> Result<PreparedFreshTransactionIngress, Error> {
-    require_current_transaction_admission(transaction.entrypoint().admission_intent())?;
-    let durable_retry_claim = app
+    let routing_plan = app
         .queue
-        .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())
+        .route_plan_with_state(&transaction, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
-    let routing_plan = if let Some(claim) = &durable_retry_claim {
-        claim.routing_plan.clone()
-    } else {
-        app.queue
-            .route_plan_with_state(&transaction, app.state.as_ref())
-            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
-    };
     require_current_transaction_route(&routing_plan)?;
-    if !durable_retry_claim
-        .as_ref()
-        .is_some_and(|claim| claim.global_admission_identity.is_some())
-    {
-        routing::reject_ingress_if_queue_capacity_saturated(
-            app.queue.as_ref(),
-            app.state.as_ref(),
-            1,
-        )?;
-    }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     Ok(PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
-        durable_retry_claim,
     })
 }
 
-/// Run the sole durable admission owner; only fresh custody pays an authority token.
+/// Dispatch the original accepted input; rate capacity commits only after queue acceptance.
 async fn submit_prepared_transaction_ingress(
     app: &SharedAppState,
     prepared: PreparedFreshTransactionIngress,
@@ -32969,80 +30500,34 @@ async fn submit_prepared_transaction_ingress(
     let PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
-        durable_retry_claim,
     } = prepared;
-    require_current_transaction_admission(transaction.entrypoint().admission_intent())?;
+
     require_current_transaction_route(&routing_plan)?;
+    let reservation =
+        reserve_verified_transaction_authority(&app.tx_rate_limiter, transaction.authority_opt())
+            .await?;
     #[cfg(feature = "connect")]
-    {
-        // Preflight is a snapshot. An earlier batch entry or concurrent ingress
-        // may have established custody before this entry reaches dispatch.
-        if let Some(authenticated) =
-            AuthenticatedQueuePlanRetry::from_accepted(app.state.network_id_ref(), &transaction)?
-            && let Some(response) = canonical_queue_plan_submission_response(
-                app.as_ref(),
-                &authenticated,
-                minimal_response,
-                format,
-            )
-        {
-            return Ok(response);
-        }
-        let durable_retry_claim = app
-            .queue
-            .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())
-            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
-            .or(durable_retry_claim);
-        let routing_plan = durable_retry_claim
-            .as_ref()
-            .map_or(routing_plan, |claim| claim.routing_plan.clone());
-        let already_durably_admitted = durable_retry_claim
-            .as_ref()
-            .is_some_and(|claim| claim.global_admission_identity.is_some());
-        let reservation = if already_durably_admitted {
-            None
-        } else {
-            Some(
-                reserve_verified_transaction_authority(
-                    &app.tx_rate_limiter,
-                    transaction.authority_opt(),
-                )
-                .await?,
-            )
-        };
-        let response = execute_torii_transaction_via_proxy(
-            app,
-            transaction,
-            routing_plan,
-            durable_retry_claim,
-            minimal_response,
-            format,
-        )
-        .await;
-        if response.status() == StatusCode::ACCEPTED
-            && let Some(reservation) = reservation
-        {
-            reservation.commit();
-        }
-        Ok(response)
-    }
+    let response = execute_torii_transaction_via_proxy(
+        app,
+        transaction,
+        routing_plan,
+        minimal_response,
+        format,
+    )
+    .await;
     #[cfg(not(feature = "connect"))]
-    {
-        let _ = (
-            app,
-            transaction,
-            routing_plan,
-            durable_retry_claim,
-            minimal_response,
-            format,
-        );
-        Err(Error::AppServiceUnavailable {
-            code: "queue_plan_synced_transport_unavailable",
-            message:
-                "quorum-certified QueuePlan admission requires an authenticated peer transport"
-                    .to_owned(),
-        })
+    let response = ordinary_transaction_ingress::submit(
+        app.clone(),
+        transaction,
+        routing_plan,
+        minimal_response,
+        format,
+    )
+    .await;
+    if response.status() == StatusCode::ACCEPTED {
+        reservation.commit();
     }
+    Ok(response)
 }
 async fn handler_post_transaction_entrypoint(
     State(app): State<SharedAppState>,
@@ -33062,27 +30547,10 @@ async fn handler_post_transaction_entrypoint(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
-    #[cfg(feature = "connect")]
-    let retry_app = app.clone();
-    #[cfg(feature = "connect")]
-    let minimal_response = transaction_submission_prefers_minimal_response(&headers);
     let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
         move || {
-            require_current_transaction_admission(transaction.admission_intent())?;
-            #[cfg(feature = "connect")]
-            if let Some(authenticated) =
-                AuthenticatedQueuePlanRetry::from_entrypoint(state.network_id_ref(), &transaction)?
-                && let Some(response) = canonical_queue_plan_submission_response(
-                    retry_app.as_ref(),
-                    &authenticated,
-                    minimal_response,
-                    format,
-                )
-            {
-                return Ok(PreparedTransactionIngress::Canonical(response));
-            }
             routing::accept_transaction_for_ingress(state, transaction, &telemetry)
                 .map(PreparedTransactionIngress::Fresh)
         },
@@ -33090,8 +30558,6 @@ async fn handler_post_transaction_entrypoint(
     .await?;
     drop(compute_permit);
     let accepted_tx = match prepared {
-        #[cfg(feature = "connect")]
-        PreparedTransactionIngress::Canonical(response) => return Ok(response),
         PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
     };
     let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
@@ -33103,6 +30569,7 @@ async fn handler_post_transaction_entrypoint(
     )
     .await
 }
+
 fn decode_transaction_batch_payloads(
     payloads: Vec<Vec<u8>>,
 ) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
@@ -34771,7 +32238,7 @@ async fn handler_alias_setup_plan(
         time_to_live_ms: None,
         nonce: None,
         fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+
         metadata: iroha_model_base::metadata::Metadata::default(),
         attachments: None,
     };
@@ -45283,7 +42750,7 @@ impl Torii {
                 name: "pipeline_status_projection",
                 task: start_pipeline_status_projection_worker(
                     self.pipeline_status_cache.clone(),
-                    self.kura.clone(),
+                    self.state.clone(),
                     &self.events,
                     shutdown_signal.clone(),
                 ),
@@ -45333,7 +42800,7 @@ impl Torii {
         #[cfg(feature = "push")]
         if let Some(task) = self.push.as_ref().and_then(|bridge| {
             bridge.start_event_worker(
-                self.kura.clone(),
+                self.state.clone(),
                 self.events.clone(),
                 shutdown_signal.clone(),
             )
@@ -47310,3 +44777,61 @@ include!("tests/lib_tests.rs");
 include!("tests/lib_conn_scheme.rs");
 // Textual inclusion keeps the telemetry test-module namespace unchanged.
 include!("tests/lib_peer_telemetry.rs");
+
+#[cfg(feature = "connect")]
+fn transaction_dispatch_outcome_unknown_response(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+    reason: impl Into<String>,
+) -> Response {
+    let envelope = ErrorEnvelope::new("transaction_dispatch_outcome_unknown", reason.into())
+        .with_details(ErrorDetails {
+            reject_code: Some("transaction_dispatch_outcome_unknown".to_owned()),
+            entrypoint_hash: Some(entrypoint_hash.to_string()),
+            tx_hash: signed_transaction_hash.as_ref().map(ToString::to_string),
+            ..Default::default()
+        });
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::SERVICE_UNAVAILABLE,
+        envelope,
+        utils::current_response_format(),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-reject-code"),
+        HeaderValue::from_static("transaction_dispatch_outcome_unknown"),
+    );
+    insert_transaction_submission_identity_headers(
+        &mut response,
+        &entrypoint_hash,
+        signed_transaction_hash.as_ref(),
+    );
+    response
+}
+
+/// Bind an authenticated peer's Accepted response to the original client transaction.
+#[cfg(feature = "connect")]
+fn validate_native_transaction_submission_identity(
+    snapshot: &ToriiProxyHttpResponseV1,
+    transaction: &TransactionEntrypoint,
+) -> Result<(), &'static str> {
+    let entrypoint = transaction.hash().to_string();
+    let signed = signed_transaction_hash_for_entrypoint(transaction).map(|hash| hash.to_string());
+    for (name, expected) in [
+        ("x-iroha-entrypoint-hash", Some(entrypoint.as_str())),
+        ("x-iroha-signed-transaction-hash", signed.as_deref()),
+    ] {
+        let mut values = snapshot
+            .headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case(name));
+        let first = values.next();
+        if values.next().is_some()
+            || first.map(|header| header.value.as_slice()) != expected.map(str::as_bytes)
+        {
+            return Err("proxy acceptance does not bind the original signed transaction identity");
+        }
+    }
+    Ok(())
+}
+#[cfg(all(test, feature = "connect"))]
+mod native_transaction_proxy_tests;

@@ -60,3 +60,6 @@ mod mintable_json;
 mod model_derive_repro;
 #[path = "../nexus_lifecycle_fixture.rs"]
 mod nexus_lifecycle_fixture;
+
+#[path = "../native_evidence_codec.rs"]
+mod native_evidence_codec;

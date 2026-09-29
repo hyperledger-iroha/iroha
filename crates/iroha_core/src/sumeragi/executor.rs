@@ -18,6 +18,42 @@
 //!   State apply begins, any failure requires recovery; the worker cannot re-execute or retry
 //!   partially consumed publication. Successful repeated completion emits no duplicate events.
 
+/// Move-only authority issued inside the original native execution worker.
+/// No decoder, clone or public constructor can recreate this proof of origin.
+pub(crate) struct NativeExecutionAuthorization {
+    state: usize,
+    tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
+    parent: Option<(Hash32, Hash32)>,
+}
+impl NativeExecutionAuthorization {
+    /// The startup module can transfer only its own original signed-genesis execution.
+    pub(super) fn from_genesis(original: super::startup::GenesisExecutionAuthorization) -> Self {
+        let (state, tip) = original.into_parts();
+        Self {
+            state,
+            tip,
+            parent: None,
+        }
+    }
+
+    /// Return fixed claims only for the exact State that owns the execution.
+    pub(crate) fn for_state(
+        &self,
+        state: &State,
+    ) -> Result<
+        (
+            crate::state::native_execution_tip::NativeExecutionTipRecord,
+            Option<(Hash32, Hash32)>,
+        ),
+        String,
+    > {
+        if self.state != std::ptr::from_ref(state) as usize {
+            return Err("native execution authorization belongs to another State".into());
+        }
+        Ok((self.tip, self.parent))
+    }
+}
+
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -31,7 +67,7 @@ use iroha_data_model::{
     block::{BlockHeader as IrohaHeader, CommitCertificate, SignedBlock},
     events::EventBox,
     parameter::system::ConsensusMode,
-    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
+    transaction::TransactionEntrypoint,
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
@@ -1004,6 +1040,7 @@ impl<'s> Worker<'s> {
             &original.overlay,
             original.valid.as_ref(),
             original.phase.ready().expect("original prepared result"),
+            &original.witness,
         ) {
             Ok(projection) => {
                 original.native_contexts = Some(projection);
@@ -1510,7 +1547,22 @@ impl<'s> Worker<'s> {
         if state_events.is_none() {
             // A normal authorization refusal retains the same original and can retry
             // after append. Metadata finalization itself is one-shot and may unwind.
-            overlay.authorize_sumeragi_output_publication(committed, &live.witness, certificate)?;
+            let native_execution = NativeExecutionAuthorization {
+                state: std::ptr::from_ref(self.state) as usize,
+                tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
+                    height: live.header.height,
+                    iroha_hash: committed.as_ref().hash(),
+                    core_hash: live.block_hash.0,
+                    result: live.result.0,
+                },
+                parent: Some((live.header.parent_hash, live.header.parent_result)),
+            };
+            overlay.authorize_sumeragi_output_publication(
+                committed,
+                &live.witness,
+                certificate,
+                native_execution,
+            )?;
             self.recovery =
                 Some("finalizing original metadata; recovery required on failure".into());
             *state_events = Some(
@@ -1718,6 +1770,7 @@ fn proposal_matches_header(header: IrohaHeader, block: &Block) -> bool {
 
 /// Whether a block requires commit attestations (§3.7, KAGEMUSHA mint finality): it carries a
 /// KAGEMUSHA V1 top-up, which admission confines to single-instruction transactions.
+/// The native transaction layout has no optional admission mode that can disable this seal.
 ///
 /// The caller additionally requires a seal at every authenticated epoch boundary,
 /// for each nonempty boundary block. This predicate checks only the transaction-dependent rule.
@@ -1727,16 +1780,14 @@ pub fn attestation_required(block: &SignedBlock) -> bool {
         let TransactionEntrypoint::External(tx) = entrypoint else {
             return false;
         };
-        tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
-            && tx
-                .instructions()
-                .explicit_instructions()
-                .any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
-                        .is_some()
-                })
+        tx.instructions()
+            .explicit_instructions()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+                    .is_some()
+            })
     })
 }
 
@@ -1901,9 +1952,42 @@ mod tests {
     }
 }
 
-mod archive_tests;
 #[cfg(test)]
 mod archive_tests;
 #[cfg(test)]
 #[path = "executor_publication_tests.rs"]
 mod publication_tests;
+
+#[cfg(test)]
+mod native_execution_authorization_tests {
+    use super::*;
+
+    #[test]
+    fn original_execution_authorization_is_bound_to_its_actual_state() {
+        use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+        let original = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let foreign = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let token = NativeExecutionAuthorization {
+            state: std::ptr::from_ref(&original) as usize,
+            tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
+                height: 1,
+                iroha_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"origin identity test",
+                )),
+                core_hash: [1; 32],
+                result: [2; 32],
+            },
+            parent: None,
+        };
+        assert!(token.for_state(&original).is_ok());
+        assert!(token.for_state(&foreign).is_err());
+    }
+}

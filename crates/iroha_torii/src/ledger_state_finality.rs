@@ -1,4 +1,4 @@
-//! State-root and state-proof responses backed only by exact Sumeragi-v2 finality.
+//! Witnessed state roots with native finality from one immutable committed view.
 
 use super::*;
 
@@ -16,17 +16,16 @@ use super::*;
 #[norito(deny_unknown_fields)]
 
 pub(super) struct StateFinalityResponse {
-    /// Requested one-based committed block height.
+    /// Requested certified non-genesis committed block height (at least two).
     pub(super) height: u64,
-    /// Canonical header hash authenticated by both State and v2 finality.
+    /// Canonical header hash authenticated by State and native finality.
     pub(super) block_hash: HashOf<BlockHeader>,
-    /// Exact post-state root authenticated by the Sumeragi-v2 CommitQC.
-    pub(super) state_root: iroha_crypto::Hash,
+    /// Post-state root of the witnessed write set; not a complete World-state hash.
+    pub(super) witnessed_post_state_root: iroha_crypto::Hash,
     /// Canonical header matched to both committed State and durable Kura evidence.
     pub(super) block_header: BlockHeader,
-    /// Exact current Sumeragi-v2 finality artifact verified by Kura.
-    pub(super) finality_artifact:
-        iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+    /// Exact canonical frame and authenticated committee from the native chain.
+    pub(super) finality_proof: iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
 }
 
 fn not_found() -> Error {
@@ -44,6 +43,13 @@ fn internal_error(message: impl Into<String>) -> Error {
 fn load(app: &AppState, height: u64) -> Result<StateFinalityResponse, Error> {
     let height_nz = NonZeroU64::new(height)
         .ok_or_else(|| conversion_error("height must be at least 1".to_owned()))?;
+    // A signed genesis body does not authenticate its execution R. This closed
+    // single-proof response cannot supply the required successor capability.
+    if height_nz.get() < 2 {
+        return Err(conversion_error(
+            "height must name a certified non-genesis execution".to_owned(),
+        ));
+    }
     let height_usize = NonZeroUsize::new(
         height_nz
             .get()
@@ -51,58 +57,41 @@ fn load(app: &AppState, height: u64) -> Result<StateFinalityResponse, Error> {
             .map_err(|_| conversion_error("height exceeds host pointer width".to_owned()))?,
     )
     .ok_or_else(|| conversion_error("height must be at least 1".to_owned()))?;
-    // This lookup binds the Kura body to State's committed hash journal. A
-    // height-only Kura lookup could otherwise observe a staged, uncommitted body.
-    let block = app
-        .state
-        .block_by_height(height_usize)
+    // A single immutable State generation selects the committed hash journal.
+    // The native builder verifies durable frames, the complete authenticated
+    // prefix and application attestations before returning this exact proof.
+    let view = app.state.view();
+    use iroha_core::state::StateReadOnly as _;
+    let block_hash = view
+        .block_hashes()
+        .get(height_usize.get() - 1)
+        .copied()
         .ok_or_else(not_found)?;
-    let block_header = block.header();
-    let block_hash = block.hash();
-    if block_header.height() != height_nz {
-        return Err(internal_error(format!(
-            "committed State block at height {height} carries header height {}",
-            block_header.height()
-        )));
-    }
-    if !block.has_results() {
-        return Err(internal_error(format!(
-            "committed State block {height} has no execution results"
-        )));
-    }
-    // Kura's reader validates the immutable record, canonical header and
-    // complete wire bindings, roster PoPs, and CommitQC cryptography.
-    let finality_artifact = app
-        .kura
-        .v2_finality_artifact(height)
-        .map_err(|error| {
+    let finality_proof =
+        iroha_core::sumeragi::finality::build_proof(&view, height).map_err(|error| {
             internal_error(format!(
-                "invalid durable Sumeragi-v2 finality for committed block {height}: {error}"
-            ))
-        })?
-        .ok_or_else(not_found)?;
-    if finality_artifact.height != height || finality_artifact.block_hash != block_hash {
-        return Err(internal_error(format!(
-            "durable Sumeragi-v2 finality does not match committed State block {height}"
-        )));
-    }
-    finality_artifact
-        .validate_for_header(&block_header)
-        .map_err(|error| {
-            internal_error(format!(
-                "durable Sumeragi-v2 finality/header association failed for committed block {height}: {error}"
+                "invalid durable native finality for committed block {height}: {error}"
             ))
         })?;
-    let state_root = finality_artifact
-        .commit_qc
-        .execution_commitment
+    let block_header = finality_proof.block_header;
+    if block_header.height() != height_nz || block_header.hash() != block_hash {
+        return Err(internal_error(format!(
+            "durable native finality does not match committed State block {height}"
+        )));
+    }
+    // This decode extracts the root from the already authenticated exact proof;
+    // candidate-committee decoding alone would not grant finality authority.
+    let witnessed_post_state_root = finality_proof
+        .decode_checked()
+        .map_err(|error| internal_error(format!("invalid native proof framing: {error}")))?
+        .execution()
         .post_state_root;
     Ok(StateFinalityResponse {
         height,
         block_hash,
-        state_root,
+        witnessed_post_state_root,
         block_header,
-        finality_artifact,
+        finality_proof,
     })
 }
 

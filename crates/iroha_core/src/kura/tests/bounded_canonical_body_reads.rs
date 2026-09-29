@@ -2,10 +2,8 @@
 fn bounded_read_executed_blocks(kura: &Kura) -> Vec<Arc<SignedBlock>> {
     use iroha_data_model::block::execution_output::ExecutionOutputV1;
     establish_dummy_store_primary_anchor(kura);
-    let mut generator = DummyBlocks::new();
-    let mut blocks = (0..4)
-        .map(|_| generator.next_with_results())
-        .collect::<Vec<_>>();
+    let mut generator = NativeBlocks::new();
+    let mut blocks = (0..4).map(|_| generator.next()).collect::<Vec<_>>();
     let mut rejected = blocks[1].as_ref().clone();
     let mut outputs = rejected.execution_outputs().to_vec();
     let ExecutionOutputV1::Network(row) = &mut outputs[0] else {
@@ -225,98 +223,98 @@ fn lazy_inline_body_cannot_promote_missing_finality_or_substituted_outputs() {
 
 #[test]
 fn executed_history_denial_precedes_cold_body_decode_and_projection() {
+    use crate::{
+        state::{StateReadOnly as _, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
     use iroha_data_model::query::error::QueryExecutionFail;
     for corrupt in [false, true] {
-        let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
-        let blocks = bounded_read_executed_blocks(&kura);
-        let height = nonzero!(2_usize);
-        finalize_chain_through_for_eviction(&kura, height);
-        let hashes = blocks.iter().map(|block| block.hash()).collect::<Vec<_>>();
-        let wire_len = u64::try_from(blocks[1].encode_wire().unwrap().len()).unwrap();
-        let (path, slot) = {
-            let mut store = kura.block_store.lock();
-            (
-                store.path_to_blockchain.join(DATA_FILE_NAME),
-                store.read_block_index(1).unwrap(),
-            )
-        };
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let kura = chain.kura();
+        let expected = chain.committed(2).block().clone();
+        let tip = chain.committed(3).block().clone();
+        let target_len = expected.encode_wire().unwrap().len() as u64;
+        let tip_len = tip.encode_wire().unwrap().len() as u64;
         if corrupt {
-            let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-            file.seek(SeekFrom::Start(slot.start)).unwrap();
-            file.write_all(&vec![0; usize::try_from(slot.length).unwrap()])
-                .unwrap();
-            file.sync_all().unwrap();
+            kura.corrupt_native_frame_for_test(nonzero!(3_usize));
         }
-        kura.mark_transaction_entrypoint_index_incomplete(2, 4);
+        kura.mark_transaction_entrypoint_index_incomplete(2, 3);
         kura.block_data.lock()[1].1 = None;
+        kura.block_data.lock()[2].1 = None;
         let index_before = format!("{:?}", *kura.transaction_entrypoint_index.lock());
-        let bytes_before = fs::read(&path).unwrap();
-        let body_bytes_before = kura.canonical_body_bytes_read_for_test();
-        let charged = std::cell::Cell::new(0);
-        let denied = crate::state::CanonicalHistorySource::read_executed_for_testing(
-            &kura,
-            &hashes,
-            height,
-            |length| {
-                charged.set(charged.get() + 1);
-                assert_eq!(
-                    length, wire_len,
-                    "admission uses exact signed execution length"
-                );
-                Err(QueryExecutionFail::GasBudgetExceeded)
-            },
-        );
+        let raw_before = {
+            let mut store = kura.block_store.lock();
+            let slot = store.read_block_index(2).unwrap();
+            let mut bytes = vec![0; usize::try_from(slot.length).unwrap()];
+            store.read_block_data(slot.start, &mut bytes).unwrap();
+            bytes
+        };
+        kura.reset_canonical_query_reads_for_test();
+        let view = chain.state().view();
+        let source = view.canonical_history();
+        let mut charged = Vec::new();
+        let denied = source.executed_block(nonzero!(2_usize), |blocks, bytes| {
+            charged.push((blocks, bytes));
+            assert_eq!((blocks, bytes), (1, tip_len));
+            Err(QueryExecutionFail::GasBudgetExceeded)
+        });
         assert!(matches!(denied, Err(QueryExecutionFail::GasBudgetExceeded)));
-        assert_eq!(charged.get(), 1);
+        assert_eq!(charged, vec![(1, tip_len)]);
         assert_eq!(
-            kura.canonical_body_bytes_read_for_test(),
-            body_bytes_before,
-            "denied admission performs neither inline body read path"
+            kura.canonical_query_reads_for_test(),
+            (0, 0),
+            "denial precedes any source-body read, including corrupt occupied frames"
         );
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
         assert!(kura.block_data.lock().cached_body(1).is_none());
+        assert!(kura.block_data.lock().cached_body(2).is_none());
         assert_eq!(
             format!("{:?}", *kura.transaction_entrypoint_index.lock()),
             index_before
         );
-        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
-        assert_eq!(fs::read(&path).unwrap(), bytes_before);
-        let admitted = crate::state::CanonicalHistorySource::read_executed_for_testing(
-            &kura,
-            &hashes,
-            height,
-            |length| {
-                charged.set(charged.get() + 1);
-                assert_eq!(length, wire_len);
-                Ok(())
-            },
-        );
-        assert_eq!(charged.get(), 2);
-        assert_eq!(
-            kura.canonical_body_bytes_read_for_test(),
-            body_bytes_before + wire_len,
-            "only the admitted invocation reads the exact signed body length"
-        );
+
+        charged.clear();
+        let admitted = source.executed_block(nonzero!(2_usize), |blocks, bytes| {
+            charged.push((blocks, bytes));
+            Ok(())
+        });
         if corrupt {
-            let expected = format!(
-                "canonical executed body at height 2 failed storage authentication: {}",
-                Error::CanonicalBlockWireMismatch { height: 2 },
-            );
             assert!(
-                matches!(admitted,
-                Err(QueryExecutionFail::Conversion(message)) if message == expected),
-                "admitted occupied corruption fails its exact signed-wire check"
+                admitted.is_err(),
+                "occupied corruption cannot authenticate the State tip"
             );
+            assert_eq!(charged, vec![(1, tip_len)]);
+            assert_eq!(kura.canonical_query_reads_for_test(), (1, tip_len));
         } else {
-            assert_eq!(admitted.unwrap().as_ref(), blocks[1].as_ref());
+            assert_eq!(admitted.unwrap().as_ref(), expected.as_ref());
+            assert_eq!(charged, vec![(1, tip_len), (1, target_len)]);
+            assert_eq!(
+                kura.canonical_query_reads_for_test(),
+                (2, tip_len + target_len)
+            );
         }
         assert!(
             kura.block_data.lock().cached_body(1).is_none(),
-            "the exact query body reader has no cache publication side effect"
+            "historical authentication does not publish caches"
         );
+        assert!(kura.block_data.lock().cached_body(2).is_none());
         assert_eq!(
             format!("{:?}", *kura.transaction_entrypoint_index.lock()),
             index_before
         );
-        assert_eq!(fs::read(&path).unwrap(), bytes_before);
+        let raw_after = {
+            let mut store = kura.block_store.lock();
+            let slot = store.read_block_index(2).unwrap();
+            let mut bytes = vec![0; usize::try_from(slot.length).unwrap()];
+            store.read_block_data(slot.start, &mut bytes).unwrap();
+            bytes
+        };
+        assert_eq!(
+            raw_after, raw_before,
+            "queries never repair occupied source bytes"
+        );
     }
 }

@@ -23,7 +23,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, kagemusha_v1::RedeemKagemushaV1},
-    transaction::{SignedTransaction, TransactionAdmissionIntent, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::kagemusha_api::{
@@ -262,7 +262,7 @@ pub(crate) async fn handle_top_up(
     let request =
         validate_top_up_signed_transaction(app.state.network_id_ref(), &transaction)?.clone();
     require_idempotency_key(&headers, request.operation_id)?;
-    crate::require_current_transaction_admission(transaction.admission_intent())?;
+
     let runtime = require_command_runtime(&app)?;
     let transaction_hash = transaction.hash();
     let binding = KagemushaOperationBinding {
@@ -290,13 +290,9 @@ pub(crate) async fn handle_top_up(
         }
         SubmissionClaim::Reserved(reservation) => {
             validate_top_up_snapshot(&app, &request)?;
-            let response = crate::submit_signed_transaction_for_ingress_strict_durable(
-                app,
-                headers,
-                accept,
-                transaction,
-            )
-            .await?;
+            let response =
+                crate::submit_signed_transaction_for_ingress(app, headers, accept, transaction)
+                    .await?;
             if response.status() != StatusCode::ACCEPTED {
                 return Ok(response);
             }
@@ -369,9 +365,6 @@ pub(crate) async fn handle_redeem(
             format!("KAGEMUSHA V1 redemption request is invalid: {source}"),
         )
     })?;
-    // The monetary protocol still requires this intent. Refuse before operation
-    // reservation or issuer signing until the current driver can execute it.
-    crate::require_current_transaction_admission(TransactionAdmissionIntent::QueuePlanSynced)?;
     let binding = KagemushaOperationBinding {
         operation_id: request.operation_id,
         kind: KagemushaOperationKindV1::Redemption,
@@ -420,18 +413,15 @@ pub(crate) async fn handle_redeem(
                 issuer.authority.clone().into(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions([InstructionBox::from(instruction)])
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+            .with_instructions([InstructionBox::from(instruction)]);
             let signed = issuer.quote_and_sign_transaction(
                 &app,
                 transaction,
                 "kagemusha_v1_redemption_transaction",
             )?;
             let transaction_hash = signed.hash();
-            let response = crate::submit_signed_transaction_for_ingress_strict_durable(
-                app, headers, accept, signed,
-            )
-            .await?;
+            let response =
+                crate::submit_signed_transaction_for_ingress(app, headers, accept, signed).await?;
             if response.status() != StatusCode::ACCEPTED {
                 return Ok(response);
             }
@@ -671,29 +661,24 @@ fn applied_status_from_consensus(
             "reserve receipt transaction hash differs from the admitted operation",
         ));
     }
-    let finality = app
-        .kura
-        .kagemusha_operation_finality_v1(height, admitted.binding.operation_id)
-        .map_err(|error| {
-            kagemusha_consensus_inconsistency(format!(
-                "canonical reserve-receipt finality lookup failed: {error}"
-            ))
-        })?;
-    let Some(finality) = finality else {
-        let artifact_exists = app.kura.v2_finality_artifact(height).map_err(|error| {
-            kagemusha_consensus_inconsistency(format!(
-                "canonical finality lookup failed while resolving reserve receipt: {error}"
-            ))
-        })?;
-        if artifact_exists.is_some() {
-            return Err(kagemusha_consensus_inconsistency(
-                "canonical finality exists without the applied reserve receipt witness",
-            ));
-        }
-        return Ok(None);
-    };
+    let proof_view = app.state.view();
+    let finality = iroha_core::query::native_receipts::kagemusha_operation_finality(
+        &proof_view,
+        height,
+        admitted.binding.operation_id,
+    )
+    .map_err(|error| {
+        kagemusha_consensus_inconsistency(format!(
+            "native reserve-receipt finality lookup failed: {error}"
+        ))
+    })?
+    .ok_or_else(|| {
+        kagemusha_consensus_inconsistency(
+            "certified native execution has no matching original reserve receipt",
+        )
+    })?;
     if finality.reserve_receipt_witness.receipt != *operation.reserve_receipt()
-        || finality.finality_artifact.height != height
+        || finality.finality_proof.height() != height
     {
         return Err(kagemusha_consensus_inconsistency(
             "Kura finality does not match the persisted reserve receipt or height",
@@ -710,7 +695,7 @@ fn applied_status_from_consensus(
             }
             let Some(result) = app
                 .kura
-                .kagemusha_mint_outbox_entry_v1(admitted.binding.operation_id)
+                .kagemusha_mint_outbox_entry_v1(admitted.binding.operation_id, &proof_view)
                 .map_err(|error| {
                     kagemusha_consensus_inconsistency(format!(
                         "canonical mint outbox lookup failed: {error}"
@@ -749,14 +734,10 @@ fn applied_status_from_consensus(
         result: Some(result),
         rejection: None,
     };
-    let finality = match status.result.as_ref().expect("Applied status has a result") {
-        KagemushaOperationResultV1::TopUp(result) => &result.finality,
-        KagemushaOperationResultV1::Redemption(result) => &result.finality,
-    };
     let anchor = iroha_torii_shared::kagemusha_api::KagemushaFinalityTrustAnchorV1 {
-        network_id: finality.finality_artifact.height_context.network_id,
-        block_height: finality.finality_artifact.height,
-        height_context_id: finality.finality_artifact.context_id(),
+        network_id: *proof_view.network_id(),
+        checkpoint: iroha_core::sumeragi::finality::build_checkpoint(&proof_view, height)
+            .map_err(kagemusha_consensus_inconsistency)?,
     };
     status.validate_against(&anchor).map_err(|error| {
         kagemusha_consensus_inconsistency(format!(
@@ -1158,7 +1139,6 @@ mod tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([TopUpKagemushaV1::new(top_up.clone()).unwrap()])
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .sign(payer_key.private_key());
         validate_top_up_signed_transaction(&top_up.network_id, &signed).unwrap();
         let bytes =

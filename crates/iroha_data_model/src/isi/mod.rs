@@ -192,8 +192,6 @@ impl_direct_instruction_box!(crate::isi::kaigi::SetKaigiRelayManifest);
 impl_direct_instruction_box!(crate::isi::kaigi::RegisterKaigiRelay);
 impl_direct_instruction_box!(crate::isi::kaigi::UnregisterKaigiRelay);
 impl_direct_instruction_box!(crate::isi::kaigi::ReportKaigiRelayHealth);
-impl_direct_instruction_box!(crate::isi::nexus::SetLaneRelayEmergencyValidators);
-impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedLaneRelay);
 impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation);
 macro_rules! impl_nexus_program_instruction_box {
     ($($ty:ident),+ $(,)?) => {
@@ -2716,7 +2714,6 @@ pub mod prelude {
         },
         ministry::SubmitAgendaProposal,
         mint_burn::{Burn, BurnBox, Mint, MintBox},
-        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         oracle::{
             AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
             RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, RollbackOracleChange,

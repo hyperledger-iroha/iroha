@@ -209,7 +209,6 @@ fn commit_result_bearing_synthetic_parent(
             Vec::new(),
             axt_policy_snapshot,
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("attach the required synthetic-parent AXT policy snapshot");

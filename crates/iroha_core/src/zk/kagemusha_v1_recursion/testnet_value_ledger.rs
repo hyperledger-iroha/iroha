@@ -7,7 +7,9 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use iroha_data_model::isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1;
+use iroha_data_model::{
+    isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1, sumeragi_finality::SumeragiFinalityVerifier,
+};
 
 use super::{
     DigestV1, KagemushaRecursionErrorV1, KagemushaTestnetProofObservationOwnerV1,
@@ -49,17 +51,29 @@ struct CreditFacts {
     successor_state_commitment: DigestV1,
     finality_network_id: DigestV1,
     finality_block_height: u64,
-    finality_height_context_id: DigestV1,
+    // Comparison facts are rederived from the independent full anchor on every replay.
+    finality_block_hash: DigestV1,
+    finality_core_hash: DigestV1,
+    finality_result: DigestV1,
 }
 
 impl CreditFacts {
     fn from_admission(
         admission: &KagemushaTestnetValueAdmissionV1,
     ) -> Result<Self, KagemushaRecursionErrorV1> {
-        let anchor: KagemushaFinalityTrustAnchorV1 = admission.finality_anchor();
+        let anchor: &KagemushaFinalityTrustAnchorV1 = admission.finality_anchor();
         anchor
             .validate()
             .map_err(|error| ledger_error(&format!("invalid finality anchor: {error}")))?;
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &anchor.checkpoint,
+            &anchor.network_id,
+            anchor.checkpoint.chain_id(),
+        )
+        .map_err(|error| ledger_error(&format!("invalid selected checkpoint: {error}")))?;
+        let verified = verifier
+            .verify_same_decision(anchor.checkpoint.tip(), anchor.checkpoint.tip())
+            .map_err(|error| ledger_error(&format!("invalid selected native decision: {error}")))?;
         let facts = Self {
             scope: admission.scope(),
             operation_id: admission.operation_id(),
@@ -69,8 +83,10 @@ impl CreditFacts {
             candidate_envelope_digest: admission.candidate_envelope_digest(),
             successor_state_commitment: admission.successor_state_commitment(),
             finality_network_id: *anchor.network_id.as_bytes(),
-            finality_block_height: anchor.block_height,
-            finality_height_context_id: *anchor.height_context_id.0.as_ref(),
+            finality_block_height: verified.height(),
+            finality_block_hash: *verified.header().hash().as_ref(),
+            finality_core_hash: verified.core_hash().0,
+            finality_result: verified.result().0,
         };
         facts.validate()?;
         Ok(facts)
@@ -84,8 +100,10 @@ impl CreditFacts {
             || self.candidate_envelope_digest == [0; 32]
             || self.successor_state_commitment == [0; 32]
             || self.finality_network_id != self.scope.network_id()
-            || self.finality_block_height == 0
-            || self.finality_height_context_id == [0; 32]
+            || self.finality_block_height <= 1
+            || self.finality_block_hash == [0; 32]
+            || self.finality_core_hash == [0; 32]
+            || self.finality_result == [0; 32]
         {
             return Err(ledger_error("invalid testnet mint-credit facts"));
         }

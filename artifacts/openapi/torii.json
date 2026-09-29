@@ -4143,6 +4143,53 @@
           }
         ]
       },
+      "BeaconHorizonStatusV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Same-applied-cut local beacon readiness. This observation confers no finality or signing authority.",
+        "properties": {
+          "active_session_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epoch_length_blocks": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_provider_ready": {
+            "type": "boolean"
+          },
+          "next_required_pulse_height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_covers_next_pulse": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "epoch_length_blocks",
+          "next_required_pulse_height",
+          "active_session_id",
+          "session_covers_next_pulse",
+          "local_provider_ready"
+        ]
+      },
       "BfvCiphertextBoundModeV1": {
         "oneOf": [
           {
@@ -5028,33 +5075,6 @@
         "x-iroha-exact-byte-length": 3176,
         "x-iroha-wire-layout": "ILR1[3176]"
       },
-      "BridgeCommitment": {
-        "additionalProperties": false,
-        "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "block_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "height_context_id": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "network_id",
-          "height_context_id",
-          "block_height",
-          "block_hash"
-        ],
-        "type": "object"
-      },
       "BridgeFinalityAttestationTipMismatchV1": {
         "additionalProperties": false,
         "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
@@ -5095,31 +5115,6 @@
           "challenge",
           "node_id",
           "network_id"
-        ],
-        "type": "object"
-      },
-      "BridgeFinalityProof": {
-        "additionalProperties": false,
-        "description": "Version-two bridge proof carrying only a canonical block header and the exact independently-verifiable durable v2 artifact.",
-        "properties": {
-          "block_header": {
-            "$ref": "#/components/schemas/BlockHeader"
-          },
-          "finality_artifact": {
-            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact"
-          },
-          "version": {
-            "enum": [
-              2
-            ],
-            "format": "uint8",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "block_header",
-          "finality_artifact"
         ],
         "type": "object"
       },
@@ -10721,7 +10716,9 @@
             "type": "array"
           },
           "public_key": {
-            "$ref": "#/components/schemas/PublicKey"
+            "type": "string",
+            "pattern": "^ea0130[0-9A-F]{96}$",
+            "description": "Canonical BLS-normal key; its possession proof and authenticated committee position are verified together."
           }
         },
         "required": [
@@ -13723,9 +13720,9 @@
           },
           "capability_mask": {
             "type": "integer",
-            "format": "uint16",
+            "format": "uint32",
             "minimum": 0,
-            "maximum": 65535
+            "maximum": 4294967295
           },
           "qualification_report_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -13741,6 +13738,9 @@
             "format": "uint64",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "app_attestation_authority_policy_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           }
         },
         "required": [
@@ -13759,7 +13759,8 @@
           "capability_mask",
           "qualification_report_digest",
           "valid_from_ms",
-          "expires_at_ms"
+          "expires_at_ms",
+          "app_attestation_authority_policy_digest"
         ]
       },
       "GovernanceKagemushaHelperProtocolV1": {
@@ -14423,6 +14424,12 @@
             "const": 1,
             "type": "integer"
           },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1"
+          },
           "release_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
@@ -14474,6 +14481,8 @@
         },
         "required": [
           "version",
+          "network_id",
+          "purpose",
           "release_id",
           "source_tree_digest",
           "cargo_lock_digest",
@@ -18713,7 +18722,7 @@
           },
           "finality_chain": {
             "items": {
-              "$ref": "#/components/schemas/BridgeFinalityProof"
+              "$ref": "#/components/schemas/SumeragiFinalityProof"
             },
             "maxItems": 64,
             "minItems": 1,
@@ -29111,6 +29120,21 @@
           "lane_block_view",
           "coordinator_proposal_hash",
           "legs"
+        ],
+        "type": "object"
+      },
+      "NativeFinalityArtifact": {
+        "additionalProperties": false,
+        "description": "One bounded original SignedBlockWire. This untrusted transport is not an authority capability; signed genesis has no CommitQC.",
+        "properties": {
+          "block_wire": {
+            "type": "string",
+            "format": "byte",
+            "maxLength": 44739244
+          }
+        },
+        "required": [
+          "block_wire"
         ],
         "type": "object"
       },
@@ -48405,7 +48429,7 @@
       },
       "StateFinalityResponse": {
         "additionalProperties": false,
-        "description": "Exact first-release ledger state evidence. Every field is bound to the same State-committed block and cryptographically verified durable Sumeragi-v2 finality artifact.",
+        "description": "Native execution finality from one immutable committed State view. The witnessed post-state root covers the executed write set, not a complete World snapshot.",
         "properties": {
           "block_hash": {
             "$ref": "#/components/schemas/Hash",
@@ -48413,29 +48437,29 @@
           },
           "block_header": {
             "$ref": "#/components/schemas/BlockHeader",
-            "description": "Canonical block header authenticated by the finality artifact."
-          },
-          "finality_artifact": {
-            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
-            "description": "Exact current Sumeragi-v2 finality artifact verified by Kura."
+            "description": "Canonical block header authenticated by the native finality proof."
           },
           "height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
-            "minimum": 1,
+            "minimum": 2,
             "type": "integer"
           },
-          "state_root": {
+          "finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof",
+            "description": "Exact canonical block frame and committee authenticated by the native chain."
+          },
+          "witnessed_post_state_root": {
             "$ref": "#/components/schemas/Hash",
-            "description": "Post-state root from finality_artifact.commit_qc.execution_commitment.post_state_root."
+            "description": "Post-state root of the witnessed execution write set authenticated by native finality; not a complete World-state hash."
           }
         },
         "required": [
           "height",
           "block_hash",
-          "state_root",
+          "witnessed_post_state_root",
           "block_header",
-          "finality_artifact"
+          "finality_proof"
         ],
         "type": "object"
       },
@@ -49796,21 +49820,15 @@
       },
       "SumeragiEvidenceAuditRecord": {
         "additionalProperties": false,
-        "description": "Closed JSON audit projection of one committed Sumeragi v2 equivocation record.",
+        "description": "Closed audit projection of original native evidence and independently authenticated historical signer attribution.",
         "properties": {
-          "artifact_hash_1": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "artifact_hash_2": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
           "class": {
             "enum": [
               "proposal",
               "phase_vote",
-              "timeout_vote"
+              "timeout_vote",
+              "invalid_proposal",
+              "conflicting_certificates"
             ],
             "type": "string"
           },
@@ -49834,7 +49852,7 @@
             "type": "integer"
           },
           "kind": {
-            "const": "SumeragiV2Equivocation",
+            "const": "NativeSumeragiEvidence",
             "type": "string"
           },
           "penalty_status": {
@@ -49855,28 +49873,41 @@
             "minimum": 0,
             "type": "integer"
           },
-          "signer": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
+          "authority_generation": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
           },
-          "view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+          "instance": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "native_frame_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "offenders": {
+            "items": {
+              "$ref": "#/components/schemas/SumeragiEvidenceOffender"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "type": "array"
+          },
+          "safety_violation": {
+            "type": "boolean"
           }
         },
         "required": [
           "kind",
           "class",
+          "instance",
           "height",
-          "view",
           "epoch",
-          "signer",
           "context_id",
-          "artifact_hash_1",
-          "artifact_hash_2",
+          "authority_generation",
+          "offenders",
+          "safety_violation",
+          "native_frame_hash",
           "recorded_height",
           "recorded_view",
           "recorded_ms",
@@ -49918,6 +49949,27 @@
         "required": [
           "total",
           "items"
+        ],
+        "type": "object"
+      },
+      "SumeragiEvidenceOffender": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "description": "Canonical original historical PeerId public-key literal.",
+            "pattern": "^ea0130[0-9A-F]{96}$",
+            "type": "string"
+          },
+          "signer": {
+            "format": "uint32",
+            "maximum": 1023,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "signer",
+          "peer_id"
         ],
         "type": "object"
       },
@@ -50007,9 +50059,10 @@
           },
           "signature": {
             "description": "Canonical uppercase node signature over the domain-separated typed body hash.",
-            "minLength": 2,
+            "minLength": 192,
             "pattern": "^(?:[0-9A-F]{2})+$",
-            "type": "string"
+            "type": "string",
+            "maxLength": 192
           }
         },
         "required": [
@@ -50086,7 +50139,7 @@
       },
       "SumeragiFinalityProof": {
         "additionalProperties": false,
-        "description": "Canonical executed SignedBlockWire with the current embedded CommitCertificate and candidate committee in canonical BLS key order. Independent verification requires the selected signed genesis and an authenticated contiguous lag-2 committee schedule. A candidate committee alone is not a trust root.",
+        "description": "Canonical executed SignedBlockWire with its native CommitCertificate and exact ordered equal-vote BLS committee. Verification requires independently selected signed genesis or a complete authenticated checkpoint and consecutive native decisions. The candidate committee and decoded execution alone confer no authority.",
         "properties": {
           "block_header": {
             "$ref": "#/components/schemas/BlockHeader"
@@ -50105,9 +50158,10 @@
             "items": {
               "$ref": "#/components/schemas/FinalityValidator"
             },
-            "maxItems": 1024,
-            "minItems": 1,
-            "type": "array"
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -51020,11 +51074,24 @@
           "awaiting": {
             "type": "boolean"
           },
+          "beacon_horizon": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BeaconHorizonStatusV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "committed_height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
+          },
+          "config_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
           },
           "footprint": {
             "$ref": "#/components/schemas/SumeragiFootprint"
@@ -51080,6 +51147,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "protocol_version": {
+            "type": "integer",
+            "format": "uint16",
+            "enum": [
+              8
+            ]
+          },
           "proxy_tail": {
             "anyOf": [
               {
@@ -51128,6 +51202,9 @@
           }
         },
         "required": [
+          "protocol_version",
+          "config_fingerprint",
+          "beacon_horizon",
           "height",
           "view",
           "t_retx_ms",
@@ -51326,52 +51403,6 @@
           "min_signers",
           "signed_power",
           "total_power"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2CommitQuorumCertificate": {
-        "additionalProperties": false,
-        "properties": {
-          "aggregate_signature": {
-            "$ref": "#/components/schemas/SumeragiV2BlsProof"
-          },
-          "execution_commitment": {
-            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/SumeragiV2CommitPhase"
-          },
-          "proposal_round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "signers": {
-            "description": "Strictly increasing indices into the frozen roster.",
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 31,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          }
-        },
-        "required": [
-          "round",
-          "proposal_round",
-          "phase",
-          "subject",
-          "execution_commitment",
-          "signers",
-          "aggregate_signature"
         ],
         "type": "object"
       },
@@ -51632,138 +51663,6 @@
         ],
         "type": "object"
       },
-      "SumeragiV2FinalityArtifact": {
-        "additionalProperties": false,
-        "description": "Exact immutable finality sidecar persisted by the Sumeragi-v2 apply path, including the complete cryptographic material needed after mutable validator records rotate.",
-        "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "commit_qc": {
-            "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
-          },
-          "format_version": {
-            "enum": [
-              4
-            ],
-            "format": "uint16",
-            "type": "integer"
-          },
-          "height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "height_context": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContext"
-          },
-          "protocol_version": {
-            "enum": [
-              4
-            ],
-            "format": "uint16",
-            "type": "integer"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          },
-          "validator_set_pops": {
-            "description": "Durable BLS proofs of possession aligned one-for-one with height_context.roster.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2BlsProof"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array"
-          }
-        },
-        "required": [
-          "format_version",
-          "protocol_version",
-          "height",
-          "height_context",
-          "subject",
-          "block_hash",
-          "commit_qc",
-          "validator_set_pops"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2FinalizedNextEpochSnapshot": {
-        "additionalProperties": false,
-        "description": "Complete parent-CommitQC-authenticated transition into the next epoch, including its end height and immutable validator PoPs.",
-        "properties": {
-          "committee_preparation": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ValidatorCommitteePreparationV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "epoch": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "epoch_end_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "kagemusha_mint_finality_authority": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1"
-          },
-          "kagemusha_mint_finality_authorization": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
-          },
-          "leader_seed": {
-            "$ref": "#/components/schemas/SumeragiV2Bytes32"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusMode"
-          },
-          "quorum": {
-            "$ref": "#/components/schemas/SumeragiV2DualQuorum"
-          },
-          "roster": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "validator_set_pops": {
-            "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2BlsProof"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array"
-          }
-        },
-        "required": [
-          "epoch",
-          "epoch_end_height",
-          "mode",
-          "roster",
-          "validator_set_pops",
-          "quorum",
-          "leader_seed",
-          "kagemusha_mint_finality_authority",
-          "kagemusha_mint_finality_authorization",
-          "committee_preparation"
-        ],
-        "type": "object"
-      },
       "SumeragiV2Fixed32ByteArray": {
         "description": "Exact 32-byte value using the historical fixed-bytes Norito JSON adapter.",
         "items": {
@@ -51793,124 +51692,6 @@
         "required": [
           "phase",
           "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2HeightContext": {
-        "additionalProperties": false,
-        "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is non-null exactly at an epoch-ending height; parent_commit_qc is null only at height one or an authenticated snapshot-bootstrap boundary.",
-        "properties": {
-          "da_layout": {
-            "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout"
-          },
-          "epoch": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "epoch_end_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "execution_policy_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "kagemusha_mint_finality_authority": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1"
-          },
-          "kagemusha_mint_finality_authorization": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
-          },
-          "leader_seed": {
-            "$ref": "#/components/schemas/SumeragiV2Bytes32"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusMode"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "next_epoch_snapshot": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "nexus_amx_context_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "parent_commit_qc": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "protocol_version": {
-            "enum": [
-              4
-            ],
-            "format": "uint16",
-            "type": "integer"
-          },
-          "quorum": {
-            "$ref": "#/components/schemas/SumeragiV2DualQuorum"
-          },
-          "roster": {
-            "description": "Canonical ordered voting roster; observers are excluded and validator identities must be unique.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "snapshot_bootstrap": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "network_id",
-          "protocol_version",
-          "height",
-          "epoch",
-          "epoch_end_height",
-          "next_epoch_snapshot",
-          "mode",
-          "parent_commit_qc",
-          "snapshot_bootstrap",
-          "roster",
-          "quorum",
-          "nexus_amx_context_hash",
-          "execution_policy_hash",
-          "da_layout",
-          "leader_seed",
-          "kagemusha_mint_finality_authority",
-          "kagemusha_mint_finality_authorization"
         ],
         "type": "object"
       },
@@ -52409,52 +52190,6 @@
         ],
         "type": "object"
       },
-      "SumeragiV2QuorumCertificate": {
-        "additionalProperties": false,
-        "properties": {
-          "aggregate_signature": {
-            "$ref": "#/components/schemas/SumeragiV2BlsProof"
-          },
-          "execution_commitment": {
-            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/SumeragiV2GlobalPhase"
-          },
-          "proposal_round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "signers": {
-            "description": "Strictly increasing indices into the frozen roster.",
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 31,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          }
-        },
-        "required": [
-          "round",
-          "proposal_round",
-          "phase",
-          "subject",
-          "execution_commitment",
-          "signers",
-          "aggregate_signature"
-        ],
-        "type": "object"
-      },
       "SumeragiV2QuorumCertificateRef": {
         "additionalProperties": false,
         "properties": {
@@ -52480,37 +52215,6 @@
           "phase",
           "subject",
           "execution_commitment"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2SnapshotBootstrapAnchor": {
-        "additionalProperties": false,
-        "description": "Audited snapshot boundary that binds the first post-snapshot height context to the exact restored ledger geometry and state.",
-        "properties": {
-          "snapshot_block_creation_time_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "snapshot_block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "snapshot_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "snapshot_state_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "snapshot_height",
-          "snapshot_block_hash",
-          "snapshot_block_creation_time_ms",
-          "snapshot_state_hash"
         ],
         "type": "object"
       },
@@ -52598,26 +52302,6 @@
           "min_signers",
           "total_power",
           "certificate_formed"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ValidatorPower": {
-        "additionalProperties": false,
-        "properties": {
-          "power": {
-            "enum": [
-              1
-            ],
-            "format": "uint64",
-            "type": "integer"
-          },
-          "validator": {
-            "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
-          }
-        },
-        "required": [
-          "validator",
-          "power"
         ],
         "type": "object"
       },
@@ -53582,7 +53266,7 @@
           },
           "finality_chain": {
             "items": {
-              "$ref": "#/components/schemas/BridgeFinalityProof"
+              "$ref": "#/components/schemas/SumeragiFinalityProof"
             },
             "maxItems": 64,
             "minItems": 1,
@@ -54179,6 +53863,34 @@
         ],
         "type": "object"
       },
+      "ValidatorCommitteeMemberV1": {
+        "additionalProperties": false,
+        "description": "One equal-vote BLS member with its original proof of possession.",
+        "properties": {
+          "proof_of_possession": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "validator": {
+            "description": "Canonical bare multihash string for a 48-byte BLS12-381 G1 (BLS-normal) validator public key.",
+            "maxLength": 102,
+            "minLength": 102,
+            "pattern": "^ea0130[0-9A-F]{96}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator",
+          "proof_of_possession"
+        ],
+        "type": "object"
+      },
       "ValidatorCommitteePreparationV1": {
         "additionalProperties": false,
         "properties": {
@@ -54189,12 +53901,24 @@
             "minimum": 0,
             "type": "integer"
           },
+          "committee": {
+            "description": "Complete ordered frozen target; every vote has equal weight.",
+            "items": {
+              "$ref": "#/components/schemas/ValidatorCommitteeMemberV1"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          },
           "election_seed": {
             "description": "Independently domain-separated election randomness from the authenticated boundary pulse.",
             "maxLength": 64,
             "minLength": 64,
             "pattern": "^[0-9A-F]{64}$",
             "type": "string"
+          },
+          "eligibility": {
+            "$ref": "#/components/schemas/ValidatorElectionPolicyV1"
           },
           "first_height": {
             "description": "Inclusive activation height.",
@@ -54221,15 +53945,6 @@
             "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
-          "roster": {
-            "description": "Complete ordered target committee; it cannot be shrunk or rerolled.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array"
-          },
           "selection_anchor": {
             "$ref": "#/components/schemas/Hash",
             "description": "Last committed block before the selecting boundary, never that boundary's own hash."
@@ -54255,22 +53970,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "validator_set_pops": {
-            "description": "Exact consensus-key possession proofs in target seat order.",
-            "items": {
-              "items": {
-                "maximum": 255,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "maxItems": 96,
-              "minItems": 96,
-              "type": "array"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array"
-          },
           "version": {
             "description": "Sole first-release layout version.",
             "enum": [
@@ -54292,8 +53991,8 @@
           "authority_generation",
           "preparing_authorization_id",
           "election_seed",
-          "roster",
-          "validator_set_pops"
+          "eligibility",
+          "committee"
         ],
         "type": "object"
       },
@@ -54327,8 +54026,8 @@
         "additionalProperties": false,
         "properties": {
           "selecting_finality": {
-            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
-            "description": "Exact selecting boundary; its snapshot must carry the identical preparation."
+            "$ref": "#/components/schemas/NativeFinalityArtifact",
+            "description": "Original canonical native selecting block; its certified result must carry the identical preparation."
           },
           "transition": {
             "$ref": "#/components/schemas/ValidatorCommitteeTransitionV1",
@@ -54353,8 +54052,8 @@
             "type": "array"
           },
           "latest_finality": {
-            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
-            "description": "Latest finalized artifact observed by this server, verified against its Kura block."
+            "$ref": "#/components/schemas/NativeFinalityArtifact",
+            "description": "Original canonical native H2-or-later block authenticated by the server against its committed source; clients must verify the full native journal independently."
           },
           "network_id": {
             "$ref": "#/components/schemas/Hash",
@@ -54443,6 +54142,82 @@
           "credentials",
           "readiness",
           "outcome"
+        ],
+        "type": "object"
+      },
+      "ValidatorElectionPolicyV1": {
+        "additionalProperties": false,
+        "description": "Immutable selection policy for one exact E+2 attempt; later configuration changes apply to subsequent selections.",
+        "properties": {
+          "asset_scale": {
+            "enum": [
+              9
+            ],
+            "format": "uint32",
+            "type": "integer"
+          },
+          "asset_scope": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "enum": [
+                  "Global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "epoch_length_blocks": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 3,
+            "type": "integer"
+          },
+          "max_validators": {
+            "enum": [
+              4,
+              7,
+              10,
+              13,
+              16,
+              19,
+              22,
+              25,
+              28,
+              31
+            ],
+            "format": "uint32",
+            "type": "integer"
+          },
+          "min_nomination_bond": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Positive minimum nomination frozen at selection; exactly representable at XOR scale 9."
+          },
+          "min_self_bond": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Positive minimum self bond frozen at selection; exactly representable at XOR scale 9."
+          },
+          "xor_asset_definition_id": {
+            "description": "Exact network-pinned real XOR definition, authenticated at selection.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "xor_asset_definition_id",
+          "asset_scope",
+          "asset_scale",
+          "min_self_bond",
+          "min_nomination_bond",
+          "max_validators",
+          "epoch_length_blocks"
         ],
         "type": "object"
       },
@@ -55691,6 +55466,71 @@
           "tally"
         ],
         "type": "object"
+      },
+      "GovernanceKagemushaTestnetExperimentScopeV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset_identity_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "asset_incarnation": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "asset_scale": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 28
+          },
+          "liability_pool_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          }
+        },
+        "required": [
+          "asset_identity_digest",
+          "asset_incarnation",
+          "asset_scale",
+          "liability_pool_id"
+        ]
+      },
+      "GovernanceKagemushaReleasePurposeV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "production"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "testnet_experiment"
+              },
+              "value": {
+                "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          }
+        ]
       }
     },
     "securitySchemes": {
@@ -78845,17 +78685,17 @@
     },
     "/v1/ledger/state-proof/{height}": {
       "get": {
-        "description": "Returns the exact State-committed block header, post-state root, and cryptographically verified durable Sumeragi-v2 finality artifact for the requested height. Missing, malformed, forged, or mis-associated v2 evidence fails closed; legacy world-state QCs are never consulted.",
+        "description": "Returns the witnessed post-state root, canonical block header and current native finality proof from one immutable committed State view. The root covers the execution write set, not a complete World snapshot. Missing, malformed, forged or mis-associated durable evidence fails closed. Height must be at least two; signed genesis alone does not authenticate its execution result.",
         "operationId": "ledgerStateProof",
         "parameters": [
           {
-            "description": "Block height to inspect (1-indexed).",
+            "description": "Certified non-genesis block height to inspect (at least 2).",
             "in": "path",
             "name": "height",
             "required": true,
             "schema": {
               "format": "uint64",
-              "minimum": 1,
+              "minimum": 2,
               "type": "integer"
             }
           }
@@ -78876,7 +78716,7 @@
                 }
               }
             },
-            "description": "Authenticated Sumeragi-v2 state finality for the requested height."
+            "description": "Authenticated native execution finality for the requested height."
           }
         },
         "security": [
@@ -78885,7 +78725,7 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Fetch authenticated Sumeragi-v2 state finality for a block height.",
+        "summary": "Fetch native execution finality and its witnessed post-state root.",
         "tags": [
           "Ledger"
         ],
@@ -78900,17 +78740,17 @@
     },
     "/v1/ledger/state/{height}": {
       "get": {
-        "description": "Returns the post-state root only from the exact cryptographically verified durable Sumeragi-v2 finality artifact bound to the State-committed block. The response carries that block header and artifact for independent verification. Missing, malformed, forged, or mis-associated v2 evidence fails closed; block result roots and legacy world-state QCs are never fallbacks.",
+        "description": "Returns the witnessed post-state root, canonical block header and current native finality proof from one immutable committed State view. The root covers the execution write set, not a complete World snapshot. Missing, malformed, forged or mis-associated durable evidence fails closed. Height must be at least two; signed genesis alone does not authenticate its execution result.",
         "operationId": "ledgerStateRoot",
         "parameters": [
           {
-            "description": "Block height to inspect (1-indexed).",
+            "description": "Certified non-genesis block height to inspect (at least 2).",
             "in": "path",
             "name": "height",
             "required": true,
             "schema": {
               "format": "uint64",
-              "minimum": 1,
+              "minimum": 2,
               "type": "integer"
             }
           }
@@ -78931,7 +78771,7 @@
                 }
               }
             },
-            "description": "Authenticated Sumeragi-v2 state root and its exact finality carrier."
+            "description": "Authenticated native execution finality for the requested height."
           }
         },
         "security": [
@@ -78940,7 +78780,7 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Fetch an authenticated execution state root for a block height.",
+        "summary": "Fetch native execution finality and its witnessed post-state root.",
         "tags": [
           "Ledger"
         ],
@@ -116186,7 +116026,7 @@
             "required": false,
             "schema": {
               "enum": [
-                "SumeragiV2Equivocation"
+                "NativeSumeragiEvidence"
               ],
               "type": "string"
             }

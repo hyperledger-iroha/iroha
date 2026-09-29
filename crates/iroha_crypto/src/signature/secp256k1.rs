@@ -1,7 +1,7 @@
 //! Secp256k1 signatures with one canonical public-key parser.
 
 use self::ecdsa_secp256k1::EcdsaSecp256k1Impl;
-mod public_key;
+pub(crate) mod public_key;
 
 use crate::{Error, KeyGenOption, ParseError};
 use std::{format, vec::Vec};

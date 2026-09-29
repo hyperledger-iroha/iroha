@@ -1,16 +1,14 @@
 //! Retained stopped-store height observation, with no later execution or carrier authority.
 
 use super::*;
-use iroha_core::kura::{
-    CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceError, CanonicalKuraEvidenceReader,
-};
+use iroha_core::kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceReader};
 use iroha_data_model::NetworkId;
 use std::cell::Cell;
 
 /// The original genesis lease and actual Core completion survive the reply callback.
 ///
 /// The launcher must already own successful termination and an independently authenticated
-/// generated genesis. This observation checks the entire journal shape and merge-log framing;
+/// generated genesis. This observation checks the entire canonical journal shape;
 /// it authenticates only the requested genesis carrier. Later carriers still require collection
 /// and full anchored facts verification through the observed height.
 pub(crate) struct RetainedStoppedTip {
@@ -27,8 +25,6 @@ enum Boundary {
     AfterCoreOpen,
     BeforeCarrier,
     AfterCarrier,
-    BeforeMergeScan,
-    AfterMergeScan,
     BeforeCoreFinish,
     AfterCoreFinish,
     BeforeIdentity,
@@ -104,7 +100,6 @@ impl RetainedStoppedTip {
 fn admit(
     genesis: &ProofInputBinding,
     block_store: &Path,
-    merge_log: &Path,
     limits: CanonicalKuraEvidenceLimits,
 ) -> Result<()> {
     // Core's bounds are private; this smaller explicit [1,1] contract is checked before
@@ -119,14 +114,12 @@ fn admit(
     ensure!(
         (1..=2 * 1024 * 1024 * 1024).contains(&limits.max_store_data_bytes)
             && (1..=32 * 1024 * 1024).contains(&limits.max_carrier_bytes)
-            && limits.max_merge_log_bytes <= MAX_INPUT_BYTES
-            && limits.max_merge_frames <= limits.max_committed_blocks
             && (1..=MAX_INPUT_BYTES).contains(&limits.max_output_bytes)
             && (1..=512 * 1024 * 1024).contains(&limits.max_decode_allocation_bytes)
             && (1..=32 * 1024 * 1024).contains(&genesis.max_bytes),
         "invalid stopped-tip file, frame or decode limits"
     );
-    for path in [genesis.path.as_path(), block_store, merge_log] {
+    for path in [genesis.path.as_path(), block_store] {
         ensure!(
             path.is_absolute() && path.as_os_str().as_bytes().len() <= MAX_PATH_BYTES,
             "stopped-tip paths must be bounded and absolute"
@@ -154,7 +147,6 @@ fn admit(
         block_store.join("blocks.index"),
         block_store.join("blocks.hashes"),
         block_store.join("blocks.count.norito"),
-        merge_log.to_owned(),
     ];
     ensure!(
         !core_paths.contains(&genesis.path),
@@ -172,14 +164,12 @@ pub(crate) fn observe_stopped_tip(
     genesis: ProofInputBinding,
     expected_network_id: NetworkId,
     block_store: &Path,
-    merge_log: &Path,
     reader: CanonicalKuraEvidenceLimits,
 ) -> Result<RetainedStoppedTip> {
     observe_with_hook(
         genesis,
         expected_network_id,
         block_store,
-        merge_log,
         reader,
         |_| Ok(()),
     )
@@ -189,11 +179,10 @@ fn observe_with_hook(
     genesis: ProofInputBinding,
     expected_network_id: NetworkId,
     block_store: &Path,
-    merge_log: &Path,
     limits: CanonicalKuraEvidenceLimits,
     mut hook: impl FnMut(Boundary) -> Result<()>,
 ) -> Result<RetainedStoppedTip> {
-    admit(&genesis, block_store, merge_log, limits)?;
+    admit(&genesis, block_store, limits)?;
     let maximum = genesis.max_bytes;
     let mut inputs = Inputs::open(vec![genesis], maximum, &mut |phase| {
         hook(Boundary::Original(phase))
@@ -210,7 +199,7 @@ fn observe_with_hook(
         limits.max_decode_allocation_bytes,
         64,
     );
-    // One cumulative Norito allocation budget covers genesis and the entire merge scan.
+    // One cumulative Norito allocation budget covers the exact genesis carrier.
     // This does not claim to meter every dependency allocation or kernel I/O latency.
     let complete = norito::with_decode_limits_scope(decode, || -> Result<_> {
         input.check()?;
@@ -232,7 +221,7 @@ fn observe_with_hook(
             input.check()
         };
         boundary(Boundary::BeforeCoreOpen)?;
-        let mut reader = CanonicalKuraEvidenceReader::open(block_store, merge_log, limits)?;
+        let mut reader = CanonicalKuraEvidenceReader::open(block_store, limits)?;
         boundary(Boundary::AfterCoreOpen)?;
         boundary(Boundary::BeforeCarrier)?;
         let carrier = reader.read_carrier(1)?;
@@ -247,13 +236,6 @@ fn observe_with_hook(
         drop(stored);
         drop(carrier);
         boundary(Boundary::AfterCarrier)?;
-        boundary(Boundary::BeforeMergeScan)?;
-        reader.scan_merge_entries(&[], |_, _, _| {
-            Err(CanonicalKuraEvidenceError::Invalid(
-                "stopped-tip genesis interval cannot contain a merge entry",
-            ))
-        })?;
-        boundary(Boundary::AfterMergeScan)?;
         boundary(Boundary::BeforeCoreFinish)?;
         let complete = reader.finish()?;
         boundary(Boundary::AfterCoreFinish)?;

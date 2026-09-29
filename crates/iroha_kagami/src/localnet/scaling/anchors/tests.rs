@@ -200,7 +200,6 @@ fn receipt_public_typed_anchors_and_census_match_every_original() {
                 "config",
                 "client_config",
                 "primary_block_store",
-                "primary_merge_log"
             ])
         );
         let node_path = f.root.join(format!("peer{index}.toml"));
@@ -214,18 +213,12 @@ fn receipt_public_typed_anchors_and_census_match_every_original() {
             receipt["chain_discriminant"].as_u64(),
             Some(u64::from(*config.common.chain_discriminant.value()))
         );
-        let (blocks, merge) =
-            iroha_core::kura::Kura::canonical_storage_paths(config.kura.store_dir.value());
+        let blocks = iroha_core::kura::Kura::canonical_storage_path(config.kura.store_dir.value());
         assert_eq!(
             receipt["peers"][index]["primary_block_store"].as_str(),
             blocks.to_str()
         );
-        assert_eq!(
-            receipt["peers"][index]["primary_merge_log"].as_str(),
-            merge.to_str()
-        );
         assert!(!blocks.exists());
-        assert!(!merge.exists());
         let name = format!("peer{index}-client.toml");
         let text = Zeroizing::new(fs::read_to_string(f.root.join(&name)).unwrap());
         let table =
@@ -429,7 +422,7 @@ fn canonical_reader_paths_follow_chain_namespace_and_bounds() {
         let path = f.root.join(format!("peer{index}.toml"));
         let text = Zeroizing::new(fs::read_to_string(&path).unwrap());
         let config = parse_localnet_peer_config(&text, Some(&path)).unwrap();
-        let (blocks, merge) = canonical_reader_paths(&config).unwrap();
+        let (blocks, _) = canonical_reader_paths(&config).unwrap();
         let root = config.kura.store_dir.value();
         assert!(Path::new(&blocks).starts_with(root));
         assert!(Path::new(&merge).starts_with(root));

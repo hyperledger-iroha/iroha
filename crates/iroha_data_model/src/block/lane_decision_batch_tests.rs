@@ -33,7 +33,6 @@ fn decision_group_on_distinct_route(route_number: u32, index: u32) -> LaneDecisi
         crate::account::AccountId::new(key.public_key().clone()),
         crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_admission_intent(crate::transaction::TransactionAdmissionIntent::QueuePlanSynced)
     .sign(key.private_key());
     payload.input.entrypoint = TransactionEntrypoint::External(tx.clone());
     let binding = &mut payload.input.certificate.binding;
@@ -241,7 +240,6 @@ fn lane_decision_batch_large_body_is_encoded_once_and_decodes_at_carrier_cap() {
         crate::Level::INFO,
         "x".repeat(800 * 1024),
     )])
-    .with_admission_intent(crate::transaction::TransactionAdmissionIntent::QueuePlanSynced)
     .sign(key.private_key());
     payload.input.certificate.binding.signed_transaction_hash = Some(transaction.hash());
     payload.input.entrypoint = TransactionEntrypoint::External(transaction);

@@ -1565,78 +1565,79 @@ crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline
         "malformed durable authority must fail before State can be constructed"
     );
 }
+
 #[test]
-fn production_state_apply_surface_requires_transient_v2_capability() {
-    let state_source = include_str!("../state.rs");
-    let block_source = include_str!("../block.rs");
-    let apply_source = include_str!("../sumeragi/v2_apply.rs");
-    for signature in [
-        "pub fn apply_without_execution(",
-        "pub fn apply_fixture_block(",
-    ] {
-        let offset = state_source
-            .find(signature)
-            .unwrap_or_else(|| panic!("fixture API `{signature}` must remain discoverable"));
-        let prefix = &state_source[offset.saturating_sub(600)..offset];
-        assert!(
-            prefix.contains("#[cfg(any(test, feature = \"iroha-core-tests\"))]"),
-            "fixture API `{signature}` must not compile into the production State surface"
-        );
-    }
-    let verified_start = state_source
-        .find("pub(crate) fn apply_without_execution_with_verified_v2_finality(")
-        .expect("production v2 State apply method");
-    let verified = &state_source[verified_start..verified_start + 750];
-    assert!(verified.contains("let topology = self.verified_v2_apply_topology(block)?;"));
-    assert!(verified.contains("self.finalize_authorized_execution_outputs(block,"));
-    assert!(
-        !verified.contains("topology: Vec<PeerId>"),
-        "production State apply must not accept caller-supplied topology"
+fn native_state_apply_refuses_reconstructed_carrier_without_original_execution_owner() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("execute genuine native genesis");
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let original = chain.committed(2);
+    let certificate = original.block().commit_certificate().unwrap();
+    let before_generation = state.state_view_generation();
+    let before_tip = state.view().native_execution_tip();
+    let before_height = state.view().height();
+    // Even the exact committed wire and QC cannot recreate a consumed local execution owner.
+    let reconstructed = crate::block::ValidBlock::committed_from_replay_signed_block(
+        original.block().as_ref().clone(),
     );
-    assert!(block_source.contains("verified_v2_finality: Some(artifact.into_arc())"));
-    assert!(block_source.contains("VerifiedV2FinalityArtifact"));
-    assert!(block_source.contains("Aggregate signatures are not verified"));
-    assert!(block_source.contains("Ok(()) => Ok(CommittedBlock::with_verified_v2_finality("));
-    assert!(block_source.contains("WithEvents::new(CommittedBlock::without_v2_finality(self))"));
-    assert!(
-        apply_source
-            .contains(".apply_without_execution_with_verified_v2_finality(&committed_block)")
+    let mut overlay = state.block(original.block().header());
+    let before_delta = overlay.world.net_state_delta().unwrap();
+    let before_hashes = overlay.block_hashes.iter().copied().collect::<Vec<_>>();
+    let result = overlay.apply_without_execution_with_sumeragi_commit(
+        &reconstructed,
+        certificate,
+        chain
+            .validators()
+            .iter()
+            .map(|(peer, _)| peer.clone())
+            .collect(),
     );
     assert!(
-        !apply_source.contains(
-            "apply_without_execution_with_verified_v2_finality(\n                &committed_block,"
-        ),
-        "live v2 apply must not thread a separately fabricated topology"
+        matches!(result, Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref reason))
+        if reason.contains("lacks exact durable finality authorization"))
     );
-}
-#[test]
-fn queue_plan_carrier_validation_uses_one_generation_coherent_state_view() {
-    let source = include_str!("../state.rs");
-    let validation = source
-        .split_once("    fn validate_queue_plan_admissions_for_carrier(")
-        .and_then(|(_, tail)| {
-            tail.split_once("    fn pending_queue_plan_admission_registry_lookup_in_view(")
-        })
-        .map(|(body, _)| body)
-        .expect("QueuePlan carrier validation remains source discoverable");
-    let validation = validation.split_whitespace().collect::<String>();
+    assert_eq!(overlay.world.net_state_delta().unwrap(), before_delta);
     assert_eq!(
-        validation.matches("letstate_view=self.view();").count(),
-        1,
-        "QueuePlan history and authority must originate from one State generation",
+        overlay.block_hashes.iter().copied().collect::<Vec<_>>(),
+        before_hashes
     );
     assert!(
-        validation
-            .contains("Self::validate_queue_plan_admissions_for_carrier_in_view(&state_view,")
+        overlay.commit().is_err(),
+        "a poisoned publication attempt cannot commit"
     );
-    assert!(validation.contains("state_view.block_hashes().get(index).copied()"));
-    assert!(validation.contains("queue_plan_authoritative_peers_in_view_at_height(state_view,"));
-    assert!(
-        !validation.contains("letblock_hashes=self.block_hashes.view();")
-            && !validation.contains("&self.view()"),
-        "a nested State view while retaining a block-hash view can deadlock block publication",
-    );
+    assert_eq!(state.state_view_generation(), before_generation);
+    assert_eq!(state.view().height(), before_height);
+    assert_eq!(state.view().native_execution_tip(), before_tip);
 }
+
+#[test]
+fn native_state_view_keeps_tip_and_canonical_hashes_in_one_generation() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("execute genuine native genesis");
+    let mut previous_generation = chain.state().state_view_generation();
+    for expected_height in 2..=3 {
+        chain.commit(Vec::new());
+        let state = chain.state();
+        let generation = state.state_view_generation();
+        assert_eq!(generation % 2, 0);
+        assert!(generation > previous_generation);
+        let expected_hash = chain.committed(expected_height).block_hash();
+        let view = state.view();
+        let tip = view
+            .native_execution_tip()
+            .expect("original executed native tip");
+        assert_eq!(view.height() as u64, expected_height);
+        assert_eq!(tip.height(), expected_height);
+        assert_eq!(view.block_hashes.last().copied(), Some(tip.iroha_hash()));
+        assert_eq!(tip.iroha_hash(), expected_hash);
+        assert_eq!(state.state_view_generation(), generation);
+        previous_generation = generation;
+    }
+}
+
 state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_field
     let source = include_str!("../state.rs");
     let_row! { struct_start = source .find("pub struct WorldBlockFields<'world> {") .expect("WorldBlock declaration must remain discoverable") };
@@ -5237,8 +5238,6 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
@@ -6235,33 +6234,8 @@ state_test! { sync unbound_merge_entrypoint_membership_is_rejected
     assert_eq!(state.committed_entrypoint_height(&merge_hash), None);
     assert_eq!(state.committed_height(), 0);
 }
-state_test! { sync apply_without_execution_indexes_sealed_commitment_entrypoint_hash
-    let (authority, keypair) = gen_account_in("wonderland");
-    let domain = Domain::new(sample_domain_id()).build(&authority);
-    let account = Account::new(authority.clone()).build(&authority);
-    let_row! { state = State::new_for_testing( World::with([domain], [account], []), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
-    state.seed_genesis_for_testing().expect("publish actual genesis before ordinary entrypoints");
-    let network_id = *state.network_id_ref();
-    let_row! { inner_tx = TransactionBuilder::new( network_id, authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .sign(keypair.private_key()) };
-    let salt = [0x57; 32];
-    let reveal_deadline_height = 3;
-    let_row! { commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment( &network_id, &inner_tx, salt, reveal_deadline_height, ) };
-    let_row! { payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload { network_id, authority, commitment, reveal_after_height: 3, reveal_deadline_height, nonce: None, } };
-    let_row! { entrypoint = TransactionEntrypoint::SealedCommitment( iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign( payload, keypair.private_key(), ), ) };
-    let entrypoint_hash = entrypoint.hash();
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint));
-    let_row! { new_block = BlockBuilder::new(vec![accepted]) .chain(0, state.view().latest_block().as_deref()) .sign(keypair.private_key()) .unpack(|_| {}) };
-    let mut state_block = state.block(new_block.header());
-    let_row! { valid_block = new_block .validate_and_record_transactions(&mut state_block) .unpack(|_| {}) };
-    let committed = valid_block.commit_unchecked().unpack(|_| {});
-    state.commit_executed_block_for_testing(state_block, committed)
-        .expect("publish the actual entrypoint outputs");
-    assert!(state.has_committed_entrypoint(entrypoint_hash));
-    assert_eq!(
-        state.committed_entrypoint_height(&entrypoint_hash),
-        Some(nonzero!(2_usize))
-    );
-}
+include!("native_membership_publication_tests.rs");
+
 state_test! { sync committed_replay_skips_failed_external_after_sealed_commitment
     let (authority, keypair) = gen_account_in("wonderland");
     let domain = Domain::new(sample_domain_id()).build(&authority);
@@ -6298,7 +6272,6 @@ block.set_execution_outputs(outputs, fragments, Default::default(),
 Vec::new(),
 Default::default(),
 Default::default(),
-Vec::new(),
 &crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hashes should match payload");
     let_row! { committed = crate::block::ValidBlock::new_unverified_for_tests(block) .commit_unchecked() .unpack(|_| {}) };
@@ -6312,28 +6285,7 @@ Vec::new(),
         "failed external transaction after sealed entrypoint must not be replay-applied"
     );
 }
-state_test! { sync apply_without_execution_keeps_plain_external_transaction_hashes
-    let (authority, keypair) = gen_account_in("wonderland");
-    let domain = Domain::new(sample_domain_id()).build(&authority);
-    let account = Account::new(authority.clone()).build(&authority);
-    let_row! { state = State::new_for_testing( World::with([domain], [account], []), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
-    state.seed_genesis_for_testing().expect("publish actual genesis before ordinary entrypoints");
-    let network_id = *state.network_id_ref();
-    let_row! { tx = TransactionBuilder::new( network_id, authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([Log::new(Level::INFO, "external".to_owned())]) .sign(keypair.private_key()) };
-    let tx_hash = tx.hash_as_entrypoint();
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let_row! { new_block = BlockBuilder::new(vec![accepted]) .chain(0, state.view().latest_block().as_deref()) .sign(keypair.private_key()) .unpack(|_| {}) };
-    let mut state_block = state.block(new_block.header());
-    let_row! { valid_block = new_block .validate_and_record_transactions(&mut state_block) .unpack(|_| {}) };
-    let committed = valid_block.commit_unchecked().unpack(|_| {});
-    state.commit_executed_block_for_testing(state_block, committed)
-        .expect("publish the actual entrypoint outputs");
-    assert!(state.has_committed_entrypoint(tx_hash));
-    assert_eq!(
-        state.committed_entrypoint_height(&tx_hash),
-        Some(nonzero!(2_usize))
-    );
-}
+
 state_test! { sync block_proofs_for_sealed_commitment_use_distinct_input_and_output_trees
     super::block_proof_tests::assert_sealed_commitment_proof_uses_distinct_trees();
 }
@@ -7451,7 +7403,7 @@ state_test! { sync mixed_role_native_amx_state_projections_reject_same_route_ide
     block.set_execution_context(Some(execution_context));
     block.set_execution_outputs(
         outputs, fragments, Default::default(), Vec::new(), Default::default(),
-        Default::default(), Vec::new(),
+        Default::default(),
         &crate::execution_output_test_support::structural_output_limits(),
     ).expect("retain structural outputs after changing the exact context");
     assert!(matches!(
@@ -9198,7 +9150,6 @@ fn finish_autoscale_fixture(
             Vec::new(),
             AxtPolicySnapshot::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("empty autoscale fixture retains explicit result metadata");
@@ -9709,7 +9660,6 @@ include!("lane_instance_persistence_tests.rs");
 include!("lane_instance_opening_tests.rs");
 include!("lane_process_tests.rs");
 include!("lane_consensus_authority_tests.rs");
-include!("queue_plan_priority_tests.rs");
 fn lane_artifact_block_and_session_for_state_test(
     previous_block: Option<&SignedBlock>,
     lane_id: LaneId,
@@ -9784,7 +9734,6 @@ fn lane_artifact_block_and_session_for_state_test(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
     }
@@ -11032,7 +10981,7 @@ state_test! { sync state_geometry_retry_retains_original_operation_and_rejects_c
     let request = replay_geometry_request(&state, &pending);
     let replaced = &pending.catalog_update.replaced_lane_ids;
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
-    let error = state.resume_lane_geometry_publication(&request, replaced, &BTreeMap::new(), None, None)
+    let error = state.resume_lane_geometry_publication(&request, replaced, None)
         .expect_err("local journal sync refusal");
     assert!(matches!(error, LaneLifecycleError::GeometryStorage(_)), "{error:?}");
     let owner_address = {
@@ -11043,21 +10992,21 @@ state_test! { sync state_geometry_retry_retains_original_operation_and_rejects_c
     };
     let mut changed = replay_geometry_request(&state, &pending);
     changed.transition_height += 1;
-    state.resume_lane_geometry_publication(&changed, replaced, &BTreeMap::new(), None, None)
+    state.resume_lane_geometry_publication(&changed, replaced, None)
         .expect_err("changed request cannot replace original owner");
     assert_eq!(std::ptr::from_ref(state.geometry_publication.lock().as_ref().unwrap()) as usize, owner_address);
-    state.resume_lane_geometry_publication(&request, replaced, &BTreeMap::new(), None, None)
+    state.resume_lane_geometry_publication(&request, replaced, None)
         .expect("resume original pending journal write");
     assert_eq!(std::ptr::from_ref(state.geometry_publication.lock().as_ref().unwrap()) as usize, owner_address);
     let held = kura.try_publication_lease().expect("hold actual physical publisher");
     let error = state.finish_lane_geometry_publication(request.updated, request.updated_incarnations,
-        request.updated_activation_heights, request.updated_lineage_root, None, None)
+        request.updated_activation_heights, request.updated_lineage_root, None)
         .expect_err("physical publication owner is busy");
     assert!(matches!(error.error, LaneLifecycleError::PublicationBusy { .. }));
     assert!(!error.rollback_safe);
     drop(held);
     state.finish_lane_geometry_publication(request.updated, request.updated_incarnations,
-        request.updated_activation_heights, request.updated_lineage_root, None, None)
+        request.updated_activation_heights, request.updated_lineage_root, None)
         .map_err(|failure| failure.error).expect("consume original owner after release");
     assert!(state.geometry_publication.lock().is_none());
 }
@@ -11070,8 +11019,7 @@ state_test! { sync state_geometry_admission_refusal_keeps_original_tiered_paths
     drop(staged);
     let request = replay_geometry_request(&state, &pending);
     let held = kura.try_publication_lease().expect("hold actual Kura fence");
-    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids,
-        &BTreeMap::new(), None, None).expect_err("Kura admission refuses after tiered capture");
+    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids, None).expect_err("Kura admission refuses after tiered capture");
     assert!(matches!(error, LaneLifecycleError::PublicationBusy { .. }));
     let tiered_address = {
         let slot = state.geometry_publication.lock();
@@ -11083,8 +11031,7 @@ state_test! { sync state_geometry_admission_refusal_keeps_original_tiered_paths
     std::fs::rename(&cold_root, temp_dir.path().join("original-cold-owner")).unwrap();
     std::fs::create_dir(&cold_root).unwrap();
     let substituted = exact_test_tree_fingerprint(&cold_root);
-    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids,
-        &BTreeMap::new(), None, None).expect_err("retry cannot recapture substituted tiered root");
+    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids, None).expect_err("retry cannot recapture substituted tiered root");
     assert!(error.to_string().contains("original directory was replaced"), "{error:?}");
     let slot = state.geometry_publication.lock();
     assert_eq!(std::ptr::from_ref(slot.as_ref().unwrap().tiered.as_ref().unwrap()) as usize, tiered_address);
@@ -11100,7 +11047,7 @@ state_test! { sync state_geometry_owned_rollback_retries_original_pending_sync
     let original_cold = exact_test_tree_fingerprint(&cold_root);
     let request = replay_geometry_request(&state, &pending);
     let update = &pending.catalog_update;
-    state.resume_lane_geometry_publication(&request, &update.replaced_lane_ids, &BTreeMap::new(), None, None)
+    state.resume_lane_geometry_publication(&request, &update.replaced_lane_ids, None)
         .expect("apply original operation");
     let rollback = || state.rollback_lane_geometry_updates(&update.previous_lane_config, &update.updated_lane_config,
         &update.previous_lane_incarnations, &update.previous_lane_incarnation_activation_heights,
@@ -31180,7 +31127,6 @@ state_test! { sync apply_without_execution_persists_da_shard_cursor_journal_in_b
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("result-bearing DA materialization fixture");
@@ -31222,7 +31168,6 @@ signed_first.set_execution_outputs(outputs, fragments, Default::default(),
 Vec::new(),
 Default::default(),
 Default::default(),
-Vec::new(),
 &crate::execution_output_test_support::structural_output_limits()) }.expect("canonical predecessor results");
     store_block_for_state_commit(&state.kura, &signed_first);
     seed_committed_height_for_state_test(&state, 1);
@@ -31243,7 +31188,6 @@ signed_second.set_execution_outputs(outputs, fragments, Default::default(),
 Vec::new(),
 Default::default(),
 Default::default(),
-Vec::new(),
 &crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach canonical results and required AXT policy to the height-mismatch fixture");
     let mut state_block = state.block(signed_second.header());
@@ -31382,7 +31326,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -31840,7 +31784,6 @@ state_test! { sync apply_without_execution_retains_filtered_da_bundle_without_un
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("result-bearing DA cursor-error fixture");
@@ -34492,7 +34435,6 @@ state_test! { sync direct_execution_identity_is_unchanged_by_canonical_output_at
         Vec::new(),
         AxtPolicySnapshot::default(),
         BTreeSet::new(),
-        Vec::new(),
         &limits,
     ).expect("attach canonical full Network output");
     assert!(with_results.has_results());

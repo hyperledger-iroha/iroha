@@ -132,7 +132,6 @@ pub(super) fn ensure_replayed_results_match_committed(
     same_metadata!(axt_envelopes, "AXT envelopes");
     same_metadata!(axt_policy_snapshot, "AXT policy snapshot");
     same_metadata!(axt_transitioned_dataspaces, "AXT transitioned dataspaces");
-    same_metadata!(lane_finality_statements, "lane finality statements");
     Ok(())
 }
 

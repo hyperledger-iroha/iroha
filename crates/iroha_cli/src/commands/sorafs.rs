@@ -73,7 +73,7 @@ use iroha_data_model::{
             RelayEpochMetricsV1, RelayRewardInstructionV1,
         },
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
+    transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
@@ -8722,7 +8722,6 @@ fn build_moderation_transaction(
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
     )?;
     Ok(account.sign_transaction(payload)?)
@@ -10162,14 +10161,11 @@ fn build_repair_action_transaction(
     {
         let account = client.account_client()?;
         account
-            .prepare_transaction(
-                AccountTransactionDraft::new(
-                    [instruction],
-                    FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                )
-                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-            )
+            .prepare_transaction(AccountTransactionDraft::new(
+                [instruction],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
             .and_then(|payload| account.sign_transaction(payload))
     }
     .wrap_err("failed to build caller-signed native SoraFS repair transaction")

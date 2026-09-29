@@ -18,7 +18,7 @@ export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
   "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 24;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 25;
 
 const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
 const BINDING_KEYS = Object.freeze([
@@ -27,7 +27,10 @@ const BINDING_KEYS = Object.freeze([
   "policyChainGenesisHash",
   "schema",
 ]);
-const CHECKPOINT_KEYS = Object.freeze(["contextId", "height"]);
+// Mirrors the sole bounded native checkpoint codec: two 32 MiB frames plus 4 MiB context.
+const MAX_CHECKPOINT_BYTES = 68 * 1024 * 1024;
+const CHECKPOINT_KEYS = Object.freeze(["checkpointNorito"]);
+const VERIFIED_PAGE_KEYS = Object.freeze(["projectionJson", "promotedCheckpointNorito"]);
 const PROJECTION_KEYS = Object.freeze([
   "current_policy",
   "evaluated_block_hash",
@@ -427,17 +430,30 @@ export function normalizeValidationFeeLedgerBindingV1(value) {
   });
 }
 
-/** Normalize one durable checkpoint used for page promotion. */
+function boundedBytes(value, label, maximum) {
+  let view;
+  if (ArrayBuffer.isView(value)) {
+    view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  } else if (value instanceof ArrayBuffer) {
+    view = new Uint8Array(value);
+  } else {
+    throw new TypeError(`${label} must be an ArrayBuffer or ArrayBufferView`);
+  }
+  if (view.byteLength === 0 || view.byteLength > maximum) {
+    throw new TypeError(`${label} must contain 1..${maximum} bytes`);
+  }
+  return Buffer.from(view);
+}
+
+/** Retain full independently selected canonical native checkpoint bytes for page promotion.
+ * Canonical decoding and native verification occur in the native owner, never in JavaScript.
+ */
 export function normalizeValidationFeeCheckpointV1(value) {
   const checkpoint = record(value, "validation-fee checkpoint");
   exactKeys(checkpoint, CHECKPOINT_KEYS, "validation-fee checkpoint");
-  return Object.freeze({
-    height: positiveU64(checkpoint.height, "validation-fee checkpoint.height"),
-    contextId: irohaHash32(
-      checkpoint.contextId,
-      "validation-fee checkpoint.contextId",
-    ),
-  });
+  const bytes = boundedBytes(checkpoint.checkpointNorito, "validation-fee checkpoint.checkpointNorito", MAX_CHECKPOINT_BYTES);
+  // Neither the caller's original view nor a returned view can mutate the retained binding.
+  return Object.freeze({ get checkpointNorito() { return Buffer.from(bytes); } });
 }
 
 function nativeBinding(nativeRuntime) {
@@ -464,8 +480,7 @@ function encodeValidationFeeCurrentPolicyProofRequestV1WithRuntime(
   const normalized = normalizeValidationFeeCheckpointV1(checkpoint);
   const native = nativeBinding(nativeRuntime);
   const encoded = native.validationFeeCurrentPolicyProofRequestV1(
-    normalized.height,
-    Buffer.from(normalized.contextId, "hex"),
+    normalized.checkpointNorito,
   );
   if (!encoded || encoded.length === 0) {
     throw new Error("native validation-fee request encoder returned no bytes");
@@ -495,7 +510,7 @@ function freezeProjection(value) {
 
 /**
  * Locally verify one canonical Norito proof page and return its immutable
- * policy projection. The native verifier performs all consensus cryptography.
+ * policy projection plus the complete promoted checkpoint from that same native verification.
  */
 function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
   nativeRuntime,
@@ -507,24 +522,20 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
   requireNetworkPrefix(networkPrefix);
   const binding = normalizeValidationFeeLedgerBindingV1(bindingValue);
   const checkpoint = normalizeValidationFeeCheckpointV1(checkpointValue);
-  const proof = Buffer.from(proofNorito ?? []);
-  if (
-    proof.length === 0 ||
-    proof.length > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
-  ) {
-    throw new TypeError(
-      `proofNorito must contain 1..${VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES} bytes`,
-    );
-  }
+  const proof = boundedBytes(proofNorito, "proofNorito", VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES);
   const native = nativeBinding(nativeRuntime);
-  const json = native.validationFeeVerifyCurrentPolicyProofV1(
+  const page = record(native.validationFeeVerifyCurrentPolicyProofV1(
     proof,
     Buffer.from(networkIdBytes(binding.networkId, "validation-fee ledger binding.networkId")),
     Buffer.from(binding.policyChainGenesisHash, "hex"),
-    checkpoint.height,
-    Buffer.from(checkpoint.contextId, "hex"),
+    checkpoint.checkpointNorito,
     networkPrefix,
-  );
+  ), "native validation-fee verified page");
+  exactKeys(page, VERIFIED_PAGE_KEYS, "native validation-fee verified page");
+  const promotedCheckpoint = normalizeValidationFeeCheckpointV1({
+    checkpointNorito: page.promotedCheckpointNorito,
+  });
+  const json = page.projectionJson;
   if (typeof json !== "string" || json.length === 0) {
     throw new Error("native validation-fee verifier returned no projection");
   }
@@ -545,9 +556,7 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
     projection.schema !== VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA ||
     projection.version !== 1 ||
     projection.network_id !== binding.networkId.toString() ||
-    projection.policy_chain_genesis_hash !== binding.policyChainGenesisHash ||
-    projection.trusted_checkpoint_context_id !== checkpoint.contextId ||
-    projectedTrustedCheckpointHeight !== checkpoint.height
+    projection.policy_chain_genesis_hash !== binding.policyChainGenesisHash
   ) {
     throw new TypeError(
       "validation-fee verified projection differs from its immutable binding or checkpoint",
@@ -569,6 +578,10 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
       "validation-fee projection.observed_ledger_tip_height",
     ),
   };
+  irohaHash32(
+    normalized.trusted_checkpoint_context_id,
+    "validation-fee projection.trusted_checkpoint_context_id",
+  );
   irohaHash32(
     normalized.evaluated_context_id,
     "validation-fee projection.evaluated_context_id",
@@ -594,7 +607,15 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
     normalized.current_policy,
     "validation-fee projection.current_policy",
   );
-  return freezeProjection(normalized);
+  if (
+    normalized.evaluated_block_height < normalized.trusted_checkpoint_height ||
+    normalized.observed_ledger_tip_height < normalized.evaluated_block_height ||
+    normalized.more_available !== (normalized.evaluated_block_height < normalized.observed_ledger_tip_height) ||
+    (normalized.more_available && normalized.evaluated_block_height === normalized.trusted_checkpoint_height)
+  ) {
+    throw new TypeError("validation-fee checkpoint promotion did not advance consistently");
+  }
+  return Object.freeze({ projection: freezeProjection(normalized), promotedCheckpoint });
 }
 
 /** @internal Create validation-fee consensus codecs for one immutable runtime. */
@@ -632,7 +653,7 @@ export function encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint) {
 
 /**
  * Locally verify one canonical Norito proof page and return its immutable
- * policy projection. The native verifier performs all consensus cryptography.
+ * policy projection plus the complete promoted checkpoint from that same native verification.
  */
 export function verifyValidationFeeCurrentPolicyProofV1(
   proofNorito,

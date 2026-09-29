@@ -72,13 +72,13 @@ pub enum Algorithm {
     /// ML‑DSA (Dilithium) post-quantum signature scheme
     MlDsa = 4,
     #[cfg(feature = "gost")]
-    /// GOST R 34.10-2012 with the CryptoPro 256-bit parameter set A (RFC 4357).
+    /// GOST R 34.10-2012 with the `CryptoPro` 256-bit parameter set A (RFC 4357).
     Gost3410_2012_256ParamSetA = 5,
     #[cfg(feature = "gost")]
-    /// GOST R 34.10-2012 with the CryptoPro 256-bit parameter set B (RFC 4357).
+    /// GOST R 34.10-2012 with the `CryptoPro` 256-bit parameter set B (RFC 4357).
     Gost3410_2012_256ParamSetB = 6,
     #[cfg(feature = "gost")]
-    /// GOST R 34.10-2012 with the CryptoPro 256-bit parameter set C (RFC 4357).
+    /// GOST R 34.10-2012 with the `CryptoPro` 256-bit parameter set C (RFC 4357).
     Gost3410_2012_256ParamSetC = 7,
     #[cfg(feature = "gost")]
     /// GOST R 34.10-2012 512-bit curve, TC26 param set A

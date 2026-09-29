@@ -2217,7 +2217,7 @@ impl Iroha {
     /// # Errors
     /// - Reading telemetry configs
     /// - Telemetry setup
-    /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
+    /// - Initialization of the native Sumeragi node and [`Kura`]
     pub async fn start(
         config: Config,
         genesis: Option<GenesisBlock>,
@@ -2261,7 +2261,7 @@ impl Iroha {
     /// # Errors
     /// - Reading telemetry configs
     /// - Telemetry setup
-    /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
+    /// - Initialization of the native Sumeragi node and [`Kura`]
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub(crate) async fn start_with_runtime_deps(
@@ -2593,12 +2593,11 @@ impl Iroha {
             });
         }
         let (kura, mut block_count) =
-            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
                 &config.kura,
                 &config.nexus.lane_config,
                 &config.nexus.configured_lane_catalog,
                 &config.snapshot.bootstrap,
-                &config.sumeragi.limits,
             )
             .map_err(|err| {
                 let resolved = config.kura.store_dir.resolve_relative_path();
@@ -2607,13 +2606,6 @@ impl Iroha {
                     resolved.display(),
                     config.kura.store_dir.value().display(),
                 ))
-            })
-            .change_context(StartError::InitKura)?;
-        kura.bind_local_peer_id(PeerId::new(config.common.key_pair.public_key().clone()))
-            .map_err(|error| {
-                Report::new(error).attach(
-                    "failed to bind the configured node identity to Kura before runtime start",
-                )
             })
             .change_context(StartError::InitKura)?;
         let provisional_imported_prefix = kura.provisional_snapshot_bootstrap_pending();
@@ -2725,6 +2717,7 @@ impl Iroha {
                 config.snapshot.max_payload_bytes,
                 config.snapshot.resources,
                 verification_key,
+                &config.common.chain,
                 &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 &config.zk,
                 &config.snapshot.bootstrap,
@@ -2827,8 +2820,11 @@ impl Iroha {
                 state.network_id, expected_network_id
             )));
         }
-        // Keep the restored state's display/configuration label aligned with this deployment.
-        state.chain_id = config.common.chain.clone();
+        if state.chain_id != config.common.chain {
+            return Err(Report::new(StartError::InitKura).attach(
+                "restored native chain identity differs from configured consensus instance",
+            ));
+        }
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
@@ -2934,7 +2930,6 @@ impl Iroha {
             state.set_oracle(config.oracle.clone());
             state.set_fraud_monitoring(config.fraud_monitoring.clone());
             state.set_gov(config.gov.clone());
-            state.set_merge_ledger_cache_capacity(config.kura.merge_ledger_cache_capacity);
             log_startup_trace(
                 "irohad.state.runtime_config_applied",
                 startup_trace_started_at,
@@ -3036,7 +3031,6 @@ impl Iroha {
             queue_config.capacity_per_user = std::num::NonZeroUsize::MIN;
             queue_config.max_retained_bytes = std::num::NonZeroU64::MIN;
             queue_config.expired_cull_batch = std::num::NonZeroUsize::MIN;
-            queue_config.plan_journal_max_bytes = 0;
         }
         let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
             queue_config,
@@ -3118,42 +3112,11 @@ impl Iroha {
         };
         if config.kura.init_mode == InitMode::Fast {
             iroha_logger::warn!(
-                "emergency Fast startup left queue journals untouched and disabled transaction admission and proposal selection until a Strict restart"
+                "emergency Fast startup disabled transaction admission and proposal selection until a Strict restart"
             );
         }
-        // TODO(WP8a): the lane-reservation journal is deleted with the lanes; nothing reconciles
-        // it at startup any more (the v2 runtime did), so it is not installed. The QueuePlan
-        // journal keeps ordinary admission durable: a pending transaction survives a restart.
-        if !emergency_fast {
-            let journal_path = config
-                .kura
-                .store_dir
-                .resolve_relative_path()
-                .join("queue_plan_journal.norito");
-            let replayable = queue
-                .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
-                .map_err(|err| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to open queue plan journal {}: {err}",
-                        journal_path.display()
-                    ))
-                })?;
-            let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "failed to replay queue plan journal {}: {err}",
-                    journal_path.display()
-                ))
-            })?;
-            iroha_logger::info!(
-                path = %journal_path.display(),
-                replayable,
-                records = replay_summary.records,
-                replayed = replay_summary.replayed,
-                tombstoned_committed = replay_summary.tombstoned_committed,
-                tombstoned_expired = replay_summary.tombstoned_expired,
-                "queue plan journal installed"
-            );
-        }
+        // Native lanes retain committed inputs in their own block stores. Ordinary pending
+        // admission is local to this process; it cannot acknowledge a QueuePlan certificate.
         let compliance_policy_digest = state
             .lane_compliance_engine()
             .map(|engine| engine.consensus_policy_digest());
@@ -9070,19 +9033,17 @@ fn open_disposable_validation_kura(
 ) -> ReportResult<Arc<Kura>, MainError> {
     let mut kura_config = config.kura.clone();
     kura_config.store_dir = WithOrigin::inline(validation_root.path().join("kura"));
-    let (kura, block_count) =
-        Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
-            &kura_config,
-            &config.nexus.lane_config,
-            &config.nexus.configured_lane_catalog,
-            &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
-            &config.sumeragi.limits,
-        )
-        .map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "failed to initialize disposable Kura for genesis validation: {error}"
-            ))
-        })?;
+    let (kura, block_count) = Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
+        &kura_config,
+        &config.nexus.lane_config,
+        &config.nexus.configured_lane_catalog,
+        &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "failed to initialize disposable Kura for genesis validation: {error}"
+        ))
+    })?;
     if block_count.0 != 0 {
         return Err(Report::new(MainError::Config).attach(format!(
             "disposable genesis validation storage was not empty ({} blocks)",
@@ -10594,7 +10555,7 @@ mod tests {
             "letruntime_nexus=ifemergency_fast{iroha_config::parameters::actual::Nexus::default()}else{nexus_for_runtime_surfaces(&state)};"
         ));
         assert!(compact_source.contains(
-            "letmutqueue_config=config.queue;ifemergency_fast{queue_config.capacity=std::num::NonZeroUsize::MIN;queue_config.capacity_per_user=std::num::NonZeroUsize::MIN;queue_config.max_retained_bytes=std::num::NonZeroU64::MIN;queue_config.expired_cull_batch=std::num::NonZeroUsize::MIN;queue_config.plan_journal_max_bytes=0;}"
+            "letmutqueue_config=config.queue;ifemergency_fast{queue_config.capacity=std::num::NonZeroUsize::MIN;queue_config.capacity_per_user=std::num::NonZeroUsize::MIN;queue_config.max_retained_bytes=std::num::NonZeroU64::MIN;queue_config.expired_cull_batch=std::num::NonZeroUsize::MIN;}"
         ));
         assert!(compact_source.contains(
             "letconfig_update_receivers=ifemergency_fast{None}else{Some(ConfigUpdateReceivers{"
@@ -11132,25 +11093,23 @@ mod tests {
     }
     include!("main/governance_dag_launcher_tests.rs");
     #[test]
-    fn standard_launcher_binds_kura_local_peer_before_start() {
+    fn standard_launcher_configures_kura_proof_limits_before_start() {
         let compact_source: String = include_str!("main.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
         let construct = compact_source
-            .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(")
+            .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(")
             .expect("standard launcher constructs Kura");
-        let bind = compact_source
-            .find(
-                "kura.bind_local_peer_id(PeerId::new(config.common.key_pair.public_key().clone()))",
-            )
-            .expect("standard launcher binds the configured node identity to Kura");
+        let configure = compact_source
+            .find("kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq)")
+            .expect("standard launcher applies configured proof-sidecar limits");
         let start = compact_source
             .find("Kura::start(kura.clone(),supervisor.shutdown_signal())")
             .expect("standard launcher starts Kura");
         assert!(
-            construct < bind && bind < start,
-            "Kura eviction authority must bind the configured local PeerId exactly once before its runtime starts"
+            construct < configure && configure < start,
+            "Kura proof-sidecar limits must be configured before its runtime starts"
         );
     }
     #[test]

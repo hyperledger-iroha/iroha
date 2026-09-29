@@ -2790,8 +2790,6 @@ pub struct Queue {
     pub expired_cull_interval: Duration,
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
-    /// Maximum queue-plan journal size before atomic compaction is considered.
-    pub plan_journal_max_bytes: u64,
 }
 /// Nexus staking configuration (public lanes).
 #[derive(Debug, Clone)]
@@ -3117,33 +3115,6 @@ impl_default!(NexusAtomicPrivateSettlement => {
                 defaults::nexus::atomic_private_settlement::PERMITTED_POLICY_VERSIONS.into(),
         }
 });
-/// Lane-relay emergency override configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct LaneRelayEmergency {
-    /// Whether emergency validator overrides are enabled.
-    pub enabled: bool,
-    /// Minimum multisig threshold required for override transactions.
-    pub multisig_threshold: NonZeroU16,
-    /// Minimum multisig member count required for override transactions.
-    pub multisig_members: NonZeroU16,
-    /// Maximum number of blocks an emergency override may remain active.
-    pub max_ttl_blocks: NonZeroU32,
-}
-impl_default!(LaneRelayEmergency => {
-        Self {
-            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-            multisig_threshold: NonZeroU16::new(
-                defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-            )
-            .expect("default threshold must be non-zero"),
-            multisig_members: NonZeroU16::new(
-                defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-            )
-            .expect("default member count must be non-zero"),
-            max_ttl_blocks: NonZeroU32::new(defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS)
-                .expect("default emergency TTL must be non-zero"),
-        }
-});
 /// Storage component participating in Nexus disk budgeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NexusStorageBudgetComponent {
@@ -3369,8 +3340,6 @@ pub struct Nexus {
     pub axt: NexusAxt,
     /// Governed atomic private cross-dataspace settlement policy.
     pub atomic_private_settlement: NexusAtomicPrivateSettlement,
-    /// Lane-relay emergency override configuration.
-    pub lane_relay_emergency: LaneRelayEmergency,
     /// Validated lane catalog.
     pub lane_catalog: LaneCatalog,
     /// Immutable lane catalog loaded from configuration before runtime lifecycle replay.
@@ -3418,7 +3387,6 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
             atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
-            lane_relay_emergency: LaneRelayEmergency::default(),
             lane_catalog: LaneCatalog::default(),
             configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
@@ -3509,7 +3477,6 @@ struct NexusConsensusPolicyPreimageV1 {
     endorsement: NexusConsensusEndorsementV1,
     axt: NexusConsensusAxtV1,
     atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1,
-    lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
     governance: NexusConsensusGovernanceV1,
     compliance_enabled: bool,
     compliance_audit_only: bool,
@@ -3612,13 +3579,6 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
     sidecar_max_total_bytes: u64,
     default_min_auditor_approvals: u16,
     permitted_policy_versions: Vec<u16>,
-}
-#[derive(Encode)]
-struct NexusConsensusLaneRelayEmergencyV1 {
-    enabled: bool,
-    multisig_threshold: u16,
-    multisig_members: u16,
-    max_ttl_blocks: u32,
 }
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
@@ -3953,12 +3913,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
                 .iter()
                 .copied()
                 .collect(),
-        },
-        lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1 {
-            enabled: nexus.lane_relay_emergency.enabled,
-            multisig_threshold: nexus.lane_relay_emergency.multisig_threshold.get(),
-            multisig_members: nexus.lane_relay_emergency.multisig_members.get(),
-            max_ttl_blocks: nexus.lane_relay_emergency.max_ttl_blocks.get(),
         },
         governance: NexusConsensusGovernanceV1 {
             default_module: nexus.governance.default_module.clone(),
@@ -6450,8 +6404,6 @@ pub struct Kura {
     pub fastpq_artifacts: KuraFastpqArtifactPolicy,
     /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
     pub debug_output_new_blocks: bool,
-    /// Maximum merge-ledger entries cached in memory (0 = default).
-    pub merge_ledger_cache_capacity: usize,
     /// Fsync policy for block persistence.
     pub fsync_mode: FsyncMode,
     /// Interval used when batching fsync calls.
@@ -6687,7 +6639,7 @@ impl_default!(Queue => {
             max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
-            plan_journal_max_bytes: defaults::queue::PLAN_JOURNAL_MAX_BYTES,
+
         }
 });
 /// Node role in consensus participation.
@@ -6823,9 +6775,7 @@ pub struct SumeragiV2RuntimeLimits {
     pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
-    /// QueuePlan admission certificates retained before canonical carrier commitment.
-    pub pending_queue_plan_admission_capacity: NonZeroUsize,
-    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    /// Aggregate bytes retained by pending Kura control-sidecar stores.
     pub pending_control_sidecar_bytes: NonZeroUsize,
     /// Durable merge-signing decisions retained before committed-frontier GC.
     pub merge_signing_guard_record_capacity: NonZeroUsize,
@@ -6876,8 +6826,6 @@ impl_default!(SumeragiV2RuntimeLimits => {
                 defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
             pending_certified_merge_entry_capacity:
                 defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
-            pending_queue_plan_admission_capacity:
-                defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
             pending_control_sidecar_bytes: defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES,
             merge_signing_guard_record_capacity:
                 defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY,
@@ -7480,11 +7428,6 @@ impl Sumeragi {
             self.limits.pending_certified_merge_entry_capacity.get(),
             defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX,
         )?;
-        let pending_queue_plan_admission_capacity = canonical_bounded_size(
-            "sumeragi.limits.pending_queue_plan_admission_capacity",
-            self.limits.pending_queue_plan_admission_capacity.get(),
-            defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
-        )?;
         let pending_control_sidecar_bytes = canonical_bounded_size(
             "sumeragi.limits.pending_control_sidecar_bytes",
             self.limits.pending_control_sidecar_bytes.get(),
@@ -7601,7 +7544,6 @@ impl Sumeragi {
                 merge_sidecar_outbound_bytes_per_source,
                 merge_sidecar_server_request_gates_per_source,
                 pending_certified_merge_entry_capacity,
-                pending_queue_plan_admission_capacity,
                 pending_control_sidecar_bytes,
                 merge_signing_guard_record_capacity,
                 merge_signing_guard_record_bytes,
@@ -7831,9 +7773,7 @@ pub struct SumeragiV2Limits {
     pub merge_sidecar_server_request_gates_per_source: u64,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: u64,
-    /// QueuePlan admission certificates retained before canonical carrier commitment.
-    pub pending_queue_plan_admission_capacity: u64,
-    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    /// Aggregate bytes retained by pending Kura control-sidecar stores.
     pub pending_control_sidecar_bytes: u64,
     /// Durable merge-signing decisions retained before committed-frontier GC.
     pub merge_signing_guard_record_capacity: u64,

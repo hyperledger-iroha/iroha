@@ -39,9 +39,11 @@ SHA-256 pairs for all ten families in the build-script order. Its signature is
 `cuda/provenance.v1.pub` (32 raw bytes). The build verifies that signature and
 fingerprint before reading artifacts. Symlinks, extra manifest fields, changed
 source/PTX bytes and divergent generation digests are rejected.
-The environment-supplied fingerprint is only a qualification input until the
-release pipeline pins the actual signer identity in reviewed source or a signed
-release manifest; setting it manually does not qualify a signer or artifact.
+The build environment receives this fingerprint from the release producer.
+The release pipeline requires its independently reviewed value explicitly via
+`--trusted-cuda-key-sha256`, and binds it plus the exact source manifest digest
+in the single authenticated prebuilt V1 `acceleration` record. Setting an
+environment value alone does not qualify a signer or artifact.
 The build exposes the signed `cuda_image_sha256` claim as
 `IVM_CUDA_SIGNED_IMAGE_SHA256` to the compiled IVM crate. A release runner must
 compare it with an independently measured, pinned toolkit image; this build
@@ -104,8 +106,9 @@ directory and setting `IVM_CUDA_TRUSTED_KEY_SHA256` before those checks would
 only make the build admit a self-consistent signature; it would not establish
 release qualification. Use `IVM_CUDA_PTX_MODE=check` to reproduce the reviewed
 PTX bytes with the same toolkit and flags, followed by bundled-mode hardware
-tests. The checked-in PTX and ordinary release CUDA feature remain gated until
-these inputs and tests exist.
+tests. Canonical Linux shipping producers require the CUDA feature and signed bundle;
+they fail closed until these inputs and tests exist. Ordinary development Cargo
+builds without CUDA remain independent of the toolkit and driver.
 
 ## Release blocker
 

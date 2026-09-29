@@ -58,7 +58,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        70 + usize::from(cfg!(feature = "telemetry"))
+        64 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),
@@ -154,7 +154,6 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "world.sumeragi_lanes",
         "world.kagemusha_verifier_registry",
         "state.transactions",
-        "state.merge_admission",
         "state.canonical_runtime",
         "state.pipeline",
         "state.oracle",
@@ -237,11 +236,30 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
     for id in [
         "world.external_event_buf",
         "state.trigger_ivm_cache",
-        "state.sumeragi_v2_pending_evidence",
+        "state.native_pending_evidence",
         "state.view_generation",
     ] {
         assert!(matches!(fields[id].role, Role::Local(_)), "{id}");
     }
+}
+
+#[test]
+fn native_execution_tip_is_authenticated_history_without_a_snapshot_decoder() {
+    let fields = fields();
+    let tip = fields["state.native_execution_tip"];
+    let Role::History {
+        source,
+        authentication,
+    } = tip.role
+    else {
+        panic!("native execution tip must remain outside the World commitment");
+    };
+    assert!(source.contains("current and undo"));
+    assert!(authentication.contains("output seal"));
+    assert!(authentication.contains("configured chain/network"));
+    assert_eq!(tip.disclosure, Disclosure::CommitmentOnly);
+    assert!(!fields.contains_key("state.lane_consensus_contexts"));
+    assert!(!fields.contains_key("state.merge_admission"));
 }
 
 #[test]

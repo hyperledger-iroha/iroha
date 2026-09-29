@@ -300,7 +300,6 @@ impl SignedBlock {
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
         axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
-        lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         limits: &output_budget::ExecutionOutputLimits,
     ) -> Result<(), SetExecutionOutputsError> {
         self.validate_proposal_commitments()
@@ -322,7 +321,6 @@ impl SignedBlock {
             axt_envelopes,
             axt_policy_snapshot,
             axt_transitioned_dataspaces,
-            lane_finality_statements,
         };
         let candidate = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),
@@ -402,13 +400,6 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| result.committed_fragment_count)
-    }
-    /// Borrow canonical post-execution lane-finality statements.
-    #[must_use]
-    pub fn lane_finality_statements(&self) -> &[crate::nexus::LaneFinalityStatement] {
-        self.result
-            .as_ref()
-            .map_or(&[], |result| result.lane_finality_statements.as_slice())
     }
     /// Produce a network-input proof joined to its exact typed Network output.
     /// The output position and complete input position are independent indices.
@@ -2414,7 +2405,6 @@ mod tests {
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
-            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
             outputs: Vec::new(),
@@ -2423,7 +2413,6 @@ mod tests {
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             axt_transitioned_dataspaces: BTreeSet::new(),
-            lane_finality_statements: Vec::new(),
         };
         let bytes = omitted_snapshot.encode();
         let mut cursor = bytes.as_slice();
@@ -2433,9 +2422,9 @@ mod tests {
         );
     }
     #[test]
-    fn block_result_rejects_wire_omitting_required_lane_finality_statements() {
+    fn block_result_native_layout_roundtrips_without_retired_lane_statements() {
         #[derive(norito::codec::Encode)]
-        struct BlockResultWithoutLaneFinalityStatements {
+        struct NativeBlockResult {
             outputs: Vec<execution_output::ExecutionOutputV1>,
             output_merkle: MerkleTree<execution_output::ExecutionOutputV1>,
             committed_fragment_count: u64,
@@ -2444,7 +2433,7 @@ mod tests {
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
             axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
         }
-        let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
+        let native_result = NativeBlockResult {
             outputs: Vec::new(),
             output_merkle: MerkleTree::default(),
             committed_fragment_count: 0,
@@ -2456,11 +2445,25 @@ mod tests {
             },
             axt_transitioned_dataspaces: BTreeSet::new(),
         };
-        let bytes = omitted_lane_finality.encode();
+        let bytes = native_result.encode();
         let mut cursor = bytes.as_slice();
+        let decoded = BlockResult::decode_all(&mut cursor).expect("current native output layout");
+        assert_eq!(decoded.encode(), bytes, "exact native Norito roundtrip");
+        assert!(cursor.is_empty());
+        let mut json = norito::json::to_value(&decoded).expect("native result JSON");
+        json.as_object_mut().unwrap().insert(
+            "lane_finality_statements".to_owned(),
+            norito::json::Value::Array(Vec::new()),
+        );
         assert!(
-            BlockResult::decode_all(&mut cursor).is_err(),
-            "lane-finality statements are a required V1 BlockResult wire field"
+            norito::json::from_value::<BlockResult>(json).is_err(),
+            "removed lane statements are not an optional JSON field"
+        );
+        let mut retired = bytes.clone();
+        retired.extend_from_slice(&Vec::<crate::nexus::LaneFinalityStatement>::new().encode());
+        assert!(
+            BlockResult::decode_all(&mut retired.as_slice()).is_err(),
+            "retired trailing lane statements must not be accepted"
         );
     }
     #[test]
@@ -2473,7 +2476,6 @@ mod tests {
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_transition_set = BlockResultWithoutAxtTransitionSet {
             outputs: Vec::new(),
@@ -2485,7 +2487,6 @@ mod tests {
                 version: 1,
                 entries: Vec::new(),
             },
-            lane_finality_statements: Vec::new(),
         };
         let bytes = omitted_transition_set.encode();
         let mut cursor = bytes.as_slice();
@@ -3704,7 +3705,6 @@ mod tests {
                 Vec::new(),
                 crate::nexus::AxtPolicySnapshot::default(),
                 BTreeSet::new(),
-                vec![],
                 &fixture::limits(),
             )
             .expect("empty block has no external hash prefix to validate");
@@ -3716,7 +3716,6 @@ mod tests {
         let mut block = fixture::proposal(1);
         let header = block.header();
         let proposal = block.canonical_proposal_wire_hash().unwrap();
-        assert!(block.lane_finality_statements().is_empty());
         block
             .set_execution_outputs(
                 vec![network(0, Ok(Vec::default()))],
@@ -3725,11 +3724,9 @@ mod tests {
                 vec![],
                 crate::nexus::AxtPolicySnapshot::default(),
                 BTreeSet::from([iroha_model_base::topology::DataSpaceId::new(9)]),
-                vec![],
                 &fixture::limits(),
             )
             .unwrap();
-        assert!(block.lane_finality_statements().is_empty());
         assert_eq!(block.axt_transitioned_dataspaces().unwrap().len(), 1);
         assert_eq!(block.committed_fragment_count(), Some(3));
         assert_eq!(block.header(), header);
@@ -3788,7 +3785,6 @@ mod tests {
                 Vec::new(),
                 snapshot,
                 BTreeSet::new(),
-                vec![],
                 &fixture::limits(),
             )
             .unwrap_err();
@@ -3898,7 +3894,6 @@ mod tests {
                 vec![axt_envelope.clone()],
                 policy_snapshot,
                 BTreeSet::new(),
-                vec![],
                 &fixture::limits(),
             )
             .expect("entrypoint hash should match payload");

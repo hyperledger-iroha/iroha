@@ -90,7 +90,6 @@ class JsonValueJavaConsumerTest {
     genesis[31] = 1;
     return new TransactionPayload(NetworkId.fromBytes(genesis), authority, 1_735_369_000_000L,
         Executable.ivm(new byte[] {1}), 100_000L, null,
-        FeePaymentIntent.authority(Collections.emptyList(), 1L), TransactionAdmissionIntent.ORDINARY,
-        metadata, null);
+        FeePaymentIntent.authority(Collections.emptyList(), 1L), metadata, null);
   }
 }

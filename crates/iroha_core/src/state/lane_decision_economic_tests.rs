@@ -785,7 +785,6 @@ fn native_economic_fixture_from_state_with_initializer(
             Vec::new(),
             AxtPolicySnapshot::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("admission-only fixture binds its exact empty Network result");

@@ -201,7 +201,7 @@ impl Kura {
                     None,
                     None,
                     "retention-window prune",
-                    Some(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES),
+                    Some(256 * 1024 * 1024),
                 )
             }
             IndexedSidecarRewrite::RetainAfterTerminalFrontier {

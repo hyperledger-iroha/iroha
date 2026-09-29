@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use iroha_core::{kura::Kura, smartcontracts::isi::tx};
+use iroha_core::{smartcontracts::isi::tx, state::State};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
@@ -16,14 +16,19 @@ fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
 
 /// Authenticate and bound the whole carrier before projecting any output.
 pub(crate) fn read_carrier(
-    kura: &Kura,
+    state: &State,
     height: NonZeroUsize,
     hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
 ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
-    tx::read_finalized_execution_carrier(kura, height, hash, max_work, max_bytes)
-        .map(|carrier| carrier.into_block())
+    let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
+    if carrier.block().hash() != hash {
+        return Err(invalid(
+            "native execution differs from its independently selected hash",
+        ));
+    }
+    Ok(carrier.into_block())
 }
 
 /// Borrow signed calls after validating the complete output join; never zip trees.
@@ -58,7 +63,7 @@ pub(crate) fn signed_calls(
 /// Resolve a unique ordinary signed submission from exact authenticated history.
 /// Reveals and internal invocations cannot impersonate an external submission.
 pub(crate) fn exact_external_outcome(
-    kura: &Kura,
+    state: &State,
     height: NonZeroUsize,
     hash: HashOf<BlockHeader>,
     target: &HashOf<SignedTransaction>,
@@ -67,7 +72,7 @@ pub(crate) fn exact_external_outcome(
     let mut outcome = None;
     let mut duplicate = false;
     let header = tx::visit_finalized_network_transactions(
-        kura,
+        state,
         height,
         hash,
         work,
@@ -175,7 +180,6 @@ mod tests {
                 vec![],
                 Default::default(),
                 Default::default(),
-                vec![],
                 &iroha_data_model::block::output_budget::ExecutionOutputLimits {
                     max_outputs: 16,
                     max_output_bytes: 1024 * 1024,
@@ -252,13 +256,17 @@ mod tests {
 
     #[test]
     fn read_carrier_rejects_zero_budget_and_missing_finality() {
-        let kura = Kura::blank_kura_for_testing();
+        let state = State::new(
+            iroha_core::state::World::new(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
         let block = with_outputs();
         let height = NonZeroUsize::new(2).unwrap();
         assert!(matches!(
-            read_carrier(&kura, height, block.hash(), 0, 1),
+            read_carrier(&state, height, block.hash(), 0, 1),
             Err(QueryExecutionFail::GasBudgetExceeded)
         ));
-        assert!(read_carrier(&kura, height, block.hash(), 16, 1024 * 1024).is_err());
+        assert!(read_carrier(&state, height, block.hash(), 16, 1024 * 1024).is_err());
     }
 }

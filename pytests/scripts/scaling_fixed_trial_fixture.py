@@ -30,7 +30,7 @@ def plan(lanes=4):
     generator=trial.GeneratorPlan('trial-test-chain',lanes,4,'127.0.0.1','127.0.0.1',8080,1337)
     load=trial.NativeLoadPlan(1,'one_lane' if lanes==1 else 'four_lane','a'*64,'40',100_000_000,
         200_000_000,10_000_000,0,2,2,20,4,32,4,1,256,10,4,2)
-    reader=trial.ReaderBudget(1000,8*budget.MIB,65536,budget.MIB,1000,budget.MIB,2*budget.MIB,os.geteuid())
+    reader=trial.ReaderBudget(1000, 8*budget.MIB, 65536, budget.MIB, 2*budget.MIB, os.geteuid())
     collection=trial.CollectionLimits(65536,65536,budget.MIB,4096,1000,1000,4*budget.MIB)
     facts=trial.FactsBudget(65536,65536,65536,65536,8*budget.MIB,65536,
         8*budget.MIB+65536,8*budget.MIB,4*budget.MIB,2*budget.MIB,2*budget.MIB,1000,128,1024)

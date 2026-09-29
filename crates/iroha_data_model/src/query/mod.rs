@@ -2296,17 +2296,17 @@ mod model {
 impl CommittedTransaction {
     /// Selective exact Network input/output inclusion. The caller MUST first
     /// authenticate this header, complete `ExecutionCommitment`, native `NetworkId`
-    /// and four-validator context from its independently pinned finality root.
+    /// and exact authenticated epoch committee from its independently pinned finality root.
+    /// Passing a raw commitment only checks inclusion and never creates a finality capability.
     /// This method does not authorize disclosing the selected record.
     #[must_use]
     pub fn verify_selective_in_authenticated_execution(
         &self,
         expected_network: &crate::NetworkId,
         header: &crate::block::BlockHeader,
-        commitment: &crate::block::consensus_v2::ExecutionCommitment,
+        commitment: &crate::sumeragi_finality::ExecutionCommitment,
     ) -> bool {
         if commitment.validate().is_err()
-            || commitment.merge_carrier.is_some()
             || self.block_hash != header.hash()
             || self.entrypoint_hash != self.entrypoint.hash()
             || self.output_hash != HashOf::new(&self.output)
@@ -2344,7 +2344,7 @@ impl CommittedTransaction {
     pub fn verify_inclusion_in_authenticated_execution(
         &self,
         block: &SignedBlock,
-        commitment: &crate::block::consensus_v2::ExecutionCommitment,
+        commitment: &crate::sumeragi_finality::ExecutionCommitment,
     ) -> bool {
         if commitment.transaction_input_commitment != block.network_input_merkle_commitment()
             || commitment.transaction_output_commitment != block.output_merkle_commitment()
@@ -2359,10 +2359,6 @@ impl CommittedTransaction {
         };
         u64::try_from(wire.len()).ok() == Some(commitment.executed_block_wire_len)
             && Hash::new(&wire) == commitment.executed_block_wire_hash
-            && commitment.merge_carrier.is_none()
-            && block.execution_context().is_none_or(|context| {
-                context.has_current_version() && context.merge_entry.is_none()
-            })
             && self.verify_inclusion_in_block(block)
     }
     /// Structural inclusion under exact full-wire commitments. The caller must authenticate

@@ -57,47 +57,21 @@ struct AcquiredKuraPublicationFences<'kura> {
     geometry: Option<PublicationGuard<'kura>>,
     canonical: Option<PublicationGuard<'kura>>,
     prune: Option<PublicationGuard<'kura>>,
-    cold_sidecar: Option<concread::release::DeferredReleaseBatch>,
 }
 
 /// Original notifications after every physical Kura owner has unlocked.
 #[must_use = "retain Kura cleanup through every enclosing physical owner"]
 pub(crate) struct KuraPublicationCleanup {
     _fences: [Option<concread::release::DeferredRelease>; 4],
-    _cold_sidecar: Option<concread::release::DeferredReleaseBatch>,
 }
 
 impl<'kura> AcquiredKuraPublicationFences<'kura> {
-    fn new(kura: &'kura Kura) -> Self {
+    fn new() -> Self {
         Self {
             sidecar: None,
             geometry: None,
             canonical: None,
             prune: None,
-            cold_sidecar: Some(kura.sidecar_lock.deferred_releases()),
-        }
-    }
-
-    /// Unlock for merge-log access while the original outer owners retain wakes.
-    fn release_cold_sidecar(&mut self) -> Result<(), KuraPublicationPreparationError> {
-        let sidecar = self.sidecar.take().expect("original cold sidecar guard");
-        match sidecar.try_release_into(
-            self.cold_sidecar
-                .as_mut()
-                .expect("original sidecar release batch"),
-        ) {
-            Ok(()) => Ok(()),
-            Err(sidecar) => {
-                // Preserve even an invalid source substitution for joint cleanup.
-                // Nothing was unlocked or notified by the refused transfer.
-                self.sidecar = Some(sidecar);
-                Err(KuraPublicationPreparationError::Storage(
-                    Error::PruneIntentConflict(
-                        "publication sidecar release belongs to a foreign physical owner"
-                            .to_owned(),
-                    ),
-                ))
-            }
         }
     }
 
@@ -111,7 +85,6 @@ impl<'kura> AcquiredKuraPublicationFences<'kura> {
                     .map(PublicationGuard::release_deferred),
                 self.prune.take().map(PublicationGuard::release_deferred),
             ],
-            _cold_sidecar: self.cold_sidecar.take(),
         }
     }
 
@@ -123,157 +96,17 @@ impl<'kura> AcquiredKuraPublicationFences<'kura> {
 impl Drop for AcquiredKuraPublicationFences<'_> {
     fn drop(&mut self) {
         // The fixed cleanup owner is built only after all four physical unlocks.
-        // Empty slots and an unused cold batch cannot signal an unacquired lock.
+        // Empty slots cannot signal an unacquired lock.
         drop(self.take_cleanup());
     }
 }
 
 impl Kura {
-    /// Promote exact standalone witness custody under the original storage fences.
-    /// The retained carrier uses its existing lease and these same private cores.
-    pub(crate) fn promote_kagemusha_finality_sidecar(
+    fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(
         &self,
-        artifact: &super::V2FinalityArtifact,
-        receipt: &super::KuraV2CommitReceipt,
-    ) -> super::Result<()> {
-        self.durable_mutation_authorized()?;
-        let mut fences = AcquiredKuraPublicationFences::new(self);
-        fences.prune = Some(self.prune_lock.lock());
-        self.ensure_prune_recovery_not_required()?;
-        fences.canonical = Some(self.canonical_chain_lock.lock());
-        self.authenticate_kagemusha_finality_receipt_under_publication_guards(artifact, receipt)?;
-        fences.sidecar = Some(self.sidecar_lock.lock());
-        self.promote_kagemusha_finality_sidecar_under_sidecar_guard(artifact, receipt)
-    }
-
-    /// Capture immutable pending-byte accounting before acquiring geometry/sidecar.
-    /// The caller owns prune and canonical fences. Cold merge lookups must return
-    /// the actual sidecar release observation instead of blocking behind its owner.
-    fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards<'kura>(
-        &'kura self,
-        fences: &mut AcquiredKuraPublicationFences<'kura>,
     ) -> Result<u64, KuraPublicationPreparationError> {
-        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
-            return Ok(0);
-        }
-        let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
-        self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash| {
-            fences.sidecar = Some(self.sidecar_lock.try_lock_or_wait().map_err(|wait| {
-                KuraPublicationPreparationError::Busy {
-                    field: "sidecar_lock",
-                    wait,
-                }
-            })?);
-            let pending = self.pending_merge_entry_by_hash_under_sidecar_guard(hash)?;
-            fences.release_cold_sidecar()?;
-            self.merge_entry_by_hash_after_sidecar(hash, pending)
-                .map_err(KuraPublicationPreparationError::Storage)
-        })
-    }
-
-    /// Reauthenticate the original participant owner before live Apply stages State.
-    ///
-    /// Live Apply still owns a borrowed StateBlock and cannot retain decided work
-    /// across a local lock refusal. Preserve its blocking publication lock order.
-    /// The same check is available on a try-acquired lease for a retained consumer;
-    /// that consumer still requires its original staged-frontier/source custody.
-    /// Every Kura fence is released before this returns, so this is a durable join
-    /// before staging, not custody through State visibility.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: wire native consensus owner")
-    )]
-    pub(crate) fn reauthenticate_native_amx_prepublication(
-        &self,
-        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
-        block: &super::SignedBlock,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality: &super::V2FinalityArtifact,
-        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
-    ) -> super::Result<()> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        let mut fences = AcquiredKuraPublicationFences::new(self);
-        fences.prune = Some(self.prune_lock.lock());
-        self.ensure_prune_recovery_not_required()?;
-        fences.canonical = Some(self.canonical_chain_lock.lock());
-        fences.geometry = Some(self.lane_geometry_lock.lock());
-        fences.sidecar = Some(self.sidecar_lock.lock());
-        let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(
-            token, block, manifest, finality, frontiers,
-        );
-        drop(fences);
-        result
-    }
-
-    /// Read-only participant reauthentication under this original Kura's four
-    /// publication fences. The live wrapper and retained lease share this oracle.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: wire native consensus owner")
-    )]
-    fn reauthenticate_native_amx_prepublication_under_publication_guards(
-        &self,
-        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
-        block: &super::SignedBlock,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality: &super::V2FinalityArtifact,
-        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
-    ) -> super::Result<()> {
-        let invalid = |message| Kura::invalid_lane_artifact_error(self.store_root.clone(), message);
-        self.ensure_prune_recovery_not_required()?;
-        self.ensure_canonical_storage_not_poisoned()?;
-        if !token.original_kura.matches(self) {
-            return Err(invalid(
-                "Native AMX prepublication token belongs to another Kura instance",
-            ));
-        }
-        if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {
-            return Err(invalid(
-                "Native AMX prepublication token differs from its exact State frontier projection",
-            ));
-        }
-        // Authenticate durable canonical/finality even for an empty manifest;
-        // an empty participant list is not authority for a foreign carrier.
-        let Some((header, durable_finality)) = self
-            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
-                token.application_block_height,
-            )?
-        else {
-            return Err(invalid(
-                "Native AMX prepublication finality read-back is unavailable",
-            ));
-        };
-        if header != block.header()
-            || super::HashOf::new(&durable_finality) != token.finality_artifact_hash
-        {
-            return Err(invalid(
-                "Native AMX prepublication finality read-back differs from its original carrier",
-            ));
-        }
-        let artifacts = super::native_amx_participant_application_artifacts(
-            manifest,
-            token.finality_artifact_hash,
-        )
-        .ok_or_else(|| invalid("Native AMX prepublication artifact projection failed"))?;
-        if artifacts.len() != token.identities.len() {
-            return Err(invalid(
-                "Native AMX prepublication artifacts do not cover every original frontier",
-            ));
-        }
-        for ((expected_manifest, expected_receipt), expected_identity) in
-            artifacts.iter().zip(&token.identities)
-        {
-            let actual = self
-                .authenticate_native_amx_participant_application_prepublication_under_publication_guards(
-                    expected_manifest, expected_receipt, false,
-                )?;
-            if actual != *expected_identity {
-                return Err(invalid(
-                    "Native AMX durable participant differs from its original read-back identity",
-                ));
-            }
-        }
-        Ok(())
+        self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+            .map_err(KuraPublicationPreparationError::Storage)
     }
 
     /// Acquire prune, canonical, geometry and sidecar ownership without waiting.
@@ -296,15 +129,15 @@ impl Kura {
         // lock-release dependency, even when another physical owner is busy.
         self.ensure_canonical_storage_not_poisoned()
             .map_err(KuraPublicationPreparationError::Storage)?;
-        let mut fences = AcquiredKuraPublicationFences::new(self);
+        let mut fences = AcquiredKuraPublicationFences::new();
         fences.prune = Some(acquire("prune_lock", &self.prune_lock)?);
         // Active pruning also sets this flag while it owns prune_lock. Only
         // classify it as restart-required after acquiring that actual owner.
         self.ensure_prune_recovery_not_required()
             .map_err(KuraPublicationPreparationError::Storage)?;
         fences.canonical = Some(acquire("canonical_chain_lock", &self.canonical_chain_lock)?);
-        let pending_canonical_bytes = self
-            .try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(&mut fences)?;
+        let pending_canonical_bytes =
+            self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         fences.geometry = Some(acquire("lane_geometry_lock", &self.lane_geometry_lock)?);
         fences.sidecar = Some(acquire("sidecar_lock", &self.sidecar_lock)?);
         self.ensure_prune_recovery_not_required()
@@ -342,7 +175,6 @@ impl<'kura> KuraPublicationLease<'kura> {
                 geometry: Some(geometry),
                 canonical: Some(canonical),
                 prune: Some(prune),
-                cold_sidecar: Some(kura.sidecar_lock.deferred_releases()),
             },
         }
     }
@@ -370,123 +202,6 @@ impl KuraPublicationLease<'_> {
     /// This grants no source, finality or mutation authorization.
     pub(crate) fn belongs_to(&self, kura: &Kura) -> bool {
         std::ptr::eq(self.kura, kura)
-    }
-
-    /// Rejoin one move-only participant token to its original Kura and exact State projection.
-    ///
-    /// Every manifest, receipt and latest index is read again under this lease's
-    /// original prune/canonical/geometry/sidecar fences. This neither writes nor
-    /// reacquires a fence, and it grants no State or source authorization. The
-    /// caller must admit canonical decoding and proof work before acquisition.
-    // TODO: enable this production entry only when the retained publisher owns
-    // its original staged participant frontiers and complete source authority.
-    #[cfg(test)]
-    pub(crate) fn reauthenticate_native_amx_prepublication(
-        &self,
-        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
-        block: &super::SignedBlock,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality: &super::V2FinalityArtifact,
-        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
-    ) -> super::Result<()> {
-        self.kura
-            .reauthenticate_native_amx_prepublication_under_publication_guards(
-                token, block, manifest, finality, frontiers,
-            )
-    }
-
-    /// Rejoin exact durable finality/checkpoint under this original held boundary.
-    ///
-    /// This uses only already-guarded Kura readers and never reacquires the four
-    /// fences. It must precede State writer acquisition; the caller admits the
-    /// bounded decoding, body/finality cache and verification work in advance.
-    /// Success proves this storage join only, never source or State permission.
-    pub(crate) fn reauthenticate_checkpoint(
-        &self,
-        receipt: &super::KuraWsvCheckpointReceipt,
-        finality: &super::V2FinalityArtifact,
-        state_hash: iroha_crypto::Hash,
-    ) -> super::Result<()> {
-        self.kura
-            .reauthenticate_checkpoint_under_publication_guards(receipt, finality, state_hash)
-    }
-
-    /// Observe exact published finality and its local result-bearing body under
-    /// this original held boundary without reacquiring any publication fence.
-    ///
-    /// Uses the standalone first-admission reader's full validation. Missing or
-    /// corrupt proof and occupied body corruption remain errors; authenticated
-    /// evicted/imported-prefix body absence remains `None`. The read has no body
-    /// cache effects and grants no source or State publication authorization.
-    pub(crate) fn read_first_admission_carrier(
-        &self,
-        height: std::num::NonZeroUsize,
-        expected_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-    ) -> super::Result<super::lane_admission_source::FinalizedAdmissionCarrierReadV1> {
-        self.kura
-            .read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)
-    }
-
-    /// Publish the original witness without releasing or reacquiring this boundary.
-    ///
-    /// The caller must first join its original source and checkpoint on this lease.
-    /// Exact durable artifact/receipt authentication precedes every stage mutation;
-    /// the common proof, no-clobber, readback and cleanup cores retain all four
-    /// physical fences through final witness authentication. This grants no State
-    /// publication authority and cannot substitute for that complete source join.
-    pub(crate) fn publish_execution_witness(
-        &self,
-        finality: &super::V2FinalityArtifact,
-        receipt: &super::KuraV2CommitReceipt,
-        witness: &super::ExecWitness,
-        parliament_timed_ovn_casting_bindings: &[super::ParliamentTimedOvnCastingContextBindingV1],
-    ) -> super::Result<()> {
-        self.kura.durable_mutation_authorized()?;
-        self.kura
-            .authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;
-        let staged = Kura::prepare_kagemusha_finality_sidecar(
-            finality.height,
-            finality.block_hash,
-            witness,
-            finality.commit_qc.execution_commitment,
-            parliament_timed_ovn_casting_bindings,
-        )?;
-        self.kura
-            .stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;
-        self.kura
-            .promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;
-        self.reauthenticate_execution_witness(finality)
-    }
-
-    /// Require the final witness projection under the original publication fences.
-    ///
-    /// The caller has already joined exact durable body/finality/checkpoint on
-    /// this lease. Missing or staged-only material grants no permission. This
-    /// bounded reader acquires no publication lock, verifies every retained
-    /// witness root and the exact finality artifact, then rejoins read identity.
-    pub(crate) fn reauthenticate_execution_witness(
-        &self,
-        finality: &super::V2FinalityArtifact,
-    ) -> super::Result<()> {
-        let path = self.kura.kagemusha_finality_sidecar_path(finality.height);
-        let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else {
-            return Err(Error::KagemushaFinalitySidecar(
-                "State publication requires its final execution witness sidecar".to_owned(),
-            ));
-        };
-        Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;
-        let directory = self.kura.kagemusha_finality_sidecar_dir();
-        let current = self.kura.regular_sidecar_metadata(&path, &directory)?;
-        if !current
-            .as_ref()
-            .is_some_and(|current| Kura::stable_sidecar_metadata_unchanged(&read.metadata, current))
-        {
-            return Err(Error::KagemushaFinalitySidecar(
-                "final execution witness sidecar changed during publication authentication"
-                    .to_owned(),
-            ));
-        }
-        Ok(())
     }
 }
 

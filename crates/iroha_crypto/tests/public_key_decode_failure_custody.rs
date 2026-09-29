@@ -211,7 +211,7 @@ fn archived(bytes: &[u8], flags: u8) -> Result<PublicKey, Error> {
     let view = norito::core::archived_from_slice::<u8>(bytes)?;
     PublicKey::try_deserialize(view.archived().cast::<PublicKey>())
 }
-fn fixed_key_error(result: Result<PublicKey, Error>) {
+fn fixed_key_error(result: &Result<PublicKey, Error>) {
     assert!(matches!(
         result,
         Err(Error::InvalidValue {
@@ -239,7 +239,7 @@ fn all_algorithms_reject_invalid_borrowed_material_without_allocations() {
                 let (result, calls) =
                     observe(|| PublicKey::from_bytes_for_decode(algorithm, &invalid));
                 assert_eq!(calls, 0, "{algorithm:?}, length {}", invalid.len());
-                fixed_key_error(result);
+                fixed_key_error(&result);
             }
         }
     }
@@ -316,7 +316,7 @@ fn binary_entrypoints_validate_before_allocation_for_all_algorithms_and_layouts(
                         Some(0xff) => {
                             assert!(matches!(result, Err(Error::InvalidTag { tag: 0xff, .. })))
                         }
-                        _ => fixed_key_error(result),
+                        _ => fixed_key_error(&result),
                     }
                 }
             }

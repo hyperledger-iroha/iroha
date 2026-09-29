@@ -13,6 +13,8 @@ pub mod index_status;
 mod journal_io;
 /// Original complete native context projection archive, authenticated by canonical R.
 pub mod native_context_archive;
+/// Historical receipt openings from original writes and native certified execution.
+pub mod native_receipts;
 pub mod pagination;
 pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;
@@ -153,7 +155,7 @@ pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: 
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
+    let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
     stx.world.consensus_evidence.insert(key, record);
     stx.apply();
     block

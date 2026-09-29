@@ -543,8 +543,8 @@ streamed body above the effective route limit fails with typed `413`
 `request_payload_too_large` before decoding.
 
 Top-up validation requires the outer transaction and embedded request to name
-the exact runtime `NetworkId`, a valid transaction signature, the
-signature-bound `QueuePlanSynced` admission intent, exactly one direct native
+the exact runtime `NetworkId`, a valid signature over the canonical nine-field
+transaction payload, exactly one direct native
 `TopUpKagemushaV1` instruction, and transaction authority equal to the embedded
 payer. Torii submits those exact caller-signed bytes through strict durable
 ingress; it neither rebuilds nor signs a top-up. The optional configured issuer

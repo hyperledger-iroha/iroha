@@ -221,7 +221,7 @@ impl ZkX509WitnessV1 {
             // Preserve the relation's precise shape error without encoding it
             // in an allocated Norito message. Framing remains Norito-owned.
             let mut shape_error = None;
-            view.decode_exact_with::<Self, _>(|payload| {
+            view.decode_exact_with::<Self, Self, _>(|payload| {
                 decode_witness_payload_v1(payload)
                     .map(|witness| (witness, payload.len()))
                     .map_err(|error| {

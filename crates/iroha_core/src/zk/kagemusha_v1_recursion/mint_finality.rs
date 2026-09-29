@@ -13,23 +13,19 @@ use halo2_proofs::halo2curves::{
     pasta::{EpAffine, EqAffine, Fp, Fq},
 };
 use iroha_data_model::{
-    block::consensus_v2::{
-        ExecutionCommitment, GlobalPhase, HeightContext, QuorumCertificate, Vote,
-    },
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalitySealShareV1,
-        KagemushaMintFinalitySeatReadinessContextV1, KagemushaMintFinalityValidatorKeysV1,
-        KagemushaMintFinalityValidatorSealV1, KagemushaOperationKindV1,
-        KagemushaPastaSchnorrSignatureV1, KagemushaReserveReceiptV1, KagemushaTopUpLeafV1,
-        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_candidate_possession_digest_v1,
-        kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalitySeatReadinessContextV1,
+        KagemushaMintFinalityValidatorKeysV1, KagemushaMintFinalityValidatorSealV1,
+        KagemushaOperationKindV1, KagemushaPastaSchnorrSignatureV1, KagemushaReserveReceiptV1,
+        KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
+        kagemusha_mint_finality_candidate_possession_digest_v1, kagemusha_mint_finality_root_v1,
     },
     kagemusha::KagemushaPastaStateCommitmentV1,
 };
-use norito::codec::{DecodeAll as _, Encode};
+use norito::codec::Encode;
 use sha2::{Digest as _, Sha256, Sha512};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -45,8 +41,6 @@ use crate::zk::kagemusha_v1_poseidon::{
 pub(super) const MINT_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmmntl1");
 const MINT_EMPTY_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgminte1");
 pub(super) const MINT_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmmntn1");
-const SUBJECT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:subject";
-const EXECUTION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:execution-commitment";
 const KEY_DERIVATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:key";
 const NONCE_DERIVATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:nonce";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:challenge";
@@ -71,9 +65,6 @@ pub enum KagemushaMintFinalityErrorV1 {
     /// One Eq or Ep Schnorr equation failed.
     #[error("invalid Kagemusha mint-finality signature: {0}")]
     InvalidSignature(String),
-    /// Canonical auxiliary payload decoding failed.
-    #[error("invalid Kagemusha mint-finality auxiliary payload: {0}")]
-    InvalidAuxiliaryPayload(String),
 }
 
 /// Complete native fixed-depth tree used to commit one block's top-up receipts.
@@ -307,46 +298,6 @@ pub fn verify_kagemusha_top_up_membership_v1(
         ));
     }
     Ok(())
-}
-
-/// Strictly validate separately provisioned Pasta keys against a frozen context.
-///
-/// # Errors
-///
-/// Returns an error unless network, generation, count, identity order, and every
-/// canonical non-identity curve point match.
-pub fn validate_kagemusha_mint_finality_authority_v1(
-    generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    context: &HeightContext,
-) -> Result<(), KagemushaMintFinalityErrorV1> {
-    generation.validate().map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
-    })?;
-    context.validate().map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
-    })?;
-    let authority_id = generation.authority_id().map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
-    })?;
-    if context
-        .kagemusha_mint_finality_authorization
-        .validate_against_authority(generation)
-        .is_err()
-        || authority_id != context.kagemusha_mint_finality_authorization.authority_id
-        || generation.network_id != context.network_id
-        || generation.validators.len() != context.roster.len()
-        || generation
-            .validators
-            .iter()
-            .zip(&context.roster)
-            .any(|(keys, validator)| keys.validator != validator.validator)
-    {
-        return Err(KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
-            "generation authority or its committed identifier does not exactly match the frozen context"
-                .to_owned(),
-        ));
-    }
-    validate_kagemusha_mint_finality_roster_keys_v1(generation)
 }
 
 /// Decode every paired-Pasta public key in a structurally valid generation roster.
@@ -964,219 +915,6 @@ impl KagemushaMintFinalitySignerV1 {
     }
 }
 
-/// Build the sole block-level mint-finality statement for an unsigned Commit vote.
-///
-/// Returns `Ok(None)` only for non-boundary blocks without top-ups. A boundary Commit vote always
-/// returns a statement so the old generation authorizes the complete next Pasta roster even when no
-/// mint occurs. A top-up commitment on any non-Commit vote is rejected rather than silently left
-/// unsealed.
-///
-/// # Errors
-///
-/// Returns an error unless the generation authority and unsigned vote match the
-/// frozen context exactly.
-pub fn build_kagemusha_mint_finality_seal_message_v1(
-    generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    context: &HeightContext,
-    vote: &Vote,
-) -> Result<Option<KagemushaMintFinalitySealMessageV1>, KagemushaMintFinalityErrorV1> {
-    validate_kagemusha_mint_finality_authority_v1(generation, context)?;
-    validate_unsigned_vote(context, vote)?;
-    let next_epoch_authorization = context
-        .next_epoch_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
-    match (
-        vote.execution_commitment.kagemusha_top_up_count,
-        vote.execution_commitment.kagemusha_top_up_root,
-    ) {
-        (0, None) if next_epoch_authorization.is_none() => Ok(None),
-        (0, None) => {
-            if vote.phase != GlobalPhase::Commit {
-                return Ok(None);
-            }
-            let root = kagemusha_mint_finality_root_v1(kagemusha_mint_finality_empty_root_v1()?);
-            seal_message_from_parts(
-                generation,
-                context,
-                vote.subject,
-                vote.execution_commitment,
-                root,
-                0,
-                next_epoch_authorization,
-            )
-            .map(Some)
-        }
-        (0, Some(_)) | (_, None) => Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-            "top-up root/count pair is inconsistent".to_owned(),
-        )),
-        (count, Some(root)) => {
-            if vote.phase != GlobalPhase::Commit {
-                return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-                    "only Commit votes may carry a top-up root".to_owned(),
-                ));
-            }
-            let message = seal_message_from_parts(
-                generation,
-                context,
-                vote.subject,
-                vote.execution_commitment,
-                root,
-                count,
-                next_epoch_authorization,
-            )?;
-            Ok(Some(message))
-        }
-    }
-}
-
-/// Sign one block-level statement with a previously admitted validator signer.
-///
-/// # Errors
-///
-/// Delegates all validation and nonce errors to [`KagemushaMintFinalitySignerV1::sign`].
-pub fn sign_kagemusha_mint_finality_seal_v1(
-    signer: &KagemushaMintFinalitySignerV1,
-    message: &KagemushaMintFinalitySealMessageV1,
-) -> Result<KagemushaMintFinalityValidatorSealV1, KagemushaMintFinalityErrorV1> {
-    signer.sign(message)
-}
-
-/// Verify one canonical share against its enclosing unsigned Commit vote.
-///
-/// # Errors
-///
-/// Returns an error for any context/message/signer/key/signature substitution.
-pub fn verify_kagemusha_mint_finality_seal_share_v1(
-    generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    context: &HeightContext,
-    vote: &Vote,
-    share: &KagemushaMintFinalitySealShareV1,
-) -> Result<(), KagemushaMintFinalityErrorV1> {
-    share
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    let expected = build_kagemusha_mint_finality_seal_message_v1(generation, context, vote)?
-        .ok_or_else(|| {
-            KagemushaMintFinalityErrorV1::InvalidStatement(
-                "a mint-finality share was attached to a block without top-ups".to_owned(),
-            )
-        })?;
-    if share.message != expected || share.seal.validator_index != vote.signer {
-        return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-            "share message or signer differs from the enclosing vote".to_owned(),
-        ));
-    }
-    verify_kagemusha_mint_finality_validator_seal_v1(generation, &share.message, &share.seal)
-}
-
-/// Verify one exact-quorum seal bundle against its enclosing CommitQC.
-///
-/// # Errors
-///
-/// Returns an error for any context/QC/message/quorum/key/signature substitution.
-pub fn verify_kagemusha_mint_finality_seal_bundle_v1(
-    generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    context: &HeightContext,
-    certificate: &QuorumCertificate,
-    bundle: &KagemushaMintFinalitySealBundleV1,
-) -> Result<(), KagemushaMintFinalityErrorV1> {
-    validate_kagemusha_mint_finality_authority_v1(generation, context)?;
-    validate_commit_qc_shape(context, certificate)?;
-    bundle
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    let next_epoch_authorization = context
-        .next_epoch_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
-    let root = match (
-        certificate.execution_commitment.kagemusha_top_up_count,
-        certificate.execution_commitment.kagemusha_top_up_root,
-    ) {
-        (0, None) if next_epoch_authorization.is_some() => {
-            kagemusha_mint_finality_root_v1(kagemusha_mint_finality_empty_root_v1()?)
-        }
-        (count, Some(root)) if count > 0 => root,
-        _ => {
-            return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-                "mint-finality bundle requires a top-up or generation-boundary commitment"
-                    .to_owned(),
-            ));
-        }
-    };
-    let expected = seal_message_from_parts(
-        generation,
-        context,
-        certificate.subject,
-        certificate.execution_commitment,
-        root,
-        certificate.execution_commitment.kagemusha_top_up_count,
-        next_epoch_authorization,
-    )?;
-    if bundle.message != expected
-        || bundle
-            .seals
-            .iter()
-            .map(|seal| seal.validator_index)
-            .ne(certificate.signers.iter().copied())
-    {
-        return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-            "bundle statement/signers differ from the enclosing CommitQC".to_owned(),
-        ));
-    }
-    for seal in &bundle.seals {
-        verify_kagemusha_mint_finality_validator_seal_v1(generation, &bundle.message, seal)?;
-    }
-    Ok(())
-}
-
-/// Decode one canonical Commit-vote auxiliary share.
-///
-/// # Errors
-///
-/// Returns an error for trailing bytes, non-canonical encoding, or an invalid share.
-pub fn decode_kagemusha_mint_finality_seal_share_v1(
-    bytes: &[u8],
-) -> Result<KagemushaMintFinalitySealShareV1, KagemushaMintFinalityErrorV1> {
-    let mut cursor = bytes;
-    let decoded = KagemushaMintFinalitySealShareV1::decode_all(&mut cursor).map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
-    })?;
-    if decoded.encode() != bytes {
-        return Err(KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(
-            "share encoding is not canonical".to_owned(),
-        ));
-    }
-    decoded.validate().map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
-    })?;
-    Ok(decoded)
-}
-
-/// Decode one canonical CommitQC auxiliary bundle.
-///
-/// # Errors
-///
-/// Returns an error for trailing bytes, non-canonical encoding, or an invalid bundle.
-pub fn decode_kagemusha_mint_finality_seal_bundle_v1(
-    bytes: &[u8],
-) -> Result<KagemushaMintFinalitySealBundleV1, KagemushaMintFinalityErrorV1> {
-    let mut cursor = bytes;
-    let decoded = KagemushaMintFinalitySealBundleV1::decode_all(&mut cursor).map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
-    })?;
-    if decoded.encode() != bytes {
-        return Err(KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(
-            "bundle encoding is not canonical".to_owned(),
-        ));
-    }
-    decoded.validate().map_err(|error| {
-        KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
-    })?;
-    Ok(decoded)
-}
-
 fn top_up_leaf_component<F: KagemushaPoseidonFieldV1>(leaf: &KagemushaTopUpLeafV1) -> F {
     let operation = digest_limbs::<F>(leaf.operation_id);
     let receipt = digest_limbs::<F>(leaf.reserve_receipt_digest);
@@ -1229,101 +967,6 @@ fn top_up_node_commitment_v1(
         eq: encode(hash(MINT_NODE_DOMAIN_V1, &[left_eq, right_eq])),
         ep: encode(hash(MINT_NODE_DOMAIN_V1, &[left_ep, right_ep])),
     })
-}
-
-fn validate_unsigned_vote(
-    context: &HeightContext,
-    vote: &Vote,
-) -> Result<(), KagemushaMintFinalityErrorV1> {
-    context
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    vote.execution_commitment
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    if vote.round.context_id != context.id()
-        || vote.round.height != context.height
-        || vote.proposal_round != vote.round
-        || usize::try_from(vote.signer)
-            .ok()
-            .is_none_or(|index| index >= context.roster.len())
-    {
-        return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-            "unsigned vote does not match the frozen context".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_commit_qc_shape(
-    context: &HeightContext,
-    certificate: &QuorumCertificate,
-) -> Result<(), KagemushaMintFinalityErrorV1> {
-    context
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    certificate
-        .execution_commitment
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    if certificate.phase != GlobalPhase::Commit
-        || certificate.round.context_id != context.id()
-        || certificate.round.height != context.height
-        || certificate.proposal_round != certificate.round
-        || certificate.signers.len()
-            != usize::try_from(context.quorum.min_signers).expect("u32 fits usize")
-        || certificate
-            .signers
-            .windows(2)
-            .any(|pair| pair[0] >= pair[1])
-        || certificate.signers.iter().any(|signer| {
-            usize::try_from(*signer)
-                .ok()
-                .is_none_or(|index| index >= context.roster.len())
-        })
-    {
-        return Err(KagemushaMintFinalityErrorV1::InvalidStatement(
-            "CommitQC does not match the frozen equal-vote context".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn seal_message_from_parts(
-    generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    context: &HeightContext,
-    subject: iroha_data_model::block::consensus_v2::BlockSubject,
-    execution_commitment: ExecutionCommitment,
-    root: iroha_crypto::Hash,
-    count: u32,
-    next_epoch_authorization: Option<
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
-    >,
-) -> Result<KagemushaMintFinalitySealMessageV1, KagemushaMintFinalityErrorV1> {
-    let message = KagemushaMintFinalitySealMessageV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        epoch_authorization: context.kagemusha_mint_finality_authorization,
-        validator_count: u32::try_from(generation.validators.len()).map_err(|_| {
-            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
-                "validator count does not fit u32".to_owned(),
-            )
-        })?,
-        network_id: context.network_id,
-        block_height: context.height,
-        height_context_id: context.id(),
-        subject_digest: canonical_sha256(SUBJECT_DIGEST_DOMAIN_V1, &subject.encode()),
-        execution_commitment_digest: canonical_sha256(
-            EXECUTION_DIGEST_DOMAIN_V1,
-            &execution_commitment.encode(),
-        ),
-        kagemusha_top_up_root: root,
-        kagemusha_top_up_count: count,
-        next_epoch_authorization,
-    };
-    message
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    Ok(message)
 }
 
 /// Verify one genuine paired-Pasta seal against its exact immutable generation and epoch.
@@ -1601,14 +1244,6 @@ fn schnorr_challenge<F: PrimeField>(
     from_u128(u128::from_le_bytes(
         digest[..16].try_into().expect("fixed challenge half"),
     ))
-}
-
-fn canonical_sha256(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update([0]);
-    hasher.update(bytes);
-    hasher.finalize().into()
 }
 
 fn encode_point<C: CurveAffine>(point: C) -> [u8; 32] {
@@ -2130,17 +1765,39 @@ mod tests {
             epoch_authorization: initial,
             validator_count: 4,
             network_id: authority.network_id,
-            block_height: 1,
-            height_context_id: iroha_data_model::block::consensus_v2::HeightContextId(
-                HashOf::from_untyped_unchecked(Hash::new(b"generation retained epoch context")),
-            ),
-            subject_digest: [0x31; 32],
-            execution_commitment_digest: [0x32; 32],
+            block_height: 2,
+            native_instance: [0x30; 32],
+            native_epoch_context: [0x31; 32],
+            native_block_hash: [0x32; 32],
+            native_result: [0x33; 32],
             kagemusha_top_up_root: Hash::new(b"generation retained top-up root"),
             kagemusha_top_up_count: 1,
             next_epoch_authorization: None,
         };
         let initial_seal = signer.sign(&message).unwrap();
+        let changes: [fn(&mut KagemushaMintFinalitySealMessageV1); 4] = [
+            |value| value.native_instance[0] ^= 1,
+            |value| value.native_epoch_context[31] ^= 1,
+            |value| value.native_block_hash[0] ^= 1,
+            |value| value.native_result[0] ^= 1,
+        ];
+        for change in changes {
+            let mut changed = message;
+            change(&mut changed);
+            assert!(
+                verify_kagemusha_mint_finality_validator_seal_v1(
+                    &authority,
+                    &changed,
+                    &initial_seal,
+                )
+                .is_err(),
+                "original paired signatures must reject every changed native coordinate"
+            );
+            let resigned = signer.sign(&changed).unwrap();
+            verify_kagemusha_mint_finality_validator_seal_v1(&authority, &changed, &resigned)
+                .unwrap();
+        }
+
         let retained_message = KagemushaMintFinalitySealMessageV1 {
             epoch_authorization: retained,
             block_height: 11,

@@ -574,3 +574,97 @@ fn prepared_geometry_non_tail_retry_preserves_rolled_back_successor_history() {
             .all(|record| record.phase == LaneGeometryPhase::CatalogPublished)
     );
 }
+
+#[test]
+fn creation_journal_roundtrip_rejects_foreign_binding_and_missing_history_prefix() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let journal = unpersisted_create_journal(&kura);
+    assert_eq!(
+        decode_exact::<LaneGeometryJournal>(&journal.encode()).unwrap(),
+        journal
+    );
+    validate_lane_geometry_journal_structure(&root, &journal).unwrap();
+    let before = fs::read(kura.lane_geometry_journal_path()).unwrap();
+    for variant in 0..4 {
+        let mut forged = journal.clone();
+        let record = &mut forged.records[0];
+        match variant {
+            0 => record.operations[0].created.incarnation = Hash::new(b"foreign creation"),
+            1 => {
+                record.updated_bindings.remove(0);
+            }
+            2 => {
+                record.transition_sequence = 1;
+                record.transition_id = geometry_transition_id(
+                    record.transition_sequence,
+                    record.transition_height,
+                    record.previous_catalog,
+                    record.previous_lineage_root,
+                    record.updated_catalog,
+                    record.updated_lineage_root,
+                );
+            }
+            _ => forged.configured_primary_binding = None,
+        };
+        assert!(PreparedGeometryJournalTransition::prepare(&kura, forged, 0).is_err());
+        assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), before);
+    }
+}
+
+#[test]
+fn exact_active_marker_rejects_each_foreign_identity_without_repair() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let binding = kura
+        .geometry_binding(
+            initial.primary(),
+            &initial_geometry().0,
+            &initial_geometry().1,
+        )
+        .unwrap();
+    let entry = LaneStorageEntry {
+        identity: binding.identity(),
+    };
+    let path = entry.blocks_dir(&root).join(MARKER_FILE_NAME);
+    let original = kura.read_lane_marker(&path).unwrap();
+    assert_eq!(
+        decode_exact::<LaneIncarnationMarker>(&original.encode()).unwrap(),
+        original
+    );
+    assert_eq!(
+        kura.active_lane_incarnation_marker(&entry).unwrap(),
+        (binding.incarnation, 0)
+    );
+    kura.require_active_lane_incarnation(&entry, binding.incarnation, 1)
+        .unwrap();
+    assert!(
+        kura.require_active_lane_incarnation(&entry, binding.incarnation, 0)
+            .is_err()
+    );
+    for variant in 0..6 {
+        let mut marker = original.clone();
+        match variant {
+            0 => marker.version -= 1,
+            1 => marker.network_id = test_network_id(b"foreign marker network"),
+            2 => marker.dataspace_id = DataSpaceId::new(99),
+            3 => marker.lane_id = LaneId::new(99),
+            4 => marker.incarnation = Hash::new(b"foreign marker incarnation"),
+            _ => marker.activation_height += 1,
+        }
+        let bytes = marker.encode();
+        fs::write(&path, &bytes).unwrap();
+        assert!(kura.active_lane_incarnation_marker(&entry).is_err());
+        assert!(
+            kura.require_active_lane_incarnation(&entry, binding.incarnation, 2)
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}

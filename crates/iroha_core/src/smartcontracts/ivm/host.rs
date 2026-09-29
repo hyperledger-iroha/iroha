@@ -5860,18 +5860,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         vm: &IVM,
         ptr: u64,
     ) -> Result<ContractInstanceLookup, ivm::VMError> {
-        if let Ok(address) =
-            Self::decode_tlv_typed::<ContractAddress>(vm, ptr, PointerType::NoritoBytes)
-        {
-            return Ok(ContractInstanceLookup::Address(address));
+        let tlv = vm.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::NoritoBytes => decode_canonical_norito::<ContractAddress>(tlv.payload)
+                .map(ContractInstanceLookup::Address)
+                .map_err(|_| ivm::VMError::NoritoInvalid),
+            PointerType::Name => {
+                let alias_name = decode_canonical_norito::<Name>(tlv.payload)
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let alias = alias_name
+                    .as_ref()
+                    .parse::<ContractAlias>()
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                Ok(ContractInstanceLookup::Alias(alias))
+            }
+            _ => Err(ivm::VMError::NoritoInvalid),
         }
-        let alias_name = Self::decode_tlv_typed::<Name>(vm, ptr, PointerType::Name)?;
-        let alias = alias_name
-            .as_ref()
-            .parse::<ContractAlias>()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        Ok(ContractInstanceLookup::Alias(alias))
     }
+
     /// Decode a blob pointer-ABI TLV into owned bytes.
     ///
     /// # Errors
@@ -6794,23 +6800,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             schema,
             max_record_bytes,
         )
-        .map_err(|error| {
-                match error {
-                    crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::Privacy {
-                        reason,
-                        ..
-                    } => reason,
-                    crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::RecordTooLarge {
-                        max_bytes,
-                        ..
-                    } if max_bytes
-                        < iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES =>
-                    {
-                        ivm::VMError::OutOfGas
-                    }
-                    _ => ivm::VMError::DecodeError,
-                }
-            })?;
+        .map_err(
+            crate::smartcontracts::ivm::return_value::EntrypointReturnDecodeError::into_nested_vm_error,
+        )?;
         let complete_boundary_bytes = record
             .len()
             .checked_add(
@@ -11105,6 +11097,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             vm.set_register(10, p);
                             vm.set_register(11, OK);
                         }
+                        Err(error) if error.execution_deferral().is_some() => return Err(error),
                         Err(_) => {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_OOM);
@@ -18905,7 +18898,8 @@ seiyaku Callee {
     fn nested_contract_return_rejects_private_pointer_memory_with_either_descriptor_tag() {
         let mut vm = completed_unit_return_vm();
         let table = vm.register(10);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         let record = ivm::private_input::int_record(42_u64.into())
             .expect("encode authenticated private input");
         let kind = record.kind.tag();
@@ -20326,7 +20320,8 @@ seiyaku Callee {
             vm.set_register(11, selector);
             vm.set_register(12, argument);
             if let Some(private_register) = private_register {
-                vm.set_zk_mode(true);
+                vm.set_zk_mode(true)
+                    .expect("private lifecycle cleanup succeeds");
                 vm.registers.set_tag(private_register, true);
             }
             host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
@@ -20393,7 +20388,8 @@ seiyaku Callee {
         let authority = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         vm.set_register(10, 0);
         // Private-input ABI V1 tag zero selects Kotodama `int`.
         vm.set_register(11, 0);
@@ -25225,3 +25221,6 @@ seiyaku PreparedBoundaryArguments {
     include!("host/pointer_abi_validation_tests.rs");
     include!("host/pointer_abi_and_sm_tests.rs");
 }
+
+#[cfg(test)]
+mod return_resource_tests;

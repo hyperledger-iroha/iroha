@@ -631,6 +631,7 @@ fn validate_validator_config(config: &TonValidatorConfigV1) -> Option<()> {
     Some(())
 }
 
+/// Serialize the boxed TL block identifier from its root and file hashes.
 pub fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(68);
     push_u32_le(&mut out, TON_BLOCK_ID_TL_CONSTRUCTOR);
@@ -920,7 +921,7 @@ struct TonPrunedBranch {
 }
 
 /// Level mask, hashes and depths of a cell.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TonComputedCell {
     pub(crate) mask: u8,
     pub(crate) hashes: [H256; 4],
@@ -948,6 +949,7 @@ fn ton_read_sized_uint(bytes: &[u8], cursor: &mut usize, size: usize) -> Option<
     Some(value)
 }
 
+/// Read the payload bit length, rejecting inconsistent descriptors or terminator bits.
 pub fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
     if data_descriptor & 1 == 0 {
         let byte_len = usize::from(data_descriptor) / 2;
@@ -1172,6 +1174,7 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     clippy::too_many_lines,
     reason = "one linear canonical BoC header and cell-table parser"
 )]
+/// Parse a bounded TON bag of cells, rejecting malformed headers, cells and references.
 pub fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
         return None;
@@ -1357,6 +1360,7 @@ fn ton_reject_duplicate_subgraphs(boc: &TonBoc) -> Option<()> {
     Some(())
 }
 
+/// Encode the selected root in canonical cell order, rejecting invalid or duplicate subgraphs.
 pub fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
     let order = ton_canonical_cell_order(boc, root)?;
     ton_reject_duplicate_subgraphs(boc)?;
@@ -1519,6 +1523,7 @@ fn ton_boc_child_for_hash_level(
     clippy::too_many_lines,
     reason = "one bottom-up pass computing every level hash and depth per cell"
 )]
+/// Compute the level hashes and depths of every cell, rejecting invalid cell structure.
 pub fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {
         mask: 0,

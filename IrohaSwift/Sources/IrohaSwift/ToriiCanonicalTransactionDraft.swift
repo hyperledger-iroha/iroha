@@ -33,7 +33,7 @@ struct ToriiCanonicalTransactionDraft {
   static func decode(
     transactionPayloadB64: String,
     signingMessageB64: String,
-    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+
     context: String
   ) throws -> Self {
     let transactionPayload = try canonicalBase64(
@@ -58,7 +58,7 @@ struct ToriiCanonicalTransactionDraft {
       signingMessage: signingMessage,
       payload: try parsePayload(
         transactionPayload,
-        expectedAdmissionIntent: expectedAdmissionIntent,
+
         context: context
       )
     )
@@ -149,19 +149,19 @@ struct ToriiCanonicalTransactionDraft {
 
   static func transactionPayload(
     fromVersionedSignedTransaction bytes: Data,
-    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+
     context: String
   ) throws -> Data {
     try inspectVersionedSignedTransaction(
       bytes,
-      expectedAdmissionIntent: expectedAdmissionIntent,
+
       context: context
     ).transactionPayload
   }
 
   static func validateTransactionPayload(
     _ bytes: Data,
-    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+
     context: String
   ) throws {
     guard !bytes.isEmpty, bytes.count <= maximumTransactionPayloadBytes else {
@@ -171,14 +171,14 @@ struct ToriiCanonicalTransactionDraft {
     }
     _ = try parsePayload(
       bytes,
-      expectedAdmissionIntent: expectedAdmissionIntent,
+
       context: context
     )
   }
 
   static func inspectVersionedSignedTransaction(
     _ bytes: Data,
-    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+
     context: String
   ) throws -> SignedTransactionV1 {
     guard !bytes.isEmpty,
@@ -208,7 +208,7 @@ struct ToriiCanonicalTransactionDraft {
     )
     let payload = try parsePayload(
       transactionPayload,
-      expectedAdmissionIntent: expectedAdmissionIntent,
+
       context: context
     )
     let signerPublicKey = try decodeEd25519Authority(
@@ -313,7 +313,7 @@ struct ToriiCanonicalTransactionDraft {
 
   private static func parsePayload(
     _ bytes: Data,
-    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+
     context: String
   ) throws -> Payload {
     var transaction = ToriiVerifyingKeyCompactReader(bytes)
@@ -324,7 +324,7 @@ struct ToriiCanonicalTransactionDraft {
     let timeToLive = try transaction.takeField("\(context).time_to_live_ms")
     let nonce = try transaction.takeField("\(context).nonce")
     let feePayment = try transaction.takeField("\(context).fee_payment")
-    let admissionIntent = try transaction.takeField("\(context).admission_intent")
+
     let metadata = try transaction.takeField("\(context).metadata")
     let attachments = try transaction.takeField("\(context).attachments")
     guard transaction.isFinished,
@@ -333,7 +333,7 @@ struct ToriiCanonicalTransactionDraft {
       creation.count == MemoryLayout<UInt64>.size
     else {
       throw ToriiClientError.invalidPayload(
-        "\(context).transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload."
+        "\(context).transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload."
       )
     }
     let creationTimeMs = creation.withUnsafeBytes {
@@ -346,15 +346,6 @@ struct ToriiCanonicalTransactionDraft {
       try SccpSubmitValidation.requireCanonicalTransactionFeePayment(feePayment)
     } catch {
       throw ToriiClientError.invalidPayload("\(context) fee_payment is not canonical.")
-    }
-    guard admissionIntent == expectedAdmissionIntent.norito else {
-      let expectedName =
-        switch expectedAdmissionIntent {
-        case .ordinary: "Ordinary"
-        case .queuePlanSynced: "QueuePlanSynced"
-        }
-      throw ToriiClientError.invalidPayload(
-        "\(context) admission_intent must be \(expectedName).")
     }
     guard attachments == Data([0]) else {
       throw ToriiClientError.invalidPayload(
@@ -379,7 +370,7 @@ struct ToriiCanonicalTransactionDraft {
       timeToLive,
       nonce,
       feePayment,
-      admissionIntent,
+
       metadata,
       attachments,
     ] {

@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use iroha_config::parameters::actual;
-use iroha_core::{EventsSender, kura::Kura};
+#[cfg(test)]
+use iroha_core::kura::Kura;
+use iroha_core::{EventsSender, state::State};
 use iroha_crypto::HashOf;
 #[cfg(test)]
 use iroha_data_model::transaction::SignedTransaction;
@@ -614,7 +616,7 @@ impl PushBridge {
     }
     pub(crate) fn start_event_worker(
         &self,
-        kura: Arc<Kura>,
+        state: Arc<State>,
         events: EventsSender,
         shutdown_signal: ShutdownSignal,
     ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
@@ -631,7 +633,7 @@ impl PushBridge {
             }
             match replay_with_queue_drain(
                 &bridge,
-                &kura,
+                &state,
                 PushReplayTarget::Authoritative,
                 &shutdown_signal,
             )
@@ -644,7 +646,7 @@ impl PushBridge {
                 Err(error) => {
                     iroha_logger::error!(
                         ?error,
-                        "push bridge could not replay its durable Kura backlog"
+                        "push bridge could not replay its applied State backlog"
                     );
                     return crate::ToriiCriticalWorkerExit::UnexpectedExit;
                 }
@@ -664,7 +666,7 @@ impl PushBridge {
                             if let Some(height) = applied_block_heights(&event).last().copied() {
                                 match replay_with_queue_drain(
                                     &bridge,
-                                    &kura,
+                                    &state,
                                     PushReplayTarget::Height(height),
                                     &shutdown_signal,
                                 )
@@ -694,11 +696,11 @@ impl PushBridge {
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                             iroha_logger::warn!(
                                 skipped,
-                                "push bridge event subscription lagged; reconciling from durable Kura"
+                                "push bridge event subscription lagged; reconciling from applied State"
                             );
                             match replay_with_queue_drain(
                                 &bridge,
-                                &kura,
+                                &state,
                                 PushReplayTarget::Authoritative,
                                 &shutdown_signal,
                             )
@@ -759,31 +761,31 @@ impl PushBridge {
     pub(crate) fn registered_device(&self, token: &str) -> Option<RegisteredDevice> {
         self.registered_device_by_token(token)
     }
-    fn reconcile_to_authoritative_height(&self, kura: &Kura) -> Result<(), PushReplayError> {
-        let authoritative_height = exact_durable_kura_height(kura)?;
+    fn reconcile_to_authoritative_height(&self, state: &State) -> Result<(), PushReplayError> {
+        let authoritative_height = exact_applied_state_height(state)?;
         self.reconcile_through_known_authoritative_height(
-            kura,
+            state,
             authoritative_height,
             authoritative_height,
         )
     }
-    fn reconcile_through_height(&self, kura: &Kura, height: u64) -> Result<(), PushReplayError> {
-        let authoritative_height = exact_durable_kura_height(kura)?;
+    fn reconcile_through_height(&self, state: &State, height: u64) -> Result<(), PushReplayError> {
+        let authoritative_height = exact_applied_state_height(state)?;
         if height > authoritative_height {
             return Err(PushError::Storage(format!(
-                "observed applied block height {height} exceeds Kura's authoritative durable height {authoritative_height}"
+                "observed applied block height {height} exceeds State's applied height {authoritative_height}"
             ))
             .into());
         }
-        self.reconcile_through_known_authoritative_height(kura, height, authoritative_height)
+        self.reconcile_through_known_authoritative_height(state, height, authoritative_height)
     }
     fn reconcile_through_known_authoritative_height(
         &self,
-        kura: &Kura,
+        state: &State,
         target_height: u64,
         authoritative_height: u64,
     ) -> Result<(), PushReplayError> {
-        self.validate_applied_block_cursor_against_kura(kura, authoritative_height)?;
+        self.validate_applied_block_cursor_against_state(state, authoritative_height)?;
         let current_height = self.applied_block_cursor.lock().height;
         if current_height >= target_height {
             return Ok(());
@@ -794,54 +796,54 @@ impl PushBridge {
             ))
         })?;
         for next_height in first_height..=target_height {
-            self.enqueue_committed_block(kura, next_height)?;
+            self.enqueue_committed_block(state, next_height)?;
         }
         Ok(())
     }
-    fn validate_applied_block_cursor_against_kura(
+    fn validate_applied_block_cursor_against_state(
         &self,
-        kura: &Kura,
+        state: &State,
         authoritative_height: u64,
     ) -> Result<(), PushError> {
         let cursor = self.applied_block_cursor.lock().clone();
         cursor.validate().map_err(storage_error)?;
         if cursor.height > authoritative_height {
             return Err(PushError::Storage(format!(
-                "push applied-block cursor height {} exceeds Kura's authoritative durable height {authoritative_height}",
+                "push applied-block cursor height {} exceeds State's applied height {authoritative_height}",
                 cursor.height
             )));
         }
         if cursor.height == 0 {
             return Ok(());
         }
-        let block = kura_block_at_height(kura, cursor.height)?;
+        let block = state_block_at_height(state, cursor.height)?;
         if block.header().height().get() != cursor.height {
             return Err(PushError::Storage(format!(
-                "Kura returned block height {} for push cursor height {}",
+                "State returned block height {} for push cursor height {}",
                 block.header().height(),
                 cursor.height
             )));
         }
         if Some(block.hash()) != cursor.block_hash {
             return Err(PushError::Storage(format!(
-                "push applied-block cursor hash does not match Kura at height {}",
+                "push applied-block cursor hash does not match State at height {}",
                 cursor.height
             )));
         }
         Ok(())
     }
-    fn enqueue_committed_block(&self, kura: &Kura, height: u64) -> Result<(), PushReplayError> {
-        let block = kura_block_at_height(kura, height)?;
+    fn enqueue_committed_block(&self, state: &State, height: u64) -> Result<(), PushReplayError> {
+        let block = state_block_at_height(state, height)?;
         if block.header().height().get() != height {
             return Err(PushError::Storage(format!(
-                "Kura returned block height {} while push reconciliation requested {height}",
+                "State returned block height {} while push reconciliation requested {height}",
                 block.header().height()
             ))
             .into());
         }
         if !block.has_results() {
             return Err(PushError::Storage(format!(
-                "authoritative Kura block {height} has no execution results"
+                "applied native block {height} has no execution results"
             ))
             .into());
         }
@@ -1306,14 +1308,14 @@ impl PushBridge {
 }
 async fn replay_with_queue_drain(
     bridge: &PushBridge,
-    kura: &Kura,
+    state: &State,
     target: PushReplayTarget,
     shutdown_signal: &ShutdownSignal,
 ) -> Result<PushReplayOutcome, PushError> {
     loop {
         let result = match target {
-            PushReplayTarget::Authoritative => bridge.reconcile_to_authoritative_height(kura),
-            PushReplayTarget::Height(height) => bridge.reconcile_through_height(kura, height),
+            PushReplayTarget::Authoritative => bridge.reconcile_to_authoritative_height(state),
+            PushReplayTarget::Height(height) => bridge.reconcile_through_height(state, height),
         };
         match result {
             Ok(()) => return Ok(PushReplayOutcome::Complete),
@@ -1611,33 +1613,24 @@ fn storage_limit_error(label: &str, actual: usize, maximum: usize) -> PushError 
         "{label} {actual} exceeds the push storage maximum {maximum}"
     ))
 }
-fn exact_durable_kura_height(kura: &Kura) -> Result<u64, PushError> {
-    let height = kura.exact_durable_blocks_count().map_err(|error| {
-        PushError::Storage(format!(
-            "failed to read Kura's authoritative durable height: {error}"
-        ))
-    })?;
-    u64::try_from(height).map_err(|_| {
-        PushError::Storage("Kura's authoritative durable height exceeds u64".to_owned())
-    })
+fn exact_applied_state_height(state: &State) -> Result<u64, PushError> {
+    u64::try_from(state.committed_height())
+        .map_err(|_| PushError::Storage("State's applied height exceeds u64".to_owned()))
 }
-fn kura_block_at_height(kura: &Kura, height: u64) -> Result<Arc<SignedBlock>, PushError> {
+fn state_block_at_height(state: &State, height: u64) -> Result<Arc<SignedBlock>, PushError> {
     let height_usize = usize::try_from(height)
-        .map_err(|_| PushError::Storage(format!("Kura block height {height} exceeds usize")))?;
+        .map_err(|_| PushError::Storage(format!("native block height {height} exceeds usize")))?;
     let height = NonZeroUsize::new(height_usize)
-        .ok_or_else(|| PushError::Storage("Kura block height must be nonzero".to_owned()))?;
-    let hash = kura
-        .get_durable_block_hash(height)
-        .ok_or_else(|| PushError::Storage("durable push carrier hash is unavailable".into()))?;
+        .ok_or_else(|| PushError::Storage("native block height must be nonzero".to_owned()))?;
     let work = crate::routing::app_query_limits().max_fetch_size;
-    crate::canonical_history::read_carrier(
-        kura,
-        height,
-        hash,
-        work,
-        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
-    )
-    .map_err(|error| PushError::Storage(error.to_string()))
+    state
+        .read_finalized_execution_carrier(
+            height,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        )
+        .map(|carrier| carrier.into_block())
+        .map_err(|error| PushError::Storage(error.to_string()))
 }
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -2570,55 +2563,38 @@ mod tests {
         crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
         Arc::new(block)
     }
-    // Stored replay fixtures own actual parent-linked finality. Their structural
-    // successful rows model notification inputs, not execution of State economics.
-    fn store_finalized_push_block(kura: &Kura, block: Arc<SignedBlock>) {
-        let height = block.header().height().get();
-        let parent = height
-            .checked_sub(1)
-            .filter(|height| *height > 0)
-            .map(|height| {
-                kura.v2_finality_artifact(height)
-                    .expect("read preceding push finality")
-                    .expect("complete push fixture finality prefix")
-            });
-        let artifact = crate::test_utils::torii_proof_finality_for_block(
-            &block,
-            crate::test_utils::signed_query_network_id(),
-            parent.as_ref(),
-        );
-        kura.store_block(Arc::clone(&block))
-            .expect("store canonical push body");
-        let receipt = kura
-            .store_v2_finality_artifact(&artifact)
-            .expect("persist genuine push finality");
-        assert_eq!(
-            receipt.artifact_hash(),
-            iroha_crypto::HashOf::new(&artifact)
-        );
-        assert_eq!(receipt.context_id(), artifact.context_id());
-        // Enter the same authenticated production read before testing queue effects.
-        let authenticated = kura_block_at_height(kura, height).expect("authenticated push carrier");
-        assert_eq!(authenticated.hash(), block.hash());
-        assert_eq!(
-            authenticated.encode_wire().unwrap(),
-            block.encode_wire().unwrap()
-        );
+    /// Apply the real signed genesis and H2 so genesis output has a native successor.
+    fn native_push_chain(activity: bool) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::prelude::{Account, Register};
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        if activity {
+            let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
+            config
+                .genesis_instructions
+                .push(Register::account(Account::new(account)).into());
+        }
+        let mut chain = CertifiedTestChain::start(config).expect("apply original native genesis");
+        chain.commit(Vec::new());
+        for height in 1..=2 {
+            let authenticated =
+                state_block_at_height(chain.state(), height).expect("native push carrier");
+            assert_eq!(
+                authenticated.encode_wire().unwrap(),
+                chain.committed(height).block().encode_wire().unwrap()
+            );
+        }
+        chain
     }
-    fn activity_transaction(account: &AccountId) -> SignedTransaction {
-        use iroha_data_model::prelude::{Account, Register, TransactionBuilder};
-
-        let signer =
-            iroha_crypto::KeyPair::try_from_seed(vec![0xC3; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("derive push activity fixture key");
-        let authority = AccountId::new(signer.public_key().clone());
-        TransactionBuilder::new(
-            crate::test_utils::signed_query_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Register::account(Account::new(account.clone()))])
-        .sign(signer.private_key())
+    fn pristine_push_state(kura: Arc<Kura>) -> Arc<State> {
+        Arc::new(State::new(
+            iroha_core::state::World::new(),
+            kura,
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ))
     }
     fn write_origin_cursor(base: &Path) {
         write_json_atomic(
@@ -2686,7 +2662,7 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         let worker = bridge
             .start_event_worker(
-                Kura::blank_kura_for_testing(),
+                pristine_push_state(Kura::blank_kura_for_testing()),
                 events.clone(),
                 shutdown.clone(),
             )
@@ -2895,25 +2871,26 @@ mod tests {
     #[test]
     fn replay_refuses_unfinalized_body_before_queue_side_effects() {
         let kura = Kura::blank_kura_for_testing();
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
-        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
+        let block = signed_push_block(1, None, Vec::new());
         kura.store_block(block)
-            .expect("deliberately store without finality");
-        assert!(kura.v2_finality_artifact(1).unwrap().is_none());
+            .expect("deliberately store an unapplied body");
+        let state = pristine_push_state(kura);
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
-            .expect("valid empty push store");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
         bridge
             .register_device(register_request("unfinalized-activity-token"))
-            .expect("register push activity target");
+            .unwrap();
+        bridge
+            .reconcile_to_authoritative_height(&state)
+            .expect("unapplied Kura body is outside State history");
         let error = bridge
-            .reconcile_to_authoritative_height(&kura)
-            .expect_err("a durable body alone is not finalized push history");
+            .reconcile_through_height(&state, 1)
+            .expect_err("an event cannot authorize an unapplied body");
         let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
-            panic!("expected unavailable finality, got {error:?}");
+            panic!("expected unavailable applied history, got {error:?}");
         };
         assert!(
-            reason.contains("finalized carrier is unavailable"),
+            reason.contains("exceeds State's applied height 0"),
             "{reason}"
         );
         assert_eq!(bridge.applied_block_cursor.lock().height, 0);
@@ -2921,11 +2898,9 @@ mod tests {
     }
     #[tokio::test]
     async fn event_worker_replays_durable_kura_backlog_before_serving_events() {
-        let kura = Kura::blank_kura_for_testing();
-        let first = signed_push_block(1, None, Vec::new());
-        let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
-        store_finalized_push_block(&kura, Arc::clone(&first));
-        store_finalized_push_block(&kura, Arc::clone(&second));
+        let chain = native_push_chain(false);
+        let state = Arc::clone(chain.state());
+        let second = chain.committed(2);
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
@@ -2933,7 +2908,7 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
             .expect("enabled push worker");
 
         wait_for_cursor(&bridge, 2).await;
@@ -2943,7 +2918,7 @@ mod tests {
         )
         .expect("read replayed push cursor");
         assert_eq!(persisted.height, 2);
-        assert_eq!(persisted.block_hash, Some(second.hash()));
+        assert_eq!(persisted.block_hash, Some(second.block_hash()));
 
         shutdown.send();
         assert_eq!(
@@ -2954,31 +2929,29 @@ mod tests {
     }
     #[tokio::test]
     async fn observed_applied_height_gap_is_replayed_from_kura() {
-        let kura = Kura::blank_kura_for_testing();
-        let first = signed_push_block(1, None, Vec::new());
-        store_finalized_push_block(&kura, Arc::clone(&first));
+        let mut chain = native_push_chain(false);
+        let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
         let (events, _) = tokio::sync::broadcast::channel(4);
         let shutdown = ShutdownSignal::new();
         let worker = bridge
-            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
             .expect("enabled push worker");
-        wait_for_cursor(&bridge, 1).await;
+        wait_for_cursor(&bridge, 2).await;
 
-        let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
-        let third = signed_push_block(3, Some(second.as_ref()), Vec::new());
-        store_finalized_push_block(&kura, Arc::clone(&second));
-        store_finalized_push_block(&kura, Arc::clone(&third));
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let fourth = chain.committed(4);
         events
-            .send(applied_event(3))
-            .expect("send height-three event");
+            .send(applied_event(4))
+            .expect("send height-four event");
 
-        wait_for_cursor(&bridge, 3).await;
+        wait_for_cursor(&bridge, 4).await;
         assert_eq!(
             bridge.applied_block_cursor.lock().block_hash,
-            Some(third.hash())
+            Some(fourth.block_hash())
         );
         shutdown.send();
         assert_eq!(
@@ -2988,10 +2961,8 @@ mod tests {
     }
     #[tokio::test]
     async fn full_durable_queue_is_drained_before_replay_retries() {
-        let kura = Kura::blank_kura_for_testing();
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
-        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        store_finalized_push_block(&kura, Arc::clone(&block));
+        let chain = native_push_chain(true);
+        let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
         let dispatcher = Arc::new(MockDispatcher::new(vec![DispatchOutcome::Sent]));
         let bridge = PushBridge::with_dispatcher_and_limits_in(
@@ -3011,7 +2982,7 @@ mod tests {
         bridge.queue.insert(stale.dedupe_key.clone(), stale);
 
         assert!(matches!(
-            bridge.reconcile_to_authoritative_height(&kura),
+            bridge.reconcile_to_authoritative_height(&state),
             Err(PushReplayError::Backpressure {
                 height: 1,
                 queued: 1,
@@ -3026,7 +2997,7 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
             .expect("enabled push worker");
         wait_for_cursor(&bridge, 1).await;
         shutdown.send();
@@ -3038,10 +3009,8 @@ mod tests {
     }
     #[test]
     fn single_block_larger_than_queue_capacity_fails_explicitly() {
-        let kura = Kura::blank_kura_for_testing();
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
-        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        store_finalized_push_block(&kura, block);
+        let chain = native_push_chain(true);
+        let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::with_dispatcher_and_limits_in(
             test_bridge_config(),
@@ -3058,7 +3027,7 @@ mod tests {
             .expect("register second activity target");
 
         let error = bridge
-            .reconcile_to_authoritative_height(&kura)
+            .reconcile_to_authoritative_height(&state)
             .expect_err("one block cannot exceed the durable queue geometry");
 
         let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
@@ -3073,10 +3042,8 @@ mod tests {
     }
     #[test]
     fn cursor_does_not_advance_when_block_jobs_cannot_be_persisted() {
-        let kura = Kura::blank_kura_for_testing();
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
-        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        store_finalized_push_block(&kura, block);
+        let chain = native_push_chain(true);
+        let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
@@ -3089,7 +3056,7 @@ mod tests {
         let expected_io = fs::create_dir_all(bridge.data_dir.join(QUEUE_DIR))
             .expect_err("the actual queue parent is a file");
         let error = bridge
-            .reconcile_to_authoritative_height(&kura)
+            .reconcile_to_authoritative_height(&state)
             .expect_err("queue persistence must fail after authenticating the carrier");
         let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
             panic!("expected actual queue-persistence refusal, got {error:?}");
@@ -3099,9 +3066,9 @@ mod tests {
         assert_eq!(bridge.queued_count(), 0);
         fs::remove_file(bridge.data_dir.join(QUEUE_DIR)).expect("repair queue parent");
         bridge
-            .reconcile_to_authoritative_height(&kura)
+            .reconcile_to_authoritative_height(&state)
             .expect("the same authenticated carrier proceeds after persistence repair");
-        assert_eq!(bridge.applied_block_cursor.lock().height, 1);
+        assert_eq!(bridge.applied_block_cursor.lock().height, 2);
         assert_eq!(bridge.queued_count(), 1);
     }
     fn register_request(token: &str) -> RegisterDeviceRequest {

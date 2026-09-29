@@ -73,7 +73,6 @@ fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture 
                 Vec::new(),
                 AxtPolicySnapshot::default(),
                 BTreeSet::new(),
-                Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();

@@ -106,7 +106,6 @@ fn source_target(parent: &SignedBlock, rejected: bool, retain_transcripts: bool)
             Vec::new(),
             Default::default(),
             BTreeSet::new(),
-            Vec::new(),
             &ExecutionOutputLimits {
                 max_outputs: 8,
                 max_output_bytes: 1024 * 1024,

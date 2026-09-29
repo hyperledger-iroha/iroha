@@ -55,6 +55,7 @@ pub(in crate::state) struct SealedExecutionOutputs {
 pub(in crate::state) struct AuthorizedExecutionOutputs {
     sealed: SealedExecutionOutputs,
     finality_hash: Hash,
+    native_execution: crate::sumeragi::executor::NativeExecutionAuthorization,
 }
 
 /// Retain both execution authority and the deterministic publication surface.

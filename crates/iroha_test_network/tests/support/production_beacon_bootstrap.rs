@@ -1276,7 +1276,7 @@ fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinal
 fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinalityJournal> {
     let native = config(config_path)?;
     let mut store =
-        BlockStore::open_read_only(Kura::canonical_storage_paths(native.kura.store_dir.value()).0)?;
+        BlockStore::open_read_only(Kura::canonical_storage_path(native.kura.store_dir.value()))?;
     let journal = journal_from_store(&mut store, height)?;
     let mut cursor = NativeJournalCursor::new(
         native.common.chain.clone(),
@@ -1342,9 +1342,9 @@ fn verify_pulse(
         // All fixture children have stopped. This is a strict read-only native
         // journal reader, so validation cannot repair or rewrite the evidence.
         let native = config(config_path)?;
-        let mut store = BlockStore::open_read_only(
-            Kura::canonical_storage_paths(native.kura.store_dir.value()).0,
-        )?;
+        let mut store = BlockStore::open_read_only(Kura::canonical_storage_path(
+            native.kura.store_dir.value(),
+        ))?;
         ensure!(
             store.read_index_count()? > epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"

@@ -71,12 +71,6 @@ pub struct Kura {
         default = "defaults::kura::REPLICA_ADVERT_REFRESH_INTERVAL.into()"
     )]
     pub replica_advert_refresh_interval_ms: DurationMs,
-    /// Capacity of the merge-ledger cache used during compaction.
-    #[config(
-        env = "KURA_MERGE_LEDGER_CACHE_CAPACITY",
-        default = "defaults::kura::MERGE_LEDGER_CACHE_CAPACITY"
-    )]
-    pub merge_ledger_cache_capacity: usize,
     /// Fsync policy for block persistence.
     #[config(env = "KURA_FSYNC_MODE", default = "defaults::kura::FSYNC_MODE")]
     pub fsync_mode: KuraFsyncMode,
@@ -107,7 +101,6 @@ impl Kura {
             replica_advert_evictable_window,
             replica_advert_ttl_ms,
             replica_advert_refresh_interval_ms,
-            merge_ledger_cache_capacity,
             fsync_mode,
             fsync_interval_ms,
             debug:
@@ -162,7 +155,6 @@ impl Kura {
             fastpq_artifacts,
             replica_advert,
             debug_output_new_blocks,
-            merge_ledger_cache_capacity,
             fsync_mode,
             fsync_interval: fsync_interval_ms.0,
         }

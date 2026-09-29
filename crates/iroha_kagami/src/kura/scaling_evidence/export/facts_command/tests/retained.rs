@@ -108,8 +108,6 @@ fn from_fixture(fixture: &Fixture) -> Args {
         ("max-committed-blocks", r.max_committed_blocks),
         ("max-store-data-bytes", r.max_store_data_bytes),
         ("max-carrier-bytes", r.max_carrier_bytes as u64),
-        ("max-merge-log-bytes", r.max_merge_log_bytes),
-        ("max-merge-frames", r.max_merge_frames),
         ("reader-max-output-bytes", r.max_output_bytes),
         (
             "max-decode-allocation-bytes",
@@ -126,7 +124,6 @@ fn from_fixture(fixture: &Fixture) -> Args {
     input.total_max_bytes = caps.total_bytes;
     input.assembly_decode_max_bytes = caps.decode_bytes;
     input.block_store = fixture.block_store().to_owned();
-    input.merge_log = fixture.merge_log().to_owned();
     input.facts_output = fixture.output_path();
     input
 }
@@ -191,7 +188,6 @@ fn actual_facts_command_flows_through_existing_prepare_export_and_independent_re
             let verified = export_bound_request(
                 open_launcher(input_binding(&request, transport_cap)).unwrap(),
                 fixture.block_store(),
-                fixture.merge_log(),
                 fixture.reader_limits(),
                 input_binding(&bundle, transport_cap),
             )

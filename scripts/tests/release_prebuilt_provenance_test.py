@@ -20,6 +20,10 @@ SCRIPT = REPO / "scripts" / "verify_release_prebuilt_provenance.py"
 ISOLATED_RUNNER = REPO / "scripts" / "run_isolated_release_tool.py"
 SOURCE_COMMIT = "a" * 40
 TARGET = "x86_64-unknown-linux-gnu"
+CUDA_PUBLIC_KEY = bytes(range(32))
+CUDA_KEY_SHA256 = hashlib.sha256(CUDA_PUBLIC_KEY).hexdigest()
+CUDA_MANIFEST = b"unit-fixture signed-manifest identity; no release claim\n"
+CUDA_MANIFEST_SHA256 = hashlib.sha256(CUDA_MANIFEST).hexdigest()
 
 
 def load_verifier():
@@ -54,6 +58,10 @@ def prepare_prebuilt(tmp_path: Path):
     cargo_lock = tmp_path / "Cargo.lock"
     cargo_lock.write_bytes(b"reviewed Cargo.lock\n")
     cargo_lock.chmod(0o644)
+    cuda_root = tmp_path / "crates/ivm/cuda"
+    cuda_root.mkdir(parents=True)
+    (cuda_root / "provenance.v1").write_bytes(CUDA_MANIFEST)
+    (cuda_root / "provenance.v1.pub").write_bytes(CUDA_PUBLIC_KEY)
 
     def write_manifest() -> str:
         payload = verifier.canonical_json_bytes(
@@ -67,7 +75,12 @@ def prepare_prebuilt(tmp_path: Path):
                 "target": TARGET,
                 "cargo_profile": "deploy",
                 "default_features": True,
-                "selected_features": [],
+                "selected_features": ["irohad/ivm-cuda"],
+                "acceleration": {
+                    "ivm_features": ["cuda", "default", "metal"],
+                    "cuda_trusted_key_sha256": CUDA_KEY_SHA256,
+                    "cuda_bundle_sha256": CUDA_MANIFEST_SHA256,
+                },
                 "binaries": [
                     {
                         "name": "iroha3d",
@@ -95,6 +108,7 @@ def verify(verifier, directory, cargo_lock, digest, output):
         target=TARGET,
         cargo_profile="deploy",
         selected_features=(),
+        trusted_cuda_key_sha256=CUDA_KEY_SHA256,
         binaries={"iroha3d": "irohad"},
         output_directory=output,
     )
@@ -168,6 +182,7 @@ def test_prebuilt_provenance_binds_release_metadata_and_closed_inventory(
             target=TARGET,
             cargo_profile="deploy",
             selected_features=(),
+        trusted_cuda_key_sha256=CUDA_KEY_SHA256,
             binaries={"iroha3d": "irohad"},
             output_directory=tmp_path / "metadata-snapshot",
         )
@@ -751,3 +766,83 @@ def test_nested_release_helper_uses_safe_path_and_ignores_stdlib_shadow(
         assert rejected.returncode != 0
         assert "parent must not be group- or world-writable" in rejected.stderr
         unsafe_directory.chmod(0o755)
+
+
+@pytest.mark.parametrize("change", (
+    "retired_shape", "omitted_cuda", "test_feature", "duplicate_feature",
+    "wrong_key", "wrong_bundle", "foreign_field",
+))
+def test_prebuilt_requires_complete_acceleration_v1_record(tmp_path: Path, change: str) -> None:
+    verifier, directory, _binary, cargo_lock, write_manifest = prepare_prebuilt(tmp_path)
+    write_manifest()
+    path = directory / verifier.MANIFEST_NAME
+    manifest = json.loads(path.read_text())
+    record = manifest["acceleration"]
+    if change == "retired_shape":
+        del manifest["acceleration"]
+    elif change == "omitted_cuda":
+        record["ivm_features"].remove("cuda")
+    elif change == "test_feature":
+        record["ivm_features"].insert(1, "cuda-hardware-tests")
+    elif change == "duplicate_feature":
+        record["ivm_features"].append("metal")
+    elif change == "wrong_key":
+        record["cuda_trusted_key_sha256"] = "b" * 64
+    elif change == "wrong_bundle":
+        record["cuda_bundle_sha256"] = "b" * 64
+    else:
+        record["arbitrary"] = True
+    payload = verifier.canonical_json_bytes(manifest)
+    path.write_bytes(payload)
+    with pytest.raises(verifier.ReleaseArtifactError):
+        verify(verifier, directory, cargo_lock, hashlib.sha256(payload).hexdigest(), tmp_path / "rejected")
+    assert not (tmp_path / "rejected").exists()
+
+
+@pytest.mark.parametrize("target,backend", (
+    ("x86_64-unknown-linux-gnu", "cuda"),
+    ("aarch64-unknown-linux-musl", "cuda"),
+    ("x86_64-pc-windows-msvc", "cuda"),
+    ("aarch64-apple-darwin", "metal"),
+    ("x86_64-apple-darwin", "metal"),
+))
+def test_target_policy_uses_target_geometry_and_preserves_selected_features(target: str, backend: str) -> None:
+    verifier = load_verifier()
+    contract = verifier._CONTRACT
+    assert contract.release_ivm_backend(target) == backend
+    selected = ("irohad/external-software-signer-bin",)
+    actual = contract.release_acceleration_features(target, selected)
+    assert set(selected) <= set(actual)
+    assert ("irohad/ivm-cuda" in actual) == (backend == "cuda")
+    assert contract.release_acceleration_features(target, actual) == actual
+
+
+@pytest.mark.parametrize("target", ("", "fake", "x86_64-unknown-freebsd", "../x-linux-z", "fake-linux-target", "riscv64gc-unknown-linux-gnu", "fake-apple-darwin"))
+def test_unknown_acceleration_target_is_rejected(target: str) -> None:
+    verifier = load_verifier()
+    with pytest.raises(verifier.ReleaseArtifactError):
+        verifier._CONTRACT.release_ivm_backend(target)
+
+
+def test_metal_record_has_no_cuda_dependency_or_private_test_features() -> None:
+    verifier = load_verifier()
+    contract = verifier._CONTRACT
+    record = {"ivm_features": ["default", "metal"], "cuda_trusted_key_sha256": None, "cuda_bundle_sha256": None}
+    contract.validate_release_acceleration("aarch64-apple-darwin", record, trusted_cuda_key_sha256=None, cuda_bundle_sha256=None)
+    with pytest.raises(verifier.ReleaseArtifactError):
+        contract.validate_release_acceleration("aarch64-apple-darwin", record, trusted_cuda_key_sha256=CUDA_KEY_SHA256, cuda_bundle_sha256=None)
+
+
+@pytest.mark.parametrize("fingerprint", (None, "", "0" * 64, "A" * 64, "a" * 63))
+def test_cuda_record_requires_independent_nonzero_reviewed_fingerprint(fingerprint: str | None) -> None:
+    verifier = load_verifier()
+    record = {"ivm_features": ["cuda", "default", "metal"], "cuda_trusted_key_sha256": fingerprint, "cuda_bundle_sha256": CUDA_MANIFEST_SHA256}
+    with pytest.raises(verifier.ReleaseArtifactError):
+        verifier.validate_release_acceleration(TARGET, record, trusted_cuda_key_sha256=fingerprint, cuda_bundle_sha256=CUDA_MANIFEST_SHA256)
+
+
+@pytest.mark.parametrize("selected", ([{}], [["cuda"]], ["cuda", "cuda"], [None], ["bad feature"]))
+def test_release_feature_geometry_is_rejected_before_hashing(selected) -> None:
+    verifier = load_verifier()
+    with pytest.raises(verifier.ReleaseArtifactError):
+        verifier._CONTRACT.release_acceleration_features(TARGET, selected)

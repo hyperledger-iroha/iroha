@@ -247,7 +247,7 @@ impl Worker<'_> {
             &config.committee,
             qc,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("native quorum verification failed: {error:?}"))
     }
 }
 

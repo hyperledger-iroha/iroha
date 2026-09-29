@@ -1,8 +1,10 @@
 //! Semantic projections tied to the original immutable Musubi World borrow.
 //!
 //! This prerequisite exposes neither table nodes nor a State/finality root. The
-//! existing validator still has open all-algorithm and error-allocation custody;
-//! this token proves only that its predicates completed on the borrowed cut.
+//! source-work validator retains static rejections and prepays sequential NFC
+//! scratch, but nested helper errors and all-algorithm crypto custody remain
+//! open. This token proves only completed predicates on the borrowed cut; it
+//! does not retain the temporary NFC lease after validation returns.
 //! TODO: complete that resource contract before any catalog reader uses this owner.
 
 use super::super::*;
@@ -39,7 +41,7 @@ impl MusubiObservationCut for Box<WorldTransaction<'_, '_>> {}
     not(test),
     expect(
         dead_code,
-        reason = "TODO: complete verifier/error custody before reader registration"
+        reason = "TODO: complete verifier/helper-error custody before reader registration"
     )
 )]
 pub(in crate::state) struct ValidatedMusubiSource<'cut, W: MusubiObservationCut> {
@@ -61,7 +63,7 @@ impl<W: MusubiObservationCut> std::fmt::Debug for ValidatedMusubiSource<'_, W> {
     not(test),
     expect(
         dead_code,
-        reason = "TODO: complete verifier/error custody before reader registration"
+        reason = "TODO: complete verifier/helper-error custody before reader registration"
     )
 )]
 impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {

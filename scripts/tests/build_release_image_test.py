@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from release_builder_fixture import (
+    CUDA_KEY_SHA256, SOURCE_COMMIT, acceleration_record, prepare_source_fixture,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_release_image.sh"
@@ -131,7 +135,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
 
 
 def _authenticated_prebuilt(
-    binaries: Path, *, destination: Path, commit: str
+    binaries: Path, *, destination: Path, commit: str, source_root: Path
 ) -> tuple[Path, str]:
     package_by_binary = {
         "iroha3d": "irohad",
@@ -165,12 +169,13 @@ def _authenticated_prebuilt(
         "schema_version": 1,
         "source_commit": commit,
         "cargo_lock_sha256": hashlib.sha256(
-            (REPO_ROOT / "Cargo.lock").read_bytes()
+            (source_root / "Cargo.lock").read_bytes()
         ).hexdigest(),
         "target": "x86_64-unknown-linux-gnu",
         "cargo_profile": "deploy",
         "default_features": True,
-        "selected_features": ["irohad/external-software-signer-bin"],
+        "selected_features": ["irohad/external-software-signer-bin", "irohad/ivm-cuda"],
+        "acceleration": acceleration_record("x86_64-unknown-linux-gnu"),
         "binaries": rows,
     }
     payload = (
@@ -219,19 +224,17 @@ def _run(
         }
     )
     environment.update(extra_env or {})
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
-        text=True,
-    ).strip()
+    source_root = prepare_source_fixture(REPO_ROOT, output.with_name(f".{output.name}-source"), environment)
+    commit = SOURCE_COMMIT
     authenticated_binaries, provenance_digest = _authenticated_prebuilt(
         binaries,
         destination=output.with_name(f".{output.name}-prebuilt"),
         commit=commit,
+        source_root=source_root,
     )
     return subprocess.run(
         [
-            str(SCRIPT),
+            str(source_root / "scripts/build_release_image.sh"),
             "--source-commit",
             commit,
             "--source-date-epoch",
@@ -260,10 +263,12 @@ def _run(
             str(authenticated_binaries),
             "--trusted-prebuilt-provenance-sha256",
             provenance_digest,
+            "--trusted-cuda-key-sha256",
+            CUDA_KEY_SHA256,
             "--artifacts-dir",
             str(output),
         ],
-        cwd=REPO_ROOT,
+        cwd=source_root,
         env=environment,
         text=True,
         capture_output=True,

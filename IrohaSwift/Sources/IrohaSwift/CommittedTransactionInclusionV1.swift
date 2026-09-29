@@ -144,10 +144,12 @@ public struct VerifiedCommittedTransactionV1: Sendable {
     public let blockHash: Data
     public let blockHeight: UInt64
     public let resultOk: Bool
+    /// Retain only after the application accepts this authenticated row.
+    public let promotedCheckpoint: Data
 }
 
-/// Binds a selected full output to a caller-pinned NetworkId, trusted initial
-/// height-context anchor and exact transaction hash through current finality.
+/// Binds a selected full output to a caller-pinned NetworkId, independently selected
+/// complete native checkpoint and exact transaction hash through current finality.
 public enum CommittedTransactionInclusionV1 {
     #if canImport(Darwin)
     private typealias CandidateFn = @convention(c) (
@@ -161,15 +163,17 @@ public enum CommittedTransactionInclusionV1 {
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<UInt8>?,
-        UnsafeMutablePointer<UInt64>?, UnsafeMutablePointer<UInt8>?
+        UnsafeMutablePointer<UInt64>?, UnsafeMutablePointer<UInt8>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
     ) -> Int32
     private typealias FreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
     #endif
 
     /// An exact empty query page returns nil. A row yields only an untrusted
-    /// block-hash routing hint for locating consecutive bundles before `verify`.
+    /// block-hash routing hint for locating consecutive native proofs before `verify`.
     public static func candidateBlockHash(response: Data, transactionHash: Data) throws -> Data? {
         guard !response.isEmpty, response.count <= 32 * 1024 * 1024,
               transactionHash.count == 32, transactionHash[31] & 1 == 1 else {
@@ -201,14 +205,14 @@ public enum CommittedTransactionInclusionV1 {
     }
 
     public static func verify(
-        response: Data, finalityBundleChainJSON: Data,
-        networkId: NetworkId, trustedHeightContextId: String,
+        response: Data, nativeFinalityProofChainJSON: Data,
+        networkId: NetworkId, expectedChain: String, trustedCheckpoint: Data,
         transactionHash: Data
     ) throws -> VerifiedCommittedTransactionV1 {
         guard !response.isEmpty, response.count <= 32 * 1024 * 1024,
-              !finalityBundleChainJSON.isEmpty, finalityBundleChainJSON.count <= 16 * 1024 * 1024,
-              !trustedHeightContextId.isEmpty, trustedHeightContextId.utf8.count <= 128,
-              trustedHeightContextId == trustedHeightContextId.trimmingCharacters(in: .whitespacesAndNewlines),
+              !nativeFinalityProofChainJSON.isEmpty, nativeFinalityProofChainJSON.count <= 16 * 1024 * 1024,
+              !expectedChain.isEmpty, expectedChain.utf8.count <= 1024,
+              !trustedCheckpoint.isEmpty, trustedCheckpoint.count <= 68 * 1024 * 1024,
               transactionHash.count == 32, transactionHash[31] & 1 == 1 else {
             throw CommittedTransactionInclusionErrorV1.invalidInput
         }
@@ -222,27 +226,32 @@ public enum CommittedTransactionInclusionV1 {
         else { throw CommittedTransactionInclusionErrorV1.bridgeUnavailable }
         var rowPointer: UnsafeMutablePointer<UInt8>?
         var rowLength: UInt = 0
+        var checkpointPointer: UnsafeMutablePointer<UInt8>?
+        var checkpointLength: UInt = 0
         var outputHash = [UInt8](repeating: 0, count: 32)
         var blockHash = [UInt8](repeating: 0, count: 32)
         var blockHeight: UInt64 = 0
         var resultOk: UInt8 = 0
-        let anchor = Data(trustedHeightContextId.utf8)
+        let label = Data(expectedChain.utf8)
         let status = response.withUnsafeBytes { responseBuffer in
-            finalityBundleChainJSON.withUnsafeBytes { chainBuffer in
+            nativeFinalityProofChainJSON.withUnsafeBytes { chainBuffer in
                 networkId.bytes.withUnsafeBytes { networkBuffer in
-                    anchor.withUnsafeBytes { anchorBuffer in
-                        transactionHash.withUnsafeBytes { transactionBuffer in
-                            outputHash.withUnsafeMutableBufferPointer { outputBuffer in
-                                blockHash.withUnsafeMutableBufferPointer { blockBuffer in
-                                    function(
-                                        responseBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(response.count),
-                                        chainBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(finalityBundleChainJSON.count),
-                                        networkBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(networkId.bytes.count),
-                                        anchorBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(anchor.count),
-                                        transactionBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(transactionHash.count),
-                                        &rowPointer, &rowLength, outputBuffer.baseAddress, blockBuffer.baseAddress,
-                                        &blockHeight, &resultOk
-                                    )
+                    label.withUnsafeBytes { labelBuffer in
+                        trustedCheckpoint.withUnsafeBytes { checkpointBuffer in
+                            transactionHash.withUnsafeBytes { transactionBuffer in
+                                outputHash.withUnsafeMutableBufferPointer { outputBuffer in
+                                    blockHash.withUnsafeMutableBufferPointer { blockBuffer in
+                                        function(
+                                            responseBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(response.count),
+                                            chainBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(nativeFinalityProofChainJSON.count),
+                                            networkBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(networkId.bytes.count),
+                                            labelBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(label.count),
+                                            checkpointBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(trustedCheckpoint.count),
+                                            transactionBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(transactionHash.count),
+                                            &rowPointer, &rowLength, outputBuffer.baseAddress, blockBuffer.baseAddress,
+                                            &blockHeight, &resultOk, &checkpointPointer, &checkpointLength
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -250,16 +259,21 @@ public enum CommittedTransactionInclusionV1 {
                 }
             }
         }
-        defer { if let rowPointer { free(UnsafeMutableRawPointer(rowPointer)) } }
+        defer {
+            if let rowPointer { free(UnsafeMutableRawPointer(rowPointer)) }
+            if let checkpointPointer { free(UnsafeMutableRawPointer(checkpointPointer)) }
+        }
         guard status == 0 else { throw CommittedTransactionInclusionErrorV1.nativeRejected(status) }
         guard let rowPointer, rowLength > 0, rowLength <= 4 * 1024 * 1024,
+              let checkpointPointer, checkpointLength > 0, checkpointLength <= 68 * 1024 * 1024,
               blockHeight > 0, resultOk == 0 || resultOk == 1 else {
             throw CommittedTransactionInclusionErrorV1.invalidNativeResult
         }
         return VerifiedCommittedTransactionV1(
             canonicalRow: Data(bytes: rowPointer, count: Int(rowLength)),
             outputHash: Data(outputHash), blockHash: Data(blockHash),
-            blockHeight: blockHeight, resultOk: resultOk == 1
+            blockHeight: blockHeight, resultOk: resultOk == 1,
+            promotedCheckpoint: Data(bytes: checkpointPointer, count: Int(checkpointLength))
         )
         #else
         throw CommittedTransactionInclusionErrorV1.bridgeUnavailable

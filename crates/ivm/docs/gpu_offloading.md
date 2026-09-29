@@ -29,32 +29,91 @@ parity self-test.
 
 ## Metal on macOS
 
-The process owns Metal discovery, the queue, and compiled pipelines. Concurrent
-workers borrow the same qualified owner. A release drops owner retention outside
-its lock, while existing leases keep in-flight resources alive. The 16 production
-pipeline families cover vector arithmetic and bit operations, SHA-256
-compression and Merkle helpers, Keccak, AES round/batch helpers, and Ed25519
-verification. Startup probes and diagnostic commands produce no production
-execution receipt.
+The process retains one charged record for each observed Metal registry identity,
+including quarantined devices. Discovery enumerates devices independently within
+`resource_limits.discovery_ordinals` and `resource_limits.devices`. The separate
+`max_gpus` cap counts healthy initialized or initializing owners; a failed first
+GPU does not consume the only active slot. A complete bounded enumeration also
+quarantines previously observed identities that have disappeared; a truncated
+inventory cannot establish absence. Reappearing identities retain their original
+quarantine. `Some(0)` prevents discovery and native
+entry. Concurrent borrowers retain their original pipeline, health and allocation
+owners. Operator opt-outs and discovery restarts never clear physical quarantine
+or forgive uncertain command/buffer charges.
 
+A private device lease pins public synthetic calibration and the operation it
+selects, including both stages of a Merkle root. Merkle, AES batch and Ed25519
+batch selection compares qualified costs across eligible devices and retains the
+CPU comparison and configured workload floors. Costs include preparation,
+transfer, launch, completion and readback. New calibration shares one sampling
+deadline across devices. Discovery and each public calibration family retain a
+nonblocking fair cursor across passes, advancing before an actual attempt. A slow
+transient failure cannot repeatedly take the first turn. Candidates deferred by
+an exhausted budget or a busy calibration owner receive no new retry penalty;
+cached profiles remain comparable when the sampling deadline expires. If a native
+callback unwinds, subsequent discovery/calibration recovers only its scalar
+scheduler timestamp and cursor, preserving the recorded cooldown and next turn.
+Contention still declines immediately. Physical quarantine and coupled registry
+or cost-profile mutexes are not reset by scheduler recovery. An explicit discovery
+restart retains its existing meaning of clearing only the retry timestamp. Discovery and calibration check time budgets between native operations;
+a single command retains its existing ten-second completion bound.
+
+Rust registry storage is reserved from the shared process metadata envelope before
+allocation. Admission, losing construction and refunds occur outside registry
+writers. The initial physical record capacity is retained for the process
+lifetime; increasing that storage ceiling requires a process restart. Native
+buffer backing and command permits retain their original shared resource charges.
+A command failure quarantines only its original physical device. Uncertain work
+retains native storage and permits; another healthy device can continue within
+remaining shared capacity. Destination copies happen only after exact-owner
+acceptance, so declined work recomputes from its original input. AES attempt output
+retains and rebinds its selected device through the final copy, including direct
+API calls entered without an existing thread-local physical binding.
+
+The 16 production pipeline families cover vector arithmetic and bit operations,
+SHA-256 compression and Merkle helpers, Keccak, AES round/batch helpers, and
+Ed25519 verification. Startup probes and diagnostic commands produce no production
+execution receipt.
 Run the required hardware gate on a Metal host:
 
 ```sh
 cargo test --locked -p ivm --features metal-hardware-tests --lib required_metal_hardware -- --test-threads=1 --nocapture
 ```
 
-The gate fails when Metal is absent, a pipeline falls back to CPU, or parity
-breaks. It compares all 16 families against CPU references at several workload
-sizes, including odd Merkle reductions and valid and invalid signatures.
-`metal_completed_dispatches(MetalKernel)` counts completed production commands;
-the test requires a positive receipt for each family. Completion alone does not
+The gate runs in an isolated process and requires the complete allowed native
+identity inventory to have charged records. It fails when Metal is absent, an
+observed device cannot qualify, a pipeline falls back to CPU, or parity breaks.
+For every recorded device it compares all 16 families against CPU references at
+several sizes, including odd Merkle reductions and valid and invalid signatures.
+`metal_completed_dispatches(MetalKernel)` exposes aggregate production counts;
+the gate also requires positive counts bound to each exact physical identity. Completion alone does not
 establish correctness, so the scalar comparisons are mandatory. Local M1 Ultra
 evidence is recorded in `target/kotodama-metal-local-evidence.json`; that
 changing-worktree component run is not an unchanged release-candidate result.
 
-Metal qualification still needs independent per-device admission, signed
-artifact provenance, profile coverage for the other kernels, and mixed-hardware
-validator parity. The process owner loads an embedded precompiled V1 Metal
+An additional unbound direct AES control requires true accepted output and exact
+physical counters for all four batch families, for both destination and in-place
+APIs. This prevents an outer qualification binding from concealing an escaped
+output owner's acceptance failure:
+
+```sh
+cargo test --locked -p ivm --features metal-hardware-tests --lib vector::metal_qualification::required_metal_unbound_aes_keeps_exact_owner_through_copy -- --exact --nocapture
+```
+
+The separate two-device destructive control requires actual hardware and cannot
+pass on a one-device runner:
+
+```sh
+cargo test --locked -p ivm --features metal-hardware-tests --lib vector::metal_qualification::required_metal_two_devices_isolate_quarantine -- --exact --nocapture
+```
+
+It checks uncertain backing/permit retention, zero-cap refusal, sticky quarantine
+across policy reload, and actual second-device dispatch with `max_gpus = 1`.
+
+Metal release qualification still needs signed artifact provenance, authenticated
+benchmark profiles, coverage for other kernels, device/driver/artifact matrix
+evidence, and mixed-hardware validator parity. Metal physical failures currently
+quarantine the affected device; finer independent kernel quarantine remains open. The process owner loads an embedded precompiled V1 Metal
 library and performs no startup shader compilation. The local optional Xcode
 Metal toolchain built the pinned candidate; release signing and unchanged-
 candidate device qualification remain open.
@@ -100,10 +159,11 @@ through compound operations. There is no second GPU manager or parallel
 admission registry. Native batch helpers fill caller destinations only after
 complete result validation; ordinary helpers handle qualified CPU fallback.
 
-Metal buffer allocation has not yet migrated fully into this common physical
-envelope. Aggregate CUDA custody controls do not establish aggregate Metal or
-FASTPQ custody. Signed performance profiles, qualified fastest-path selection,
-and complete physical resource qualification remain open.
+IVM Metal no-copy buffers, command permits and Rust registry records use this
+common resource envelope. These controls do not establish FASTPQ Metal physical
+custody or remove its separate runtime-compilation path. CUDA cost ranking,
+authenticated performance profiles, complete fastest-path coverage, opaque native
+pipeline accounting and physical resource qualification remain open.
 
 Run the mandatory CUDA hardware gate on each qualified CUDA runner:
 

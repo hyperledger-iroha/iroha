@@ -47,7 +47,6 @@ fn install(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &fixture_limits(),
         )
         .expect("bounded structural output fixture");

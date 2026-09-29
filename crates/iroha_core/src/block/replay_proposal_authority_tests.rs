@@ -27,7 +27,6 @@ fn authenticate_replay_fixture_block(
             Vec::new(),
             fixture.state.block(executed.header()).axt_policy_snapshot(),
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("retain exact control-only execution result");

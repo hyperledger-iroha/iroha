@@ -147,7 +147,6 @@ fn metadata(
     assert_eq!(routes.len(), 1);
     Ok(ExecutionOutputSealMetadata {
         committed_fragment_count: u64::try_from(block.committed_fragment_count()).unwrap(),
-        lane_finality_statements: Vec::new(),
     })
 }
 

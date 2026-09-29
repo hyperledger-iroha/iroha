@@ -486,9 +486,6 @@ final class ToriiClientTests: XCTestCase {
             "instructions": .object([:]),
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
-            "admission_intent": .object(
-                ["intent": .string("ordinary"), "value": .null]
-            ),
             "metadata": .object([:]),
             "attachments": .null,
         ]
@@ -11111,7 +11108,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             option(uint64(100_000)),
             Data([0]),
             feePayment.data,
-            TransactionAdmissionIntentV1.ordinary.norito,
+
             uint64(0),
             Data([0]),
         ] {

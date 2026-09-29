@@ -19,6 +19,10 @@ mod metal_cost;
 use metal_buffers::MetalBuffer;
 #[cfg(any(test, all(target_os = "macos", feature = "metal")))]
 mod metal_owner;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_runtime;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use metal_runtime::MetalSelection;
 mod metal_receipts;
 pub use metal_receipts::{MetalKernel, metal_completed_dispatches};
 #[cfg(all(test, feature = "metal-hardware-tests"))]
@@ -231,7 +235,7 @@ pub fn clear_thread_forced_simd() {
     set_thread_forced_simd(None);
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-static METAL_DISABLED: AtomicBool = AtomicBool::new(false);
+static METAL_ARTIFACT_INVALID: AtomicBool = AtomicBool::new(false);
 #[cfg(all(target_os = "macos", feature = "metal"))]
 static METAL_FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -251,11 +255,13 @@ fn set_metal_status_message(message: Option<String>) {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn record_metal_disable(reason: impl Into<String>) {
     let message = reason.into();
-    METAL_DISABLED.store(true, Ordering::SeqCst);
+    if let Some(health) = metal_runtime::current_health() {
+        health.quarantine(false);
+    }
     if let Ok(mut guard) = metal_error_slot().lock() {
         *guard = Some(message.clone());
     }
-    eprintln!("ivm: metal backend disabled: {message}");
+    eprintln!("ivm: selected Metal device quarantined: {message}");
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_last_error_message() -> Option<String> {
@@ -285,7 +291,10 @@ fn metal_env_disabled() -> bool {
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_policy_enabled() -> bool {
-    if metal_env_disabled() {
+    if crate::acceleration_config().max_gpus == Some(0)
+        || crate::acceleration_config().resource_limits.devices == 0
+        || metal_env_disabled()
+    {
         return false;
     }
     if !METAL_CONFIG_ENABLED.load(Ordering::SeqCst) {
@@ -299,14 +308,15 @@ pub(crate) fn metal_policy_enabled() -> bool {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_runtime_allowed() -> bool {
     metal_policy_enabled()
-        && !METAL_DISABLED.load(Ordering::SeqCst)
-        && metal_buffers::physical_usable()
+        && !METAL_ARTIFACT_INVALID.load(Ordering::SeqCst)
+        && metal_runtime::current_allowed()
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn metal_disabled() -> bool {
     !metal_policy_enabled()
-        || METAL_DISABLED.load(Ordering::SeqCst)
-        || !metal_buffers::physical_usable()
+        || METAL_ARTIFACT_INVALID.load(Ordering::SeqCst)
+        || !metal_runtime::current_allowed()
+        || metal_runtime::all_quarantined()
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 pub fn metal_disabled() -> bool {
@@ -314,7 +324,9 @@ pub fn metal_disabled() -> bool {
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_parity_ok() -> bool {
-    !METAL_DISABLED.load(Ordering::SeqCst) && metal_buffers::physical_usable()
+    !METAL_ARTIFACT_INVALID.load(Ordering::SeqCst)
+        && metal_runtime::current_allowed()
+        && !metal_runtime::all_quarantined()
 }
 /// Ensure Metal pipelines are compiled ahead of time to avoid first-use latency.
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -376,105 +388,6 @@ use objc2::rc::Retained;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::runtime::ProtocolObject;
 #[cfg(all(target_os = "macos", feature = "metal"))]
-fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>> {
-    // Debug knob: force enumeration even if system default device is available.
-    let force_enumeration = if crate::dev_env::dev_env_flag("IVM_FORCE_METAL_ENUM") {
-        std::env::var("IVM_FORCE_METAL_ENUM")
-            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    // Touch the CoreGraphics display connection on headless hosts so
-    // MTLCopyAllDevices can enumerate GPU drivers.
-    warm_up_core_graphics_display();
-    // Prefer the system default device once the CoreGraphics session is ready.
-    if !force_enumeration && let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
-        return Some(device);
-    }
-    let devices = objc2_metal::MTLCopyAllDevices();
-    let mut retained_devices = Vec::new();
-    let mut traits = Vec::new();
-    for device in devices.iter() {
-        retained_devices.push(device.retain());
-        traits.push(DeviceTraits {
-            headless: device.isHeadless(),
-            low_power: device.isLowPower(),
-        });
-    }
-    let debug_enum = if crate::dev_env::dev_env_flag("IVM_DEBUG_METAL_ENUM") {
-        std::env::var("IVM_DEBUG_METAL_ENUM")
-            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    if debug_enum {
-        eprintln!(
-            "ivm: MTLCopyAllDevices returned {} device(s)",
-            retained_devices.len()
-        );
-        for (idx, info) in traits.iter().enumerate() {
-            eprintln!(
-                "ivm:   device #{idx}: headless={}, low_power={}",
-                info.headless, info.low_power
-            );
-        }
-    }
-    let Some(index) = select_device_index(&traits) else {
-        set_metal_status_message(Some(
-            "no Metal devices returned by MTLCopyAllDevices".to_owned(),
-        ));
-        if debug_enum {
-            eprintln!("ivm: unable to select Metal device (empty enumeration)");
-        }
-        // As a last resort (and only when enumeration is not forced) try the
-        // default device again now that CoreGraphics has been warmed up. Some
-        // headless shells load the Metal drivers lazily and only expose the
-        // default device once CG establishes a session, so retrying here lets
-        // CLI captures use GPU acceleration even when MTLCopyAllDevices fails.
-        if !force_enumeration && let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() {
-            if debug_enum {
-                eprintln!(
-                    "ivm: MTLCopyAllDevices returned zero devices; using MTLCreateSystemDefaultDevice fallback"
-                );
-            }
-            set_metal_status_message(None);
-            return Some(device);
-        }
-        return None;
-    };
-    if debug_enum {
-        eprintln!("ivm: selecting device #{}", index);
-    }
-    retained_devices.into_iter().nth(index)
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DeviceTraits {
-    headless: bool,
-    low_power: bool,
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
-fn select_device_index(traits: &[DeviceTraits]) -> Option<usize> {
-    let mut first_non_headless = None;
-    let mut first_any = None;
-    for (idx, info) in traits.iter().enumerate() {
-        if !info.headless {
-            if !info.low_power {
-                return Some(idx);
-            }
-            if first_non_headless.is_none() {
-                first_non_headless = Some(idx);
-            }
-        }
-        if first_any.is_none() {
-            first_any = Some(idx);
-        }
-    }
-    first_non_headless.or(first_any)
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
 const METAL_KERNELS: &[u8] = include_bytes!("../metal/v1/ivm_kernels.metallib");
 #[cfg(all(target_os = "macos", feature = "metal"))]
 const METAL_KERNELS_SHA256: [u8; 32] = [
@@ -489,7 +402,8 @@ fn bundled_metal_library(
     use sha2::Digest as _;
 
     if sha2::Sha256::digest(METAL_KERNELS).as_slice() != METAL_KERNELS_SHA256 {
-        record_metal_disable("embedded Metal library digest mismatch");
+        METAL_ARTIFACT_INVALID.store(true, Ordering::Release);
+        set_metal_status_message(Some("embedded Metal library digest mismatch".to_owned()));
         return None;
     }
     let data = dispatch2::DispatchData::from_static_bytes(METAL_KERNELS);
@@ -561,14 +475,17 @@ fn metal_dispatch(
     context: &str,
     receipt: Option<MetalKernel>,
 ) -> Option<()> {
-    // A different in-flight command may have quarantined the shared backend.
+    // Another command may have quarantined this same physical device.
     // No new work from this owner may begin after that failure.
     if !metal_runtime_allowed() {
         return None;
     }
     let mut command = metal_buffers::Command::prepare(queue, buffers)?;
     if !command.encode(pipeline, grid_width, threadgroup_width) {
-        record_metal_disable(format!("{context} could not encode qualified command"));
+        command.quarantine();
+        set_metal_status_message(Some(format!(
+            "{context} could not encode qualified command"
+        )));
         return None;
     }
     if !command.commit() {
@@ -579,7 +496,8 @@ fn metal_dispatch(
     // A command can finish while another thread quarantines the process-owned
     // device. Discard that result and let the caller recompute from its original
     // input on CPU. Only accepted completions earn production receipts.
-    let accepted = metal_dispatch_result_allowed(completed, metal_runtime_allowed());
+    let accepted =
+        metal_dispatch_result_allowed(completed, command.usable() && metal_runtime_allowed());
     metal_receipts::record_completion(receipt, accepted);
     accepted.then_some(())
 }
@@ -591,9 +509,8 @@ fn metal_dispatch_result_allowed(completed: bool, backend_allowed: bool) -> bool
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 impl MetalState {
-    fn new() -> Option<Self> {
+    fn new(device: Retained<ProtocolObject<dyn MTLDevice>>) -> Option<Self> {
         use objc2_foundation::ns_string;
-        let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
         let lib = bundled_metal_library(&device)?;
         let func = lib.newFunctionWithName(ns_string!("vadd64"))?;
@@ -1388,64 +1305,55 @@ impl MetalState {
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-static METAL_STATE: metal_owner::ProcessOwner<MetalState> = metal_owner::ProcessOwner::new();
-
-#[cfg(all(target_os = "macos", feature = "metal"))]
 fn with_metal_state<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&MetalState) -> R,
 {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    let state = METAL_STATE.acquire(MetalState::new)?;
-    // Never hold the owner lock while submitting or waiting for GPU work.
-    Some(f(&state))
+    metal_runtime::with_state(f)
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn with_metal_state_try<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&MetalState) -> Option<R>,
 {
-    with_metal_state(|state| f(state)).and_then(|result| result)
+    with_metal_state(f).flatten()
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_merkle_cost_profile() -> Option<metal_cost::MetalMerkleCostProfile> {
     with_metal_state(|state| {
-        // A concurrent calibration never stalls execution; that caller uses
-        // CPU and may try again after the bounded retry window.
-        let mut cache = state.merkle_cost.try_lock().ok()?;
-        cache.get_or_calibrate(Instant::now(), metal_cost::calibrate)
+        state
+            .merkle_cost
+            .try_lock()
+            .ok()?
+            .get_or_calibrate(Instant::now(), || metal_cost::calibrate(Instant::now()))
     })
     .flatten()
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_merkle_prefer_gpu(work: MetalMerkleWork, leaves: usize) -> bool {
-    metal_merkle_cost_profile().is_some_and(|profile| profile.prefer_metal(work, leaves))
+pub(crate) fn select_metal_merkle(work: MetalMerkleWork, leaves: usize) -> Option<MetalSelection> {
+    metal_runtime::select_merkle(work, leaves)
 }
 #[cfg(all(target_os = "macos", not(feature = "metal")))]
-pub(crate) fn metal_merkle_prefer_gpu(_work: MetalMerkleWork, _leaves: usize) -> bool {
-    false
+pub(crate) struct MetalSelection;
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
+impl MetalSelection {
+    pub(crate) fn run<R>(self, _call: impl FnOnce() -> R) -> Option<R> {
+        None
+    }
+}
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
+pub(crate) fn select_metal_merkle(
+    _work: MetalMerkleWork,
+    _leaves: usize,
+) -> Option<MetalSelection> {
+    None
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_batch_prefer_gpu(work: metal_cost::MetalBatchWork, items: usize) -> bool {
-    if !work.calibration_supported() || items < work.min_items() {
-        return false;
-    }
-    with_metal_state(|state| {
-        if matches!(work, metal_cost::MetalBatchWork::Ed25519) && state.ed25519_signature.is_none()
-        {
-            return false;
-        }
-        // Another calibration never holds up transaction execution.
-        let Some(mut cache) = state.batch_cost[work.family_index()].try_lock().ok() else {
-            return false;
-        };
-        cache
-            .get_or_calibrate(Instant::now(), work, || metal_cost::calibrate_batch(work))
-            .is_some_and(|profile| profile.prefer_metal(items))
-    })
-    .unwrap_or(false)
+pub(crate) fn select_metal_batch(
+    work: metal_cost::MetalBatchWork,
+    items: usize,
+) -> Option<MetalSelection> {
+    metal_runtime::select_batch(work, items)
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) use metal_cost::MetalBatchWork;
@@ -1467,14 +1375,15 @@ fn finalize_command_buffer(
             if success {
                 return MetalCommandOutcome::Complete;
             }
-            record_metal_disable(format!("{context} command buffer failed"));
+            command.quarantine();
+            set_metal_status_message(Some(format!("{context} command buffer failed")));
             return MetalCommandOutcome::Failed;
         }
         if started.elapsed() >= METAL_COMMAND_TIMEOUT {
             command.mark_uncertain();
-            record_metal_disable(format!(
+            set_metal_status_message(Some(format!(
                 "{context} command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"
-            ));
+            )));
             return MetalCommandOutcome::Uncertain;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -1482,7 +1391,7 @@ fn finalize_command_buffer(
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn release_metal_state() {
-    METAL_STATE.release();
+    metal_runtime::release();
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 pub fn release_metal_state() {}
@@ -1654,6 +1563,9 @@ fn metal_sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
             }
             let ptr = buf_state.contents().as_ptr() as *const u32;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 8) };
+            if !buf_state.usable() {
+                return false;
+            }
             state.copy_from_slice(out_slice);
             true
         })
@@ -1844,36 +1756,39 @@ fn metal_ed25519_run_kernel_for_tests(
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
     autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = bundled_metal_library(&device)?;
-        let function_name = NSString::from_str(function_name);
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let n = signatures.len();
-        let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
-        let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
-        let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
-        let count_buf = [n as u32];
-        let buf_sigs = metal_input_buffer(&device, &flat_sigs[..], flat_sigs.len())?;
-        let buf_pks = metal_input_buffer(&device, &flat_pks[..], flat_pks.len())?;
-        let buf_hrams = metal_input_buffer(&device, &flat_hrams[..], flat_hrams.len())?;
-        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
-        let buf_out = metal_output_buffer(&device, n)?;
-        metal_dispatch(
-            &queue,
-            &pipeline,
-            &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
-            n as NSUInteger,
-            pipeline.threadExecutionWidth().max(1),
-            "metal ed25519 batch verify direct",
-            None,
-        )?;
-        let out =
-            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
-        Some(out.to_vec())
+        with_metal_state_try(|ctx| {
+            let device = &ctx.device;
+            let queue = &ctx.queue;
+            let lib = bundled_metal_library(device)?;
+            let function_name = NSString::from_str(function_name);
+            let func = lib.newFunctionWithName(&function_name)?;
+            let pipeline = device
+                .newComputePipelineStateWithFunction_error(&func)
+                .ok()?;
+            let n = signatures.len();
+            let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
+            let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
+            let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
+            let count_buf = [n as u32];
+            let buf_sigs = metal_input_buffer(device, &flat_sigs[..], flat_sigs.len())?;
+            let buf_pks = metal_input_buffer(device, &flat_pks[..], flat_pks.len())?;
+            let buf_hrams = metal_input_buffer(device, &flat_hrams[..], flat_hrams.len())?;
+            let buf_count =
+                metal_input_buffer(device, &count_buf[..], core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(device, n)?;
+            metal_dispatch(
+                queue,
+                &pipeline,
+                &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+                n as NSUInteger,
+                pipeline.threadExecutionWidth().max(1),
+                "metal ed25519 batch verify direct",
+                None,
+            )?;
+            let out =
+                unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
+            Some(out.to_vec())
+        })
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal", test))]
@@ -1909,56 +1824,60 @@ fn metal_ed25519_check_bytes_for_tests(
         return None;
     }
     autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = bundled_metal_library(&device)?;
-        let function_name = NSString::from_str("signature_check_bytes_kernel");
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let n = signatures.len();
-        let flat_sigs: Vec<u8> = signatures
-            .iter()
-            .flat_map(|sig| sig.iter())
-            .copied()
-            .collect();
-        let flat_pks: Vec<u8> = public_keys
-            .iter()
-            .flat_map(|pk| pk.iter())
-            .copied()
-            .collect();
-        let flat_hrams: Vec<u8> = hrams
-            .iter()
-            .flat_map(|scalar| scalar.iter())
-            .copied()
-            .collect();
-        let count_buf = [n as u32];
-        let buf_sigs = metal_input_buffer(&device, &flat_sigs[..], flat_sigs.len())?;
-        let buf_pks = metal_input_buffer(&device, &flat_pks[..], flat_pks.len())?;
-        let buf_hrams = metal_input_buffer(&device, &flat_hrams[..], flat_hrams.len())?;
-        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
-        let buf_out = metal_output_buffer(&device, n * 32)?;
-        metal_dispatch(
-            &queue,
-            &pipeline,
-            &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
-            n as NSUInteger,
-            pipeline.threadExecutionWidth().max(1),
-            "metal ed25519 check bytes direct",
-            None,
-        )?;
-        let out =
-            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
-        Some(
-            out.chunks_exact(32)
-                .map(|chunk| {
-                    let mut bytes = [0u8; 32];
-                    bytes.copy_from_slice(chunk);
-                    bytes
-                })
-                .collect(),
-        )
+        with_metal_state_try(|ctx| {
+            let device = &ctx.device;
+            let queue = &ctx.queue;
+            let lib = bundled_metal_library(device)?;
+            let function_name = NSString::from_str("signature_check_bytes_kernel");
+            let func = lib.newFunctionWithName(&function_name)?;
+            let pipeline = device
+                .newComputePipelineStateWithFunction_error(&func)
+                .ok()?;
+            let n = signatures.len();
+            let flat_sigs: Vec<u8> = signatures
+                .iter()
+                .flat_map(|sig| sig.iter())
+                .copied()
+                .collect();
+            let flat_pks: Vec<u8> = public_keys
+                .iter()
+                .flat_map(|pk| pk.iter())
+                .copied()
+                .collect();
+            let flat_hrams: Vec<u8> = hrams
+                .iter()
+                .flat_map(|scalar| scalar.iter())
+                .copied()
+                .collect();
+            let count_buf = [n as u32];
+            let buf_sigs = metal_input_buffer(device, &flat_sigs[..], flat_sigs.len())?;
+            let buf_pks = metal_input_buffer(device, &flat_pks[..], flat_pks.len())?;
+            let buf_hrams = metal_input_buffer(device, &flat_hrams[..], flat_hrams.len())?;
+            let buf_count =
+                metal_input_buffer(device, &count_buf[..], core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(device, n * 32)?;
+            metal_dispatch(
+                queue,
+                &pipeline,
+                &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+                n as NSUInteger,
+                pipeline.threadExecutionWidth().max(1),
+                "metal ed25519 check bytes direct",
+                None,
+            )?;
+            let out = unsafe {
+                std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32)
+            };
+            Some(
+                out.chunks_exact(32)
+                    .map(|chunk| {
+                        let mut bytes = [0u8; 32];
+                        bytes.copy_from_slice(chunk);
+                        bytes
+                    })
+                    .collect(),
+            )
+        })
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal", test))]
@@ -1969,44 +1888,48 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
     autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = bundled_metal_library(&device)?;
-        let function_name = NSString::from_str("field_roundtrip_kernel");
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let n = inputs.len();
-        let flat_inputs: Vec<u8> = inputs
-            .iter()
-            .flat_map(|point| point.iter())
-            .copied()
-            .collect();
-        let count_buf = [n as u32];
-        let buf_inputs = metal_input_buffer(&device, &flat_inputs[..], flat_inputs.len())?;
-        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
-        let buf_out = metal_output_buffer(&device, n * 32)?;
-        metal_dispatch(
-            &queue,
-            &pipeline,
-            &[&buf_inputs, &buf_count, &buf_out],
-            n as NSUInteger,
-            pipeline.threadExecutionWidth().max(1),
-            "metal ed25519 field roundtrip direct",
-            None,
-        )?;
-        let out =
-            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
-        Some(
-            out.chunks_exact(32)
-                .map(|chunk| {
-                    let mut value = [0u8; 32];
-                    value.copy_from_slice(chunk);
-                    value
-                })
-                .collect(),
-        )
+        with_metal_state_try(|ctx| {
+            let device = &ctx.device;
+            let queue = &ctx.queue;
+            let lib = bundled_metal_library(device)?;
+            let function_name = NSString::from_str("field_roundtrip_kernel");
+            let func = lib.newFunctionWithName(&function_name)?;
+            let pipeline = device
+                .newComputePipelineStateWithFunction_error(&func)
+                .ok()?;
+            let n = inputs.len();
+            let flat_inputs: Vec<u8> = inputs
+                .iter()
+                .flat_map(|point| point.iter())
+                .copied()
+                .collect();
+            let count_buf = [n as u32];
+            let buf_inputs = metal_input_buffer(device, &flat_inputs[..], flat_inputs.len())?;
+            let buf_count =
+                metal_input_buffer(device, &count_buf[..], core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(device, n * 32)?;
+            metal_dispatch(
+                queue,
+                &pipeline,
+                &[&buf_inputs, &buf_count, &buf_out],
+                n as NSUInteger,
+                pipeline.threadExecutionWidth().max(1),
+                "metal ed25519 field roundtrip direct",
+                None,
+            )?;
+            let out = unsafe {
+                std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32)
+            };
+            Some(
+                out.chunks_exact(32)
+                    .map(|chunk| {
+                        let mut value = [0u8; 32];
+                        value.copy_from_slice(chunk);
+                        value
+                    })
+                    .collect(),
+            )
+        })
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal", test))]
@@ -2019,48 +1942,53 @@ fn metal_ed25519_point_decompress_for_tests(
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
     autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = bundled_metal_library(&device)?;
-        let function_name = NSString::from_str("point_decompress_status_kernel");
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let n = inputs.len();
-        let flat_inputs: Vec<u8> = inputs
-            .iter()
-            .flat_map(|point| point.iter())
-            .copied()
-            .collect();
-        let count_buf = [n as u32];
-        let buf_inputs = metal_input_buffer(&device, &flat_inputs[..], flat_inputs.len())?;
-        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
-        let buf_status = metal_output_buffer(&device, n)?;
-        let buf_out = metal_output_buffer(&device, n * 32)?;
-        metal_dispatch(
-            &queue,
-            &pipeline,
-            &[&buf_inputs, &buf_count, &buf_status, &buf_out],
-            n as NSUInteger,
-            pipeline.threadExecutionWidth().max(1),
-            "metal ed25519 point decompress direct",
-            None,
-        )?;
-        let statuses =
-            unsafe { std::slice::from_raw_parts(buf_status.contents().as_ptr() as *const u8, n) };
-        let out =
-            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
-        Some((
-            statuses.to_vec(),
-            out.chunks_exact(32)
-                .map(|chunk| {
-                    let mut value = [0u8; 32];
-                    value.copy_from_slice(chunk);
-                    value
-                })
-                .collect(),
-        ))
+        with_metal_state_try(|ctx| {
+            let device = &ctx.device;
+            let queue = &ctx.queue;
+            let lib = bundled_metal_library(device)?;
+            let function_name = NSString::from_str("point_decompress_status_kernel");
+            let func = lib.newFunctionWithName(&function_name)?;
+            let pipeline = device
+                .newComputePipelineStateWithFunction_error(&func)
+                .ok()?;
+            let n = inputs.len();
+            let flat_inputs: Vec<u8> = inputs
+                .iter()
+                .flat_map(|point| point.iter())
+                .copied()
+                .collect();
+            let count_buf = [n as u32];
+            let buf_inputs = metal_input_buffer(device, &flat_inputs[..], flat_inputs.len())?;
+            let buf_count =
+                metal_input_buffer(device, &count_buf[..], core::mem::size_of::<u32>())?;
+            let buf_status = metal_output_buffer(device, n)?;
+            let buf_out = metal_output_buffer(device, n * 32)?;
+            metal_dispatch(
+                queue,
+                &pipeline,
+                &[&buf_inputs, &buf_count, &buf_status, &buf_out],
+                n as NSUInteger,
+                pipeline.threadExecutionWidth().max(1),
+                "metal ed25519 point decompress direct",
+                None,
+            )?;
+            let statuses = unsafe {
+                std::slice::from_raw_parts(buf_status.contents().as_ptr() as *const u8, n)
+            };
+            let out = unsafe {
+                std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32)
+            };
+            Some((
+                statuses.to_vec(),
+                out.chunks_exact(32)
+                    .map(|chunk| {
+                        let mut value = [0u8; 32];
+                        value.copy_from_slice(chunk);
+                        value
+                    })
+                    .collect(),
+            ))
+        })
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -2145,6 +2073,9 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
             )?;
             let ptr = buf.contents().as_ptr() as *const u64;
             let out = unsafe { std::slice::from_raw_parts(ptr, 25) };
+            if !buf.usable() {
+                return None;
+            }
             state.copy_from_slice(out);
             Some(())
         })
@@ -3106,7 +3037,7 @@ pub fn set_metal_enabled(enabled: bool) {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[doc(hidden)]
 pub fn reset_metal_backend_for_tests() {
-    METAL_DISABLED.store(false, Ordering::SeqCst);
+    METAL_ARTIFACT_INVALID.store(false, Ordering::SeqCst);
     METAL_FORCED_DISABLED.store(false, Ordering::SeqCst);
     METAL_CONFIG_ENABLED.store(true, Ordering::SeqCst);
     release_metal_state();
@@ -3667,56 +3598,7 @@ mod tests {
         ));
         assert_eq!(output, expected_dec);
     }
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    #[test]
-    fn device_selector_prefers_non_headless_perf_device() {
-        use super::{DeviceTraits, select_device_index};
-        let traits = [
-            DeviceTraits {
-                headless: false,
-                low_power: true,
-            },
-            DeviceTraits {
-                headless: false,
-                low_power: false,
-            },
-        ];
-        assert_eq!(select_device_index(&traits), Some(1));
-    }
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    #[test]
-    fn device_selector_falls_back_to_first_non_headless() {
-        use super::{DeviceTraits, select_device_index};
-        let traits = [
-            DeviceTraits {
-                headless: false,
-                low_power: true,
-            },
-            DeviceTraits {
-                headless: true,
-                low_power: false,
-            },
-        ];
-        assert_eq!(select_device_index(&traits), Some(0));
-    }
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    #[test]
-    fn device_selector_handles_all_headless_devices() {
-        use super::{DeviceTraits, select_device_index};
-        let traits = [
-            DeviceTraits {
-                headless: true,
-                low_power: false,
-            },
-            DeviceTraits {
-                headless: true,
-                low_power: true,
-            },
-        ];
-        assert_eq!(select_device_index(&traits), Some(0));
-        let empty: [DeviceTraits; 0] = [];
-        assert_eq!(select_device_index(&empty), None);
-    }
+
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
     fn warm_up_metal_reuses_cached_state() {

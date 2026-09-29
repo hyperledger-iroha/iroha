@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry-enabled tests for the sumeragi evidence list endpoint.
 #![cfg(feature = "telemetry")]
-use super::sumeragi_evidence::make_phase_vote_evidence;
+use super::sumeragi_evidence::{make_phase_vote_attribution, make_phase_vote_evidence};
 use axum::{extract::State, http::header};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -28,6 +28,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     let records = [
         EvidenceRecord {
             evidence: make_phase_vote_evidence(10, 0xA1),
+            attribution: make_phase_vote_attribution(10, 0xA1),
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 10,
@@ -35,6 +36,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(20, 0xB2),
+            attribution: make_phase_vote_attribution(20, 0xB2),
             recorded_at_height: 2,
             recorded_at_view: 0,
             recorded_at_ms: 20,
@@ -42,6 +44,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(30, 0xC3),
+            attribution: make_phase_vote_attribution(30, 0xC3),
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
@@ -117,7 +120,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     {
         assert_eq!(
             item.get("kind").and_then(norito::json::Value::as_str),
-            Some("SumeragiV2Equivocation")
+            Some("NativeSumeragiEvidence")
         );
         assert_eq!(item.get("penalty_status"), Some(expected_status));
         assert_eq!(
@@ -129,13 +132,14 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         let expected_keys = [
             "kind",
             "class",
+            "instance",
             "height",
-            "view",
             "epoch",
-            "signer",
             "context_id",
-            "artifact_hash_1",
-            "artifact_hash_2",
+            "authority_generation",
+            "offenders",
+            "safety_violation",
+            "native_frame_hash",
             "recorded_height",
             "recorded_view",
             "recorded_ms",
@@ -147,6 +151,10 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             assert!(item.contains_key(key), "evidence item must contain `{key}`");
         }
         for retired in [
+            "view",
+            "signer",
+            "artifact_hash_1",
+            "artifact_hash_2",
             "penalty_applied",
             "penalty_cancelled",
             "penalty_cancelled_at_height",
@@ -162,7 +170,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),
-        kind: Some("SumeragiV2Equivocation".to_string()),
+        kind: Some("NativeSumeragiEvidence".to_string()),
     };
     let response_filtered = handle_v1_sumeragi_evidence_list(
         State(state.clone()),
@@ -204,7 +212,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             .and_then(norito::json::Value::as_str),
         Some("phase_vote"),
     );
-    for kind in ["SumeragiV2Equivocation"] {
+    for kind in ["NativeSumeragiEvidence"] {
         let query = EvidenceListQuery {
             limit: None,
             offset: None,

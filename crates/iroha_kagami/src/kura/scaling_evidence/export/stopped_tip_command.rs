@@ -41,9 +41,6 @@ pub(crate) struct Args {
     /// Exact absolute stopped lane directory containing the canonical block journals
     #[arg(long)]
     block_store: PathBuf,
-    /// Exact absolute stopped canonical merge-log file
-    #[arg(long)]
-    merge_log: PathBuf,
     /// Reserved complete JSON reply bytes, including its final newline
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_REPLY_BYTES as u64))]
     reply_max_bytes: u64,
@@ -72,7 +69,6 @@ impl<W: Write> RunArgs<W> for Args {
             },
             self.network_id,
             &self.block_store,
-            &self.merge_log,
             reader,
         )?;
         retained.finish_reply(|identity| {

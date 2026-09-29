@@ -107,7 +107,7 @@ pub(super) fn context() -> KagemushaTestnetNativeStartupContextV1 {
 }
 
 fn archive(sequence: u64) -> Vec<u8> {
-    let mut checkpoint = *verified_test_bootstrap_v1().checkpoint();
+    let mut checkpoint = verified_test_bootstrap_v1().checkpoint().clone();
     checkpoint.sequence = sequence;
     let mut keys: Vec<_> = [41, 42, 43]
         .into_iter()
@@ -115,7 +115,7 @@ fn archive(sequence: u64) -> Vec<u8> {
         .collect();
     keys.sort_by(|a, b| a.public_key().cmp(b.public_key()));
     norito::encode_canonical(&KagemushaMobileBootstrapPackageV1 {
-        checkpoint,
+        checkpoint: checkpoint.clone(),
         approvals: keys[..2]
             .iter()
             .map(|key| KagemushaMobileBootstrapApprovalV1 {

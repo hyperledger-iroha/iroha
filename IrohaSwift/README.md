@@ -75,7 +75,7 @@ durable/native reservation, immediately before device dispatch. An approval valu
 is never persisted as authority.
 
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
-schema-2 transport. It checks the complete ABI-24 inventory and correlates method
+schema-2 transport. It checks the complete ABI-25 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
 is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
 implements the wallet coordinator interface over that transport and the exact
@@ -94,12 +94,10 @@ re-admitted with their original command and qualification before recovery acknow
 The adapter supplies no software monetary backend. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online top-up is payer-signed. Build a transaction containing exactly one
-`KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`
-admission and sign it with the embedded payer. Construct
+`KagemushaNoritoV1.topUpInstructionFrame(_:)` result and sign it with the embedded payer. Construct
 `KagemushaPreparedTopUpSubmissionV1(signedTransaction:expectedRequest:)` from the
 canonical versioned signed transaction and the exact reviewed request. This
-requires the linked native verifier to validate the signature, network, queue
-admission, sole instruction, payer and complete canonical request equality.
+requires the linked native verifier to validate the signature, network, sole instruction, payer and complete canonical request equality.
 Persist those exact bytes with the original durable operation and wallet identity
 before calling `submitKagemushaTopUp(_:withCurrentOwner:)`. The required MainActor
 owner wrapper must invoke the supplied synchronous action exactly once. It holds
@@ -811,7 +809,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-24 native inspection proves the versioned
+Preparation fails closed unless ABI-25 native inspection proves the versioned
 scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -847,7 +845,7 @@ let quote = try await torii.postValidationFeeHijiriQuote(
 )
 ```
 
-The SDK requires bridge ABI 24, signs the exact bounded request, refuses
+The SDK requires bridge ABI 25, signs the exact bounded request, refuses
 redirected, cacheable, encoded, or non-Norito success responses, and exposes
 the 64 KiB-bounded result only after native canonical decoding, request-echo,
 height, hash, and aggregate-Q16 verification. The returned assurance is an
@@ -918,8 +916,8 @@ let finality = try await torii.waitForDetachedContractCallFinality(
 contract, ABI, entrypoint, argument-record, metadata, gas, sponsor, payload,
 time, and TTL bindings. Unsigned preparation fails closed without the independent
 `ToriiContractCallDraftIntent`; response fields are never accepted as their own
-proof of intent. The payload must already use `QueuePlanSynced` before signing;
-an `Ordinary` downgrade is rejected even with a matching recomputed payload
+proof of intent. The payload has exactly nine canonical fields; retired admission
+fields and extra binary slots are rejected even with a matching recomputed payload
 hash. Detached finalization preserves those exact verified payload bytes.
 Submit accepts only the public key and detached signature; it fails closed unless the
 returned receipt and queued pipeline status match the draft exactly.
@@ -1315,7 +1313,7 @@ stale native bridge fail closed. The signed fetch bypasses local cached response
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
-byte-identical to the ABI24 native-validated compiled catalog. The generic
+byte-identical to the ABI25 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete final V1 envelope profile tuple both at construction and final encoding.
@@ -1326,7 +1324,7 @@ Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI24 requires exactly six privacy C exports, including
+ABI25 requires exactly six privacy C exports, including
 `iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
 Rust checks the complete release and deployment records, artifact counts,
@@ -1338,7 +1336,7 @@ without the manifest validator is unavailable.
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 24
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 25
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
@@ -2375,7 +2373,7 @@ one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
 Account-controller policies retain the full u16 member count (1–65,535). The
-public address constructors and parsers require the ABI-24 Rust address codec
+public address constructors and parsers require the ABI-25 Rust address codec
 for complete key and policy admission. Canonical I105 parsers reject surrounding
 Unicode whitespace; unavailable native validation is an
 explicit error. The
@@ -2399,7 +2397,7 @@ account ordering, establish rekey authority or verify an authorization proof.
 all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
-canonical Swift package always requires the real ABI24 NoritoBridge artifact.
+canonical Swift package always requires the real ABI25 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,

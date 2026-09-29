@@ -1252,8 +1252,6 @@ impl InstallEnvelopeV1 {
             || transaction.fee_payment_intent() != &self.fee_quote.intent
             || !inventory_fee_payment_intent(inventory)?
                 .has_same_payer_and_gas_bound(transaction.fee_payment_intent())
-            || transaction.admission_intent()
-                != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
             || transaction.attachments().is_some()
             || transaction.multisig_signatures().is_some()
             || !transaction.metadata().is_empty()
@@ -1426,18 +1424,16 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 return Err(eyre!("submitted beacon install has no retained envelope"));
             }
             let fees = inventory_fee_payment_intent(&self.admitted.inventory)?;
-            let (transaction, fee_quote) =
-                crate::quote_and_sign_transaction_with_admission_and_expiry(
-                    &blocking,
-                    Executable::from(native.instructions.clone()),
-                    fees,
-                    Metadata::default(),
-                    iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-                    self.admitted
-                        .authorization
-                        .claims
-                        .execution_expires_at_unix_ms,
-                )?;
+            let (transaction, fee_quote) = crate::quote_and_sign_transaction_with_expiry(
+                &blocking,
+                Executable::from(native.instructions.clone()),
+                fees,
+                Metadata::default(),
+                self.admitted
+                    .authorization
+                    .claims
+                    .execution_expires_at_unix_ms,
+            )?;
             if fee_quote.observation.next_block_height
                 != native.bundle.finalization_draft.effective_height
             {
@@ -2563,7 +2559,7 @@ mod tests {
                     ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
                 },
             },
-            transaction::{TransactionAdmissionIntent, TransactionBuilder},
+            transaction::TransactionBuilder,
         };
         use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
         let _profile = ChainDiscriminantGuard::enter(reset::CHAIN_DISCRIMINANT);
@@ -2618,11 +2614,6 @@ mod tests {
                 selected.push(Log::new(Level::INFO, "substituted instruction".to_owned()).into());
             }
             let transaction = TransactionBuilder::new(network, authority.clone(), fees.clone())
-                .with_admission_intent(if case == 1 {
-                    TransactionAdmissionIntent::QueuePlanSynced
-                } else {
-                    TransactionAdmissionIntent::Ordinary
-                })
                 .with_instructions(selected)
                 .try_sign(key.private_key())
                 .unwrap();

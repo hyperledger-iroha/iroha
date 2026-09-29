@@ -5,27 +5,26 @@
 //! core already authenticated for that height. No local execution cache, World lookup, quorum
 //! subset or obsolete height context grants verification authority.
 
-use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalitySealMessageV1,
-        KagemushaMintFinalityValidatorSealV1, KagemushaPastaSchnorrSignatureV1,
-        kagemusha_mint_finality_root_v1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalityValidatorSealV1,
+        KagemushaPastaSchnorrSignatureV1, kagemusha_mint_finality_root_v1,
     },
+    sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use iroha_sumeragi::{
-    crypto::{AttestOutcome, AttestationVerifier, Attestor},
-    message::{AttestationSignature, BlockHeader, CommitAttestation, ResultWitness},
+    crypto::{AttestOutcome, AttestationVerifier, Attestor, verify_attestations},
+    message::{AttestationSignature, BlockHeader, CommitAttestation, Qc, ResultWitness},
     preimage::{AttestationStatement, att_preimage},
-    types::{Hash32, PublicKey, ValidatorIndex},
+    types::{Committee, Hash32, PublicKey, ValidatorIndex},
 };
 use mv::allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedShared, PrepaidSharedError,
     RetainedPayload,
 };
-use sha2::{Digest as _, Sha256};
 use std::sync::{Mutex, TryLockError};
 
 use super::{
@@ -37,7 +36,6 @@ use crate::zk::kagemusha_v1_recursion::{
     verify_kagemusha_mint_finality_validator_seal_v1,
 };
 
-const SUBJECT_DOMAIN: &[u8] = b"iroha:native-pasta-commit:v1";
 const SEAL_BYTES: usize = 4 + 4 * 32;
 
 /// Pure verifier pinned to the actual network and native consensus instance.
@@ -75,9 +73,7 @@ impl AttestationVerifier for NativePastaVerifier {
         let Ok(result) = ExecutionResultCommitment::decode(witness.as_slice()) else {
             return false;
         };
-        let Ok(message) =
-            message_from_result(self.instance, self.network, source, statement, &result)
-        else {
+        let Ok(message) = message_from_result(self.instance, self.network, source, &result) else {
             return false;
         };
         let Some(member) = result.schedule.current.committee.get(signer as usize) else {
@@ -138,14 +134,95 @@ pub fn native_seal_message(
     }
     let result = ExecutionResultCommitment::decode(result_preimage)
         .map_err(|error| NativeAttestationError::Statement(error.to_string()))?;
-    message_from_result(instance, network, source, statement, &result)
+    message_from_result(instance, network, source, &result)
+}
+
+/// Verify the selected native decision and every exact-quorum paired Pasta share, then
+/// project the original certificate into the recursive mint circuit's canonical witness.
+/// The anchor must be selected independently of the response. This returns witness data,
+/// not monetary authority: callers must still verify the release-pinned recursive proof.
+///
+/// # Errors
+/// Rejects genesis, another selected decision/network, an unflagged certificate, changed
+/// result witness, malformed shares, wrong signer attribution, or any invalid Pasta equation.
+pub(crate) fn verify_native_mint_finality_bundle(
+    proof: &SumeragiFinalityProof,
+    anchor: &KagemushaFinalityTrustAnchorV1,
+) -> Result<
+    (
+        KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalityAuthorityGenerationV1,
+    ),
+    String,
+> {
+    if proof.height() <= 1 || proof.height() != anchor.checkpoint.height() {
+        return Err("mint finality must be the selected non-genesis native decision".into());
+    }
+    if anchor.network_id != anchor.checkpoint.network_id() {
+        return Err("mint finality anchor belongs to another network".into());
+    }
+    let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &anchor.checkpoint,
+        &anchor.network_id,
+        anchor.checkpoint.chain_id(),
+    )
+    .map_err(|error| format!("invalid native mint checkpoint: {error}"))?;
+    let verified = verifier
+        .verify_same_decision(anchor.checkpoint.tip(), proof)
+        .map_err(|error| format!("invalid selected native mint decision: {error}"))?;
+    let certificate = verified
+        .block()
+        .commit_certificate()
+        .ok_or_else(|| "native mint certificate is missing".to_owned())?;
+    let qc: Qc = norito::decode_canonical(certificate.commit_qc())
+        .map_err(|error| format!("invalid native mint CommitQC: {error}"))?;
+    if !qc.needs_attestations()
+        || qc.attestation_witness.as_ref().map(ResultWitness::as_slice)
+            != Some(certificate.result_preimage())
+    {
+        return Err(
+            "native mint requires flagged attestations of the exact result preimage".into(),
+        );
+    }
+    let current = &verified.commitment().schedule.current;
+    let keys = current
+        .committee
+        .iter()
+        .map(|member| core_key(member.validator.public_key()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("invalid native mint committee: {error}"))?;
+    let committee = Committee::new(keys)
+        .map_err(|error| format!("invalid native mint committee: {error:?}"))?;
+    verify_attestations(
+        &NativePastaVerifier::new(verifier.instance(), anchor.network_id),
+        &committee,
+        &qc,
+    )
+    .map_err(|error| format!("invalid native paired Pasta attestations: {error:?}"))?;
+    let message = native_seal_message(
+        verifier.instance(),
+        anchor.network_id,
+        &qc.statement(),
+        certificate.result_preimage(),
+    )
+    .map_err(|error| error.to_string())?;
+    let seals = qc
+        .attestations
+        .iter()
+        .map(|share| {
+            decode_seal(share.as_slice())
+                .ok_or_else(|| "malformed native paired Pasta share".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bundle = KagemushaMintFinalitySealBundleV1 { message, seals };
+    bundle.validate().map_err(|error| error.to_string())?;
+    Ok((bundle, current.authority.clone()))
 }
 
 fn message_from_result(
     instance: Hash32,
     network: NetworkId,
     source: AttestationStatement,
-    statement: &[u8],
     result: &ExecutionResultCommitment,
 ) -> Result<KagemushaMintFinalitySealMessageV1, NativeAttestationError> {
     let invalid = |reason: String| NativeAttestationError::Statement(reason);
@@ -181,10 +258,6 @@ fn message_from_result(
             ));
         }
     };
-    let mut digest = Sha256::new();
-    digest.update(SUBJECT_DOMAIN);
-    digest.update([0]);
-    digest.update(statement);
     let message = KagemushaMintFinalitySealMessageV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         epoch_authorization: current.authorization,
@@ -192,11 +265,10 @@ fn message_from_result(
             .map_err(|_| NativeAttestationError::Source)?,
         network_id: network,
         block_height: source.height,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-            source.epoch.context.0,
-        ))),
-        subject_digest: digest.finalize().into(),
-        execution_commitment_digest: source.result.0,
+        native_instance: source.instance.0,
+        native_epoch_context: source.epoch.context.0,
+        native_block_hash: source.block_hash.0,
+        native_result: source.result.0,
         kagemusha_top_up_root: root,
         kagemusha_top_up_count: count,
         next_epoch_authorization: next,
@@ -300,20 +372,8 @@ pub(crate) fn attest_original(
         if compare.used != preimage.as_slice().len() {
             return Err(NativeAttestationError::Source);
         }
-        let statement = att_preimage(
-            &source.instance,
-            &source.epoch,
-            source.height,
-            &source.block_hash,
-            &source.result,
-        );
-        let message = message_from_result(
-            verifier.instance,
-            verifier.network,
-            source,
-            &statement,
-            result.get(),
-        )?;
+        let message =
+            message_from_result(verifier.instance, verifier.network, source, result.get())?;
         let signer = custody
             .signer_for_authority(&result.get().schedule.current.authority)
             .map_err(|error| NativeAttestationError::Custody(error.to_string()))?;
@@ -525,7 +585,123 @@ mod tests {
         certified_chain::CertifiedChain,
         test_chain::{CertifiedTestChain, Signers},
     };
+    use iroha_crypto::{Hash, HashOf};
     use iroha_sumeragi::crypto::verify_qc;
+
+    #[test]
+    fn native_mint_witness_requires_independent_tip_and_actual_pasta_equations() {
+        use crate::sumeragi::finality::{build_checkpoint, build_proof};
+        use iroha_data_model::block::CommitCertificate;
+
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let proof = build_proof(&view, 10).unwrap();
+        let anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: chain.network_id(),
+            checkpoint: build_checkpoint(&view, 10).unwrap(),
+        };
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &anchor.checkpoint,
+            &anchor.network_id,
+            anchor.checkpoint.chain_id(),
+        )
+        .unwrap();
+        let verified = verifier
+            .verify_same_decision(anchor.checkpoint.tip(), &proof)
+            .unwrap();
+        let (bundle, authority) = verify_native_mint_finality_bundle(&proof, &anchor).unwrap();
+        assert_eq!(authority, verified.commitment().schedule.current.authority);
+        assert_eq!(bundle.seals.len(), 3);
+        assert_eq!(bundle.message.kagemusha_top_up_count, 0);
+        assert!(bundle.message.next_epoch_authorization.is_some());
+
+        let certificate = verified.block().commit_certificate().unwrap();
+        let qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        let with_qc = |qc: &Qc| {
+            let mut block = verified.block().clone();
+            block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                norito::encode_canonical(qc).unwrap(),
+                certificate.result_preimage().to_vec(),
+            )));
+            SumeragiFinalityProof {
+                block_header: block.header(),
+                block_wire: block.encode_wire().unwrap(),
+                committee: proof.committee.clone(),
+            }
+        };
+        let alternative_qc = chain.commit_qc(
+            10,
+            verified.core_hash(),
+            verified.result(),
+            true,
+            Signers::LastThree,
+        );
+        let alternative = with_qc(&alternative_qc);
+        let (alternative_bundle, alternative_authority) =
+            verify_native_mint_finality_bundle(&alternative, &anchor).unwrap();
+        assert_eq!(alternative_authority, authority);
+        assert_eq!(alternative_bundle.message, bundle.message);
+        assert_ne!(alternative_bundle.seals, bundle.seals);
+
+        for index in [0, 4, 36, 68, 100] {
+            let mut altered = qc.clone();
+            let mut share = altered.attestations[0].as_slice().to_vec();
+            share[index] ^= 1;
+            altered.attestations[0] = AttestationSignature::try_from_slice(&share).unwrap();
+            let candidate = with_qc(&altered);
+            // Portable finality authenticates the BLS decision, not these Pasta equations.
+            verifier
+                .verify_same_decision(anchor.checkpoint.tip(), &candidate)
+                .unwrap();
+            assert!(verify_native_mint_finality_bundle(&candidate, &anchor).is_err());
+        }
+        let mut absent = qc.clone();
+        absent.attestation_witness = None;
+        assert!(verify_native_mint_finality_bundle(&with_qc(&absent), &anchor).is_err());
+        let mut substituted = qc.clone();
+        let mut bytes = certificate.result_preimage().to_vec();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        substituted.attestation_witness = Some(ResultWitness::from_untrusted(bytes).unwrap());
+        assert!(verify_native_mint_finality_bundle(&with_qc(&substituted), &anchor).is_err());
+        let older_anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: anchor.network_id,
+            checkpoint: build_checkpoint(&view, 9).unwrap(),
+        };
+        assert!(verify_native_mint_finality_bundle(&proof, &older_anchor).is_err());
+        let unflagged = build_proof(&view, 9).unwrap();
+        let unflagged_block = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &older_anchor.checkpoint,
+            &older_anchor.network_id,
+            older_anchor.checkpoint.chain_id(),
+        )
+        .unwrap()
+        .verify_same_decision(older_anchor.checkpoint.tip(), &unflagged)
+        .unwrap();
+        let unflagged_qc: Qc = norito::decode_canonical(
+            unflagged_block
+                .block()
+                .commit_certificate()
+                .unwrap()
+                .commit_qc(),
+        )
+        .unwrap();
+        assert!(!unflagged_qc.needs_attestations());
+        assert!(verify_native_mint_finality_bundle(&unflagged, &older_anchor).is_err());
+        let genesis = build_proof(&view, 1).unwrap();
+        let genesis_anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: anchor.network_id,
+            checkpoint: build_checkpoint(&view, 1).unwrap(),
+        };
+        assert!(verify_native_mint_finality_bundle(&genesis, &genesis_anchor).is_err());
+        let mut foreign = anchor.clone();
+        foreign.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0xE9; 32]),
+        ));
+        assert!(verify_native_mint_finality_bundle(&proof, &foreign).is_err());
+    }
 
     #[test]
     fn actual_empty_boundary_pasta_is_source_complete_and_subset_independent() {
@@ -585,6 +761,20 @@ mod tests {
         assert_eq!(qc.attestation_witness, other.attestation_witness);
         let witness = qc.attestation_witness.as_ref().unwrap();
         let statement = qc.statement();
+        let original = AttestationStatement::parse(&statement).unwrap();
+        let projected = native_seal_message(
+            chain.instance(),
+            chain.network_id(),
+            &statement,
+            witness.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(projected.native_instance, original.instance.0);
+        assert_eq!(projected.native_epoch_context, original.epoch.context.0);
+        assert_eq!(projected.native_block_hash, original.block_hash.0);
+        assert_eq!(projected.native_result, original.result.0);
+        assert_eq!(projected.epoch_authorization.epoch, original.epoch.epoch);
+
         let key = core_key(current.committee[0].validator.public_key()).unwrap();
         let signature = qc.attestations[0].as_slice();
         assert!(verifier.verify(10, 0, &key, &statement, witness, signature));
@@ -602,16 +792,26 @@ mod tests {
         changed[last] ^= 1;
         let changed = ResultWitness::from_untrusted(changed).unwrap();
         assert!(!verifier.verify(10, 0, &key, &statement, &changed, signature));
-        let mut source = AttestationStatement::parse(&statement).unwrap();
-        source.epoch.epoch += 1;
-        let changed = att_preimage(
-            &source.instance,
-            &source.epoch,
-            source.height,
-            &source.block_hash,
-            &source.result,
-        );
-        assert!(!verifier.verify(10, 0, &key, &changed, witness, signature));
+        let changes: [fn(&mut AttestationStatement); 6] = [
+            |source| source.instance.0[0] ^= 1,
+            |source| source.epoch.epoch += 1,
+            |source| source.epoch.context.0[31] ^= 1,
+            |source| source.height += 1,
+            |source| source.block_hash.0[0] ^= 1,
+            |source| source.result.0[0] ^= 1,
+        ];
+        for change in changes {
+            let mut source = original;
+            change(&mut source);
+            let changed = att_preimage(
+                &source.instance,
+                &source.epoch,
+                source.height,
+                &source.block_hash,
+                &source.result,
+            );
+            assert!(!verifier.verify(10, 0, &key, &changed, witness, signature));
+        }
         let foreign = NativePastaVerifier::new(Hash32([0x77; 32]), chain.network_id());
         assert!(!foreign.verify(10, 0, &key, &statement, witness, signature));
     }

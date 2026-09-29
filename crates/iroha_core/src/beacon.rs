@@ -2825,13 +2825,14 @@ fn is_zero(bytes: &[u8]) -> bool {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod fixtures;
 #[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use fixtures::prepared_session_and_signers_fixture_for_keys_v1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::{
     complete_beacon_dkg_fixture_for_exact_session_v1, complete_beacon_dkg_fixture_for_seat_v1,
 };
 #[cfg(test)]
 pub(crate) use fixtures::{
-    prepared_session_and_signers_fixture_for_keys_v1, prepared_session_and_signers_fixture_v1,
-    signed_pulses_fixture_for_roster_and_anchors,
+    prepared_session_and_signers_fixture_v1, signed_pulses_fixture_for_roster_and_anchors,
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::{pulse_context_fixture_v1, signed_persisted_pulse_fixture_for_world};

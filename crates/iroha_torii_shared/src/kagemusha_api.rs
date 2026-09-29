@@ -4,29 +4,30 @@
 //! `iroha_data_model` and re-exported here without transport wrappers. Every
 //! binary ingress helper installs a byte ceiling before canonical Norito
 //! decoding. Applied KAGEMUSHA V1 results additionally require a
-//! caller-pinned consensus context; an untrusted response can never select the
+//! caller-pinned native checkpoint; an untrusted response can never select the
 //! trust root used to validate its own finality proof.
 //!
 //! An applied top-up response is an idempotent join of the immutable consensus
 //! intent/receipt with the durable local finality-and-mint outbox. This DTO
 //! boundary does not imply a post-finality mutation of world state.
 
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
+    block::BlockHeader,
     isi::kagemusha_v1::TopUpKagemushaV1,
-    transaction::{Executable, SignedTransaction, TransactionAdmissionIntent},
+    transaction::{Executable, SignedTransaction},
 };
 pub use iroha_data_model::{
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-        KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1, KagemushaFinalityTrustAnchorV1,
-        KagemushaIsiValidationErrorV1, KagemushaOperationFinalityV1, KagemushaOperationKindV1,
-        KagemushaOperationLookupV1, KagemushaOperationRejectionCodeV1,
-        KagemushaOperationRejectionV1, KagemushaOperationResultV1, KagemushaOperationStateV1,
-        KagemushaOperationStatusV1, KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1,
-        KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1, KagemushaTopUpRequestV1,
-        KagemushaTopUpResultV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1,
+        KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1, KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1,
+        KagemushaFinalityTrustAnchorV1, KagemushaIsiValidationErrorV1,
+        KagemushaOperationFinalityV1, KagemushaOperationKindV1, KagemushaOperationLookupV1,
+        KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
+        KagemushaOperationResultV1, KagemushaOperationStateV1, KagemushaOperationStatusV1,
+        KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1, KagemushaReserveReceiptV1,
+        KagemushaReserveReceiptWitnessV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
     },
     kagemusha::{
         KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
@@ -71,14 +72,17 @@ pub const KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1: usize = 32 *
 pub const KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1: usize = 8 * 1024;
 /// Maximum canonical operation-status response bytes.
 ///
-/// The bound covers the consensus roster certificate and one fixed-depth
-/// ordinary-write witness. Neither component grows with KAGEMUSHA handoff history.
-pub const KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+/// The bound covers the canonical result plus 256 bytes for the closed status
+/// envelope. The result includes the complete native carrier, committee and
+/// fixed-depth witnesses, independently of KAGEMUSHA handoff history.
+pub const KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1: usize =
+    KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1 + 256;
 /// Maximum JSON operation-status response bytes.
 ///
 /// JSON byte arrays expand relative to canonical Norito. The binary limit
 /// remains the authoritative protocol representation.
-pub const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
+pub const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1: usize =
+    4 * KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1;
 
 /// Exact first-release readiness response.
 #[derive(
@@ -107,7 +111,7 @@ pub struct KagemushaReadinessV1 {
 /// Untrusted finality coordinates advertised by an applied operation response.
 ///
 /// This value is only a lookup hint. A wallet must resolve the coordinates
-/// through release-pinned state or its already authenticated context chain and
+/// through release-pinned state or its already authenticated native prefix and
 /// then supply the resulting [`KagemushaFinalityTrustAnchorV1`] to
 /// [`UnverifiedKagemushaOperationStatusV1::verify_against`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,8 +120,8 @@ pub struct KagemushaFinalityAnchorHintV1 {
     pub network_id: NetworkId,
     /// Advertised finalized block height.
     pub block_height: u64,
-    /// Advertised context identifier at `block_height`.
-    pub height_context_id: HeightContextId,
+    /// Advertised block identity, used only to locate an independent checkpoint.
+    pub block_hash: HashOf<BlockHeader>,
 }
 
 /// Bounded canonical operation response whose monetary result is still untrusted.
@@ -182,9 +186,9 @@ impl UnverifiedKagemushaOperationStatusV1 {
             KagemushaOperationResultV1::Redemption(result) => &result.finality,
         };
         Some(KagemushaFinalityAnchorHintV1 {
-            network_id: finality.finality_artifact.height_context.network_id,
-            block_height: finality.finality_artifact.height,
-            height_context_id: finality.finality_artifact.context_id(),
+            network_id: finality.network_id,
+            block_height: finality.finality_proof.height(),
+            block_hash: finality.finality_proof.block_header.hash(),
         })
     }
 
@@ -193,8 +197,9 @@ impl UnverifiedKagemushaOperationStatusV1 {
     /// # Errors
     ///
     /// Returns an error unless the complete response validates against the
-    /// caller-pinned network, block height, context, certificate, and reserve
-    /// receipt witness.
+    /// independently selected network, complete native checkpoint, and reserve
+    /// receipt witness. Consensus finality does not replace offline monetary
+    /// proof, paired-Pasta attestation, or hardware authorization verification.
     pub fn verify_against(
         self,
         trust_anchor: &KagemushaFinalityTrustAnchorV1,
@@ -254,8 +259,6 @@ pub enum KagemushaApiErrorV1 {
     TopUpTransactionShapeInvalid,
     /// The signed transaction authority is not the embedded top-up payer.
     TopUpTransactionAuthorityMismatch,
-    /// The signed transaction does not require globally certified queue-plan admission.
-    TopUpTransactionAdmissionIntentInvalid,
 }
 
 impl core::fmt::Display for KagemushaApiErrorV1 {
@@ -288,9 +291,6 @@ impl core::fmt::Display for KagemushaApiErrorV1 {
             ),
             Self::TopUpTransactionAuthorityMismatch => formatter.write_str(
                 "KAGEMUSHA V1 top-up transaction authority must equal its embedded payer",
-            ),
-            Self::TopUpTransactionAdmissionIntentInvalid => formatter.write_str(
-                "KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission",
             ),
         }
     }
@@ -331,17 +331,15 @@ where
 ///
 /// The transaction and embedded request must both target `expected_network`,
 /// carry a valid signature, contain exactly one native [`TopUpKagemushaV1`]
-/// instruction, name the transaction authority as the request payer, and signature-bind
-/// [`TransactionAdmissionIntent::QueuePlanSynced`]. These checks make the
-/// normal transaction signature the sole online debit authorization and force
-/// the globally certified durable admission path; Torii does not rebuild or
-/// re-sign the transaction.
+/// instruction, and name the transaction authority as the request payer. The original
+/// canonical transaction signature is the sole online debit authorization; Torii
+/// preserves it through native queue admission and finality.
 ///
 /// # Errors
 ///
 /// Returns an error for a wrong network, invalid signature, any executable
 /// other than one native top-up instruction, an invalid embedded request, or
-/// an authority/payer mismatch, or ordinary queue admission.
+/// an authority/payer mismatch.
 pub fn validate_kagemusha_top_up_signed_transaction_v1<'a>(
     expected_network: &NetworkId,
     transaction: &'a SignedTransaction,
@@ -352,9 +350,7 @@ pub fn validate_kagemusha_top_up_signed_transaction_v1<'a>(
     transaction
         .verify_signature()
         .map_err(|_| KagemushaApiErrorV1::TopUpTransactionSignatureInvalid)?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(KagemushaApiErrorV1::TopUpTransactionAdmissionIntentInvalid);
-    }
+
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(KagemushaApiErrorV1::TopUpTransactionShapeInvalid);
     };
@@ -469,7 +465,7 @@ pub fn decode_kagemusha_redemption_request_v1(
 ///
 /// The returned wrapper exposes only operation routing metadata. For an
 /// applied response, use its finality hint to resolve an independently trusted
-/// context, then call
+/// native checkpoint, then call
 /// [`UnverifiedKagemushaOperationStatusV1::verify_against`]. There is no
 /// accessor for the unverified monetary result.
 ///
@@ -509,10 +505,10 @@ pub fn decode_unverified_kagemusha_operation_status_json_v1(
 /// Decode and authenticate one operation status against caller-pinned finality.
 ///
 /// Requiring `trust_anchor` at this public terminal boundary prevents an
-/// applied response from choosing the network roster or height context used
+/// applied response from choosing the network, committee or native decision used
 /// to validate itself. Clients that first need the result's advertised height
 /// use [`decode_unverified_kagemusha_operation_status_v1`] only to resolve a
-/// matching independently trusted context, then call this function (or the
+/// matching independently selected checkpoint, then call this function (or the
 /// wrapper's `verify_against`) to unlock the complete result.
 ///
 /// # Errors

@@ -197,63 +197,128 @@ impl IntoSchema for CertPhase {
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
 }
-/// Self-contained frozen context and exact signed artifacts for one Sumeragi v2 equivocation proof.
+/// Bounded original native signed evidence, without transported authority state.
 ///
-/// Proofs of possession are retained in roster order so an auditor can verify current-context
-/// aggregate certificates referenced by the artifacts without consulting mutable validator state.
-/// Production persistence additionally compares this context and `PoP` vector with the locally
-/// verified immutable context record.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence")]
-pub struct SumeragiV2EquivocationEvidence {
-    /// Immutable context which governed both conflicting artifacts.
-    pub context: super::consensus_v2::HeightContext,
-    /// BLS proofs of possession in exact frozen-roster order.
-    pub proofs_of_possession: Vec<Vec<u8>>,
-    /// Exact pair of conflicting signed artifacts.
-    pub conflict: super::consensus_v2::SumeragiV2Equivocation,
-}
-/// Exact, independently verifiable Sumeragi-v2 equivocation evidence.
-///
-/// The first release has one evidence shape. Retired global-v1 kind/payload
-/// enums are intentionally absent, so old wire and storage layouts fail decode.
-/// Snapshot JSON persists this wrapper directly so restart cannot discard an
-/// admitted penalty or replay fence.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
+/// Decode validates canonical native framing and pair ordering. Historical authority,
+/// signatures and offender attribution must be verified independently before admission.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, IntoSchema, DeriveJsonSerialize)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::Evidence")]
 pub struct Evidence {
-    /// Frozen height context, roster proofs, and exact conflicting signed artifacts.
-    pub equivocation: SumeragiV2EquivocationEvidence,
+    /// One exact canonical native evidence frame; no proposal body is permitted.
+    pub native: Vec<u8>,
+}
+impl Evidence {
+    /// Canonicalize paired original artifacts and retain their bounded native frame.
+    ///
+    /// # Errors
+    /// Native shape, bound or canonical serialization failure.
+    pub fn from_native(
+        native: &iroha_sumeragi::message::Evidence,
+    ) -> Result<Self, iroha_sumeragi::message::CodecError> {
+        let mut canonical = native.clone();
+        Self::canonicalize_pairs(&mut canonical)?;
+        Ok(Self {
+            native: canonical.encode()?,
+        })
+    }
+
+    /// Decode the exact bounded native frame, rejecting a reversed pair.
+    ///
+    /// # Errors
+    /// Malformed framing, oversized artifacts, proposal bodies or noncanonical order.
+    pub fn decode_native(
+        &self,
+    ) -> Result<iroha_sumeragi::message::Evidence, iroha_sumeragi::message::CodecError> {
+        let native = iroha_sumeragi::message::Evidence::decode(&self.native)?;
+        let mut canonical = native.clone();
+        Self::canonicalize_pairs(&mut canonical)?;
+        if canonical != native {
+            return Err(iroha_sumeragi::message::CodecError::Norito(
+                "native evidence artifact pair is not in canonical frame order".into(),
+            ));
+        }
+        Ok(native)
+    }
+
+    /// Borrow the original canonical native evidence bytes.
+    #[must_use]
+    pub fn native_frame(&self) -> &[u8] {
+        &self.native
+    }
+
+    fn canonicalize_pairs(
+        native: &mut iroha_sumeragi::message::Evidence,
+    ) -> Result<(), iroha_sumeragi::message::CodecError> {
+        use iroha_sumeragi::message::{CodecError, Evidence as NativeEvidence};
+        fn order<T: norito::NoritoSerialize>(
+            first: &mut T,
+            second: &mut T,
+        ) -> Result<(), CodecError> {
+            let left =
+                norito::encode_canonical(first).map_err(|e| CodecError::Norito(e.to_string()))?;
+            let right =
+                norito::encode_canonical(second).map_err(|e| CodecError::Norito(e.to_string()))?;
+            if left > right {
+                core::mem::swap(first, second);
+            }
+            Ok(())
+        }
+        native.check_limits()?;
+        match native {
+            NativeEvidence::ProposalEquivocation(first, second) => {
+                order(first.as_mut(), second.as_mut())
+            }
+            NativeEvidence::VoteEquivocation(first, second) => order(first, second),
+            NativeEvidence::TimeoutEquivocation(first, second) => {
+                order(first.as_mut(), second.as_mut())
+            }
+            NativeEvidence::ConflictingCertificates(first, second) => order(first, second),
+            NativeEvidence::InvalidProposal { .. } => Ok(()),
+        }
+    }
+}
+#[derive(Decode, DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct EvidenceWire {
+    native: Vec<u8>,
+}
+impl<'de> norito::core::DeserializePayload<'de> for Evidence {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical native evidence invariant")
+    }
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire =
+            <EvidenceWire as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
+        let evidence = Self {
+            native: wire.native,
+        };
+        evidence
+            .decode_native()
+            .map_err(|e| norito::core::Error::Message(e.to_string()))?;
+        Ok(evidence)
+    }
+}
+impl norito::json::JsonDeserialize for Evidence {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let wire = <EvidenceWire as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        let evidence = Self {
+            native: wire.native,
+        };
+        evidence
+            .decode_native()
+            .map_err(|e| norito::json::Error::Message(e.to_string()))?;
+        Ok(evidence)
+    }
 }
 impl Ord for Evidence {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        let left = self.encode();
-        let right = other.encode();
-        left.cmp(&right)
+        self.native.cmp(&other.native)
     }
 }
 impl PartialOrd for Evidence {
@@ -261,6 +326,61 @@ impl PartialOrd for Evidence {
         Some(self.cmp(other))
     }
 }
+
+/// One offender resolved from the exact historical native committee.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::block::consensus::EvidenceOffender")]
+pub struct EvidenceOffender {
+    /// Equal-weight signer index in the authenticated historical committee.
+    pub signer: u32,
+    /// Original historical peer bound to that signer index.
+    pub peer_id: PeerId,
+}
+
+/// Independently authenticated historical attribution retained with a committed report.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::block::consensus::EvidenceAttribution")]
+pub struct EvidenceAttribution {
+    /// Exact native consensus instance.
+    pub instance: [u8; 32],
+    /// Native height at which the original artifacts were signed.
+    pub height: u64,
+    /// Scheduling epoch bound by the signatures.
+    pub epoch: u64,
+    /// Complete authenticated epoch context identity.
+    pub context_id: [u8; 32],
+    /// Historical signing generation, independently resolved from state.
+    pub authority_generation: [u8; 32],
+    /// Exact original offenders in increasing signer-index order.
+    pub offenders: Vec<EvidenceOffender>,
+    /// Whether admission established conflicting finalized values.
+    pub safety_violation: bool,
+}
+
 /// Closed penalty lifecycle for one committed evidence record.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, DeriveJsonSerialize, DeriveJsonDeserialize,
@@ -312,6 +432,8 @@ impl EvidencePenaltyStatus {
 pub struct EvidenceRecord {
     /// Slashing material captured for governance processing.
     pub evidence: Evidence,
+    /// Required attribution authenticated independently at original evidence admission.
+    pub attribution: EvidenceAttribution,
     /// Block height at which this evidence record was appended to WSV.
     pub recorded_at_height: Height,
     /// Consensus view (round) of the block carrying the record.

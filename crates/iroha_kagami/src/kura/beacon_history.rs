@@ -5,37 +5,26 @@
 
 use super::*;
 use color_eyre::eyre::Result;
-use iroha_core::{
-    beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    lane_consensus::LaneExecutablePayloadV1,
-    merge::{merge_application_header_from_carrier, merge_execution_batch_commitments_match},
-    merge_sidecar::decode_certified_merge_sidecar,
-};
+use iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::{
         SignedBlock,
         execution_output::{ExecutionOutputV1, TriggerFailureRootV1},
-        lane_admission::LaneAdmittedInputV1,
     },
     isi::{
         InstructionBox,
         consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1},
     },
-    merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
+    sumeragi_finality::ExecutionResultCommitment,
     transaction::{Executable, ExecutableBatchItem, signed::TransactionEntrypoint},
 };
 use norito::json::{self, Value};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Read,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_BLOCKS: u64 = 4_096;
 const MAX_RECORDS: usize = 16_384;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_SIDECAR_BYTES: usize = 64 * 1024 * 1024;
-const MAX_SIDECARS: usize = 64;
 
 /// Read-only beacon history options. An exact, unclamped range is mandatory.
 #[derive(Debug, ClapArgs, Clone)]
@@ -43,9 +32,6 @@ pub(super) struct Args {
     /// Exact number of blocks, from the --from height (1..=4096).
     #[clap(long)]
     pub(super) length: u64,
-    /// Exact canonical public merge-entry file; repeat for referenced carriers only.
-    #[clap(long = "merge-sidecar", value_name = "FILE")]
-    pub(super) merge_sidecars: Vec<PathBuf>,
     /// Write bounded JSON outside the inspected store; defaults to stdout.
     #[clap(short, long, value_name = "OUTPUT")]
     pub(super) output: Option<PathBuf>,
@@ -182,7 +168,6 @@ impl Projection {
         source: &str,
         index: usize,
         result: Option<&iroha_data_model::transaction::signed::TransactionResult>,
-        merge_hash: Option<String>,
     ) -> Result<()> {
         self.count(source);
         let tx = match entrypoint {
@@ -194,8 +179,7 @@ impl Projection {
             "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
             "source": source, "entrypoint_index": index, "entrypoint_hash": (entrypoint.hash().to_string()),
             "signed_transaction_hash": (tx.map(|tx| tx.hash().to_string())), "stored_outcome": (outcome(result)),
-            "merge_entry_hash": (if source == "reference_bound_merge_execution" { merge_hash.clone() } else { None }),
-            "source_reference": merge_hash, "authenticated_execution_verified": false
+            "authenticated_execution_verified": false
         });
         if let Some(tx) = tx {
             self.executable(tx.instructions(), &occurrence)?;
@@ -239,22 +223,16 @@ impl Projection {
                 let entrypoint = block
                     .network_entrypoint_at(input_index)
                     .ok_or_else(|| eyre!("Network output lacks its exact input"))?;
-                let source = if block
-                    .execution_context()
-                    .is_some_and(|c| c.native_lane_decisions.is_some())
+                let source = if input_index
+                    >= block
+                        .external_entrypoint_count()
+                        .saturating_sub(block.merged_entrypoint_count())
                 {
-                    "native_decision_execution"
+                    "native_lane_merge_execution"
                 } else {
                     "block_network_execution"
                 };
-                return self.entrypoint(
-                    entrypoint,
-                    block,
-                    source,
-                    input_index,
-                    Some(&row.result),
-                    None,
-                );
+                return self.entrypoint(entrypoint, block, source, input_index, Some(&row.result));
             }
             ExecutionOutputV1::Pipeline(row) => (
                 "pipeline_execution",
@@ -316,12 +294,7 @@ fn outcome(
     }
 }
 
-fn project_block(
-    block: &SignedBlock,
-    projection: &mut Projection,
-    sidecars: &BTreeMap<String, Vec<u8>>,
-    used: &mut BTreeSet<String>,
-) -> Result<()> {
+fn project_block(block: &SignedBlock, projection: &mut Projection) -> Result<()> {
     block
         .validate_proposal_commitments()
         .map_err(|_| eyre!("block proposal commitments differ"))?;
@@ -332,130 +305,16 @@ fn project_block(
             .validate_output_merkle_cache()
             .map_err(|_| eyre!("block typed output ownership or Merkle cache differs"))?;
     }
-    if let Some(context) = block.execution_context() {
-        context
-            .validate_native_lane_decisions_shape()
-            .map_err(|_| eyre!("invalid native decision carrier shape"))?;
-        for (index, bytes) in context.queue_plan_admissions.iter().enumerate() {
-            let admitted = LaneAdmittedInputV1::decode_canonical(bytes)
-                .map_err(|_| eyre!("invalid canonical QueuePlan admission control"))?;
-            projection.entrypoint(
-                &admitted.entrypoint,
-                block,
-                "queue_plan_admission_only",
-                index,
-                None,
-                None,
-            )?;
-        }
-        for (anchor_index, envelope) in context.autonomous_lane_payloads.iter().enumerate() {
-            let payload = norito::decode_canonical_with_limits::<LaneExecutablePayloadV1>(
-                &envelope.canonical_payload,
-                norito::canonical_decode_limits(envelope.canonical_payload.len()),
-            )
-            .map_err(|_| eyre!("invalid canonical autonomous proposal payload"))?;
-            if envelope.version
-                != iroha_data_model::block::AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1
-                || payload.version != 1
-                || payload.network_id != envelope.network_id
-                || payload.epoch != envelope.epoch
-                || payload.payload_hash != envelope.payload_hash
-                || payload.origin_proposal.proposal_hash != envelope.proposal_hash
-            {
-                return Err(eyre!(
-                    "autonomous proposal layout or envelope identity differs"
-                ));
-            }
-            projection.gap("autonomous_proposal_authority_not_verified");
-            for (index, entrypoint) in payload.entrypoints.iter().enumerate() {
-                projection.entrypoint(
-                    entrypoint,
-                    block,
-                    "autonomous_proposal_only",
-                    index,
-                    None,
-                    Some(format!("anchor:{anchor_index}")),
-                )?;
-            }
-        }
-        if let Some(reference) = &context.merge_entry {
-            let hash = reference.entry_hash.to_string();
-            if let Some(bytes) = sidecars.get(&hash) {
-                let entry = norito::with_decode_limits_scope(
-                    norito::canonical_decode_limits(bytes.len()),
-                    || decode_certified_merge_sidecar(reference, bytes),
-                )
-                .map_err(|_| eyre!("merge sidecar differs from its exact carrier reference"))?;
-                if entry.merge_qc.carrier_height != block.header().height().get()
-                    || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
-                    || entry.merge_qc.view != block.header().view_change_index()
-                {
-                    return Err(eyre!("merge certificate carrier coordinates differ"));
-                }
-                used.insert(hash.clone());
-                if let Some(batch) = &entry.execution_batch {
-                    if !merge_execution_batch_commitments_match(batch)
-                        || batch.application_block_header
-                            != merge_application_header_from_carrier(&block.header())
-                    {
-                        return Err(eyre!(
-                            "merge batch commitments or application header differ"
-                        ));
-                    }
-                    let mut index = 0;
-                    for lane in &batch.lanes {
-                        if lane.entrypoints.len() != lane.results.len() {
-                            return Err(eyre!("merge lane entrypoint/result count differs"));
-                        }
-                        for (entrypoint, result) in lane.entrypoints.iter().zip(&lane.results) {
-                            projection.entrypoint(
-                                entrypoint,
-                                block,
-                                "reference_bound_merge_execution",
-                                index,
-                                Some(result),
-                                Some(hash.clone()),
-                            )?;
-                            index += 1;
-                        }
-                    }
-                }
-            } else {
-                projection.gap("merge_execution_sidecar_missing");
-                projection.record(norito::json!({"kind": "unresolved_merge_execution_reference",
-                    "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
-                    "merge_entry_hash": hash, "encoded_len": (reference.encoded_len),
-                    "entrypoint_count": (reference.entrypoint_count)}))?;
-            }
-        }
-    }
     if block.has_results() {
         for (index, output) in block.execution_outputs().iter().enumerate() {
             projection.output(block, index, output)?;
         }
     } else {
         for (index, entrypoint) in block.network_entrypoints().enumerate() {
-            projection.entrypoint(
-                entrypoint,
-                block,
-                "resultless_proposal_only",
-                index,
-                None,
-                None,
-            )?;
+            projection.entrypoint(entrypoint, block, "resultless_proposal_only", index, None)?;
         }
     }
-    if let Some(pulse) = block
-        .npos_consensus_effects()
-        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref())
-    {
-        projection.record(norito::json!({"kind": "global_beacon_pulse_candidate",
-            "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
-            "network_id": (pulse.network_id.to_string()), "session_id": (hex::encode(pulse.session_id)),
-            "roster_hash": (hex::encode(pulse.roster_hash)), "transcript_hash": (hex::encode(pulse.transcript_hash)),
-            "pulse_height": (pulse.height), "pulse_id": (hex::encode(pulse.pulse_id)),
-            "pulse_signature_verified": false}))?;
-    }
+    project_native_pulse(block, projection)?;
     // Recorded trigger steps are included; dynamic VM/contract effects still require native replay.
     projection
         .gaps
@@ -463,30 +322,41 @@ fn project_block(
     Ok(())
 }
 
-fn bounded_public_file(path: &Path, limit: usize) -> Result<Vec<u8>> {
-    let before = fs::symlink_metadata(path)?;
-    if !before.is_file() || before.file_type().is_symlink() || before.len() > limit as u64 {
+/// Decode a bounded native result claim and bind it to this exact stored execution.
+/// Structural coherence never grants finality, signature verification, or replay authority.
+fn project_native_pulse(block: &SignedBlock, projection: &mut Projection) -> Result<()> {
+    let Some(certificate) = block.commit_certificate() else {
+        projection.gap("native_result_preimage_unavailable");
+        return Ok(());
+    };
+    let commitment = ExecutionResultCommitment::decode(certificate.result_preimage())
+        .map_err(|error| eyre!("invalid canonical native result preimage: {error}"))?;
+    let (wire_len, wire_hash) = block.executed_block_wire_identity()?;
+    if commitment.height != block.header().height().get()
+        || commitment.execution.executed_block_wire_len != wire_len
+        || commitment.execution.executed_block_wire_hash != wire_hash
+        || commitment.execution.transaction_input_commitment
+            != block.network_input_merkle_commitment()
+        || commitment.execution.transaction_output_commitment != block.output_merkle_commitment()
+        || commitment.beacon.as_ref().is_some_and(|pulse| {
+            Some(pulse.finalized_chain_anchor.block_hash) != block.header().prev_block_hash()
+        })
+    {
         return Err(eyre!(
-            "public sidecar must be a bounded direct regular file"
+            "native result preimage differs from its exact execution block"
         ));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+    if let Some(pulse) = commitment.beacon.as_ref() {
+        projection.record(norito::json!({"kind": "global_beacon_pulse_candidate",
+            "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
+            "network_id": (pulse.network_id.to_string()), "session_id": (hex::encode(pulse.session_id)),
+            "roster_hash": (hex::encode(pulse.roster_hash)), "transcript_hash": (hex::encode(pulse.transcript_hash)),
+            "pulse_height": (pulse.height), "pulse_id": (hex::encode(pulse.pulse_id)),
+            "pulse_signature_verified": false}))?;
     }
-    let file = options.open(path)?;
-    let opened = file.metadata()?;
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-    let after = fs::symlink_metadata(path)?;
-    if bytes.len() > limit || !same_metadata(&before, &opened) || !same_metadata(&opened, &after) {
-        return Err(eyre!("public sidecar changed during read"));
-    }
-    Ok(bytes)
+    Ok(())
 }
+
 fn same_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -516,14 +386,6 @@ pub(super) fn inspect(
         .checked_add(args.length)
         .ok_or_else(|| eyre!("beacon-history range overflow"))?;
     let path = super::resolve_block_store_dir(path)?;
-    if let Some(output) = &args.output {
-        let output = crate::atomic_output::resolve_output_file(output)?;
-        for sidecar in &args.merge_sidecars {
-            if output == fs::canonicalize(sidecar)? {
-                return Err(eyre!("output would replace an input merge sidecar"));
-            }
-        }
-    }
     let stamps = ["blocks.index", "blocks.data", "blocks.hashes"]
         .map(|name| fs::symlink_metadata(path.join(name)))
         .into_iter()
@@ -535,31 +397,7 @@ pub(super) fn inspect(
             "requested beacon-history range exceeds retained index; ranges are never clamped"
         ));
     }
-    if args.merge_sidecars.len() > MAX_SIDECARS {
-        return Err(eyre!("too many explicit merge sidecars"));
-    }
-    let mut sidecars = BTreeMap::new();
-    let mut total_bytes = 0usize;
-    for path in &args.merge_sidecars {
-        let bytes = bounded_public_file(
-            path,
-            MAX_MERGE_LEDGER_ENTRY_BYTES.min(MAX_SIDECAR_BYTES - total_bytes),
-        )?;
-        total_bytes += bytes.len();
-        let entry = norito::decode_canonical_with_limits::<MergeLedgerEntry>(
-            &bytes,
-            norito::canonical_decode_limits(bytes.len()),
-        )
-        .map_err(|_| eyre!("invalid canonical public merge sidecar"))?;
-        if sidecars
-            .insert(entry.canonical_hash().to_string(), bytes)
-            .is_some()
-        {
-            return Err(eyre!("duplicate public merge sidecar"));
-        }
-    }
     let mut projection = Projection::default();
-    let mut used = BTreeSet::new();
     let mut previous = None;
     let mut first_hash = None;
     let mut last_hash = None;
@@ -587,12 +425,7 @@ pub(super) fn inspect(
         first_hash.get_or_insert_with(|| block.hash().to_string());
         last_hash = Some(block.hash().to_string());
         previous = Some(block.hash());
-        project_block(&block, &mut projection, &sidecars, &mut used)?;
-    }
-    if used.len() != sidecars.len() {
-        return Err(eyre!(
-            "supplied merge sidecar is not referenced by the selected range"
-        ));
+        project_block(&block, &mut projection)?;
     }
     for (name, before) in ["blocks.index", "blocks.data", "blocks.hashes"]
         .into_iter()
@@ -609,7 +442,7 @@ pub(super) fn inspect(
         "records": (projection.records), "authenticated_history_verified": false,
         "authenticated_absence_proven": false, "provider_custody_verified": false,
         "hash_journal_content_verified": false,
-        "interpretation": "Admission and proposal appearances are not execution. Recorded success and reference-bound merge results remain unauthenticated until native finality and successful replay are independently established."});
+        "interpretation": "Proposal appearances are not execution. Recorded global and merged execution results and native pulse claims remain unauthenticated until native finality and successful replay are independently established."});
     let encoded = json::to_json_bounded(&report, MAX_OUTPUT_BYTES)?;
     writer.write_all(encoded.as_bytes())?;
     writer.write_all(b"\n")?;
@@ -701,7 +534,6 @@ mod tests {
                 Vec::new(),
                 Default::default(),
                 BTreeSet::new(),
-                Vec::new(),
                 &ExecutionOutputLimits {
                     max_outputs: 16,
                     max_output_bytes: 1024 * 1024,
@@ -754,7 +586,6 @@ mod tests {
     fn options() -> Args {
         Args {
             length: 1,
-            merge_sidecars: Vec::new(),
             output: None,
         }
     }
@@ -791,29 +622,21 @@ mod tests {
     }
 
     #[test]
-    fn beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects() {
+    fn beacon_history_distinguishes_proposals_from_recorded_execution_and_nested_effects() {
         let block = block(vec![lifecycle()]);
         let entrypoint = block.external_entrypoints_slice()[0].clone();
         let result = TransactionResult::from(Ok(Vec::new()));
         let mut projection = Projection::default();
         projection
-            .entrypoint(
-                &entrypoint,
-                &block,
-                "queue_plan_admission_only",
-                0,
-                None,
-                None,
-            )
-            .expect("admission");
+            .entrypoint(&entrypoint, &block, "resultless_proposal_only", 0, None)
+            .expect("proposal");
         projection
             .entrypoint(
                 &entrypoint,
                 &block,
-                "reference_bound_merge_execution",
+                "native_lane_merge_execution",
                 0,
                 Some(&result),
-                Some("merge-hash".to_owned()),
             )
             .expect("execution");
         assert_eq!(
@@ -851,7 +674,6 @@ mod tests {
                 "block_entrypoint_execution",
                 0,
                 Some(&trigger_result),
-                None,
             )
             .expect("recorded trigger");
         assert!(
@@ -996,13 +818,8 @@ mod tests {
             (bad_owner, "typed output ownership or Merkle cache"),
         ] {
             let corrupt: SignedBlock = json::from_value(value).expect("structural fixture");
-            let error = project_block(
-                &corrupt,
-                &mut Projection::default(),
-                &BTreeMap::new(),
-                &mut BTreeSet::new(),
-            )
-            .expect_err("reject changed commitment");
+            let error = project_block(&corrupt, &mut Projection::default())
+                .expect_err("reject changed commitment");
             assert!(error.to_string().contains(expected), "{error}");
         }
     }
@@ -1070,13 +887,7 @@ mod tests {
                 ],
             );
             let mut projection = Projection::default();
-            project_block(
-                &block,
-                &mut projection,
-                &BTreeMap::new(),
-                &mut BTreeSet::new(),
-            )
-            .expect("typed candidate projection");
+            project_block(&block, &mut projection).expect("typed candidate projection");
             assert_eq!(
                 projection.records.len(),
                 5,
@@ -1108,13 +919,7 @@ mod tests {
         let terminal = ExecutionOutputV1::time_output_limit_rejection(time_invocation(&omitted));
         attach_outputs(&mut omitted, vec![network_output(Vec::new()), terminal]);
         let mut projection = Projection::default();
-        project_block(
-            &omitted,
-            &mut projection,
-            &BTreeMap::new(),
-            &mut BTreeSet::new(),
-        )
-        .expect("omitted rejected program");
+        project_block(&omitted, &mut projection).expect("omitted rejected program");
         assert!(projection.records.is_empty());
         assert!(projection.gaps.contains("rejected_trigger_program_omitted"));
     }
@@ -1166,49 +971,126 @@ mod tests {
     }
 
     #[test]
-    fn beacon_history_rejects_malformed_sidecars_and_preserves_their_source() {
-        let block = block(vec![lifecycle()]);
-        let dir = store(&block);
-        let sidecar_dir = tempfile::tempdir().expect("sidecar dir");
-        let sidecar = sidecar_dir.path().join("invalid.norito");
-        fs::write(&sidecar, b"not a public merge entry").expect("fixture");
-        let mut output = Vec::new();
+    fn beacon_history_rejects_removed_merge_sidecar_option() {
+        use clap::Parser;
         assert!(
-            inspect(
-                &mut output,
-                dir.path(),
-                Some(0),
-                &Args {
-                    merge_sidecars: vec![sidecar.clone()],
-                    ..options()
-                }
-            )
+            crate::Cli::try_parse_from([
+                "kagami",
+                "advanced",
+                "kura",
+                "beacon-history",
+                "./public-core",
+                "--from",
+                "1",
+                "--length",
+                "1",
+                "--merge-sidecar",
+                "obsolete.norito",
+            ])
             .is_err()
         );
-        assert!(
-            inspect(
-                &mut output,
-                dir.path(),
-                Some(0),
-                &Args {
-                    merge_sidecars: vec![sidecar.clone()],
-                    output: Some(sidecar.clone()),
-                    ..options()
-                }
+    }
+
+    #[test]
+    fn beacon_history_distinguishes_native_merge_suffix_from_global_inputs() {
+        use iroha_data_model::{
+            block::{BlockExecutionContextBundle, ExternalExecutionContext},
+            nexus::{DataSpaceId, LaneId},
+            sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
+        };
+        let original = block(vec![lifecycle()]);
+        let own = original.external_entrypoints_slice()[0].clone();
+        let merged_source = block(vec![
+            lifecycle(),
+            Log::new(
+                iroha_data_model::level::Level::INFO,
+                "distinct merged source".into(),
             )
-            .is_err()
+            .into(),
+        ]);
+        assert_ne!(
+            original.external_entrypoints_slice()[0].hash(),
+            merged_source.external_entrypoints_slice()[0].hash(),
+            "the suffix has a distinct signed source even within the same millisecond",
         );
-        assert!(output.is_empty());
+        let merged = merged_source.external_entrypoints_slice()[0].clone();
+        let context = |entry: &TransactionEntrypoint, lane: u32| {
+            ExternalExecutionContext::new(entry.hash(), LaneId::new(lane), DataSpaceId::new(0))
+        };
+        let mut bundle = BlockExecutionContextBundle::new(vec![context(&own, 0)]);
+        bundle.lane_merge = Some(SumeragiLaneMergeSection {
+            merges: vec![SumeragiLaneMerge {
+                lane: LaneId::new(16),
+                incarnation: [1; 32],
+                from: 1,
+                to: 1,
+                tip_hash: [2; 32],
+                tip_result: [3; 32],
+            }],
+            time_floor_ms: 0,
+            merged_count: 0,
+        });
+        // This inspector fixture proves structural projection, not lane finality.
+        let mut proposal = original.as_ref().clone();
+        proposal.set_execution_context(Some(bundle));
+        let mut executed = proposal
+            .with_merged_entrypoints(vec![merged.clone()], vec![context(&merged, 16)])
+            .expect("native merge suffix");
+        attach_outputs(
+            &mut executed,
+            vec![
+                network_output(Vec::new()),
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: 1,
+                    result: TransactionResult::new(Ok(Vec::new())),
+                    completions: Vec::new(),
+                }),
+            ],
+        );
+        let mut projection = Projection::default();
+        project_block(&executed, &mut projection).expect("native output projection");
+        assert_eq!(projection.records.len(), 2);
         assert_eq!(
-            fs::read(&sidecar).expect("preserved input"),
-            b"not a public merge entry"
+            projection.records[0]["occurrence"]["source"].as_str(),
+            Some("block_network_execution")
         );
-        #[cfg(unix)]
-        {
-            let link = sidecar_dir.path().join("linked.norito");
-            std::os::unix::fs::symlink(&sidecar, &link).expect("link");
-            assert!(bounded_public_file(&link, 100).is_err());
-        }
+        assert_eq!(
+            projection.records[1]["occurrence"]["source"].as_str(),
+            Some("native_lane_merge_execution")
+        );
+        assert_eq!(
+            projection.records[1]["occurrence"]["entrypoint_hash"].as_str(),
+            Some(merged.hash().to_string().as_str())
+        );
+        assert_eq!(
+            projection.records[1]["occurrence"]["authenticated_execution_verified"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn beacon_history_projects_actual_native_pulse_and_rejects_foreign_execution_claim() {
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::npos_boundary_fixture();
+        let pulse_block = chain.committed(9).block().clone();
+        let mut projection = Projection::default();
+        project_block(&pulse_block, &mut projection).expect("actual native pulse execution");
+        let pulse = projection
+            .records
+            .iter()
+            .find(|record| record["kind"].as_str() == Some("global_beacon_pulse_candidate"))
+            .expect("pulse from native result preimage");
+        assert_eq!(pulse["pulse_height"].as_u64(), Some(9));
+        assert_eq!(pulse["pulse_signature_verified"].as_bool(), Some(false));
+        let mut foreign = chain.committed(8).block().as_ref().clone();
+        foreign.set_commit_certificate(pulse_block.commit_certificate().cloned());
+        assert!(project_native_pulse(&foreign, &mut Projection::default()).is_err());
+        let malformed = iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+            Vec::new(),
+            Vec::new(),
+            b"not a native result".to_vec(),
+        );
+        foreign.set_commit_certificate(Some(malformed));
+        assert!(project_native_pulse(&foreign, &mut Projection::default()).is_err());
     }
 
     #[test]

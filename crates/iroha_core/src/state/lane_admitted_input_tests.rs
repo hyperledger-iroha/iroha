@@ -28,8 +28,8 @@ fn first_lane_input_fixture(seed: u8) -> (Box<LaneContextVerifiedFixture>, Vec<u
 
 /// Build a lifecycle test source through the same finalized State and Kura
 /// authentication path used by native input preparation.
-pub(crate) fn authenticated_native_source_for_lifecycle_fixture(
-) -> Arc<super::AuthenticatedLaneAdmittedInputSourceV1> {
+pub(crate) fn authenticated_native_source_for_lifecycle_fixture()
+-> Arc<super::AuthenticatedLaneAdmittedInputSourceV1> {
     let (fixture, _) = first_lane_input_fixture(0x7B);
     let state = &fixture.state;
     let observed = state
@@ -80,7 +80,6 @@ fn publish_first_lane_input_fixture(
             Vec::new(),
             AxtPolicySnapshot::default(),
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();
@@ -424,7 +423,7 @@ state_test! { sync canonical_queue_plan_input_component_carrier_requires_separat
     let mut carrier = builder.build_with_signature(0, key.private_key());
     carrier.set_execution_outputs(
         Vec::new(), 0, BTreeMap::new(), Vec::new(), AxtPolicySnapshot::default(),
-        Default::default(), Vec::new(),
+        Default::default(),
         &crate::execution_output_test_support::structural_output_limits(),
     ).unwrap();
     carrier.validate_proposal_commitments().unwrap();

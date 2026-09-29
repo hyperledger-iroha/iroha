@@ -39,15 +39,12 @@ fn arguments() -> Vec<String> {
         ("signed-genesis-max-bytes", "4096".to_owned()),
         ("network-id", network().to_string()),
         ("block-store", "/independent/kura".to_owned()),
-        ("merge-log", "/independent/kura/merge.log".to_owned()),
         ("reply-max-bytes", "512".to_owned()),
         ("first-height", "1".to_owned()),
         ("last-height", "1".to_owned()),
         ("max-committed-blocks", "8".to_owned()),
         ("max-store-data-bytes", "16777216".to_owned()),
         ("max-carrier-bytes", "8388608".to_owned()),
-        ("max-merge-log-bytes", "16777216".to_owned()),
-        ("max-merge-frames", "8".to_owned()),
         ("reader-max-output-bytes", "16777216".to_owned()),
         ("max-decode-allocation-bytes", "134217728".to_owned()),
         ("owner-uid", "501".to_owned()),
@@ -220,5 +217,14 @@ fn actual_buffered_reply_propagates_write_and_flush_failures() {
         assert_eq!(result.is_err(), fail_write || fail_flush);
         assert!(writes.load(Ordering::SeqCst) > 0);
         assert_eq!(flushes.load(Ordering::SeqCst), usize::from(!fail_write));
+    }
+}
+
+#[test]
+fn retired_merge_storage_flags_are_rejected_without_fallback() {
+    for flag in ["--merge-log", "--max-merge-log-bytes", "--max-merge-frames"] {
+        let mut supplied = arguments();
+        supplied.extend([flag.to_owned(), "1".to_owned()]);
+        assert!(Parse::try_parse_from(supplied).is_err(), "{flag}");
     }
 }

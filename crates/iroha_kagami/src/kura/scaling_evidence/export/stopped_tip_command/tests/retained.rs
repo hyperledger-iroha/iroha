@@ -29,11 +29,7 @@ fn from_fixture(fixture: &Fixture) -> Args {
         "--block-store",
         fixture.block_store().to_str().unwrap(),
     );
-    set(
-        &mut values,
-        "--merge-log",
-        fixture.merge_log().to_str().unwrap(),
-    );
+    set(&mut values);
     let reader = fixture.reader_limits();
     for (flag, value) in [
         ("--first-height", 1),
@@ -41,8 +37,6 @@ fn from_fixture(fixture: &Fixture) -> Args {
         ("--max-committed-blocks", reader.max_committed_blocks),
         ("--max-store-data-bytes", reader.max_store_data_bytes),
         ("--max-carrier-bytes", reader.max_carrier_bytes as u64),
-        ("--max-merge-log-bytes", reader.max_merge_log_bytes),
-        ("--max-merge-frames", reader.max_merge_frames),
         ("--reader-max-output-bytes", reader.max_output_bytes),
         (
             "--max-decode-allocation-bytes",

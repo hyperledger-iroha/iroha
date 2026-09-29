@@ -5,15 +5,16 @@ import { networkIdBytes } from "./networkId.js";
 
 export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1 = 1;
 export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 = 32 * 1024 * 1024;
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1 = 9 * 1024 * 1024;
+export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1 = 36 * 1024 * 1024;
 export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1 = 16 * 1024 * 1024;
+
+const MAX_CHECKPOINT_BYTES = 68 * 1024 * 1024;
 
 const INPUT_KEYS = new Set([
   "version",
   "networkId",
-  "trustedContextId",
+  "trustedCheckpointNorito",
   "expectedEntryHash",
-  "previousFinalityProofNorito",
   "finalityProofNorito",
   "executedBlockWire",
   "blockProofsNorito",
@@ -21,7 +22,7 @@ const INPUT_KEYS = new Set([
 const REQUIRED_INPUT_KEYS = [
   "version",
   "networkId",
-  "trustedContextId",
+  "trustedCheckpointNorito",
   "expectedEntryHash",
   "finalityProofNorito",
   "executedBlockWire",
@@ -188,17 +189,11 @@ function normalizeInput(input) {
     );
   }
   networkIdBytes(input.networkId, "authenticated BlockProofs networkId");
-  const trustedContextId = copyBoundedBytes(
-    input.trustedContextId,
-    "authenticated BlockProofs trustedContextId",
-    32,
-    32,
+  const trustedCheckpointNorito = copyBoundedBytes(
+    input.trustedCheckpointNorito,
+    "authenticated BlockProofs trustedCheckpointNorito",
+    MAX_CHECKPOINT_BYTES,
   );
-  if ((trustedContextId[31] & 1) !== 1) {
-    throw new TypeError(
-      "authenticated BlockProofs trustedContextId must carry the Iroha hash marker bit",
-    );
-  }
   const expectedEntryHash = copyBoundedBytes(
     input.expectedEntryHash,
     "authenticated BlockProofs expectedEntryHash",
@@ -210,21 +205,11 @@ function normalizeInput(input) {
       "authenticated BlockProofs expectedEntryHash must carry the Iroha hash marker bit",
     );
   }
-  const previousFinalityProofNorito =
-    input.previousFinalityProofNorito === undefined ||
-    input.previousFinalityProofNorito === null
-      ? null
-      : copyBoundedBytes(
-          input.previousFinalityProofNorito,
-          "authenticated BlockProofs previousFinalityProofNorito",
-          AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
-        );
   return {
     version: input.version,
     networkId: input.networkId.literal,
-    trustedContextId,
+    trustedCheckpointNorito,
     expectedEntryHash,
-    previousFinalityProofNorito,
     finalityProofNorito: copyBoundedBytes(
       input.finalityProofNorito,
       "authenticated BlockProofs finalityProofNorito",
@@ -267,11 +252,11 @@ function normalizeVerdict(value, expectedEntryHash) {
   ) {
     throw new Error("native authenticated BlockProofs blockHeight is not a positive decimal");
   }
-  const heightContextIdHex = normalizeHex32(
-    value.heightContextIdHex,
-    "heightContextIdHex",
+  const contextIdHex = normalizeHex32(
+    value.contextIdHex,
+    "contextIdHex",
   );
-  if ((Number.parseInt(heightContextIdHex.slice(-2), 16) & 1) !== 1) {
+  if ((Number.parseInt(contextIdHex.slice(-2), 16) & 1) !== 1) {
     throw new Error("native authenticated BlockProofs context id is not a marked Iroha hash");
   }
   const entryHashHex = normalizeHex32(value.entryHashHex, "entryHashHex");
@@ -280,6 +265,12 @@ function normalizeVerdict(value, expectedEntryHash) {
     throw new Error(
       "native authenticated BlockProofs verdict is not bound to expectedEntryHash",
     );
+  }
+  let checkpointNorito = null;
+  if (value.valid) {
+    checkpointNorito = copyBoundedBytes(value.checkpointNorito, "native authenticated BlockProofs checkpointNorito", MAX_CHECKPOINT_BYTES);
+  } else if (value.checkpointNorito !== null) {
+    throw new Error("native authenticated BlockProofs mismatch must not promote a checkpoint");
   }
   return Object.freeze({
     valid: value.valid,
@@ -291,19 +282,16 @@ function normalizeVerdict(value, expectedEntryHash) {
       "executedBlockWireHashHex",
     ),
     entryHashHex,
-    heightContextIdHex,
+    contextIdHex,
+    checkpointNorito,
   });
 }
 
 /**
- * Verify canonical Torii `BlockProofs` through native Sumeragi-v2 finality.
- *
- * The caller must pin `networkId` and `trustedContextId` outside the Torii
- * response and provide the originally requested `expectedEntryHash`, never a
- * hash copied from `BlockProofs`. Supplying `previousFinalityProofNorito`
- * advances exactly one cryptographically linked height; omitting it verifies
- * the target as the initially pinned context. No JavaScript-created structural
- * anchor is used.
+ * Verify canonical Torii BlockProofs through native finality.
+ * The network and complete trustedCheckpointNorito must be selected independently of the
+ * response. The target must be that exact checkpoint decision or its immediate successor.
+ * Promote returned checkpointNorito only when valid is true; a context digest is diagnostic.
  */
 export async function verifyAuthenticatedBlockProofsV1(input) {
   const normalized = normalizeInput(input);

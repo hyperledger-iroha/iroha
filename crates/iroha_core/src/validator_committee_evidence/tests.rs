@@ -78,7 +78,6 @@ fn outputs(block: &mut SignedBlock) {
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();

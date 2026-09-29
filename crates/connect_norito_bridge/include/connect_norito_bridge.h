@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 24
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -45,7 +45,7 @@ extern "C" {
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1 8388608
-#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 41
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1 41
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -117,23 +117,26 @@ uint32_t connect_norito_bridge_abi_version(void);
 void connect_norito_free(uint8_t *ptr);
 
 // Authenticate one selective current CommittedTransaction QueryResponse against
-// an independently pinned 32-byte NetworkId, canonical height-context hash,
-// and exact 32-byte requested transaction hash. The bounded JSON array must
-// contain 1..4096 consecutive four-validator BridgeFinalityBundle values.
-// On success, out_row is exact bare `norito::to_bytes(CommittedTransaction)`
-// (at most 4 MiB), suitable for lowercase-hex FI commit. out_result_ok is 1
-// only for an authenticated successful execution; a rejected execution is
-// still authentic and returns 0. All outputs are cleared on failure. Free the
-// row with connect_norito_free.
+// an independently selected NetworkId, chain UTF-8 label (1..1024 bytes), canonical
+// native checkpoint (at most 68 MiB), and exact requested transaction hash.
+// The bounded JSON array contains 1..4096 consecutive SumeragiFinalityProof values,
+// beginning at that checkpoint, at most 16 MiB. No scalar trust anchor is accepted.
+// The verified native capability binds the original full wire and result before
+// row inclusion. A genuine rejected execution returns success with result_ok=0.
+// On success, free both the canonical row (at most 4 MiB) and promoted canonical
+// checkpoint with connect_norito_free. All outputs are cleared on failure;
+// output slots must be distinct and must not overlap input storage.
 int32_t connect_norito_verify_committed_transaction_inclusion_v1(
     const uint8_t* response,
     unsigned long response_len,
-    const uint8_t* finality_bundle_chain_json,
-    unsigned long finality_bundle_chain_json_len,
+    const uint8_t* native_finality_proof_chain_json,
+    unsigned long native_finality_proof_chain_json_len,
     const uint8_t* expected_network_id,
     unsigned long expected_network_id_len,
-    const uint8_t* trusted_height_context_id_utf8,
-    unsigned long trusted_height_context_id_utf8_len,
+    const uint8_t* expected_chain_utf8,
+    unsigned long expected_chain_utf8_len,
+    const uint8_t* trusted_checkpoint,
+    unsigned long trusted_checkpoint_len,
     const uint8_t* expected_transaction_hash,
     unsigned long expected_transaction_hash_len,
     uint8_t** out_row,
@@ -141,10 +144,12 @@ int32_t connect_norito_verify_committed_transaction_inclusion_v1(
     uint8_t* out_output_hash_32,
     uint8_t* out_block_hash_32,
     uint64_t* out_block_height,
-    uint8_t* out_result_ok);
+    uint8_t* out_result_ok,
+    uint8_t** out_checkpoint,
+    unsigned long* out_checkpoint_len);
 
 // Exact committed-row decoder returning an *untrusted routing hint* for locating
-// the carrier among consecutive finality bundles. Status 0 means one matching
+// the carrier among consecutive native finality proofs. Status 0 means one matching
 // row and writes its block hash; status 1 means a canonical empty committed-row
 // page and leaves output zeroed; -508 rejects malformed, foreign, multirow or
 // wrong-transaction evidence. A status-0 hint never authenticates the block or
@@ -255,21 +260,18 @@ int32_t connect_norito_canonical_json_blake3_v1(
     uint8_t* out_hash,
     unsigned long out_hash_len);
 
-// Encodes the canonical Norito V1 request body for
-// POST /v1/validation-fee/policy/current/proof. The context id is validated
-// for symmetry with the verifier but is not serialized by the frozen request.
+// Encodes POST /v1/validation-fee/policy/current/proof from one independently
+// selected complete canonical native checkpoint. Its height is derived locally.
 int32_t connect_norito_validation_fee_current_policy_proof_request_v1(
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint,
+    unsigned long trusted_checkpoint_len,
     uint8_t** out_request,
     unsigned long* out_request_len);
 
-// Verifies one canonical Norito proof page against finality, its synthetic
-// ordinary-write witness, the complete registry, and all immutable deployment
-// bindings. On success it returns canonical JSON using schema
-// iroha.validation_fee.verified_policy_projection.v1. The output is cleared on
-// failure and must be released with connect_norito_free on success.
+// Verifies native finality, ordinary writes, registry and immutable network/policy
+// bindings. Returns projection JSON and the promoted canonical native checkpoint.
+// Persist the pair atomically before paging. Outputs must be distinct, are both
+// cleared on failure, and each must be freed with connect_norito_free on success.
 int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     const uint8_t* proof_norito,
     unsigned long proof_norito_len,
@@ -277,11 +279,12 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     unsigned long network_id_len,
     const uint8_t* policy_chain_genesis_hash,
     unsigned long policy_chain_genesis_hash_len,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint,
+    unsigned long trusted_checkpoint_len,
     uint8_t** out_projection_json,
-    unsigned long* out_projection_json_len);
+    unsigned long* out_projection_json_len,
+    uint8_t** out_promoted_checkpoint,
+    unsigned long* out_promoted_checkpoint_len);
 
 // Encodes the exact canonical Norito V1 request body for
 // POST /v1/validation-fee/hijiri/quote. The account id must be a canonical
@@ -359,21 +362,25 @@ int32_t connect_norito_private_settlement_audit_approval_response_verify_v1(
 
 // Authenticates one bounded proof page against independently configured
 // network/checkpoint/ballot anchors. The caller-owned output must contain
-// exactly 41 bytes: big-endian u64 evaluated height, 32-byte evaluated context
+// exactly 41 diagnostic bytes: big-endian u64 evaluated height, 32-byte evaluated context
 // id, and canonical 0/1 more-available. Intermediate pages promote only the
 // checkpoint; terminal pages also replay and bind the complete Core archive.
+// Every successful call returns the complete canonical promoted checkpoint in
+// separate owned output storage. Free every owned output with connect_norito_free.
+// A scalar summary is never an input authority. All output slots are distinct.
 int32_t connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
     const uint8_t* proof_response_norito,
     unsigned long proof_response_norito_len,
     const uint8_t* network_id,
     unsigned long network_id_len,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint_norito,
+    unsigned long trusted_checkpoint_norito_len,
     const uint8_t* expected_ballot_attempt_id,
     unsigned long expected_ballot_attempt_id_len,
     uint8_t* out_page_result,
-    unsigned long out_page_result_len);
+    unsigned long out_page_result_len,
+    uint8_t** out_checkpoint_norito,
+    unsigned long* out_checkpoint_norito_len);
 
 // Authenticates a terminal proof response against independently configured
 // network/checkpoint/ballot anchors, then canonical-decodes and replay-validates
@@ -383,23 +390,23 @@ int32_t connect_norito_parliament_timed_ovn_verify_casting_proof_v1(
     unsigned long proof_response_norito_len,
     const uint8_t* network_id,
     unsigned long network_id_len,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint_norito,
+    unsigned long trusted_checkpoint_norito_len,
     const uint8_t* expected_ballot_attempt_id,
-    unsigned long expected_ballot_attempt_id_len);
+    unsigned long expected_ballot_attempt_id_len,
+    uint8_t** out_checkpoint_norito,
+    unsigned long* out_checkpoint_norito_len);
 
 // Verifies the same proof and archive before reading the exact 32-byte
-// caller-keystore seed. Only the public registration record is returned.
+// caller-keystore seed. The public record and complete promoted checkpoint are returned.
 // The two output slots must be distinct and must not overlap input storage.
 int32_t connect_norito_parliament_timed_ovn_registration_from_proof_v1(
     const uint8_t* proof_response_norito,
     unsigned long proof_response_norito_len,
     const uint8_t* network_id,
     unsigned long network_id_len,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint_norito,
+    unsigned long trusted_checkpoint_norito_len,
     const uint8_t* expected_ballot_attempt_id,
     unsigned long expected_ballot_attempt_id_len,
     const char* authority,
@@ -407,7 +414,9 @@ int32_t connect_norito_parliament_timed_ovn_registration_from_proof_v1(
     const uint8_t* keystore_seed,
     unsigned long keystore_seed_len,
     uint8_t** out_registration,
-    unsigned long* out_registration_len);
+    unsigned long* out_registration_len,
+    uint8_t** out_checkpoint_norito,
+    unsigned long* out_checkpoint_norito_len);
 
 // Verifies the same proof and archive before reading the seed, reconstructs the
 // exact committed registration, and returns a survivor- and release-bound
@@ -418,9 +427,8 @@ int32_t connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
     unsigned long proof_response_norito_len,
     const uint8_t* network_id,
     unsigned long network_id_len,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id,
-    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* trusted_checkpoint_norito,
+    unsigned long trusted_checkpoint_norito_len,
     const uint8_t* expected_ballot_attempt_id,
     unsigned long expected_ballot_attempt_id_len,
     const char* authority,
@@ -429,7 +437,9 @@ int32_t connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
     unsigned long keystore_seed_len,
     uint8_t choice,
     uint8_t** out_ballot,
-    unsigned long* out_ballot_len);
+    unsigned long* out_ballot_len,
+    uint8_t** out_checkpoint_norito,
+    unsigned long* out_checkpoint_norito_len);
 
 // ---------------- Chain discriminant helpers ----------------
 // Thread-scoped overrides must be exited on the same thread and in LIFO order.
@@ -481,7 +491,7 @@ typedef enum ConnectNoritoKagemushaIpm1PayloadKindV1 {
 } ConnectNoritoKagemushaIpm1PayloadKindV1;
 
 /** Validate canonical payer-signed bytes against the entire original canonical reviewed top-up.
- * Signature, network, QueuePlanSynced, instruction count/type and payer must all match.
+ * Signature, network, instruction count/type and payer must all match.
  * Returns zero only on success. No value is released and no input is retained.
  */
 int32_t connect_norito_kagemusha_top_up_signed_request_validate_v1(
@@ -490,26 +500,26 @@ int32_t connect_norito_kagemusha_top_up_signed_request_validate_v1(
 
 // Bounded non-authoritative coordinates from an operation response. Success returns
 // JSON null for pending/rejected, or {version:1, network_id:<hex>, block_height:<decimal
-// string>, height_context_id:<hex>}. These are lookup hints, never a trust source.
+// string>, block_hash:<hex>}. These are lookup hints, never a trust source.
 // Outputs are cleared on failure; free successful buffers with connect_norito_free.
 int32_t connect_norito_kagemusha_reserve_finality_hint_v1(
     const uint8_t* response_json, unsigned long response_json_len,
     uint8_t** out_json, unsigned long* out_json_len);
 
 // Authenticate APPLIED finality for an independently retained exact canonical V1
-// request and independently trusted network/height/context. expected_kind is 0 for
+// request and independently trusted network and canonical native checkpoint. expected_kind is 0 for
 // top-up and 1 for redemption. Returns the existing canonical MintCreditV1 or
 // RedemptionVoucherV1, respectively. It never releases PENDING/REJECTED as value.
 // Core must still admit the exact release, hardware and proof before mint staging.
 // Persist original response and independent anchor provenance before retirement.
 // Outputs are cleared on failure; free successful buffers with connect_norito_free.
+#define CONNECT_NORITO_KAGEMUSHA_FINALITY_CHECKPOINT_MAX_BYTES_V1 71303168
 int32_t connect_norito_kagemusha_reserve_finality_verify_v1(
     const uint8_t* response_json, unsigned long response_json_len,
     uint8_t expected_kind,
     const uint8_t* expected_request, unsigned long expected_request_len,
     const uint8_t* trusted_network_id, unsigned long trusted_network_id_len,
-    uint64_t trusted_block_height,
-    const uint8_t* trusted_context_id, unsigned long trusted_context_id_len,
+    const uint8_t* trusted_checkpoint, unsigned long trusted_checkpoint_len,
     uint8_t** out_payload, unsigned long* out_payload_len);
 
 int32_t connect_norito_kagemusha_v1_payment_request_validate(
@@ -614,26 +624,25 @@ int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
     uint8_t* output_observation, size_t output_capacity, size_t* output_length);
 
 // Observe an actual Applied top-up and paired MintFold proof using a private
-// pre-send reservation and separately authenticated finality context already
+// pre-send reservation and separately authenticated native checkpoint already
 // pinned by the Rust-only durable owner. Caller coordinates must match that
 // pin; they cannot establish trust themselves. The reservation and its credit
 // opening never cross this ABI. The original status
-// response is bounded Torii JSON; the independent finality network, height,
-// and context are exact raw coordinates, and State inputs/proof are canonical
+// response is bounded Torii JSON; the independently selected native checkpoint
+// is canonical Norito bound to the exact network, and State inputs/proof are canonical
 // Norito archives. The returned record declares hardware_qualified
 // false and grants no payment, redemption, or production wallet capability.
 // A missing durable owner or reservation fails closed. output_length is aligned
 // and disjoint from all input/output spans; full output capacity is mandatory.
 #if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
-#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 16777216
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 150995968
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 32
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 512
 int32_t connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
     const uint8_t* operation_id, size_t operation_id_length,
     const uint8_t* status_json, size_t status_json_length,
     const uint8_t* anchor_network_id, size_t anchor_network_id_length,
-    uint64_t anchor_height,
-    const uint8_t* anchor_context_id, size_t anchor_context_id_length,
+    const uint8_t* anchor_checkpoint, size_t anchor_checkpoint_length,
     const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
     const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
     uint8_t* output_observation, size_t output_capacity, size_t* output_length);

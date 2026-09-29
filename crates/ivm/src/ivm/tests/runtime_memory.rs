@@ -72,6 +72,7 @@ fn warm_runtime_template_reset_does_not_clone_reload_or_reparse() {
 }
 fn funded_template_demand(vm: &IVM) -> usize {
     norito::core::owned_arc_allocation_bytes::<RuntimeTemplateData>().unwrap()
+        + norito::core::owned_arc_allocation_bytes::<RuntimeTemplateBacking>().unwrap()
         + vm.memory
             .runtime_template_memory_plan()
             .unwrap()
@@ -245,6 +246,8 @@ fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas(
     let ordinary_template = ordinary.try_runtime_template().unwrap();
     let before_gas = vm.remaining_gas();
     let before_pc = vm.pc;
+    // Tracked probes reuse this prepaid read array throughout zero-limit resets.
+    assert_eq!(vm.memory.load_u64(Memory::STACK_START), Ok(0));
     let reserved = budget.reserved_bytes();
     let row_bytes = 4 * std::mem::size_of::<crate::WriteLogEntry>();
     budget.set_limit_bytes(0);
@@ -298,6 +301,8 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     let program = program_with_imm(7);
     vm.load_program(&program).unwrap();
     local.load_program(&program).unwrap();
+    // Probe reads below must not borrow write-log or bitmap observation credit.
+    assert_eq!(vm.memory.load_u64(Memory::STACK_START), Ok(0));
     let base = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     let pc = vm.pc;
@@ -507,7 +512,7 @@ fn contract_return_integrity_is_cloned_and_cleared_at_reuse_boundaries() {
     assert!(cloned.strict_return_integrity);
     assert_eq!(&cloned.contract_return_stack[..], &[4, 8]);
     assert_eq!(cloned.contract_outer_return_pc, Some(12));
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     assert!(vm.contract_return_stack.is_empty());
     assert_eq!(vm.contract_outer_return_pc, None);
     vm.contract_return_stack.try_push(12).unwrap();
@@ -574,7 +579,7 @@ fn funded_child_return_backing_defers_before_gas_and_keeps_its_charge() {
         budget.reserved_bytes(),
         occupied + MAX_CONTRACT_CALL_DEPTH * std::mem::size_of::<u64>()
     );
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     assert!(vm.contract_return_stack.is_empty());
     assert_eq!(
         budget.reserved_bytes(),
@@ -800,15 +805,20 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert_eq!(budget.reserved_bytes(), total_bytes);
     let mut ordinary = IVM::try_new(gas_limit).unwrap();
     ordinary.load_code(&code).unwrap();
+    // Unprepared fetch logging owns separate rows; construction geometry stays exact.
+    let read_bytes = 4 * std::mem::size_of::<crate::AccessRange>();
+    budget.set_limit_bytes(total_bytes + read_bytes);
     vm.run().unwrap();
     ordinary.run().unwrap();
     assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
     assert_eq!(vm.memory.current_root(), ordinary.memory.current_root());
     assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
-    vm.reset();
-    ordinary.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
+    ordinary
+        .reset()
+        .expect("private lifecycle cleanup succeeds");
     assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
-    assert_eq!(budget.reserved_bytes(), total_bytes);
+    assert_eq!(budget.reserved_bytes(), total_bytes + read_bytes);
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -887,4 +897,75 @@ fn snapshot_refusal_keeps_the_host_and_allows_retry() {
     assert_eq!(vm.remaining_gas(), before_gas);
     assert!(vm.host_mut_any().is_some());
     vm.try_clone_snapshot().expect("snapshot fits retry");
+}
+
+#[test]
+fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
+    let mut local = quiet_vm(1_000);
+    let program = program_with_imm(7);
+    vm.load_program(&program).unwrap();
+    local.load_program(&program).unwrap();
+    vm.memory
+        .preload_input(0, &[1, 2, 3, 4, 5, 6, 7, 8])
+        .unwrap();
+    local
+        .memory
+        .preload_input(0, &[1, 2, 3, 4, 5, 6, 7, 8])
+        .unwrap();
+    vm.memory.commit();
+    local.memory.commit();
+    for _ in 0..4 {
+        vm.memory.load_u8(Memory::OUTPUT_START).unwrap();
+    }
+    let occupied = budget.reserved_bytes();
+    let gas = vm.remaining_gas();
+    let pc = vm.pc;
+    let root = vm.memory.current_root();
+    let privacy = vm.private_memory_bytes.pairs_for_testing().to_vec();
+    let mut output = [0xa5; 8];
+    budget.set_limit_bytes(0);
+    assert!(matches!(
+        vm.memory.load_bytes(Memory::INPUT_START, &mut output),
+        Err(VMError::AllocationDeferred(_))
+    ));
+    assert_eq!(output, [0xa5; 8]);
+    // Existing history is observed without a new funded snapshot under refusal.
+    assert_eq!(
+        vm.memory.inspect_region(Memory::INPUT_START, 8).unwrap(),
+        &[1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    // Address/alignment errors still precede local allocation admission.
+    assert!(matches!(
+        vm.memory.load_u8(u64::MAX),
+        Err(VMError::MemoryAccessViolation { .. })
+    ));
+    assert!(matches!(
+        vm.memory.load_u64(Memory::INPUT_START + 1),
+        Err(VMError::MisalignedAccess { .. })
+    ));
+    assert_eq!(vm.remaining_gas(), gas);
+    assert_eq!(vm.pc, pc);
+    assert_eq!(vm.memory.current_root(), root);
+    assert_eq!(vm.private_memory_bytes.pairs_for_testing(), privacy);
+    assert_eq!(budget.reserved_bytes(), occupied);
+    let read_bytes = 8 * std::mem::size_of::<crate::AccessRange>();
+    budget.set_limit_bytes(occupied + read_bytes);
+    vm.memory
+        .load_bytes(Memory::INPUT_START, &mut output)
+        .unwrap();
+    assert_eq!(output, [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(
+        vm.memory.load_u64(Memory::INPUT_START),
+        local.memory.load_u64(Memory::INPUT_START)
+    );
+    assert_eq!(budget.reserved_bytes(), occupied + read_bytes / 2);
+    vm.run().unwrap();
+    local.run().unwrap();
+    assert_eq!(vm.remaining_gas(), local.remaining_gas());
+    assert_eq!(vm.memory.current_root(), local.memory.current_root());
+    assert_eq!(vm.registers.merkle_root(), local.registers.merkle_root());
+    drop(vm);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

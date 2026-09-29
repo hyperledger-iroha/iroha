@@ -11,7 +11,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::{DurableV2FinalityTelemetrySummary, Kura},
+    kura::Kura,
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::Queue,
     state::{State, WorldReadOnly},
@@ -687,40 +687,6 @@ pub struct AxtRejectHint {
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
 }
-struct CommitQcTelemetryPublisher {
-    metrics: Arc<Metrics>,
-    update: StdRwLock<()>,
-}
-impl CommitQcTelemetryPublisher {
-    fn new(metrics: Arc<Metrics>) -> Self {
-        Self {
-            metrics,
-            update: StdRwLock::new(()),
-        }
-    }
-    fn publish(&self, summary: DurableV2FinalityTelemetrySummary) {
-        let _update_guard = self
-            .update
-            .write()
-            .expect("commit QC telemetry summary lock poisoned");
-        let current = (
-            self.metrics.sumeragi_commit_qc_height.get(),
-            self.metrics.sumeragi_commit_qc_view.get(),
-        );
-        if summary.position() < current {
-            return;
-        }
-        self.metrics.sumeragi_commit_qc_height.set(summary.height());
-        self.metrics.sumeragi_commit_qc_view.set(summary.view());
-        self.metrics.sumeragi_commit_qc_epoch.set(summary.epoch());
-        self.metrics
-            .sumeragi_commit_qc_signatures_total
-            .set(summary.signatures_total());
-        self.metrics
-            .sumeragi_commit_qc_validator_set_len
-            .set(summary.validator_set_len());
-    }
-}
 /// Slice of metrics used to be used from within [`State`].
 ///
 /// Needed to brake the circular dependency from [`Telemetry`] to [`State`].
@@ -728,7 +694,6 @@ impl CommitQcTelemetryPublisher {
 pub struct StateTelemetry {
     metrics: Arc<Metrics>,
     enabled: bool,
-    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     time_source: TimeSource,
     lane_metadata: Arc<StdRwLock<BTreeMap<u32, LaneMetadataSnapshot>>>,
     dataspace_metadata: Arc<StdRwLock<BTreeMap<u64, DataspaceMetadataSnapshot>>>,
@@ -762,11 +727,9 @@ impl StateTelemetry {
         let soranet_privacy = Arc::new(
             SoranetSecureAggregator::new(privacy_config).expect("valid SoraNet privacy config"),
         );
-        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Self {
             metrics,
             enabled,
-            commit_qc_publisher,
             time_source: TimeSource::new_system(),
             lane_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
             dataspace_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -2432,13 +2395,6 @@ impl StateTelemetry {
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-    /// Publish a Kura-authenticated durable v2 finality summary monotonically.
-    pub(crate) fn record_durable_v2_finality_summary(
-        &self,
-        summary: DurableV2FinalityTelemetrySummary,
-    ) {
-        self.commit_qc_publisher.publish(summary);
-    }
     /// Record the latest storage budget usage for a component.
     pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
         if !self.is_enabled() {
@@ -2688,24 +2644,6 @@ impl StateTelemetry {
             entry.finality_lag_slots = lag;
             entry.rbc_bytes_total = rbc_bytes_total;
         });
-    }
-    #[cfg(test)]
-    /// Record use of emergency validator overrides during lane relay validation.
-    pub fn record_lane_relay_emergency_override(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        outcome: &str,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        self.metrics
-            .lane_relay_emergency_override_total
-            .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), outcome])
-            .inc();
     }
     fn with_dataspace_snapshot<F>(&self, lane_id: LaneId, dataspace_id: DataSpaceId, update: F)
     where
@@ -4641,7 +4579,6 @@ pub struct Telemetry {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
     enabled: bool,
-    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     sync_requested: Arc<AtomicBool>,
     time_source: TimeSource,
     soranet_privacy: Arc<SoranetSecureAggregator>,
@@ -4655,7 +4592,6 @@ impl Clone for Telemetry {
             last_reported_block: Arc::clone(&self.last_reported_block),
             metrics: Arc::clone(&self.metrics),
             enabled: self.enabled,
-            commit_qc_publisher: Arc::clone(&self.commit_qc_publisher),
             sync_requested: Arc::clone(&self.sync_requested),
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
@@ -4754,13 +4690,11 @@ impl Telemetry {
             SoranetSecureAggregator::new(PrivacyBucketConfig::default())
                 .expect("valid default SoraNet privacy config"),
         );
-        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         Telemetry {
             actor,
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics,
             enabled,
-            commit_qc_publisher,
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy,
@@ -6171,7 +6105,6 @@ impl From<StateTelemetry> for Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics: st.metrics.clone(),
             enabled: st.enabled,
-            commit_qc_publisher: Arc::clone(&st.commit_qc_publisher),
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
@@ -6251,7 +6184,7 @@ impl Actor {
         if !self.enabled {
             return Err(StatusSnapshotError::Disabled);
         }
-        refresh_sumeragi_mode(&self.metrics);
+        refresh_sumeragi_mode(&self.metrics, &self.state);
         refresh_ivm_execution_budget_metrics(&self.metrics, &self.state.ivm_execution_budget());
         let local_removed = {
             let world = self.state.world_view();
@@ -6815,7 +6748,6 @@ pub fn start(
     let (actor, handle) = mpsc::channel(CHANNEL_CAPACITY);
     let last_reported_block = Arc::new(RwLock::new(None));
     let sync_requested = Arc::new(AtomicBool::new(false));
-    let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
     let soranet_privacy = Arc::new(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
@@ -6826,7 +6758,6 @@ pub fn start(
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
             enabled,
-            commit_qc_publisher,
             sync_requested: sync_requested.clone(),
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
@@ -6859,11 +6790,23 @@ pub fn start(
         ),
     ))
 }
-/// Project the frozen reducer-owned mode, never a configuration candidate or
-/// the default of an unrelated metrics registry. No owner means unknown mode.
-fn refresh_sumeragi_mode(metrics: &Metrics) {
-    let mode_tag = crate::sumeragi::v2_status::v2_status()
-        .map(|status| status.height_context.mode.tag())
+/// Project the next height's authenticated native scheduling mode from this State.
+/// Missing, pending or malformed authority clears a stale mode instead of using configuration.
+fn refresh_sumeragi_mode(metrics: &Metrics, state: &State) {
+    use crate::state::StateReadOnly as _;
+    use iroha_data_model::parameter::system::ConsensusMode;
+
+    let view = state.view();
+    let schedule = view.world().consensus_schedule();
+    let mode_tag = u64::try_from(view.height())
+        .ok()
+        .filter(|height| schedule.tip() == Some(*height) && schedule.is_well_formed())
+        .and_then(|height| height.checked_add(1))
+        .and_then(|height| schedule.ready(height).ok())
+        .map(|config| match config.epoch.mode {
+            ConsensusMode::Permissioned => "permissioned",
+            ConsensusMode::Npos => "npos",
+        })
         .unwrap_or_default();
     metrics.set_sumeragi_mode_tag(mode_tag);
 }
@@ -7432,17 +7375,6 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
         telemetry.observe_da_chunking_seconds(0.25);
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
-    }
-    #[test]
-    fn state_telemetry_conversion_shares_durable_qc_publisher() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let state_telemetry = StateTelemetry::new(metrics, true);
-        let expected_publisher = Arc::clone(&state_telemetry.commit_qc_publisher);
-        let telemetry = Telemetry::from(state_telemetry);
-        assert!(Arc::ptr_eq(
-            &telemetry.commit_qc_publisher,
-            &expected_publisher
-        ));
     }
     #[test]
     fn isi_metrics_record_when_enabled() {
@@ -8320,51 +8252,6 @@ mod tests {
             .expect("lane snapshot");
         assert!(updated.manifest_required);
         assert!(updated.manifest_ready);
-    }
-    #[test]
-    fn lane_relay_emergency_override_metric_increments() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let lane_id = LaneId::new(0);
-        let dataspace_id = DataSpaceId::new(7);
-        let lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                id: lane_id,
-                dataspace_id,
-                alias: "alpha".to_string(),
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("lane catalog");
-        telemetry.set_nexus_catalogs(&lane_catalog, &DataSpaceCatalog::default());
-        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "applied");
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .lane_relay_emergency_override_total
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "applied",])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn lane_relay_emergency_override_metric_skips_when_disabled() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::UNIVERSAL;
-        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .lane_relay_emergency_override_total
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
-                .get(),
-            0
-        );
     }
     #[test]
     fn amx_metrics_recorded() {
@@ -9449,18 +9336,9 @@ mod tests {
         assert_eq!(metrics.sumeragi_highest_qc_height.get(), 64);
     }
     #[test]
-    fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
-        use crate::{status, sumeragi::v2_status};
-        use iroha_data_model::block::consensus_v2 as wire;
-        let _guard = status::rbc_status_test_guard();
-        struct ClearStatusOnDrop;
-        impl Drop for ClearStatusOnDrop {
-            fn drop(&mut self) {
-                v2_status::clear_v2_status();
-            }
-        }
-        let _cleanup = ClearStatusOnDrop;
-        v2_status::clear_v2_status();
+    fn public_mode_tracks_authenticated_native_state_and_clears_without_authority() {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::parameter::system::SumeragiConsensusMode;
         let metrics = Metrics::default();
         let exported_mode = || {
             metrics
@@ -9469,54 +9347,39 @@ mod tests {
                 .expect("public consensus telemetry")
                 .mode_tag
         };
-        assert_eq!(exported_mode(), "", "an unstarted reducer has no mode");
-        let mut snapshot = wire::SumeragiV2Status {
-            protocol_version: wire::PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"telemetry node"),
-            build_fingerprint: Hash::new(b"telemetry build"),
-            config_fingerprint: Hash::new(b"telemetry config"),
-            restart_required: false,
-            height_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"telemetry height context",
-            ))),
-            height: 7,
-            view: 0,
-            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: wire::SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: 6,
-            last_committed_subject: None,
-            height_context: wire::SumeragiV2HeightContextStatus {
-                epoch: 0,
-                epoch_end_height: 100,
-                mode: wire::ConsensusMode::Npos,
-                epoch_seed: [0; 32],
-                validator_count: 4,
-                quorum: wire::DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-            beacon_horizon: None,
-        };
-        for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
-            snapshot.height_context.mode = mode;
-            v2_status::set_v2_status(snapshot.clone());
-            refresh_sumeragi_mode(&metrics);
-            assert_eq!(exported_mode(), mode.tag());
+        let unstarted = State::new(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        refresh_sumeragi_mode(&metrics, &unstarted);
+        assert_eq!(exported_mode(), "", "pre-genesis state has no authority");
+        for (mode, expected) in [
+            (SumeragiConsensusMode::Npos, "npos"),
+            (SumeragiConsensusMode::Permissioned, "permissioned"),
+        ] {
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            config.consensus_mode = mode;
+            if mode == SumeragiConsensusMode::Npos {
+                let policy = iroha_data_model::parameter::system::SumeragiNposParameters {
+                    epoch_seed: [0x61; 32],
+                    ..Default::default()
+                };
+                config
+                    .genesis_parameters
+                    .push(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter(),
+                    ));
+            }
+            let chain = CertifiedTestChain::start(config).expect("authenticated signed genesis");
+            refresh_sumeragi_mode(&metrics, chain.state());
+            assert_eq!(exported_mode(), expected);
         }
-        v2_status::clear_v2_status();
-        refresh_sumeragi_mode(&metrics);
+        refresh_sumeragi_mode(&metrics, &unstarted);
         assert_eq!(
             exported_mode(),
             "",
-            "a cleared owner cannot leave a stale mode"
+            "a missing authority cannot leave a stale mode"
         );
         let mode_cache = Arc::clone(&metrics.sumeragi_mode_tag);
         assert!(

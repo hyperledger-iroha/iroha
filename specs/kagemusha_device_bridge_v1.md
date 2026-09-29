@@ -596,7 +596,11 @@ the canonical bare AccountId payload under the fixed V1 `COMPACT_LEN` layout,
 bounded to 512 bytes. Method 10's receipt is `kind:u32LE || canonical receipt`:
 kind 0 carries the complete ACK archive; kind 1 carries the complete
 `iroha.kagemusha.device.v1.redemption-terminal-receipt` archive. It does not carry
-another nested sender-terminal-receipt enum archive.
+another nested sender-terminal-receipt enum archive. The compact redemption layout
+retains the exact native block hash, consensus header hash, and execution result
+commitment after the finalized height; height one has no certified output and is
+refused. These fields are selectors only. They never replace the independently
+selected complete native checkpoint or authorize a redemption outbox release.
 
 Release method 10 returns the retained operation ID, preparation, envelope digest,
 exact installed envelope, and hardware release authorization. The C/JNI boundary

@@ -108,7 +108,6 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
             Vec::new(),
             AxtPolicySnapshot::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("empty fixture block has complete execution metadata");
@@ -505,8 +504,9 @@ state_test!(consensus_stack component_commit_topology_preserves_scheduled_networ
 );
 fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_stack() {
     let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
-        crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 1_000))
-        .expect("authenticated global committee");
+        crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 1_000),
+    )
+    .expect("authenticated global committee");
     let state = chain.state();
     let validators = merge_carrier_finality_fixture_keypairs();
     seed_consensus_keys_with_pops(&state, &validators);

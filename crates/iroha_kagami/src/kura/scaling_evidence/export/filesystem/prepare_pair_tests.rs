@@ -166,7 +166,6 @@ fn prepared_pair_retains_exact_one_and_four_lane_facts_and_both_replayable_outpu
         let proof = export_bound_request(
             open_launcher(binding(&request)).unwrap(),
             &disk.root,
-            &disk.log,
             disk.reader_limits(),
             binding(&bundle),
         )

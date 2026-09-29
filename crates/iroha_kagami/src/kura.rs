@@ -421,7 +421,6 @@ mod tests {
                 from: 0,
                 options: beacon_history::Args {
                     length: 1,
-                    merge_sidecars: Vec::new(),
                     output: None,
                 },
             },
@@ -565,14 +564,14 @@ mod tests {
             kura::FsyncMode,
             parameters::{
                 actual::{Kura as KuraConfig, LaneConfig},
-                defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
+                defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL},
             },
         };
         use iroha_core::kura::{Kura, PipelineRecoverySidecar};
         // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
         let lane_config = LaneConfig::default();
-        let block_store_path = Kura::canonical_storage_paths(temp.path()).0;
+        let block_store_path = Kura::canonical_storage_path(temp.path());
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,
@@ -581,7 +580,6 @@ mod tests {
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
-                merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: FsyncMode::Batched,
                 fsync_interval: FSYNC_INTERVAL,
                 lane_history_retention:

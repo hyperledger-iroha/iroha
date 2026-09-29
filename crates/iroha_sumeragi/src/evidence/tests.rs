@@ -1,0 +1,616 @@
+//! Native evidence attribution controls over original signed protocol fixtures.
+
+use super::*;
+use crate::{
+    crypto::Signer,
+    message::{Qc, Vote},
+    testing::{FakeValidators, FakeVerifier, TEST_EPOCH},
+    types::{ChainParams, ControlWitness, EpochId, ValidatorIndex},
+};
+
+const I: Hash32 = Hash32([0x51; 32]);
+fn h(byte: u8) -> Hash32 {
+    Hash32([byte; 32])
+}
+
+struct Fixture {
+    validators: FakeValidators,
+    config: HeightConfig,
+    parent: CommittedTip,
+}
+impl Fixture {
+    fn new() -> Self {
+        let validators = FakeValidators::new(4, 8001, None);
+        let config = HeightConfig {
+            epoch: Box::new(TEST_EPOCH),
+            committee: validators.committee.clone(),
+            params: ChainParams::default(),
+        };
+        Self {
+            validators,
+            config,
+            parent: CommittedTip {
+                height: 1,
+                block_hash: h(1),
+                result: h(2),
+                header: None,
+                commit_qc: None,
+            },
+        }
+    }
+    fn context(&self) -> EvidenceContext<'_> {
+        EvidenceContext {
+            instance: I,
+            height: 2,
+            config: &self.config,
+            genesis_height: 1,
+            parent: &self.parent,
+            parent_config: None,
+            demotion_window: 0,
+            demotion_headers: &[],
+        }
+    }
+    fn verify(&self, evidence: &Evidence) -> Result<EvidenceAttribution, EvidenceError> {
+        verify_evidence(
+            &self.validators.crypto,
+            &FakeVerifier,
+            &self.context(),
+            evidence,
+        )
+    }
+    fn header(&self, view: u64) -> BlockHeader {
+        let topology = self.context().topology(&self.validators.crypto).unwrap();
+        BlockHeader {
+            instance: I,
+            epoch: TEST_EPOCH.id,
+            height: 2,
+            origin_view: view,
+            parent_hash: self.parent.block_hash,
+            parent_result: self.parent.result,
+            payload_hash: h(3),
+            payload_len: 1,
+            proposer: topology.leader(view),
+            skipped_leaders: topology.skipped_leader_keys(&self.config.committee, view),
+            attest: false,
+            control_witness: ControlWitness::empty(),
+        }
+    }
+    fn proposal(&self, header: BlockHeader, view: u64) -> Proposal {
+        let leader = self
+            .context()
+            .topology(&self.validators.crypto)
+            .unwrap()
+            .leader(view);
+        self.validators
+            .proposal(leader, &I, 2, view, header, None, None, None)
+    }
+    fn resign(&self, proposal: &mut Proposal) {
+        let leader = self
+            .context()
+            .topology(&self.validators.crypto)
+            .unwrap()
+            .leader(proposal.view);
+        proposal.sig = self
+            .validators
+            .signer(leader)
+            .sign(&proposal.signing_preimage(&self.validators.crypto));
+    }
+    fn vote(&self, block: u8) -> Vote {
+        self.validators
+            .vote(VoteKind::Prepare, 1, &I, 2, 0, &h(block), &h(9))
+    }
+    fn qc(&self, kind: VoteKind, view: u64, block: u8, signers: &[ValidatorIndex]) -> Qc {
+        self.validators
+            .qc(kind, &I, 2, view, &h(block), &h(9), signers)
+    }
+}
+
+#[test]
+fn vote_conflicts_bind_all_signed_values_and_original_signer() {
+    let fixture = Fixture::new();
+    let first = fixture.vote(3);
+    let second = fixture.vote(4);
+    let proof = Evidence::VoteEquivocation(first.clone(), second.clone());
+    let result = fixture.verify(&proof).unwrap();
+    assert_eq!(result.offenders.ones().collect::<Vec<_>>(), [1]);
+    assert!(!result.safety_violation());
+    assert_eq!(result.height(), 2);
+    assert_eq!(result.offenders().count_ones(), 1);
+    let mut forged = second.clone();
+    forged.sig.0[0] ^= 1;
+    assert!(matches!(
+        fixture.verify(&Evidence::VoteEquivocation(first.clone(), forged)),
+        Err(EvidenceError::Signature(_))
+    ));
+    let mut other_signer = second.clone();
+    other_signer.signer = 2;
+    assert_eq!(
+        fixture.verify(&Evidence::VoteEquivocation(first.clone(), other_signer)),
+        Err(EvidenceError::NotConflicting)
+    );
+    let flagged =
+        fixture
+            .validators
+            .vote_flagged(VoteKind::Prepare, 1, &I, 2, 0, &h(3), &h(9), true);
+    assert_eq!(
+        fixture
+            .verify(&Evidence::VoteEquivocation(first.clone(), flagged))
+            .unwrap()
+            .offenders
+            .ones()
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    let mut unsigned = first.clone();
+    unsigned.attestation = second.attestation;
+    assert_eq!(
+        fixture.verify(&Evidence::VoteEquivocation(first, unsigned)),
+        Err(EvidenceError::NotConflicting)
+    );
+}
+
+#[test]
+fn instance_epoch_context_and_height_replay_do_not_attribute() {
+    let fixture = Fixture::new();
+    let proof = Evidence::VoteEquivocation(fixture.vote(3), fixture.vote(4));
+    let mut context = fixture.context();
+    context.instance = h(99);
+    assert_eq!(
+        verify_evidence(&fixture.validators.crypto, &FakeVerifier, &context, &proof),
+        Err(EvidenceError::Signature(CertError::WrongInstance))
+    );
+    let mut config = fixture.config.clone();
+    config.epoch.id = EpochId {
+        epoch: 1,
+        context: TEST_EPOCH.id.context,
+    };
+    context = fixture.context();
+    context.config = &config;
+    assert_eq!(
+        verify_evidence(&fixture.validators.crypto, &FakeVerifier, &context, &proof),
+        Err(EvidenceError::Signature(CertError::WrongEpoch))
+    );
+    let mut different_context = fixture.config.clone();
+    different_context.epoch.id = EpochId {
+        epoch: 0,
+        context: h(0xEE),
+    };
+    context.config = &different_context;
+    assert_eq!(
+        verify_evidence(&fixture.validators.crypto, &FakeVerifier, &context, &proof),
+        Err(EvidenceError::Signature(CertError::WrongEpoch))
+    );
+    context = fixture.context();
+    context.height = 3;
+    assert_eq!(
+        verify_evidence(&fixture.validators.crypto, &FakeVerifier, &context, &proof),
+        Err(EvidenceError::Context)
+    );
+}
+
+#[test]
+fn noncommittee_geometry_and_missing_demotion_history_fail_closed() {
+    let fixture = Fixture::new();
+    let proof = Evidence::VoteEquivocation(fixture.vote(3), fixture.vote(4));
+    let mut config = fixture.config.clone();
+    config.committee = FakeValidators::new(5, 8, None).committee;
+    let mut context = fixture.context();
+    context.config = &config;
+    assert_eq!(
+        verify_evidence(&fixture.validators.crypto, &FakeVerifier, &context, &proof),
+        Err(EvidenceError::Context)
+    );
+    let parent = CommittedTip {
+        height: 4,
+        ..fixture.parent.clone()
+    };
+    context = fixture.context();
+    context.height = 5;
+    context.parent = &parent;
+    context.parent_config = Some(&fixture.config);
+    context.demotion_window = 2;
+    assert_eq!(
+        context.topology(&fixture.validators.crypto),
+        Err(EvidenceError::DemotionHistory)
+    );
+    let mut headers = [fixture.header(0), fixture.header(0)];
+    headers[1].height = 3;
+    context.demotion_headers = &headers;
+    assert!(context.topology(&fixture.validators.crypto).is_ok());
+    let mut foreign_headers = headers.clone();
+    foreign_headers[1].instance = h(98);
+    context.demotion_headers = &foreign_headers;
+    assert_eq!(
+        context.topology(&fixture.validators.crypto),
+        Err(EvidenceError::DemotionHistory)
+    );
+}
+
+#[test]
+fn proposal_equivocation_requires_actual_leader_and_distinct_signed_content() {
+    let fixture = Fixture::new();
+    let first = fixture.proposal(fixture.header(0), 0);
+    let mut header = fixture.header(0);
+    header.payload_hash = h(4);
+    let second = fixture.proposal(header, 0);
+    let expected = fixture
+        .context()
+        .topology(&fixture.validators.crypto)
+        .unwrap()
+        .leader(0);
+    assert_eq!(
+        fixture
+            .verify(&Evidence::ProposalEquivocation(
+                Box::new(first.clone()),
+                Box::new(second.clone())
+            ))
+            .unwrap()
+            .offenders
+            .ones()
+            .collect::<Vec<_>>(),
+        [expected]
+    );
+    let mut unsigned = first.clone();
+    unsigned.payload = Some(vec![1, 2, 3]);
+    assert_eq!(
+        fixture.verify(&Evidence::ProposalEquivocation(
+            Box::new(first.clone()),
+            Box::new(unsigned)
+        )),
+        Err(EvidenceError::NotConflicting)
+    );
+    let mut wrong_leader = second;
+    wrong_leader.sig = fixture
+        .validators
+        .signer((expected + 1) % 4)
+        .sign(&wrong_leader.signing_preimage(&fixture.validators.crypto));
+    assert_eq!(
+        fixture.verify(&Evidence::ProposalEquivocation(
+            Box::new(first),
+            Box::new(wrong_leader)
+        )),
+        Err(EvidenceError::Signature(CertError::BadSignature))
+    );
+}
+
+#[test]
+fn timeout_evidence_compares_signed_highest_view_and_verifies_carried_qc() {
+    let fixture = Fixture::new();
+    let first = fixture.validators.timeout(1, &I, 2, 2, None);
+    let second = fixture.validators.timeout(
+        1,
+        &I,
+        2,
+        2,
+        Some(fixture.qc(VoteKind::Prepare, 1, 7, &[0, 1, 2])),
+    );
+    assert_eq!(
+        fixture
+            .verify(&Evidence::TimeoutEquivocation(
+                Box::new(first.clone()),
+                Box::new(second.clone())
+            ))
+            .unwrap()
+            .offenders
+            .ones()
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    let same_view = fixture.validators.timeout(
+        1,
+        &I,
+        2,
+        2,
+        Some(fixture.qc(VoteKind::Prepare, 1, 8, &[0, 1, 2])),
+    );
+    assert_eq!(
+        fixture.verify(&Evidence::TimeoutEquivocation(
+            Box::new(second.clone()),
+            Box::new(same_view)
+        )),
+        Err(EvidenceError::NotConflicting)
+    );
+    let mut bad = second;
+    bad.high_pqc.as_mut().unwrap().agg_sig.0[0] ^= 1;
+    assert_eq!(
+        fixture.verify(&Evidence::TimeoutEquivocation(
+            Box::new(first),
+            Box::new(bad)
+        )),
+        Err(EvidenceError::Signature(CertError::HighQcInvalid))
+    );
+}
+
+#[test]
+fn only_same_view_certificate_intersection_is_accountable() {
+    let fixture = Fixture::new();
+    let first = fixture.qc(VoteKind::Commit, 0, 3, &[0, 1, 2]);
+    let second = fixture.qc(VoteKind::Commit, 0, 4, &[1, 2, 3]);
+    let same = fixture
+        .verify(&Evidence::ConflictingCertificates(first.clone(), second))
+        .unwrap();
+    assert!(same.safety_violation);
+    assert_eq!(same.offenders.ones().collect::<Vec<_>>(), [1, 2]);
+    let later = fixture.qc(VoteKind::Commit, 1, 4, &[1, 2, 3]);
+    let cross = fixture
+        .verify(&Evidence::ConflictingCertificates(first.clone(), later))
+        .unwrap();
+    assert!(cross.safety_violation);
+    assert_eq!(cross.offenders.count_ones(), 0);
+    let extra = fixture.qc(VoteKind::Commit, 0, 4, &[0, 1, 2, 3]);
+    assert_eq!(
+        fixture.verify(&Evidence::ConflictingCertificates(first.clone(), extra)),
+        Err(EvidenceError::Signature(CertError::TooManySigners))
+    );
+    let below = fixture.qc(VoteKind::Commit, 0, 4, &[1, 2]);
+    assert_eq!(
+        fixture.verify(&Evidence::ConflictingCertificates(first, below)),
+        Err(EvidenceError::Signature(CertError::TooFewSigners))
+    );
+}
+
+#[test]
+fn signed_header_defects_reproduce_but_poison_execution_does_not() {
+    let fixture = Fixture::new();
+    let ordinary = fixture.proposal(fixture.header(0), 0);
+    for defect in [
+        Defect::HeaderInstance,
+        Defect::HeaderHeight,
+        Defect::ParentHash,
+        Defect::ParentResult,
+        Defect::PayloadTooLarge,
+        Defect::EmptyPayload,
+        Defect::OriginView,
+        Defect::Proposer,
+        Defect::SkippedLeaders,
+    ] {
+        let mut header = fixture.header(0);
+        match defect {
+            Defect::HeaderInstance => header.instance = h(98),
+            Defect::HeaderHeight => header.height += 1,
+            Defect::ParentHash => header.parent_hash = h(98),
+            Defect::ParentResult => header.parent_result = h(98),
+            Defect::PayloadTooLarge => {
+                header.payload_len = fixture.config.params.max_block_bytes + 1
+            }
+            Defect::EmptyPayload => header.payload_len = 0,
+            Defect::OriginView => header.origin_view = 1,
+            Defect::Proposer => header.proposer = (header.proposer + 1) % 4,
+            Defect::SkippedLeaders => header.skipped_leaders.push(fixture.validators.key(0)),
+            _ => unreachable!(),
+        }
+        let report = Evidence::InvalidProposal {
+            proposal: Box::new(fixture.proposal(header, 0)),
+            defect,
+        };
+        assert!(fixture.verify(&report).is_ok(), "{defect:?}");
+        assert_eq!(
+            fixture.verify(&Evidence::InvalidProposal {
+                proposal: Box::new(ordinary.clone()),
+                defect
+            }),
+            Err(EvidenceError::DefectMismatch)
+        );
+    }
+    let mut poison = ordinary.clone();
+    poison.payload = Some(vec![0xFF; 5]);
+    assert_eq!(
+        fixture.verify(&Evidence::InvalidProposal {
+            proposal: Box::new(poison),
+            defect: Defect::EmptyPayload
+        }),
+        Err(EvidenceError::DefectMismatch)
+    );
+}
+
+#[test]
+fn justification_defect_and_tc_rule_require_original_signed_attachments() {
+    let fixture = Fixture::new();
+    let missing = fixture.proposal(fixture.header(1), 1);
+    assert!(
+        fixture
+            .verify(&Evidence::InvalidProposal {
+                proposal: Box::new(missing),
+                defect: Defect::MissingJustify
+            })
+            .is_ok()
+    );
+    let mut unexpected = fixture.proposal(fixture.header(0), 0);
+    unexpected.justify = Some(
+        fixture
+            .validators
+            .tc(&I, 2, 0, &[(0, None), (1, None), (2, None)]),
+    );
+    fixture.resign(&mut unexpected);
+    assert!(
+        fixture
+            .verify(&Evidence::InvalidProposal {
+                proposal: Box::new(unexpected),
+                defect: Defect::UnexpectedJustify
+            })
+            .is_ok()
+    );
+    let mut invalid = fixture.proposal(fixture.header(1), 1);
+    invalid.justify = Some(
+        fixture
+            .validators
+            .tc(&I, 2, 2, &[(0, None), (1, None), (2, None)]),
+    );
+    fixture.resign(&mut invalid);
+    assert!(
+        fixture
+            .verify(&Evidence::InvalidProposal {
+                proposal: Box::new(invalid),
+                defect: Defect::InvalidJustify
+            })
+            .is_ok()
+    );
+    let mut tc_rule = fixture.proposal(fixture.header(1), 1);
+    tc_rule.justify = Some(fixture.validators.tc(
+        &I,
+        2,
+        0,
+        &[
+            (0, Some(fixture.qc(VoteKind::Prepare, 0, 98, &[0, 1, 2]))),
+            (1, None),
+            (2, None),
+        ],
+    ));
+    fixture.resign(&mut tc_rule);
+    assert!(
+        fixture
+            .verify(&Evidence::InvalidProposal {
+                proposal: Box::new(tc_rule),
+                defect: Defect::TcRule
+            })
+            .is_ok()
+    );
+}
+
+#[test]
+fn evidence_errors_remain_distinct() {
+    assert_ne!(
+        EvidenceError::Context.to_string(),
+        EvidenceError::DemotionHistory.to_string()
+    );
+    assert_ne!(
+        EvidenceError::NotConflicting.to_string(),
+        EvidenceError::DefectMismatch.to_string()
+    );
+    assert!(
+        EvidenceError::from(CertError::WrongEpoch)
+            .to_string()
+            .contains("WrongEpoch")
+    );
+}
+
+#[test]
+fn parent_defects_use_the_authenticated_parent_configuration() {
+    let fixture = Fixture::new();
+    let parent = CommittedTip {
+        height: 2,
+        block_hash: h(3),
+        result: h(9),
+        header: None,
+        commit_qc: None,
+    };
+    let mut context = fixture.context();
+    context.height = 3;
+    context.parent = &parent;
+    context.parent_config = Some(&fixture.config);
+    let topology = context.topology(&fixture.validators.crypto).unwrap();
+    let mut header = fixture.header(0);
+    header.height = 3;
+    header.proposer = topology.leader(0);
+    header.parent_hash = parent.block_hash;
+    header.parent_result = parent.result;
+    let leader = topology.leader(0);
+    let missing = fixture
+        .validators
+        .proposal(leader, &I, 3, 0, header.clone(), None, None, None);
+    assert!(
+        verify_evidence(
+            &fixture.validators.crypto,
+            &FakeVerifier,
+            &context,
+            &Evidence::InvalidProposal {
+                proposal: Box::new(missing),
+                defect: Defect::MissingParentQc
+            }
+        )
+        .is_ok()
+    );
+    let wrong = fixture.validators.proposal(
+        leader,
+        &I,
+        3,
+        0,
+        header.clone(),
+        None,
+        Some(fixture.qc(VoteKind::Commit, 0, 98, &[0, 1, 2])),
+        None,
+    );
+    assert!(
+        verify_evidence(
+            &fixture.validators.crypto,
+            &FakeVerifier,
+            &context,
+            &Evidence::InvalidProposal {
+                proposal: Box::new(wrong),
+                defect: Defect::InvalidParentQc
+            }
+        )
+        .is_ok()
+    );
+    let valid = fixture.validators.proposal(
+        leader,
+        &I,
+        3,
+        0,
+        header,
+        None,
+        Some(fixture.qc(VoteKind::Commit, 0, 3, &[0, 1, 2])),
+        None,
+    );
+    assert_eq!(
+        verify_evidence(
+            &fixture.validators.crypto,
+            &FakeVerifier,
+            &context,
+            &Evidence::InvalidProposal {
+                proposal: Box::new(valid),
+                defect: Defect::InvalidParentQc
+            }
+        ),
+        Err(EvidenceError::DefectMismatch)
+    );
+    context.parent_config = None;
+    assert_eq!(context.validate(), Err(EvidenceError::Context));
+    let mut unexpected = fixture.proposal(fixture.header(0), 0);
+    unexpected.parent_qc = Some(fixture.qc(VoteKind::Commit, 0, 3, &[0, 1, 2]));
+    fixture.resign(&mut unexpected);
+    assert!(
+        fixture
+            .verify(&Evidence::InvalidProposal {
+                proposal: Box::new(unexpected),
+                defect: Defect::UnexpectedParentQc
+            })
+            .is_ok()
+    );
+}
+
+#[test]
+fn boundary_attestation_defect_uses_exact_epoch_cutoff() {
+    let fixture = Fixture::new();
+    let mut config = fixture.config.clone();
+    config.epoch.last_height = 2;
+    let mut context = fixture.context();
+    context.config = &config;
+    let ordinary = fixture.proposal(fixture.header(0), 0);
+    assert!(
+        verify_evidence(
+            &fixture.validators.crypto,
+            &FakeVerifier,
+            &context,
+            &Evidence::InvalidProposal {
+                proposal: Box::new(ordinary),
+                defect: Defect::BoundaryAttestation
+            }
+        )
+        .is_ok()
+    );
+    let mut header = fixture.header(0);
+    header.attest = true;
+    assert_eq!(
+        verify_evidence(
+            &fixture.validators.crypto,
+            &FakeVerifier,
+            &context,
+            &Evidence::InvalidProposal {
+                proposal: Box::new(fixture.proposal(header, 0)),
+                defect: Defect::BoundaryAttestation
+            }
+        ),
+        Err(EvidenceError::DefectMismatch)
+    );
+}

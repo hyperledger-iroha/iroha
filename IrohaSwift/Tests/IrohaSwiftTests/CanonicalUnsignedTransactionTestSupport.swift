@@ -11,7 +11,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     timeToLiveMs: UInt64?,
     nonce: UInt32? = nil,
     feePayment: FeePaymentIntent,
-    admissionIntent: TransactionAdmissionIntentV1 = .ordinary,
+    retiredAdmissionTag: UInt32? = nil,
     metadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var domain = CompactNoritoWriter()
@@ -33,7 +33,9 @@ enum CanonicalUnsignedTransactionTestSupport {
       try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
     )
     payload.writeField(try feePayment.compactNorito())
-    payload.writeField(admissionIntent.norito)
+    if let retiredAdmissionTag {
+      payload.writeField(CompactNorito.encodeUInt32(retiredAdmissionTag))
+    }
     payload.writeField(try encodeMetadata(metadata))
     payload.writeField(Data([0]))
     return payload.data
@@ -66,7 +68,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     codeHashHex: String,
     networkId: NetworkId,
     feePayment: FeePaymentIntent? = nil,
-    admissionIntent: TransactionAdmissionIntentV1 = .ordinary,
+    retiredAdmissionTag: UInt32? = nil,
     additionalMetadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var invocation = CompactNoritoWriter()
@@ -116,7 +118,7 @@ enum CanonicalUnsignedTransactionTestSupport {
       executable: executable.data,
       timeToLiveMs: request.transactionTtlMs,
       feePayment: feePayment ?? request.feePayment,
-      admissionIntent: admissionIntent,
+      retiredAdmissionTag: retiredAdmissionTag,
       metadata: metadata
     )
   }

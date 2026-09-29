@@ -39,7 +39,6 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: kura_defaults::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: kura_defaults::FSYNC_MODE,
         fsync_interval: kura_defaults::FSYNC_INTERVAL,
     };
@@ -340,7 +339,7 @@ fn reserve_two_canonical_cleanup_carrier_groups(
             queue,
             state,
             dir,
-            accepted_queue_plan_unique_entrypoint_tx_by_someone(time_source),
+            accepted_unique_entrypoint_tx_by_someone(time_source),
         );
     }
     let reserve_one = |scope| {
@@ -439,7 +438,7 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
     let dir = tempdir().expect("tempdir");
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     let key = persist_unreconciled_commit_barrier(
         &queue,
@@ -610,10 +609,10 @@ fn reservation_append_releases_state_snapshot_without_losing_lifecycle_fences() 
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let selected = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let selected = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let selected_hash = selected.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, selected);
-    let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     // Every StateView owns this immutable configuration Arc. Observe its live

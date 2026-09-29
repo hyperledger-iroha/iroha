@@ -193,7 +193,7 @@ class ParliamentTimedOvnCastingProofRequestV1(
  * Schema- and checksum-admitted response frame passed unchanged to the native wallet bridge.
  *
  * Framing admission does not establish consensus validity. Wallets must verify the page with the
- * external network, checkpoint context, and expected ballot before accessing seed material.
+ * external network, complete canonical checkpoint, and expected ballot before accessing seed material.
  */
 class ParliamentTimedOvnCastingProofResponseV1 internal constructor(
     canonicalNorito: ByteArray,
@@ -215,13 +215,18 @@ class ParliamentTimedOvnCastingProofPageVerificationV1(
     evaluatedContextId: ByteArray,
     /** Whether another independently fetched and verified page is required. */
     val moreAvailable: Boolean,
+    promotedCheckpointNorito: ByteArray,
 ) {
     /** Exact positive u64 height authenticated by the native finality verifier. */
     val evaluatedBlockHeight: BigInteger =
         ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(evaluatedBlockHeight)
     private val evaluatedContextIdBytes = evaluatedContextId.copyOf()
+    private val checkpointBytes = promotedCheckpointNorito.copyOf()
 
     init {
+        require(checkpointBytes.size in 1..(68 * 1024 * 1024)) {
+            "promotedCheckpointNorito must contain a bounded complete canonical checkpoint"
+        }
         require(evaluatedContextIdBytes.size == 32) {
             "evaluatedContextId must contain exactly 32 bytes"
         }
@@ -233,15 +238,18 @@ class ParliamentTimedOvnCastingProofPageVerificationV1(
     /** Defensive copy of the authenticated `HeightContextId`. */
     fun evaluatedContextId(): ByteArray = evaluatedContextIdBytes.copyOf()
 
+    /** Defensive copy of the complete native-authenticated checkpoint. */
+    fun promotedCheckpointNorito(): ByteArray = checkpointBytes.copyOf()
+
     override fun equals(other: Any?): Boolean =
         other is ParliamentTimedOvnCastingProofPageVerificationV1 &&
             evaluatedBlockHeight == other.evaluatedBlockHeight &&
             evaluatedContextIdBytes.contentEquals(other.evaluatedContextIdBytes) &&
-            moreAvailable == other.moreAvailable
+            moreAvailable == other.moreAvailable && checkpointBytes.contentEquals(other.checkpointBytes)
 
     override fun hashCode(): Int =
         31 * (31 * evaluatedBlockHeight.hashCode() + evaluatedContextIdBytes.contentHashCode()) +
-            moreAvailable.hashCode()
+            31 * moreAvailable.hashCode() + checkpointBytes.contentHashCode()
 }
 
 /** Native page verifier used by the bounded transport loop. */
@@ -250,7 +258,7 @@ fun interface ParliamentTimedOvnCastingProofPageVerifierV1 {
     fun verify(
         response: ParliamentTimedOvnCastingProofResponseV1,
         trustedCheckpointHeight: BigInteger,
-        trustedCheckpointContextId: ByteArray,
+        trustedCheckpointNorito: ByteArray,
     ): ParliamentTimedOvnCastingProofPageVerificationV1
 }
 
@@ -268,16 +276,16 @@ class ParliamentTimedOvnCastingProofTerminalV1 internal constructor(
     val response: ParliamentTimedOvnCastingProofResponseV1,
     /** Checkpoint height supplied while authenticating [response]. */
     val verificationAnchorHeight: BigInteger,
-    verificationAnchorContextId: ByteArray,
+    verificationAnchorCheckpointNorito: ByteArray,
     /** Native-authenticated terminal promotion. */
     val verification: ParliamentTimedOvnCastingProofPageVerificationV1,
     /** Total number of independently fetched and verified pages. */
     val verifiedPageCount: Int,
 ) {
-    private val verificationAnchorContextIdBytes = verificationAnchorContextId.copyOf()
+    private val verificationAnchorCheckpointNoritoBytes = verificationAnchorCheckpointNorito.copyOf()
 
-    /** Defensive copy of the context supplied while authenticating [response]. */
-    fun verificationAnchorContextId(): ByteArray = verificationAnchorContextIdBytes.copyOf()
+    /** Defensive copy of the complete checkpoint supplied while authenticating [response]. */
+    fun verificationAnchorCheckpointNorito(): ByteArray = verificationAnchorCheckpointNoritoBytes.copyOf()
 }
 
 /** Core-authorized release context available only during the inclusive Opening window. */

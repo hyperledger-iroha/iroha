@@ -428,7 +428,7 @@ impl ByteMerkleTree {
         // Attempt Metal offload for large trees (macOS)
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && crate::vector::metal_merkle_prefer_gpu(
+            && let Some(selected) = crate::vector::select_metal_merkle(
                 crate::vector::MetalMerkleWork::Leaves,
                 leaves_count,
             )
@@ -447,7 +447,10 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(digests) = crate::vector::metal_sha256_leaves(&blocks) {
+            if let Some(digests) = selected
+                .run(|| crate::vector::metal_sha256_leaves(&blocks))
+                .flatten()
+            {
                 if digests.len() == leaves_count {
                     return Self::from_leaf_digests(&digests, chunk);
                 }
@@ -477,7 +480,7 @@ impl ByteMerkleTree {
         }
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && crate::vector::metal_merkle_prefer_gpu(
+            && let Some(selected) = crate::vector::select_metal_merkle(
                 crate::vector::MetalMerkleWork::Leaves,
                 leaves_count,
             )
@@ -495,7 +498,10 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(digests) = crate::vector::metal_sha256_leaves(&blocks) {
+            if let Some(digests) = selected
+                .run(|| crate::vector::metal_sha256_leaves(&blocks))
+                .flatten()
+            {
                 return self.install_leaf_digests(&digests);
             }
         }
@@ -760,7 +766,7 @@ impl ByteMerkleTree {
         // GPU Metal path (macOS)
         #[cfg(target_os = "macos")]
         if leaves_count >= merkle_metal_min_leaves()
-            && crate::vector::metal_merkle_prefer_gpu(
+            && let Some(selected) = crate::vector::select_metal_merkle(
                 crate::vector::MetalMerkleWork::Root,
                 leaves_count,
             )
@@ -779,8 +785,12 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(digests) = crate::vector::metal_sha256_leaves(&blocks)
-                && let Some(root) = crate::vector::metal_merkle_root(&digests)
+            if let Some(root) = selected
+                .run(|| {
+                    let digests = crate::vector::metal_sha256_leaves(&blocks)?;
+                    crate::vector::metal_merkle_root(&digests)
+                })
+                .flatten()
             {
                 // Telemetry: GPU merkle root
                 let metrics = iroha_telemetry::metrics::global_or_default();

@@ -46,7 +46,7 @@ use iroha_data_model::{
             ReserveMovementKindV1, ReserveMovementStatusV1, ReserveProviderAccountV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionAdmissionIntent},
+    transaction::{Executable, SignedTransaction},
 };
 use iroha_logger::{debug, warn};
 use norito::json;
@@ -421,14 +421,7 @@ async fn submit_reserve_signed_transaction(
     if let Err(response) = validate_reserve_signed_transaction(&state, &transaction, route) {
         return response;
     }
-    match crate::submit_signed_transaction_for_ingress_strict_durable(
-        state,
-        headers,
-        accept,
-        transaction,
-    )
-    .await
-    {
+    match crate::submit_signed_transaction_for_ingress(state, headers, accept, transaction).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -575,12 +568,7 @@ fn validate_reserve_signed_envelope_and_route(
             "SoraFS reserve transaction signature or authority binding is invalid",
         )
     })?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS reserve transaction requires signature-bound QueuePlanSynced admission",
-        ));
-    }
+
     if transaction.creation_time().is_zero()
         || transaction.time_to_live() != Some(RESERVE_TRANSACTION_TTL_V1)
         || transaction.nonce().is_some()
@@ -1733,8 +1721,7 @@ mod tests {
             *network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         builder.set_ttl(RESERVE_TRANSACTION_TTL_V1);
         mutate(builder)
             .with_instructions(instructions)
@@ -1999,17 +1986,14 @@ mod tests {
             movement(ReserveMovementKindV1::TopUp),
             |builder| builder,
         );
-        assert_eq!(
-            strict.admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced
-        );
+
         validate_reserve_signed_envelope_and_route(&network_id, &strict, route)
             .expect("matching QueuePlanSynced reserve transaction");
 
         let ordinary = signed_transaction(
             &network_id,
             movement(ReserveMovementKindV1::TopUp),
-            |builder| builder.with_admission_intent(TransactionAdmissionIntent::Ordinary),
+            |builder| builder,
         );
         let response = validate_reserve_signed_envelope_and_route(&network_id, &ordinary, route)
             .expect_err("ordinary intent cannot enter strict reserve route");

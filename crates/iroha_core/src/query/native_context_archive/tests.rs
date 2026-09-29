@@ -1,7 +1,7 @@
 //! Original archive backing, immutable publication and canonical reader regressions.
 
 use super::*;
-use crate::state::NativeLaneStateProjectionV1;
+use crate::state::NativeExecutionProjectionV1;
 use iroha_crypto::Hash;
 use mv::allocation::AllocationRefusal;
 use std::fs;
@@ -9,11 +9,17 @@ use std::fs;
 fn hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::new(b"exact original native carrier"))
 }
+static EMPTY_WRITES: Vec<ExecKv> = Vec::new();
+static EMPTY_CASTING: Vec<
+    iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1,
+> = Vec::new();
 fn projection(lanes: &SumeragiLaneState) -> Projection<'_> {
     Projection {
         carrier_height: 2,
         carrier_hash: hash(),
-        lanes,
+        lanes: LaneStateRef(lanes),
+        ordinary_writes: OrdinaryWritesRef(&EMPTY_WRITES),
+        casting_bindings: CastingBindingsRef(&EMPTY_CASTING),
     }
 }
 fn archive(root: &Path, budget: AllocationBudget, maximum: usize) -> NativeContextArchive {
@@ -49,11 +55,24 @@ fn exact_canonical_projection_owns_original_pool_until_last_drop() {
         incarnations: 3,
         ..SumeragiLaneState::default()
     };
-    let source = projection(&lanes);
-    let bytes = norito::encode_canonical(&NativeLaneStateProjectionV1 {
+    let writes = vec![
+        ExecKv {
+            key: vec![0x42],
+            value: vec![1, 2],
+        },
+        ExecKv {
+            key: vec![0x42],
+            value: vec![3, 4],
+        },
+    ];
+    let mut source = projection(&lanes);
+    source.ordinary_writes = OrdinaryWritesRef(&writes);
+    let bytes = norito::encode_canonical(&NativeExecutionProjectionV1 {
         carrier_height: 2,
         carrier_hash: hash(),
         lanes: lanes.clone(),
+        ordinary_writes: writes.clone(),
+        casting_bindings: vec![],
     })
     .unwrap();
     let budget = AllocationBudget::new(bytes.len() * 2);
@@ -356,4 +375,51 @@ fn live_readonly_open_requires_existing_original_archive_and_cannot_publish() {
     drop(read);
     drop(original);
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_native_archive_retains_writes_bound_to_the_original_execution_root() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::sumeragi_finality::NativeLaneStateProof;
+    let mut chain =
+        CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let committed = chain.committed(2);
+    let budget = chain.state().ivm_execution_budget();
+    let archive = NativeContextArchive::open_existing(
+        chain.kura(),
+        budget.clone(),
+        chain.kura().native_context_archive_max_bytes(),
+    )
+    .unwrap();
+    let bytes = archive.read_exact(2, committed.block_hash()).unwrap();
+    let projection: NativeExecutionProjectionV1 = norito::decode_canonical_with_limits(
+        bytes.as_slice(),
+        norito::canonical_decode_limits(bytes.len()),
+    )
+    .unwrap();
+    assert_eq!(projection.carrier_hash, committed.block_hash());
+    let mut witness = ExecWitness {
+        writes: projection.ordinary_writes,
+        ..ExecWitness::default()
+    };
+    let expected = &committed.commitment().native_lanes;
+    assert_eq!(
+        &NativeLaneStateProof::from_witness(&witness, &budget).unwrap(),
+        expected
+    );
+    witness.writes.push(ExecKv {
+        key: b"foreign-write".to_vec(),
+        value: vec![1],
+    });
+    let changed = NativeLaneStateProof::from_witness(&witness, &budget).unwrap();
+    assert_ne!(
+        &changed, expected,
+        "adding an unexecuted write changes the authenticated path"
+    );
+    assert!(!changed.verify(
+        chain.network_id(),
+        2,
+        committed.commitment().execution.ordinary_writes_root
+    ));
 }

@@ -578,7 +578,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         let exact = try ToriiCanonicalTransactionDraft.decode(
             transactionPayloadB64: exactBytes.base64EncodedString(),
             signingMessageB64: IrohaHash.hash(exactBytes).base64EncodedString(),
-            expectedAdmissionIntent: .ordinary,
+
             context: "asset transfer test"
         )
         XCTAssertNoThrow(
@@ -605,7 +605,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             let candidate = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: candidateBytes.base64EncodedString(),
                 signingMessageB64: IrohaHash.hash(candidateBytes).base64EncodedString(),
-                expectedAdmissionIntent: .ordinary,
+
                 context: "hostile asset transfer test"
             )
             XCTAssertThrowsError(
@@ -621,7 +621,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         let wrongNetwork = try ToriiCanonicalTransactionDraft.decode(
             transactionPayloadB64: wrongNetworkBytes.base64EncodedString(),
             signingMessageB64: IrohaHash.hash(wrongNetworkBytes).base64EncodedString(),
-            expectedAdmissionIntent: .ordinary,
+
             context: "wrong-network asset transfer test"
         )
         XCTAssertThrowsError(
@@ -638,7 +638,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: trailing.base64EncodedString(),
                 signingMessageB64: IrohaHash.hash(trailing).base64EncodedString(),
-                expectedAdmissionIntent: .ordinary,
+
                 context: "trailing asset transfer test"
             )
         )
@@ -884,7 +884,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         XCTAssertEqual(
             try ToriiCanonicalTransactionDraft.transactionPayload(
                 fromVersionedSignedTransaction: finalized.signedTransaction,
-                expectedAdmissionIntent: .ordinary,
+
                 context: "asset finalization test"
             ),
             transactionPayload

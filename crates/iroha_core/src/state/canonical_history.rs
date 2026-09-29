@@ -58,11 +58,20 @@ pub(super) fn committed_block_from_kura(
 pub struct CanonicalHistorySource<'a> {
     kura: &'a Kura,
     block_hashes: &'a dyn super::BlockHashRead,
+    tip: Option<super::NativeExecutionTip>,
 }
 
 impl<'a> CanonicalHistorySource<'a> {
-    pub(super) fn new(kura: &'a Kura, block_hashes: &'a dyn super::BlockHashRead) -> Self {
-        Self { kura, block_hashes }
+    pub(super) fn new(
+        kura: &'a Kura,
+        block_hashes: &'a dyn super::BlockHashRead,
+        tip: Option<super::NativeExecutionTip>,
+    ) -> Self {
+        Self {
+            kura,
+            block_hashes,
+            tip,
+        }
     }
 
     /// Return the committed height captured by this immutable source.
@@ -123,71 +132,149 @@ impl<'a> CanonicalHistorySource<'a> {
         self.load(height)
     }
 
-    /// Load exact published execution bytes after the caller admits their durable size.
-    ///
-    /// Header identity alone does not authenticate attached outputs. This path
-    /// requires Kura's verified finality commitment and rechecks the admitted
-    /// length under its storage guards before allocating or decoding the body.
-    /// The admission callback runs once, including for a later failed read.
+    /// Read execution identity through the original State tip, without inspecting
+    /// any local QC. Every source frame is admitted before its bytes are read.
+    /// Parent core hash, parent R and Iroha parent hash jointly authenticate the
+    /// reverse walk. The finite captured tip bounds its number of source frames.
+    pub(crate) fn executed_receipt(
+        self,
+        height: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<crate::sumeragi::certified_chain::CommittedBlock, QueryExecutionFail> {
+        let mut receipt = None;
+        self.visit_executed_backwards(height, height, before_read, |value| {
+            receipt = Some(value);
+            Ok(())
+        })?;
+        receipt.ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "requested execution was absent from its authenticated interval".into(),
+            )
+        })
+    }
+
+    /// Visit one inclusive execution interval in descending height order after a single
+    /// authenticated walk from this source's original native tip. Every physical source
+    /// is charged before reading; only authenticated receipts in the selected interval
+    /// reach the visitor. No local certificate is parsed or trusted.
+    pub(crate) fn visit_executed_backwards(
+        self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        mut visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<(), QueryExecutionFail>,
+    ) -> Result<(), QueryExecutionFail> {
+        if first > last {
+            return Err(QueryExecutionFail::Conversion(
+                "native execution interval is reversed".into(),
+            ));
+        }
+        self.expected_hash(first)
+            .and_then(|_| self.expected_hash(last))
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
+        let invalid = |message: String| QueryExecutionFail::Conversion(message);
+        let tip = self
+            .tip
+            .ok_or_else(|| invalid("State has no authenticated native execution tip".into()))?;
+        if usize::try_from(tip.height()).ok() != Some(self.height()) {
+            return Err(invalid(
+                "native execution tip differs from the captured State history cut".into(),
+            ));
+        }
+        let mut expected_iroha = tip.iroha_hash();
+        let mut expected_core = tip.core_hash();
+        let mut expected_result = tip.result();
+        let target =
+            u64::try_from(first.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        let selected_last =
+            u64::try_from(last.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        for source_height in (target..=tip.height()).rev() {
+            let index = usize::try_from(source_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            let journal_hash = self
+                .expected_hash(index)
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            if journal_hash != expected_iroha {
+                return Err(invalid(format!(
+                    "native execution parent contradicts State hash at {source_height}"
+                )));
+            }
+            if self.kura.is_hash_only_block_height(index) {
+                return Err(QueryExecutionFail::CanonicalHistory(
+                    CanonicalHistoryError::HashOnlyBodyUnavailable {
+                        height: source_height,
+                        expected_hash: expected_iroha,
+                    },
+                ));
+            }
+            let source = self
+                .kura
+                .native_frame_read(source_height, expected_iroha)
+                .map_err(|error| invalid(error.to_string()))?
+                .ok_or(QueryExecutionFail::CanonicalHistory(
+                    CanonicalHistoryError::BodyUnavailable {
+                        height: source_height,
+                        expected_hash: expected_iroha,
+                    },
+                ))?;
+            let wire_len = source.wire_len();
+            before_read(1, wire_len)?;
+            let bytes = source
+                .read(wire_len)
+                .map_err(|error| invalid(error.to_string()))?
+                .ok_or(QueryExecutionFail::CanonicalHistory(
+                    CanonicalHistoryError::BodyUnavailable {
+                        height: source_height,
+                        expected_hash: expected_iroha,
+                    },
+                ))?;
+            let block = iroha_data_model::block::decode_framed_signed_block(&bytes)
+                .map_err(|error| invalid(error.to_string()))?;
+            let block = authenticate_canonical_block(index, expected_iroha, Some(Arc::new(block)))
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            let receipt = crate::sumeragi::certified_chain::read_frame(block, source_height)
+                .map_err(|error| invalid(error.to_string()))?;
+            if receipt.core_hash() != expected_core || receipt.result() != expected_result {
+                return Err(invalid(format!(
+                    "native header or R differs from authenticated execution ancestry at {source_height}"
+                )));
+            }
+            if source_height > target {
+                let header = receipt
+                    .header()
+                    .ok_or_else(|| invalid("genesis cannot precede the requested height".into()))?;
+                expected_core = header.parent_hash;
+                expected_result = header.parent_result;
+                expected_iroha =
+                    receipt.block().header().prev_block_hash().ok_or_else(|| {
+                        invalid("native successor omits Iroha parent hash".into())
+                    })?;
+            }
+            if source_height <= selected_last {
+                visit(receipt)?;
+            }
+            if source_height == target {
+                return Ok(());
+            }
+        }
+        Err(invalid(
+            "requested execution lies beyond the original native tip".into(),
+        ))
+    }
+
+    /// Load exact original execution bytes; the callback admits actual source
+    /// count and bytes, including intermediate parents and a subsequently failed read.
     pub(crate) fn executed_block(
         self,
         height: NonZeroUsize,
-        before_read: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
-        let expected_hash = self
-            .expected_hash(height)
-            .map_err(QueryExecutionFail::CanonicalHistory)?;
-        let height_u64 =
-            u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
-        if self.kura.is_hash_only_block_height(height) {
-            return Err(QueryExecutionFail::CanonicalHistory(
-                CanonicalHistoryError::HashOnlyBodyUnavailable {
-                    height: height_u64,
-                    expected_hash,
-                },
-            ));
-        }
-        let storage_error = |error: crate::kura::Error| {
-            QueryExecutionFail::Conversion(format!(
-                "canonical executed body at height {height_u64} failed storage authentication: {error}"
-            ))
-        };
-        let (durable_height, wire_len) = self
-            .kura
-            .durable_block_payload_len_by_hash(expected_hash)
-            .map_err(storage_error)?
-            .ok_or(QueryExecutionFail::CanonicalHistory(
-                CanonicalHistoryError::BodyUnavailable {
-                    height: height_u64,
-                    expected_hash,
-                },
-            ))?;
-        if durable_height != height_u64 {
-            return Err(QueryExecutionFail::CanonicalHistory(
-                CanonicalHistoryError::BlockHeightMismatch {
-                    height: height_u64,
-                    actual_height: durable_height,
-                },
-            ));
-        }
-        before_read(wire_len)?;
-        let block = self
-            .kura
-            .read_block_body_with_wire_bound(height, expected_hash, wire_len)
-            .map_err(storage_error)?;
-        authenticate_canonical_block(height, expected_hash, block)
-            .map_err(QueryExecutionFail::CanonicalHistory)
-    }
-
-    /// Exercise the actual executed-body admission boundary with a durable test journal.
-    #[cfg(test)]
-    pub(crate) fn read_executed_for_testing(
-        kura: &'a Kura,
-        hashes: &'a [HashOf<BlockHeader>],
-        height: NonZeroUsize,
-        before_read: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
-    ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
-        CanonicalHistorySource::new(kura, &hashes).executed_block(height, before_read)
+        self.executed_receipt(height, before_read)
+            .map(|receipt| Arc::clone(receipt.block()))
     }
 
     /// Iterate every committed slot from `start` through this source's tip.

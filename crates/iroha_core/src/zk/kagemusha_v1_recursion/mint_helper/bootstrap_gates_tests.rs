@@ -62,15 +62,31 @@ fn bootstrap_gates_reject_each_forbidden_witness_in_both_fields() {
 }
 
 #[test]
-fn bootstrap_gates_are_conditional_in_both_fields() {
-    // The complete Rotate/FinalizedMint relations own their additional rules. This fixture
-    // proves that only Bootstrap imposes zero count, height one and an absent successor.
+fn normal_certificates_require_post_genesis_height_in_both_fields() {
+    // Test the actual common circuit gates without model preflight: normal certificates
+    // never gain output authority from the unsigned genesis result.
     for values in [
-        [0, 0, 1, 0],
+        [0, 0, 2, 0],
         [0, 7, 2, 1],
         [0, u64::from(u32::MAX), u64::MAX, 1],
     ] {
         assert!(gate_case::<Fp>(values), "Fp rejected {values:?}");
         assert!(gate_case::<Fq>(values), "Fq rejected {values:?}");
+    }
+    for values in [
+        [0, 0, 0, 0],
+        [0, 1, 0, 1],
+        [0, 0, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 1, 1],
+    ] {
+        assert!(
+            !gate_case::<Fp>(values),
+            "Fp accepted unsigned genesis {values:?}"
+        );
+        assert!(
+            !gate_case::<Fq>(values),
+            "Fq accepted unsigned genesis {values:?}"
+        );
     }
 }
