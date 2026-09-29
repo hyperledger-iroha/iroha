@@ -106,8 +106,8 @@ python3 -m pytest -q \
   scripts/tests/sorafs_javascript_runtime_inputs_test.py \
   scripts/tests/sorafs_javascript_runtime_custody_test.py \
   scripts/tests/sorafs_javascript_child_process_test.py \
-  pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images \
-  pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field \
+  scripts/tests/macho_decoder_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images \
+  scripts/tests/macho_decoder_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field \
   scripts/tests/python_wheel_byte_owner_test.py \
   scripts/tests/python_installed_content_owner_test.py \
   scripts/tests/python_zip_directory_admission_test.py \

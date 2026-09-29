@@ -5455,7 +5455,7 @@ impl_default!(Pipeline => {
             amx_per_syscall_ns: defaults::pipeline::AMX_PER_SYSCALL_NS,
         }
 });
-/// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
+/// One retained lane-incarnation lineage binding committed into a Sumeragi height context.
 ///
 /// The complete projection contains every active or retired lane identifier ever
 /// observed by the state. Retired entries remain consensus-relevant because a
@@ -5473,7 +5473,7 @@ pub struct SumeragiLaneLifecycleEntry {
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
 }
-/// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
+/// Compute the canonical Sumeragi commitment to the Nexus and AMX inputs
 /// that can change proposal assembly or deterministic validation.
 ///
 /// The commitment deliberately excludes local storage paths, worker pool

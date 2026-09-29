@@ -125,8 +125,7 @@ pub fn result_of_preimage(preimage: &[u8]) -> Hash32 {
 }
 
 /// The deterministic outcome of executing one block: roots over the execution witness and the
-/// identity of the result-bearing block. The v2 commitment without its native-AMX, lane-finality
-/// and merge-carrier fields.
+/// identity of the result-bearing block.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionCommitment")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]

@@ -1599,14 +1599,18 @@ export interface RamLfeProofVerifierMetadata {
   verifying_key_bytes_b64: string;
 }
 
+/** Current RAM-LFE wire tags; a recognized tag does not imply production encryption support. */
+export type RamLfeBackend = "hkdf-sha3-512-prf-v1" | "bfv-affine-v1" | "bfv-programmed-v1";
+export type RamLfeVerificationMode = "signed" | "proof";
+
 export interface RamLfeProgramPolicySummary {
   program_id: string;
   owner: string;
   active: boolean;
   resolver_public_key: string;
   output_opening_public_key: string;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
   input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
@@ -1629,7 +1633,7 @@ export interface IdentifierPolicySummary {
   resolver_public_key: string;
   output_opening_public_key: string;
   phone_retail_attestor_public_key?: string;
-  backend: string;
+  backend: RamLfeBackend;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
   input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
@@ -1670,8 +1674,8 @@ export interface RamLfeOutputOpening {
 export interface RamLfeExecutionReceiptPayload {
   program_id: string;
   program_digest: string;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   input_ciphertext_hash: string;
   output_ciphertext_hash: string;
   parameter_digest: string;
@@ -1706,8 +1710,8 @@ export interface RamLfeExecuteResponse {
   associated_data_hash: string;
   executed_at_ms: number;
   expires_at_ms: number | null;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   receipt: RamLfeExecutionReceipt;
 }
 
@@ -3366,11 +3370,7 @@ export class ToriiDataModelMismatchError extends Error {
 }
 
 export interface IdentifierRequestForPolicyOptions {
-  input?: unknown;
-  encryptedInput?: string;
-  encrypt?: boolean;
-  seed?: BinaryLike;
-  seedHex?: string;
+  encryptedInput: string;
   outputOpening: RamLfeOutputOpening;
 }
 
@@ -3387,11 +3387,16 @@ export function encodeIdentifierResolutionReceiptAttestation(
 export function getIdentifierBfvPublicParameters(
   policySummary: IdentifierPolicyClientSummary,
 ): Readonly<IdentifierBfvPublicParameters> | null;
+/** No secure RAM-LFE input-encryption profile is currently available. */
+export class RamLfeEncryptionUnavailableError extends Error {
+  readonly code: "ram_lfe_encryption_unavailable";
+  constructor();
+}
+/** Always throws RamLfeEncryptionUnavailableError before inspecting the input. */
 export function encryptIdentifierInputForPolicy(
   policySummary: IdentifierPolicyClientSummary,
   input: unknown,
-  options?: { seed?: BinaryLike; seedHex?: string },
-): string;
+): never;
 export function hashIdentifierEncryptedInput(encryptedInput: string): string;
 export function buildIdentifierRequestForPolicy(
   policySummary: IdentifierPolicyClientSummary,
@@ -3425,6 +3430,7 @@ type ToriiRuntimeNamespaceExport =
   | "encodeIdentifierResolutionReceiptAttestation"
   | "encodeIdentifierResolutionReceiptPayload"
   | "encryptIdentifierInputForPolicy"
+  | "RamLfeEncryptionUnavailableError"
   | "hashIdentifierEncryptedInput"
   | "extractPipelineStatusKind"
   | "getIdentifierBfvPublicParameters"
@@ -4118,13 +4124,6 @@ export interface ClientConnectWebSocketOptions<T = unknown>
   ) => void;
 }
 
-export interface ToriiSumeragiMembershipSnapshot {
-  height: number;
-  view: number;
-  epoch: number;
-  view_hash?: string | null;
-}
-
 /**
  * Exact protocol `u64` decoded from JSON.
  *
@@ -4132,33 +4131,6 @@ export interface ToriiSumeragiMembershipSnapshot {
  * returned as bigint so typed Sumeragi reads never round wire integers.
  */
 export type ToriiU64 = number | bigint;
-
-/**
- * Aggregated TEU commitment for a Nexus lane recorded in the latest block.
- */
-export interface ToriiLaneCommitmentSnapshot {
-  block_height: number;
-  lane_id: number;
-  tx_count: number;
-  total_chunks: number;
-  rbc_bytes_total: number;
-  teu_total: number;
-  block_hash: string;
-}
-
-/**
- * Aggregated TEU commitment for a Nexus dataspace recorded in the latest block.
- */
-export interface ToriiDataspaceCommitmentSnapshot {
-  block_height: number;
-  lane_id: number;
-  dataspace_id: number;
-  tx_count: number;
-  total_chunks: number;
-  rbc_bytes_total: number;
-  teu_total: number;
-  block_hash: string;
-}
 
 export interface ToriiLaneRuntimeUpgradeHookSnapshot {
   allow: boolean;
@@ -5800,8 +5772,6 @@ export interface ToriiStatusPayload {
   txs_rejected: number;
   view_changes: number;
   governance: ToriiGovernanceStatusSnapshot | null;
-  lane_commitments: ToriiLaneCommitmentSnapshot[];
-  dataspace_commitments: ToriiDataspaceCommitmentSnapshot[];
   lane_governance: ToriiLaneGovernanceSnapshot[];
   dataspace_catalog: ToriiDataspaceCatalogEntry[];
   lane_governance_sealed_total: number;
@@ -6167,6 +6137,52 @@ export interface ToriiSumeragiBeaconHorizon {
 export type ToriiSumeragiHaltReason =
   | Readonly<{ reason: "safety_record_corrupt" | "safety_record_inconsistent" | "driver_anomaly"; details: null }>
   | Readonly<{ reason: "safety_violation" | "apply_diverged" | "publication_recovery_required"; details: ToriiU64 }>;
+/** Chain parameters pinned into one lane incarnation (Rust `SumeragiParameters`). */
+export interface ToriiSumeragiParameters {
+  block_cadence_ms: ToriiU64;
+  max_clock_drift_ms: ToriiU64;
+  key_activation_lead_blocks: ToriiU64;
+  key_overlap_grace_blocks: ToriiU64;
+  key_expiry_grace_blocks: ToriiU64;
+  key_allowed_algorithms: ReadonlyArray<string>;
+  payload_retry_interval_ms: ToriiU64;
+  exec_budget_ms: ToriiU64;
+  apply_budget_ms: ToriiU64;
+  max_block_bytes: number;
+  epoch_length_blocks: ToriiU64;
+  demotion_window: ToriiU64;
+}
+/** One pinned lane committee member: canonical BLS-normal key and base64 96-byte possession proof. */
+export interface ToriiSumeragiLaneMember {
+  peer: string;
+  pop: string;
+}
+/** Highest merged lane block; `height` 0 means nothing merged yet. Hashes are uppercase hex. */
+export interface ToriiSumeragiLaneFrontier {
+  height: ToriiU64;
+  block_hash: string;
+  result: string;
+}
+/** Committed lifecycle record of one lane incarnation; all nullable keys are mandatory. */
+export interface ToriiSumeragiLaneRecord {
+  lane: number;
+  dataspace: ToriiU64;
+  incarnation: string;
+  params: ToriiSumeragiParameters;
+  committee: ReadonlyArray<ToriiSumeragiLaneMember>;
+  created_at: ToriiU64;
+  active_from: ToriiU64;
+  closing: ToriiU64 | null;
+  anchor_freshness: ToriiU64;
+  merged: ToriiSumeragiLaneFrontier;
+  merged_at: ToriiU64;
+  rescued: ToriiU64;
+}
+/** One served lane with the node's instance status (`null` while the node runs none). */
+export interface ToriiSumeragiLaneStatus {
+  record: ToriiSumeragiLaneRecord;
+  instance: ToriiSumeragiStatus | null;
+}
 
 export interface ToriiConsensusCaps {
   collectors_k: number;
@@ -10032,6 +10048,7 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
+  getSumeragiLanes(options?: { signal?: AbortSignal }): Promise<ReadonlyArray<ToriiSumeragiLaneStatus>>;
   listKaigiRelays(options?: { signal?: AbortSignal }): Promise<KaigiRelaySummaryList>;
   getKaigiRelay(
     relayId: string,
@@ -10957,6 +10974,9 @@ export declare class ToriiClient {
   getSumeragiStatusTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiStatus>;
+  getSumeragiLanes(options?: {
+    signal?: AbortSignal;
+  }): Promise<ReadonlyArray<ToriiSumeragiLaneStatus>>;
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;

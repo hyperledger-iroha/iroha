@@ -242,9 +242,10 @@ fn canonical_output_repeat_validation_is_deterministic() {
         }),
         "the state-free fixture binds one exact ordinary route per input"
     );
-    let (mut sb, sb_recorder) = ValidBlock::start_component_execution(&new_block.clone().into(), state)
+    let source: SignedBlock = new_block.into();
+    let (mut sb, sb_recorder) = ValidBlock::start_component_execution(&source, state)
         .expect("original recorder before execution");
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb, sb_recorder).unpack(|_| {});
+    let vb = ValidBlock::validate_unchecked(source, &mut sb, sb_recorder).unpack(|_| {});
     let first_outputs = vb.as_ref().execution_outputs().to_vec();
     assert!(
         first_outputs.iter().all(|output| output.result().is_ok()),
@@ -255,10 +256,10 @@ fn canonical_output_repeat_validation_is_deterministic() {
         .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
-    let (mut sb2, sb2_recorder) = ValidBlock::start_component_execution(&new_block2.clone().into(), state)
+    let replay: SignedBlock = new_block2.into();
+    let (mut sb2, sb2_recorder) = ValidBlock::start_component_execution(&replay, state)
         .expect("original recorder before replay");
-    let vb2 =
-        ValidBlock::validate_unchecked(new_block2.into(), &mut sb2, sb2_recorder).unpack(|_| {});
+    let vb2 = ValidBlock::validate_unchecked(replay, &mut sb2, sb2_recorder).unpack(|_| {});
     assert_eq!(
         vb2.as_ref().execution_outputs(),
         first_outputs.as_slice(),

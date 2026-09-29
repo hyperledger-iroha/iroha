@@ -6,8 +6,7 @@ use crate::{
     state::{StateBlock, WorldReadOnly, public_lane_validator_record_matches_key},
 };
 use iroha_config::parameters::actual::{
-    NexusConsensusPolicyDigestError, SumeragiLaneLifecycleEntry,
-    sumeragi_nexus_amx_context_hash,
+    NexusConsensusPolicyDigestError, SumeragiLaneLifecycleEntry, sumeragi_nexus_amx_context_hash,
 };
 use iroha_crypto::Hash;
 use mv::storage::StorageReadOnly;

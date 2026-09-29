@@ -613,7 +613,13 @@ impl FinalityVerifier {
                 })
                 .collect::<Vec<_>>();
             claims.sort_by_key(|(_, proof)| Reverse(proof.height()));
-            prefix.extend(source, &claims, budget, &mut source_failed_at, &mut unverified);
+            prefix.extend(
+                source,
+                &claims,
+                budget,
+                &mut source_failed_at,
+                &mut unverified,
+            );
         }
         let claimed = unverified
             .iter()
@@ -901,7 +907,7 @@ impl Prefix {
             Some(error) if !matches!(error, FinalityError::ResourceLimit(_)) => return Err(error),
             budget if height > checkpoint => {
                 return Err(
-                    budget.unwrap_or(FinalityError::AheadOfCheckpoint { checkpoint, height }),
+                    budget.unwrap_or(FinalityError::AheadOfCheckpoint { checkpoint, height })
                 );
             }
             _ => {}

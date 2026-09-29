@@ -78,6 +78,11 @@ fn invalid(details: &'static str) -> Error {
     }
 }
 
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+              module calls this directly with owned policy values"
+)]
 fn check_statement(
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
@@ -164,6 +169,11 @@ impl Artifact {
         )
     }
 
+    #[allow(
+        clippy::large_types_passed_by_value,
+        reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+                  module calls this directly with owned policy values"
+    )]
     fn preflight(&self, count: usize, limits: VerificationLimits) -> Result<()> {
         // Each scalar/sequence field has at most ten compact prefix bytes.
         // These deliberately conservative framing allowances avoid allocating
@@ -190,6 +200,11 @@ impl Artifact {
         )
     }
 
+    #[allow(
+        clippy::large_types_passed_by_value,
+        reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+                  module calls this directly with owned policy values"
+    )]
     fn finish(mut self, bundle: Vec<u8>, limits: VerificationLimits) -> Result<Vec<u8>> {
         check(
             "max_compact_producer_bundle_bytes",
@@ -258,6 +273,11 @@ fn construction_limits(
     }
 }
 
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+              module calls this directly with owned policy values"
+)]
 fn segments<R: DeepRelation>(
     statements: &[PublicStatement],
     private: &[[TransferSmtWitness; 2]],
@@ -305,6 +325,11 @@ fn segments<R: DeepRelation>(
     Ok(frames)
 }
 
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+              module calls this directly with owned policy values"
+)]
 fn prepare_and_prove(
     prepared: &PreparedPublicTransfers<'_, FastpqQuantityUnits>,
     statement: &FastpqPublicTransferStatementV1,

@@ -3,9 +3,9 @@ import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
 import { AccountAddress } from "./address.js";
-import { SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES } from "./sumeragiTypedLimits.js";
+import { SUMERAGI_LANES_TYPED_JSON_MAX_BYTES, SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES } from "./sumeragiTypedLimits.js";
 
-export { SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES };
+export { SUMERAGI_LANES_TYPED_JSON_MAX_BYTES, SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES };
 const FIELDS = "protocol_version config_fingerprint beacon_horizon instance height view stage leader proxy_tail high_qc_view level start_level t_retx_ms committed_height applied_height awaiting signer unanchored abstaining halted footprint".split(" ");
 const FOOTPRINT = "votes timeouts blocks exec_entries wants pending_apply sync_entries sync_bytes peers recent_headers configs cert_cache evidence_keys probe".split(" ");
 const HORIZON = "epoch_length_blocks next_required_pulse_height active_session_id session_covers_next_pulse local_provider_ready".split(" ");
@@ -105,4 +105,66 @@ export function parseSumeragiStatusPayload(payload) {
 export function parseSumeragiStatusJson(text, context = "native status") {
   if (typeof text !== "string" || !text.length || Buffer.byteLength(text, "utf8") > SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES) throw new TypeError(`${context} is empty or exceeds its byte bound`);
   return parseSumeragiStatusPayload(parseStrictLosslessIntegerJson(text, context));
+}
+const LANE_STATUS = ["record", "instance"];
+const LANE_RECORD = "lane dataspace incarnation params committee created_at active_from closing anchor_freshness merged merged_at rescued".split(" ");
+const LANE_PARAMS = "block_cadence_ms max_clock_drift_ms key_activation_lead_blocks key_overlap_grace_blocks key_expiry_grace_blocks key_allowed_algorithms payload_retry_interval_ms exec_budget_ms apply_budget_ms max_block_bytes epoch_length_blocks demotion_window".split(" ");
+const LANE_NONZERO_PARAMS = new Set(["block_cadence_ms", "payload_retry_interval_ms", "exec_budget_ms", "apply_budget_ms", "max_block_bytes", "epoch_length_blocks", "demotion_window"]);
+const LANE_FRONTIER = ["height", "block_hash", "result"];
+const LANE_MEMBER = ["peer", "pop"];
+const KEY_ALGORITHMS = new Set(["ed25519", "secp256k1", "ml-dsa", "bls_normal", "bls_small", "gost3410-2012-256-paramset-a", "gost3410-2012-256-paramset-b", "gost3410-2012-256-paramset-c", "gost3410-2012-512-paramset-a", "gost3410-2012-512-paramset-b", "sm2"]);
+const BLS_NORMAL_POP_BYTES = 96;
+
+function byte32(value, label) {
+  if (typeof value !== "string" || !/^[0-9A-F]{64}$/.test(value)) throw new TypeError(`${label} must be exactly 32 uppercase hex bytes`);
+  return value;
+}
+function laneParams(value) {
+  const r = record(value, LANE_PARAMS, "native lane parameters");
+  const algorithms = r.key_allowed_algorithms;
+  if (!Array.isArray(algorithms) || algorithms.some((name) => typeof name !== "string" || !KEY_ALGORITHMS.has(name))) {
+    throw new TypeError("native lane key_allowed_algorithms must list admitted algorithm names");
+  }
+  return Object.freeze(Object.fromEntries(LANE_PARAMS.map((field) => {
+    if (field === "key_allowed_algorithms") return [field, Object.freeze([...algorithms])];
+    const parsed = uint(r[field], field === "max_block_bytes" ? 32 : 64);
+    if (LANE_NONZERO_PARAMS.has(field) && BigInt(parsed) === 0n) throw new RangeError(`native lane ${field} must be nonzero`);
+    return [field, parsed];
+  })));
+}
+function laneMember(value) {
+  const r = record(value, LANE_MEMBER, "native lane committee member");
+  if (typeof r.peer !== "string" || !r.peer.startsWith("ea0130")) throw new TypeError("native lane committee peer must be a BLS-normal key");
+  const peer = publicKey(r.peer);
+  if (typeof r.pop !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(r.pop)) throw new TypeError("native lane committee pop must be standard base64");
+  const pop = Buffer.from(r.pop, "base64");
+  if (pop.toString("base64") !== r.pop || pop.length !== BLS_NORMAL_POP_BYTES) throw new TypeError("native lane committee pop must be a canonical 96-byte proof");
+  return Object.freeze({ peer, pop: r.pop });
+}
+function laneFrontier(value) {
+  const r = record(value, LANE_FRONTIER, "native lane frontier");
+  return Object.freeze({ height: uint(r.height), block_hash: byte32(r.block_hash, "native lane block_hash"), result: byte32(r.result, "native lane result") });
+}
+function laneRecord(value) {
+  const r = record(value, LANE_RECORD, "native lane record");
+  if (!Array.isArray(r.committee)) throw new TypeError("native lane committee must be an array");
+  return Object.freeze({
+    lane: uint(r.lane, 32), dataspace: uint(r.dataspace), incarnation: byte32(r.incarnation, "native lane incarnation"),
+    params: laneParams(r.params), committee: Object.freeze(r.committee.map(laneMember)),
+    created_at: uint(r.created_at), active_from: uint(r.active_from), closing: optionalUint(r.closing),
+    anchor_freshness: uint(r.anchor_freshness), merged: laneFrontier(r.merged), merged_at: uint(r.merged_at), rescued: uint(r.rescued),
+  });
+}
+/** Validate the exact native lane list; lane instance statuses are observations, never finality proofs. */
+export function parseSumeragiLanesPayload(payload) {
+  if (!Array.isArray(payload)) throw new TypeError("native lanes must be a JSON array");
+  return Object.freeze(payload.map((lane) => {
+    const r = record(lane, LANE_STATUS, "native lane status");
+    return Object.freeze({ record: laneRecord(r.record), instance: r.instance === null ? null : parseSumeragiStatusPayload(r.instance) });
+  }));
+}
+/** Bounded strict JSON for `GET /v1/sumeragi/lanes`; preserves all unsigned bits. */
+export function parseSumeragiLanesJson(text, context = "native lanes") {
+  if (typeof text !== "string" || !text.length || Buffer.byteLength(text, "utf8") > SUMERAGI_LANES_TYPED_JSON_MAX_BYTES) throw new TypeError(`${context} is empty or exceeds its byte bound`);
+  return parseSumeragiLanesPayload(parseStrictLosslessIntegerJson(text, context));
 }

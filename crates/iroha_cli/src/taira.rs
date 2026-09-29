@@ -159,9 +159,6 @@ pub enum Command {
     /// Prepare, submit, or recover ordinary account onboarding and faucet transactions.
     #[command(subcommand)]
     Account(onboarding::AccountCommand),
-    /// Plan, apply, resume, or inspect an exact dataspace and namespace deployment.
-    #[command(subcommand)]
-    DataspaceDeploy(crate::taira_dataspace_deploy::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Seat the SORA Parliament in a freshly generated Kagami Taira network: genesis citizens
@@ -186,7 +183,6 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Account(cmd) => cmd.run(context),
-            Self::DataspaceDeploy(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::SeatParliament(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(

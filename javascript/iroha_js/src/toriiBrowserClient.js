@@ -35,6 +35,7 @@ import {
 } from "./kagemushaToriiV1.js";
 import { _encodeRedemptionRequestV1 } from "./kagemusha.js";
 import {
+  SUMERAGI_LANES_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
 import {
@@ -3438,6 +3439,28 @@ export class ToriiBrowserClient {
           text,
           "Sumeragi typed status",
         ),
+      ),
+    });
+  }
+
+  getSumeragiLanes(options = {}) {
+    const opts = signalOnlyOptions(options, "getSumeragiLanes options");
+    return this._json("GET", "/v1/sumeragi/lanes", {
+      headers: { Accept: FIELD_APPLICATION_JSON },
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this.#operatorSigningContext,
+        "getSumeragiLanes",
+      ),
+      maximumBodyBytes: SUMERAGI_LANES_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get(FIELD_CONTENT_TYPE),
+          "Sumeragi lanes response",
+        );
+      },
+      jsonParser: (text) => import("./sumeragiTyped.js").then(
+        ({ parseSumeragiLanesJson }) => parseSumeragiLanesJson(text, "Sumeragi lanes"),
       ),
     });
   }

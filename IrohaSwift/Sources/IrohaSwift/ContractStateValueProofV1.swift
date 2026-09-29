@@ -33,7 +33,7 @@ public struct ContractStateProofStepV1: Decodable, Sendable {
 /// An exact stored byte value and its compressed-map membership path.
 ///
 /// Membership alone does not establish finality. The root supplied to `verify`
-/// must be authenticated through linked Sumeragi V2 finality separately.
+/// must be authenticated through linked native Sumeragi finality separately.
 public struct ContractStateValueInclusionProofV1: Decodable, Sendable {
     public let version: UInt8
     public let path: String

@@ -8,7 +8,7 @@
 //! `drive` is the Parliament driver of §4.14.5 item 4. It has no discretion: it creates the
 //! first attempt of every admissible open proposal, oldest first, and submits whatever Core's
 //! attempt plan (`GET /v1/gov/parliament/attempts/{id}/plan`) lists: due transitions in one
-//! transaction, each exact-height checkpoint in its own transaction timed by the `QueuePlan` lag,
+//! transaction, each exact-height checkpoint in its own transaction for the next native candidate,
 //! corpus relays from published records and combined TLE releases. It ticks an idle tip so block
 //! windows elapse. Several drivers are harmless: a duplicate transition fails and pays its fee.
 //!
@@ -103,6 +103,16 @@ enum DriveStep {
 }
 
 impl DriveStep {
+    /// Candidate height used to expire this submission's retry suppression.
+    fn candidate_height(&self, observed_tip: u64) -> Option<u64> {
+        match self {
+            Self::Exact {
+                execution_height, ..
+            } => Some(*execution_height),
+            _ => observed_tip.checked_add(1),
+        }
+    }
+
     /// Key under which a submission is remembered until its execution height has passed.
     fn key(&self) -> String {
         match self {
@@ -157,9 +167,9 @@ fn needs_blocks(proposal: &SccpGovernanceProposalStatusV1) -> bool {
     }
 }
 
-/// Steps of one attempt plan. A transaction sent now executes at `execution_height`; an exact
-/// transition one block later is sent now as well, so a transaction admitted one block late
-/// still lands on its height, and the early copy fails harmlessly.
+/// Steps advised for the next native candidate, without an inclusion guarantee. An exact
+/// transition one block later is sent as well so a delayed inclusion may reach its height;
+/// an early copy fails the on-chain height check.
 fn plan_steps(plan: &ParliamentAttemptPlanResponseV1) -> Vec<DriveStep> {
     let attempt = plan.governance_attempt_id;
     let mut steps = Vec::new();
@@ -244,15 +254,19 @@ fn step_instructions(
     }))
 }
 
+/// Forget submissions only after their candidate height has passed.
+fn retire_submissions(sent: &mut BTreeMap<String, u64>, tip: u64) {
+    sent.retain(|_, candidate| tip <= *candidate);
+}
+
 /// Run the Parliament driver until `args.polls` polls (0: until interrupted).
 fn drive<C: RunContext>(context: &mut C, args: &DriveArgs) -> Result<()> {
-    use iroha_core::governance::parliament::PARLIAMENT_DRIVER_EXECUTION_LAG_BLOCKS as LAG;
     let client = super::blocking(context)?;
     let parliament: Client = context.client_from_config()?;
     let poll_interval = Duration::from_millis(args.poll_interval_ms.max(100));
     let tick_interval = Duration::from_millis(args.tick_interval_ms.max(1_000));
-    // Submissions by key, with the tip they were sent at; a step is resent only after the
-    // height it aimed at has passed without taking effect.
+    // Submissions retain their actual candidate height; plan advice does not promise
+    // inclusion, so a still-needed step is retried after that candidate has passed.
     let mut sent: BTreeMap<String, u64> = BTreeMap::new();
     let mut last_block: Option<(u64, Instant)> = None;
     let mut polls = 0_u64;
@@ -262,7 +276,7 @@ fn drive<C: RunContext>(context: &mut C, args: &DriveArgs) -> Result<()> {
         if last_block.is_none_or(|(height, _)| height != tip) {
             last_block = Some((tip, Instant::now()));
         }
-        sent.retain(|_, at| at.saturating_add(LAG).saturating_add(1) > tip);
+        retire_submissions(&mut sent, tip);
         let proposals = client.sccp().governance_proposals()?;
         let pending = proposals.iter().any(needs_blocks);
         let mut steps: Vec<_> = proposals_to_attempt(&proposals)
@@ -289,7 +303,10 @@ fn drive<C: RunContext>(context: &mut C, args: &DriveArgs) -> Result<()> {
             if sent.contains_key(&key) {
                 continue;
             }
-            sent.insert(key.clone(), tip);
+            let candidate = step
+                .candidate_height(tip)
+                .ok_or_else(|| eyre!("committed height has no next native candidate"))?;
+            sent.insert(key.clone(), candidate);
             match step_instructions(&parliament, args, &step) {
                 Ok(Some(instructions)) => {
                     context.println(format_args!("tip {tip}: {key}"))?;
@@ -485,9 +502,9 @@ mod tests {
             version: 1,
             governance_attempt_id: attempt_id,
             current_height: 40,
-            execution_height: 43,
+            execution_height: 41,
             due: vec![ParliamentLifecycleTransitionV1::CompleteQualification],
-            exact: vec![close(43), close(44), close(50)],
+            exact: vec![close(41), close(42), close(50)],
             relay_ballots: vec![ballot],
             finalize_ballots: vec![ballot],
         };
@@ -501,24 +518,24 @@ mod tests {
                 ),
                 DriveStep::Exact {
                     attempt: attempt_id,
-                    execution_height: 43,
-                    transition: close(43).transition,
+                    execution_height: 41,
+                    transition: close(41).transition,
                 },
                 DriveStep::Exact {
                     attempt: attempt_id,
-                    execution_height: 43,
-                    transition: close(44).transition,
+                    execution_height: 41,
+                    transition: close(42).transition,
                 },
                 DriveStep::Relay(ballot),
                 DriveStep::Finalize(ballot),
             ],
-            "the exact checkpoint seven blocks out waits"
+            "the exact checkpoint nine blocks out waits"
         );
         // The same exact transition aimed at two execution heights is sent twice.
         let later = DriveStep::Exact {
             attempt: attempt_id,
-            execution_height: 44,
-            transition: close(44).transition,
+            execution_height: 42,
+            transition: close(42).transition,
         };
         assert_ne!(steps[2].key(), later.key());
         let keys: std::collections::BTreeSet<_> = steps.iter().map(DriveStep::key).collect();
@@ -527,6 +544,35 @@ mod tests {
             steps.len() - 1,
             "exact copies share a key per height only"
         );
+    }
+
+    #[test]
+    fn retry_suppression_tracks_actual_native_candidate_boundaries() {
+        let ballot = BallotAttemptId::new([9; 32]);
+        let relay = DriveStep::Relay(ballot);
+        assert_eq!(relay.candidate_height(40), Some(41));
+        assert_eq!(relay.candidate_height(u64::MAX), None);
+        let exact = DriveStep::Exact {
+            attempt: attempt(GovernanceAttemptStatusV1::Active).id,
+            execution_height: 44,
+            transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+        };
+        assert_eq!(exact.candidate_height(40), Some(44));
+        let mut sent = BTreeMap::from([
+            (relay.key(), relay.candidate_height(40).unwrap()),
+            (exact.key(), exact.candidate_height(40).unwrap()),
+        ]);
+        for tip in [40, 41] {
+            retire_submissions(&mut sent, tip);
+            assert_eq!(sent.len(), 2);
+        }
+        retire_submissions(&mut sent, 42);
+        assert!(!sent.contains_key(&relay.key()));
+        assert!(sent.contains_key(&exact.key()));
+        retire_submissions(&mut sent, 44);
+        assert!(sent.contains_key(&exact.key()));
+        retire_submissions(&mut sent, 45);
+        assert!(sent.is_empty());
     }
 
     #[test]

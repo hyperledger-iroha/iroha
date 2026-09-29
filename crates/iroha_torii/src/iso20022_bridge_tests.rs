@@ -8389,7 +8389,7 @@ fn durable_in_flight_reservation_pins_capacity_until_transaction_binding() {
     assert!(!runtime.update_message_context("missing", IsoMessageContext::default()));
 }
 #[test]
-fn rejected_retry_requires_the_exact_original_metadata() {
+fn rejected_original_identity_blocks_both_exact_and_changed_retries() {
     let runtime = sample_runtime();
     let original = IsoMessageMetadata::inbound(
         "generic-iso20022",
@@ -8410,7 +8410,7 @@ fn rejected_retry_requires_the_exact_original_metadata() {
     let mut changed = original.clone();
     changed.payload_hash = Some("payload-replacement".to_owned());
     assert!(!runtime.check_and_record_inbound("exact-retry", changed));
-    assert!(runtime.check_and_record_inbound("exact-retry", original));
+    assert!(!runtime.check_and_record_inbound("exact-retry", original));
 }
 #[test]
 fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
@@ -9442,6 +9442,46 @@ fn durable_directory_initialization_does_not_create_unowned_parent_trees() {
     assert!(!missing_parent.exists());
 }
 #[test]
+fn durable_directory_initialization_allows_unrelated_sibling_creation() {
+    let parent = TempDir::new().expect("tempdir");
+    let directory = parent.path().join("iso-store");
+    let sibling = parent.path().join("other-service");
+    let mut synchronized = 0;
+    prepare_real_directory_with_sync(&directory, |_| {
+        synchronized += 1;
+        if synchronized == 1 {
+            fs::create_dir(&sibling)?;
+        }
+        Ok(())
+    })
+    .expect("a sibling name does not replace the pinned parent or store");
+    assert_eq!(synchronized, 2);
+    assert!(is_real_directory(&directory));
+    assert!(is_real_directory(&sibling));
+}
+#[test]
+fn durable_directory_initialization_rejects_parent_replacement_during_sync() {
+    let holder = TempDir::new().expect("tempdir");
+    let parent = holder.path().join("parent");
+    fs::create_dir(&parent).expect("original parent");
+    let directory = parent.join("iso-store");
+    let retired = holder.path().join("retained-original-parent");
+    let mut synchronized = 0;
+    let error = prepare_real_directory_with_sync(&directory, |_| {
+        synchronized += 1;
+        if synchronized == 1 {
+            fs::rename(&parent, &retired)?;
+            fs::create_dir(&parent)?;
+            fs::create_dir(&directory)?;
+        }
+        Ok(())
+    })
+    .expect_err("replacing both names must not replace the original open identity");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(is_real_directory(&retired.join("iso-store")));
+    assert!(is_real_directory(&directory));
+}
+#[test]
 fn runtime_prepares_identity_directories_once_and_does_not_recreate_them() {
     let holder = TempDir::new().expect("tempdir");
     let store = holder.path().join("iso-store");
@@ -9637,7 +9677,7 @@ fn assert_digest_correct_audit_mutation_is_rejected(
     assert!(
         error
             .to_string()
-            .contains("is invalid or corrupt for schema V2"),
+            .contains("is invalid or corrupt for schema V3"),
         "unexpected hard-cut error for {case}: {error:?}"
     );
 }
@@ -9724,7 +9764,7 @@ fn durable_store_never_evicts_an_unexpired_identity_for_capacity() {
     runtime.mark_accepted("compact-old", "tx-compact-old");
     runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
-    assert!(runtime.check_and_record_inbound(
+    assert!(!runtime.check_and_record_inbound(
         "compact-new",
         IsoMessageMetadata::inbound(
             "generic-iso20022",
@@ -10105,7 +10145,7 @@ fn durable_store_audit_index_stops_startup_on_tampered_record() {
     assert!(
         error
             .to_string()
-            .contains("invalid or corrupt for schema V2"),
+            .contains("invalid or corrupt for schema V3"),
         "unexpected hard-cut error: {error:?}"
     );
 }
@@ -10150,7 +10190,7 @@ fn durable_store_rejects_tampered_record_body() {
     assert!(
         error
             .to_string()
-            .contains("invalid or corrupt for schema V2"),
+            .contains("invalid or corrupt for schema V3"),
         "unexpected hard-cut error: {error:?}"
     );
     assert_eq!(fs::read_to_string(path).expect("tampered record"), tampered);
@@ -10200,7 +10240,7 @@ fn durable_store_rejects_missing_record_digest() {
     assert!(
         error
             .to_string()
-            .contains("invalid or corrupt for schema V2"),
+            .contains("invalid or corrupt for schema V3"),
         "unexpected hard-cut error: {error:?}"
     );
 }
@@ -10247,7 +10287,7 @@ fn durable_store_rejects_malformed_record_digest() {
     assert!(
         error
             .to_string()
-            .contains("invalid or corrupt for schema V2"),
+            .contains("invalid or corrupt for schema V3"),
         "unexpected hard-cut error: {error:?}"
     );
 }
@@ -10661,7 +10701,7 @@ fn durable_store_rejects_oversized_record_on_reload() {
     });
 }
 #[test]
-fn durable_store_removes_oversized_record_on_persist() {
+fn durable_store_refuses_oversized_update_without_mutating_original_record() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
@@ -10686,31 +10726,47 @@ fn durable_store_removes_oversized_record_on_persist() {
         .join("messages")
         .join(message_filename("oversized-persist"));
     assert!(path.exists(), "initial persisted record missing");
+    let original_bytes = fs::read(&path).expect("original persisted record");
+    let original_index = read_audit_index(&store);
     let oversized_detail =
         "x".repeat(usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("cap fits") + 1);
-    runtime.update_message_context(
+    assert!(!runtime.update_message_context(
         "oversized-persist",
         IsoMessageContext {
             ledger_id: Some(oversized_detail),
             ..IsoMessageContext::default()
         },
+    ));
+    assert_eq!(
+        fs::read(&path).expect("retained original record"),
+        original_bytes
     );
     assert!(
-        !path.exists(),
-        "oversized persisted records must remove stale on-disk state"
+        runtime
+            .message_status("oversized-persist")
+            .unwrap()
+            .ledger_id()
+            .is_none()
     );
     assert!(runtime.message_status("oversized-persist").is_some());
     let index_value = read_audit_index(&store);
+    assert_eq!(index_value, original_index);
     let index_obj = index_value.as_object().expect("audit index object");
     assert!(persisted_audit_index_digest_matches(index_obj));
     assert_eq!(
         index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+        Some(1)
     );
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
-    assert!(reloaded.message_status("oversized-persist").is_none());
+    assert!(
+        reloaded
+            .message_status("oversized-persist")
+            .unwrap()
+            .ledger_id()
+            .is_none()
+    );
 }
 #[test]
 fn runtime_rejects_invalid_alias_iban() {
@@ -11305,7 +11361,37 @@ fn memory_only_runtime_refuses_transaction_binding_before_queue_admission() {
     assert!(!runtime.tx_hash_index.contains_key("tx-queue-unknown"));
 }
 #[test]
-fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
+fn unrepresentable_replay_expiry_refuses_admission_without_mutation() {
+    for ttl_seconds in [u64::MAX, u64::MAX / 1000 + 1] {
+        let mut config = sample_config();
+        config.dedupe_ttl_secs = ttl_seconds;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let metadata = IsoMessageMetadata::default();
+        let parties = runtime.compatibility_test_parties(&metadata);
+        assert_eq!(
+            runtime.admit_inbound("overflowing-expiry", metadata, parties, false),
+            Err(IsoAdmissionError::PersistenceUnavailable)
+        );
+        assert!(runtime.records.is_empty());
+        assert!(runtime.replay_tombstones.is_empty());
+        assert!(runtime.payload_hash_index.is_empty());
+        assert!(runtime.business_message_id_index.is_empty());
+        assert!(runtime.uetr_index.is_empty());
+    }
+    assert_eq!(system_time_from_ms(0), Some(SystemTime::UNIX_EPOCH));
+    for millis in [1, 86_400_000, u64::MAX] {
+        // A platform may have a narrower SystemTime; every representable value
+        // must survive exact persistence without saturation or a panic.
+        if let Some(time) = system_time_from_ms(millis) {
+            assert_eq!(system_time_to_ms(time), millis);
+        }
+    }
+}
+
+#[test]
+fn durable_prepared_transaction_survives_reload_and_pins_capacity() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.dedupe_ttl_secs = 0;
@@ -11315,28 +11401,24 @@ fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        assert!(runtime.check_and_record_message("durable-queue-unknown"));
-        assert!(runtime.bind_transaction_hash("durable-queue-unknown", "tx-durable-queue-unknown"));
-        assert!(runtime.mark_queue_outcome_unknown(
-            "durable-queue-unknown",
-            "tx-durable-queue-unknown",
-            "journal outcome requires reconciliation".to_owned(),
-        ));
+        assert!(runtime.check_and_record_message("durable-prepared"));
+        assert!(runtime.bind_transaction_hash("durable-prepared", "tx-durable-prepared"));
         assert!(!runtime.check_and_record_message("capacity-must-fail-closed"));
     }
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
     let status = reloaded
-        .message_status("durable-queue-unknown")
-        .expect("unknown outcome reloads");
-    assert_eq!(status.transaction_hash(), Some("tx-durable-queue-unknown"));
-    assert_eq!(status.pacs002_code(), "PDNG");
-    assert!(!reloaded.check_and_record_message("durable-queue-unknown"));
-    assert!(reloaded.mark_transaction_applied("tx-durable-queue-unknown", SystemTime::now()));
+        .message_status("durable-prepared")
+        .expect("original prepared transaction reloads");
+    assert_eq!(status.transaction_hash(), Some("tx-durable-prepared"));
+    assert_eq!(status.pacs002_code(), "ACTC");
+    assert!(status.hold_reason_code().is_none());
+    assert!(!reloaded.check_and_record_message("durable-prepared"));
+    assert!(reloaded.mark_transaction_applied("tx-durable-prepared", SystemTime::now()));
     assert_eq!(
         reloaded
-            .message_status("durable-queue-unknown")
+            .message_status("durable-prepared")
             .expect("reconciled status")
             .pacs002_code(),
         "ACSC"
@@ -11743,9 +11825,27 @@ fn participant_message(
     to: &str,
     extra_fields: &str,
 ) -> ParsedMessage {
+    // Authorization tests still enter through the current schema validator.
+    let required = match message_type {
+        "pacs.008" => {
+            "IntrBkSttlmCcy=USD\nIntrBkSttlmAmt=10\nIntrBkSttlmDt=2026-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB33BUKB20201555555555\nDbtrAgt=DEUTDEFF\nCdtrAgt=MARKDEFF\n"
+        }
+        "pacs.004" => {
+            "MsgId=participant-return\nCreDtTm=2026-01-01T00:00:00Z\nTxInf[0]/OrgnlInstrId=original\nTxInf[0]/RtrdInstdAmt=10\nTxInf[0]/RtrdInstdAmtCcy=USD\n"
+        }
+        "camt.056" => "Assgnmt/Id=participant-cancellation\nAssgnmt/CreDtTm=2026-01-01T00:00:00Z\n",
+        "sese.023" => {
+            "SttlmDt=2026-01-01\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nSctiesLeg/FinInstrmId=US0378331005\nSctiesLeg/Qty=1\nCashLeg/Amt=10\nCashLeg/Ccy=USD\nDlvrgSttlmPties/Pty/Bic=DEUTDEFF\nDlvrgSttlmPties/Acct=DELIVER-1\nRcvgSttlmPties/Pty/Bic=MARKDEFF\nRcvgSttlmPties/Acct=RECEIVE-1\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING\n"
+        }
+        "sese.025" => {
+            "SttlmDt=2026-01-01\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nSttlmQty=1\nSttlmAmt=10\nSttlmCcy=USD\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING\n"
+        }
+        _ => "",
+    };
     let fields = format!(
         "AppHdr/Fr/FIId/FinInstnId/BICFI={from}\n\
          AppHdr/To/FIId/FinInstnId/BICFI={to}\n\
+         {required}\
          {extra_fields}"
     );
     parse_message(message_type, fields.as_bytes()).expect("participant message parses")
@@ -11789,7 +11889,7 @@ fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
     );
     let ambiguous_from = parse_message(
         "pacs.008",
-        b"AppHdr/Fr/FIId/FinInstnId/BICFI=DEUTDEFF\nAppHdr/Fr/FIId/FinInstnId/LEI=5493001KJTIIGC8Y1R12\nAppHdr/To/FIId/FinInstnId/BICFI=MARKDEFF\nMsgId=ambiguous",
+        b"AppHdr/Fr/FIId/FinInstnId/BICFI=DEUTDEFF\nAppHdr/Fr/FIId/FinInstnId/LEI=5493001KJTIIGC8Y1R12\nAppHdr/To/FIId/FinInstnId/BICFI=MARKDEFF\nMsgId=ambiguous\nIntrBkSttlmCcy=USD\nIntrBkSttlmAmt=10\nIntrBkSttlmDt=2026-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB33BUKB20201555555555\nDbtrAgt=DEUTDEFF\nCdtrAgt=MARKDEFF",
     )
     .expect("ambiguous From parses");
     assert_eq!(
@@ -11992,7 +12092,7 @@ fn lifecycle_roles_reject_cross_party_updates() {
         "camt.056",
         "DEUTDEFF",
         "MARKDEFF",
-        "BizMsgIdr=cancel-1\nOrgnlGrpInf/OrgnlMsgId=owned-payment",
+        "BizMsgIdr=cancel-1\nUndrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId=owned-payment",
     );
     runtime
         .authorize_lifecycle_submission(originator.public_key(), profile, "camt.056", &cancellation)
@@ -12111,7 +12211,9 @@ fn lifecycle_authorization_rejects_prune_readmit_aba_and_old_settlement_hash() {
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     config.store_retention_secs = 3_600;
-    config.dedupe_ttl_secs = 0;
+    // Keep the original identity live until this test deliberately expires both
+    // the record and its tombstone; a zero TTL may prune it during settlement.
+    config.dedupe_ttl_secs = 3_600;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("valid participant config")
         .expect("enabled runtime");
@@ -12283,7 +12385,7 @@ fn counterparty_owns_every_return_and_securities_lifecycle_message() {
                 "sese.025",
                 "MARKDEFF",
                 "DEUTDEFF",
-                "BizMsgIdr=securities-confirmation-1\nTxId=securities-role-trade\nConfSts=ACSC",
+                "BizMsgIdr=securities-confirmation-1\nTxId=securities-role-trade\nConfSts=ACCP",
             ),
         ),
     ] {

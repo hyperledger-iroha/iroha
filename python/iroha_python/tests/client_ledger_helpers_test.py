@@ -577,7 +577,7 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
 
 
 @pytest.mark.parametrize("name", ["onboarding_prepared", "faucet_prepared"])
-def test_prepared_transaction_v1_rejects_signed_ordinary_admission(name: str) -> None:
+def test_prepared_transaction_v1_rejects_validly_signed_missing_operation_binding(name: str) -> None:
     fixture_path = (
         Path(__file__).resolve().parents[3]
         / "fixtures"
@@ -619,24 +619,28 @@ def test_prepared_transaction_v1_rejects_signed_ordinary_admission(name: str) ->
     payload, _ = read_field(original_wire, offset)
     fields = []
     offset = 0
-    for _ in range(10):
+    for _ in range(9):
         value, offset = read_field(payload, offset)
         fields.append(value)
     assert offset == len(payload)
-    assert fields[7] == b"\x01\x00\x00\x00"
-    fields[7] = b"\x00\x00\x00\x00"
-    ordinary_payload = b"".join(field(value) for value in fields)
+    # Metadata is the eighth field in the sole current payload layout. Remove the
+    # signed prepared-operation binding, then sign that otherwise valid transaction.
+    assert b"prepared_semantic_hash" in fields[7]
+    # Metadata's canonical element sequence has a fixed u64 zero count.
+    fields[7] = bytes(8)
+    unbound_payload = b"".join(field(value) for value in fields)
     seed = bytes([0x51 if name == "onboarding_prepared" else 0x61]) * 32
+    signer = crypto_module.derive_ed25519_keypair_from_seed(seed)
     signature = crypto_module.sign_ed25519(
-        seed, crypto_module.hash_blake2b_32(ordinary_payload)
+        signer.private_key, crypto_module.hash_blake2b_32(unbound_payload)
     )
     signature_wire = len(signature).to_bytes(8, "little") + b"".join(
         field(bytes([byte])) for byte in signature
     )
-    ordinary_wire = b"\x01" + field(field(signature_wire)) + field(ordinary_payload) + field(b"\x00")
+    unbound_wire = b"\x01" + field(field(signature_wire)) + field(unbound_payload) + field(b"\x00")
     network_id = NetworkId.parse(vector["network_id"])
     # The negative case must reach the prepared verifier with a valid signature.
-    crypto_module.signed_transaction_envelope_from_versioned_v1(ordinary_wire, network_id)
+    crypto_module.signed_transaction_envelope_from_versioned_v1(unbound_wire, network_id)
     operation_context = (
         {
             "receipt": prepared["receipt"],
@@ -655,7 +659,7 @@ def test_prepared_transaction_v1_rejects_signed_ordinary_admission(name: str) ->
     )
     with pytest.raises(ValueError, match="invalid prepared transaction context"):
         crypto_module.verify_prepared_transaction_context_v1(
-            ordinary_wire,
+            unbound_wire,
             network_id,
             vector["signer_account_id"],
             json.dumps(prepared["binding"], sort_keys=True, separators=(",", ":")),

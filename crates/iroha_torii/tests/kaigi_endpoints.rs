@@ -17,8 +17,8 @@ use iroha_data_model::{
     },
     domain::Domain,
     kaigi::{
-        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
-        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KaigiId, KaigiRecord, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
+        NewKaigi, kaigi_metadata_key, kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
     prelude::AccountId,
     sns::{NameControllerV1, NameRecordV1},
@@ -101,6 +101,19 @@ fn build_app() -> (
     KeyPair,
     iroha_torii::test_utils::TestDataDirGuard,
 ) {
+    let (app, relay, owner, operator, data_dir, _network, _owner_key) =
+        build_app_with_stream_signer();
+    (app, relay, owner, operator, data_dir)
+}
+fn build_app_with_stream_signer() -> (
+    iroha_torii::TestApiRouterRuntime,
+    AccountId,
+    AccountId,
+    KeyPair,
+    iroha_torii::test_utils::TestDataDirGuard,
+    NetworkId,
+    KeyPair,
+) {
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let chain_id = cfg.common.chain.clone();
@@ -134,6 +147,11 @@ fn build_app() -> (
         notes: Some("operational".to_string()),
     };
     let mut metadata = Metadata::default();
+    let call = NewKaigi::with_defaults(feedback.call.clone(), owner_id.clone());
+    metadata.insert(
+        kaigi_metadata_key(&call.id.call_name).expect("call metadata key"),
+        Json::try_new(KaigiRecord::from_new(&call, 0)).expect("call JSON"),
+    );
     metadata.insert(
         kaigi_relay_metadata_key(&relay_id).expect("metadata key"),
         Json::try_new(registration).expect("registration json"),
@@ -230,6 +248,8 @@ fn build_app() -> (
         owner_id,
         operator_key_pair,
         data_dir,
+        network_id,
+        owner_kp,
     )
 }
 async fn get_kaigi(
@@ -683,34 +703,46 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
 }
 #[tokio::test]
 async fn kaigi_sse_accepts_i105_relay_filter() {
-    let (app, relay_account, _owner_account, _operator_key_pair, _data_dir) = build_app();
-    let relay_literal = relay_account.to_string();
-    let resp = app
+    let (app, relay_account, owner_account, _operator, _data_dir, network_id, owner_key) =
+        build_app_with_stream_signer();
+    let uri = format!("/v1/kaigi/relays/events?relay={relay_account}");
+    let unsigned = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/events?relay={relay_literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+    let request = fixtures::app_signed_request(
+        &network_id,
+        &owner_account,
+        &owner_key,
+        Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        &[],
+    );
+    let resp = app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("text/event-stream"))
+    );
+    drop(resp);
     app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_sse_rejects_invalid_relay_filter() {
-    let (app, _relay_account, _owner_account, _operator_key_pair, _data_dir) = build_app();
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let (app, _relay, owner_account, _operator, _data_dir, network_id, owner_key) =
+        build_app_with_stream_signer();
+    let request = fixtures::app_signed_request(
+        &network_id,
+        &owner_account,
+        &owner_key,
+        Request::builder()
+            .uri("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")
+            .body(Body::empty())
+            .unwrap(),
+        &[],
+    );
+    let resp = app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     app.shutdown().await;
 }

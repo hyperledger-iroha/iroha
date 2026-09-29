@@ -1,4 +1,4 @@
-// Current embedded-certificate finality transport. No V2 decoding or conversion.
+// Embedded-certificate finality transport; no alternate decoding or conversion.
 
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;

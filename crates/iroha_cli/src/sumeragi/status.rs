@@ -54,7 +54,9 @@ fn summarize_status(value: &Value) -> String {
         number("committed_height"),
         number("applied_height"),
         flag("awaiting"),
-        !value.get("signer").is_none_or(Value::is_null) && !flag("abstaining") && !flag("unanchored"),
+        !value.get("signer").is_none_or(Value::is_null)
+            && !flag("abstaining")
+            && !flag("unanchored"),
     )
 }
 fn summarize_diagnostics(value: &Value) -> String {
@@ -70,12 +72,8 @@ fn summarize_diagnostics(value: &Value) -> String {
         .get("tx_queue_saturated")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let lanes = value
-        .get("lane_commitments")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    let relays = value
-        .get("lane_relay_envelopes")
+    let governance_lanes = value
+        .get("lane_governance")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     let sealed = value
@@ -94,7 +92,7 @@ fn summarize_diagnostics(value: &Value) -> String {
         },
     );
     format!(
-        "queue={depth}/{capacity} saturated={saturated} election={election} lanes={lanes} relays={relays} sealed={sealed}"
+        "queue={depth}/{capacity} saturated={saturated} election={election} governance_lanes={governance_lanes} sealed={sealed}"
     )
 }
 fn summarize_params(value: &Value) -> String {
@@ -151,13 +149,12 @@ mod tests {
             "npos": {
                 "epoch_length_blocks": 100
             },
-            "lane_commitments": [{ "lane_id": 1 }],
-            "lane_relay_envelopes": [],
+            "lane_governance": [{ "lane_id": 1 }],
             "lane_governance_sealed_total": 0
         });
         assert_eq!(
             summarize_diagnostics(&value),
-            "queue=4/10 saturated=false election=npos(epoch=100) lanes=1 relays=0 sealed=0"
+            "queue=4/10 saturated=false election=npos(epoch=100) governance_lanes=1 sealed=0"
         );
     }
     #[test]

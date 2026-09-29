@@ -11,10 +11,10 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 
 fn priced_fixture(callback_bytes: Option<usize>) -> (State, AssetDefinitionId) {
-    let asset = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("network-fee", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR fee asset");
     let mut state = fixture_with_fee_asset(65_536, callback_bytes, Some(asset.clone()));
     state.nexus.get_mut().fees.per_instruction_fee = Quantity::from(1_u32);
     (state, asset)
@@ -360,7 +360,8 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
                 accepted,
                 &mut failed,
                 &mut cache,
-                Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+                Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+                None,
             )
             .is_err()
         );

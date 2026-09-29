@@ -25,7 +25,7 @@ pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIO
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-/// Compute the genesis-embedded v2 consensus-parameters fingerprint.
+/// Compute the genesis-embedded consensus-parameters fingerprint.
 ///
 /// Mode, cadence, block bound, signed DA/Nexus context, and the
 /// genesis-selected NPoS election inputs are the complete canonical Norito
@@ -40,7 +40,7 @@ pub fn compute_consensus_parameters_fingerprint(
 /// Build the exact first-release carrier for consensus-genesis parameters.
 ///
 /// Runtime handshakes, genesis metadata generation, and startup validation all
-/// pass this carrier through the canonical v2 fingerprint projection.
+/// pass this carrier through the canonical fingerprint projection.
 ///
 /// # Errors
 /// Returns an error when NPoS mode lacks its signed election parameters.

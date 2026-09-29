@@ -4661,7 +4661,7 @@ pub struct PeerStartupState {
     pub sumeragi_snapshot: Option<PeerSumeragiSnapshot>,
     /// Most recent `/v1/sumeragi/status` error captured by the startup watchdog.
     pub sumeragi_error: Option<String>,
-    /// Unix timestamp in milliseconds when the Sumeragi v2 probe completed.
+    /// Unix timestamp in milliseconds when the Sumeragi probe completed.
     pub sumeragi_unix_timestamp_ms: Option<u128>,
     /// Snapshot of the peer's Kura storage layout.
     pub storage: PeerStorageSnapshot,
@@ -8271,7 +8271,7 @@ impl NetworkBuilder {
                 norito::json::from_str::<ConsensusHandshakeMetadata>(parameter.payload().get()).ok()
             })
             .expect(
-                "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
+                "test-network genesis must carry explicitly provisioned signed Sumeragi context parameters",
             );
         let provisional_sumeragi_context = provisional_metadata.sumeragi_context;
         let provisional_kagemusha_mint_finality = disposable_mint_finality_genesis
@@ -8313,14 +8313,15 @@ impl NetworkBuilder {
                     zk_config.as_ref(),
                     resolved_genesis_config.as_ref(),
                 )
-                .expect("normalized custom genesis must pre-execute for v2 context binding")
+                .expect("normalized custom genesis must pre-execute for Sumeragi context binding")
             }
             None => preview_staged_policy_hashes
                 .expect("normal genesis preview must provide staged execution-policy hashes"),
         };
         let mut signed_sumeragi_context = provisional_sumeragi_context;
         signed_sumeragi_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
-        signed_sumeragi_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
+        signed_sumeragi_context.execution_policy_hash =
+            staged_policy_hashes.execution_policy.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
@@ -12423,7 +12424,7 @@ mod tests {
             .map(|index| format!("ordinary startup line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        input.push_str("\nSumeragi v2 effect services failed closed: exact ownership violation\n");
+        input.push_str("\nSumeragi effect services failed closed: exact ownership violation\n");
         for index in 0..100 {
             input.push_str(&format!("ordinary shutdown detail {index}\n"));
         }
@@ -12434,7 +12435,7 @@ mod tests {
         assert!(
             summary
                 .preview
-                .contains("Sumeragi v2 effect services failed closed: exact ownership violation")
+                .contains("Sumeragi effect services failed closed: exact ownership violation")
         );
         assert!(summary.preview.contains("... decisive peer failure ..."));
     }
@@ -12691,7 +12692,7 @@ mod tests {
         );
         assert_eq!(
             metadata.sumeragi_context, profile.params.sumeragi_context,
-            "handshake metadata should carry the exact signed v2 context"
+            "handshake metadata should carry the exact signed Sumeragi context"
         );
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
@@ -16555,7 +16556,10 @@ mod tests {
             .expect("custom genesis must contain canonical consensus metadata");
         assert_eq!(
             metadata.sumeragi_context,
-            network.consensus_bootstrap_profile().params.sumeragi_context,
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .sumeragi_context,
             "cached custom genesis must carry the final runtime profile"
         );
         assert_ne!(

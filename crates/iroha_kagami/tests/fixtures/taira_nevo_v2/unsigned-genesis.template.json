@@ -3,7 +3,7 @@
   "chain_discriminant": 369,
   "consensus_fingerprint": null,
   "consensus_mode": "Npos",
-  "sumeragi_v2": {
+  "sumeragi_context": {
     "da_layout": {
       "encoding": {
         "encoding": "reed_solomon16",

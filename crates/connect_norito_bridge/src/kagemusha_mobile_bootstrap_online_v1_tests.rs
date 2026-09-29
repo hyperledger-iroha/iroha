@@ -24,17 +24,16 @@ fn bootstrap() -> (KagemushaTestnetNativeStartupContextV1, Vec<u8>) {
     let checkpoint = crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1()
         .checkpoint()
         .clone();
-    let approvals = keys()[..2]
-        .iter()
-        .map(|key| KagemushaMobileBootstrapApprovalV1 {
-            public_key: key.public_key().clone(),
-            signature: SignatureOf::try_new(key.private_key(), &checkpoint.approval_payload())
-                .unwrap(),
-        })
-        .collect();
+    let approval_payload = checkpoint.approval_payload();
     let package = KagemushaMobileBootstrapPackageV1 {
         checkpoint,
-        approvals,
+        approvals: keys()[..2]
+            .iter()
+            .map(|key| KagemushaMobileBootstrapApprovalV1 {
+                public_key: key.public_key().clone(),
+                signature: SignatureOf::try_new(key.private_key(), &approval_payload).unwrap(),
+            })
+            .collect(),
     };
     (context, norito::encode_canonical(&package).unwrap())
 }

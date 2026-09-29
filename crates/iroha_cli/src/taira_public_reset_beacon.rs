@@ -803,7 +803,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         }
         let genesis = plan_genesis(inventory, &genesis_wire)?;
         let clients = self.beacon_clients(deadline)?;
-        let mut observer = AuthenticatedHeightObserverV1::new(&genesis, peers(inventory)?)?;
+        let mut observer =
+            AuthenticatedHeightObserverV1::new(&genesis, &inventory.chain_id, peers(inventory)?)?;
         let initial = observe_new(&mut observer, &clients, inventory, deadline)?;
         let request = &inventory.beacon_bootstrap.request;
         let state = GlobalThresholdBeaconDkgStateV1::new(
@@ -1519,8 +1520,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             }
             let genesis =
                 plan_genesis(&self.admitted.inventory, &native.bundle.genesis.signed_wire)?;
-            let mut observer =
-                AuthenticatedHeightObserverV1::new(&genesis, peers(&self.admitted.inventory)?)?;
+            let mut observer = AuthenticatedHeightObserverV1::new(
+                &genesis,
+                &self.admitted.inventory.chain_id,
+                peers(&self.admitted.inventory)?,
+            )?;
             let height = observe_new(&mut observer, &client, &self.admitted.inventory, deadline)?;
             let carrier_height =
                 std::num::NonZeroU64::new(native.bundle.finalization_draft.effective_height)

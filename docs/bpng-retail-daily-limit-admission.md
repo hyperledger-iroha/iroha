@@ -51,7 +51,7 @@ protocol-4 or physical-device acceptance follows from this source slice.
 
 ## Finalized activation evidence boundary
 
-`verify_finalized_retail_activation_v1` verifies a Sumeragi-v2 `CommitQC`
+`verify_finalized_retail_activation_v1` verifies a `CommitQC`
 against an independently pinned target-height context, then binds the exact
 executed block wire, one direct owner-signed activation instruction, and its
 successful typed Network output. Callers must supply the owner-approved full
@@ -63,15 +63,18 @@ The existing full executed-block wire route requires a canonical signed read
 and `CanReadAllLedgerData`; that broad grant cannot be inferred for BPNG Core.
 An authorized owner custody path or a separately reviewed selective carrier
 must supply the block without weakening the ledger privacy boundary.
+TODO: the verifier still takes the previous finality artifact and
+`HeightContextId`; re-anchor it on the Sumeragi CommitQC stored in Kura
+certified frames (`specs/sumeragi.md` §12.7).
 
 This is evidence of the historical activation event at that height. It does
 not authenticate a later read of the `retail_day_policy_v1` and
 `retail_day_activation_v1` state-map entries. `ContractStateMapV1` has a
 Core-local cold-capture path, but Core does not maintain and publish its
 accumulated root in a finalized consensus field, and Torii has no corresponding
-value-inclusion proof route. The Sumeragi-v2
-`post_state_root` is a block execution-witness root, not that accumulated
-map root. The existing ledger `state_proof` route returns a finalized block
+value-inclusion proof route. The certified execution result `R` commits only
+the witnessed write set (`specs/sumeragi.md` Appendix E, E51), not that
+accumulated map root. The existing ledger `state_proof` route returns a finalized block
 envelope without membership proofs for those entries. Production admission
 therefore remains closed until the current-state binding or an independently
 reviewed immutable-state theorem and proof chain is implemented and qualified.
@@ -155,19 +158,11 @@ The existing snapshot/checkpoint machinery has these distinct guarantees:
 | --- | --- |
 | `snapshot.rs::try_read_snapshot_bundle` | The ordinary signed-bundle path verifies the configured snapshot signing key, exact payload digest, Merkle bytes, canonical WSV hash and signed fast manifest, with exact network and snapshot binding. This authenticates local snapshot custody under that separately trusted key; explicit audited-import authority is a separate path. |
 | `snapshot.rs::validate_snapshot_wsv_checkpoint` | Compares the canonical WSV hash to an available local checkpoint at the exact matching Kura tip. No checkpoint comparison is possible when that local checkpoint is absent; separately admitted snapshot-ahead/import paths have their own authority. |
-| `kura/prune_commit_merge_support.rs::CommitManifest::binds_authenticated_v2_commit_authority` | Checks the exact block, execution-witness roots, QC digest and artifact authority digest. The manifest also stores a WSV checkpoint hash, but that hash is not part of the quorum-signed execution commitment or the artifact authority seal. A locally coherent checkpoint and manifest do not add quorum authentication of accumulated WSV contents. |
-| `sumeragi/v2_recovery.rs::V2StartupReplayPlan::replay_complete_prefix` | Authenticated full-body replay starts after the restored state's committed height. It does not independently re-execute the snapshot's preceding activation history. |
-| `sumeragi/v2_recovery.rs::authenticate_v2_snapshot_replay_boundary` | Verifies the separately authenticated hash-only bootstrap lineage when one exists. The ordinary full-body path has no such bootstrap prefix; this function does not mint a retail snapshot proof for it. |
-| `kura/bound_progress_and_retained_support.rs::KuraRetainedBlockRecord` | Retains the block header, proposal and executed-wire hashes and merge reference after body eviction. It does not retain the original retail activation input/output needed to verify the activation independently. |
 
 The execution-policy digest in
 `state.rs::execution_policy_digest_with_runtime_policies_v1` binds configured
-runtime policies; it does not hash retail state-map entries. The retained AMX
-context calculation in
-`sumeragi/v2_recovery.rs::nexus_amx_context_hash_with_runtime_policy` binds lane
-and validator/runtime authority, without independently binding this retail
-policy pair. Neither context check supplies the missing accumulated-state
-commitment.
+runtime policies; it does not hash retail state-map entries. It does not supply
+the missing accumulated-state commitment.
 
 Complete deterministic replay from an independently trusted origin, with the
 original result-bearing activation block and every required successor body,

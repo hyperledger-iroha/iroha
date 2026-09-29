@@ -75,7 +75,7 @@ pub struct Args {
     /// Use this topology instead of specified in genesis.json.
     /// JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
     ///
-    /// The final unique topology must be an exact Sumeragi v2 `3f + 1`
+    /// The final unique topology must be an exact Sumeragi `3f + 1`
     /// committee in the range 4..=31.
     #[clap(short, long)]
     topology: Option<String>,
@@ -1951,7 +1951,7 @@ fn ensure_valid_genesis_committee(topology: &[PeerId]) -> Result<(), color_eyre:
     }
     if !(4..=MAX_VALIDATORS).contains(&unique.len()) || (unique.len() - 1) % 3 != 0 {
         return Err(eyre!(
-            "genesis topology must contain an exact Sumeragi v2 `3f + 1` validator committee \
+            "genesis topology must contain an exact Sumeragi `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS} (saw {})",
             unique.len()
         ));
@@ -3311,7 +3311,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let error = ensure_valid_genesis_committee(&topology[..count])
                 .expect_err("non-committee topology must fail");
             assert!(
-                error.to_string().contains("exact Sumeragi v2 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }
@@ -4257,7 +4257,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .validate()
             .expect("signed consensus metadata is complete");
         let mut bound_parameters = manifest.sumeragi_context_parameters();
-        bound_parameters.nexus_amx_context_hash = signed_meta.sumeragi_context.nexus_amx_context_hash;
+        bound_parameters.nexus_amx_context_hash =
+            signed_meta.sumeragi_context.nexus_amx_context_hash;
         bound_parameters.execution_policy_hash = signed_meta.sumeragi_context.execution_policy_hash;
         let expected = manifest
             .with_sumeragi_context_parameters(bound_parameters)
@@ -4449,7 +4450,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let resigned_consensus_meta = consensus_handshake_meta(&block);
         assert_eq!(generated_consensus_meta, resigned_consensus_meta);
         assert_ne!(
-            generated_consensus_meta.sumeragi_context.nexus_amx_context_hash, [0; 32],
+            generated_consensus_meta
+                .sumeragi_context
+                .nexus_amx_context_hash,
+            [0; 32],
             "staged Nexus/AMX context commitment must not be empty"
         );
         assert_genesis_signatures_verify(&generated_block, &genesis_key_pair);

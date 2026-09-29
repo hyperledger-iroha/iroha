@@ -20,9 +20,7 @@ pub struct LaneMaintenanceReport {
     pub store_root: String,
     pub declared_lanes: Vec<DeclaredLane>,
     pub canonical_blocks: PathReport,
-    pub canonical_merge_log: PathReport,
     pub instance_blocks: Vec<PathReport>,
-    pub instance_merge_scaffolds: Vec<PathReport>,
     pub unclassified_entries: Vec<PathReport>,
 }
 #[derive(Debug, Clone, JsonSerialize)]
@@ -51,14 +49,14 @@ fn inspect_lanes(store_root: &Path, lanes: &LaneConfig) -> Result<LaneMaintenanc
     // Validate the root before inspecting children so a linked store cannot
     // make the otherwise non-following namespace walk traverse another tree.
     directory_present(store_root)?;
-    let (canonical_blocks, canonical_merge_log) = Kura::canonical_storage_paths(store_root);
+    let canonical_blocks = Kura::canonical_storage_path(store_root);
     let blocks_root = store_root.join("blocks");
-    let merge_root = store_root.join("merge_ledger");
-    let mut unclassified_entries = inventory_entries(&blocks_root, &["canonical", "instances"])?;
+    let mut unclassified_entries = inventory_entries(store_root, &["blocks"])?;
     unclassified_entries.extend(inventory_entries(
-        &merge_root,
-        &["canonical.log", "instances"],
+        &blocks_root,
+        &["canonical", "instances"],
     )?);
+    unclassified_entries.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(LaneMaintenanceReport {
         store_root: store_root.display().to_string(),
         declared_lanes: lanes
@@ -72,9 +70,7 @@ fn inspect_lanes(store_root: &Path, lanes: &LaneConfig) -> Result<LaneMaintenanc
             })
             .collect(),
         canonical_blocks: PathReport::from_path(canonical_blocks)?,
-        canonical_merge_log: PathReport::from_path(canonical_merge_log)?,
         instance_blocks: inventory_entries(&blocks_root.join("instances"), &[])?,
-        instance_merge_scaffolds: inventory_entries(&merge_root.join("instances"), &[])?,
         unclassified_entries,
     })
 }
@@ -185,11 +181,9 @@ mod tests {
     fn inventories_canonical_and_exact_instance_paths_without_alias_authority() {
         let temp = tempdir().expect("tmpdir");
         let store = temp.path();
-        let (canonical_blocks, canonical_merge) = Kura::canonical_storage_paths(store);
+        let canonical_blocks = Kura::canonical_storage_path(store);
         fs::create_dir_all(&canonical_blocks).expect("canonical blocks");
         fs::write(canonical_blocks.join("blocks.data"), b"canonical").expect("block data");
-        fs::create_dir_all(canonical_merge.parent().unwrap()).expect("canonical merge parent");
-        fs::write(&canonical_merge, b"merge").expect("canonical merge");
         // A locator constructs test paths only; inventory does not infer active
         // ownership from these values or from their filename hash.
         let identity = LaneStorageIdentity::new(
@@ -200,14 +194,12 @@ mod tests {
             7,
         );
         let instance_blocks = identity.blocks_dir(store);
-        let instance_merge = identity.merge_log_path(store);
         fs::create_dir_all(&instance_blocks).expect("instance blocks");
         fs::write(instance_blocks.join("receipt.norito"), b"receipt").expect("receipt");
-        fs::create_dir_all(instance_merge.parent().unwrap()).expect("instance merge parent");
-        fs::write(&instance_merge, []).expect("empty geometry scaffold");
         let unclassified_blocks = store.join("blocks/lane_999_old");
         let unclassified_merge = store.join("merge_ledger/lane_999_old_merge.log");
         fs::create_dir_all(&unclassified_blocks).expect("unclassified blocks");
+        fs::create_dir_all(unclassified_merge.parent().unwrap()).expect("retired namespace");
         fs::write(&unclassified_merge, b"unknown").expect("unclassified merge");
 
         let report = inspect_lanes(store, &lane_cfg("Alpha")).expect("inventory");
@@ -217,23 +209,20 @@ mod tests {
             canonical_blocks.display().to_string()
         );
         assert_eq!(report.canonical_blocks.size_bytes, 9);
-        assert_eq!(
-            report.canonical_merge_log.path,
-            canonical_merge.display().to_string()
-        );
-        assert_eq!(report.canonical_merge_log.size_bytes, 5);
         assert_eq!(report.instance_blocks.len(), 1);
         assert_eq!(
             report.instance_blocks[0].path,
             instance_blocks.display().to_string()
         );
         assert_eq!(report.instance_blocks[0].size_bytes, 7);
-        assert_eq!(report.instance_merge_scaffolds.len(), 1);
-        assert_eq!(
-            report.instance_merge_scaffolds[0].path,
-            instance_merge.display().to_string()
-        );
         assert_eq!(report.unclassified_entries.len(), 2);
+        let retired = report
+            .unclassified_entries
+            .iter()
+            .find(|entry| entry.path == store.join("merge_ledger").display().to_string())
+            .expect("retired namespace is only unclassified physical data");
+        assert_eq!(retired.kind, "directory");
+        assert_eq!(retired.size_bytes, 7);
         assert!(unclassified_blocks.is_dir());
         assert_eq!(fs::read(&unclassified_merge).unwrap(), b"unknown");
         assert!(!store.join("retired").exists());
@@ -244,12 +233,14 @@ mod tests {
             renamed.instance_blocks[0].path,
             report.instance_blocks[0].path
         );
-        assert_eq!(
-            renamed.instance_merge_scaffolds[0].path,
-            report.instance_merge_scaffolds[0].path
-        );
         let json = json::to_value(&report).expect("report JSON");
-        for unsupported in ["active", "retired", "compacted"] {
+        for unsupported in [
+            "active",
+            "retired",
+            "compacted",
+            "canonical_merge_log",
+            "instance_merge_scaffolds",
+        ] {
             assert!(json.get(unsupported).is_none());
         }
     }
@@ -258,11 +249,9 @@ mod tests {
     fn run_reads_existing_config_and_storage_without_writing_files() {
         let temp = tempdir().expect("tmpdir");
         let store = temp.path().join("store");
-        let (blocks, merge) = Kura::canonical_storage_paths(&store);
+        let blocks = Kura::canonical_storage_path(&store);
         fs::create_dir_all(&blocks).expect("canonical blocks");
-        fs::create_dir_all(merge.parent().unwrap()).expect("merge directory");
         fs::write(blocks.join("blocks.data"), b"original block data").expect("block data");
-        fs::write(&merge, b"original merge data").expect("merge data");
         let base = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../crates/iroha_config/tests/fixtures/base.toml")
             .canonicalize()
@@ -290,7 +279,6 @@ mod tests {
         let report = run(LaneMaintenanceOptions { config_path }).expect("read-only report");
         assert_eq!(report.canonical_blocks.path, blocks.display().to_string());
         assert_eq!(report.canonical_blocks.size_bytes, 19);
-        assert_eq!(report.canonical_merge_log.size_bytes, 19);
         assert_eq!(image(), before, "no report, archive, or storage mutation");
     }
 
@@ -301,9 +289,7 @@ mod tests {
         let report = inspect_lanes(&store, &lane_cfg("Alpha")).expect("missing storage");
         assert!(!report.canonical_blocks.exists);
         assert_eq!(report.canonical_blocks.kind, "missing");
-        assert!(!report.canonical_merge_log.exists);
         assert!(report.instance_blocks.is_empty());
-        assert!(report.instance_merge_scaffolds.is_empty());
         assert!(report.unclassified_entries.is_empty());
         assert!(!store.exists());
     }
@@ -332,10 +318,11 @@ mod tests {
                 fs::symlink_metadata(&entry.path).unwrap().len()
             );
         }
-        let merge_root = store.join("merge_ledger");
-        fs::create_dir_all(&merge_root).expect("merge namespace");
-        symlink(&instances, merge_root.join("instances")).expect("linked namespace");
-        let error = inspect_lanes(store, &lane_cfg("Alpha")).expect_err("refuse linked namespace");
+        let linked_blocks = temp.path().join("linked-blocks");
+        fs::create_dir_all(&linked_blocks).expect("linked block store");
+        symlink(store.join("blocks"), linked_blocks.join("blocks")).expect("linked namespace");
+        let error =
+            inspect_lanes(&linked_blocks, &lane_cfg("Alpha")).expect_err("refuse linked namespace");
         assert!(error.to_string().contains("must be a directory"));
         assert!(cycle.is_symlink());
         assert!(broken.is_symlink());
@@ -357,7 +344,7 @@ mod tests {
         assert!(error.to_string().contains("must be a directory"));
 
         let store = temp.path().join("store");
-        let (blocks, _) = Kura::canonical_storage_paths(&store);
+        let blocks = Kura::canonical_storage_path(&store);
         fs::create_dir_all(&blocks).expect("canonical blocks");
         fs::write(blocks.join("blocks.data"), b"canonical").expect("block data");
         let linked_payload = blocks.join("external");

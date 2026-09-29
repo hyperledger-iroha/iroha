@@ -112,10 +112,9 @@ fn profile_node(dir: &NodeDir, role: &str, extra: &str) -> String {
     };
     format!(
         "profile = \"sora-nexus-v1\"\n\
-         role_overlay = \"{role}\"\n\
-         profile_roster_size = 4\n\
+         role = \"{role}\"\n\
+         validators = 4\n\
          chain = \"fc56984b-2be7-431d-840e-21514d1883f0\"\n\
-         chain_discriminant = 369\n\
          data_dir = \"{}\"\n\
          public_key = \"{VALIDATOR_PUBLIC}\"\n\
          trusted_peers_pop = [{{ public_key = \"{VALIDATOR_PUBLIC}\", pop_hex = \"{VALIDATOR_POP}\" }}]\n\
@@ -165,6 +164,14 @@ fn profile_node_file_layers_the_profile_and_completes_data_dir() {
         let profile = Profile::compiled(ProfileId::SoraNexusV1).unwrap();
         assert_eq!(binding.profile, ProfileId::SoraNexusV1);
         assert_eq!(binding.role.as_str(), role);
+        assert_eq!(
+            config.sumeragi.role,
+            if role == "observer" {
+                actual::NodeRole::Observer
+            } else {
+                actual::NodeRole::Validator
+            }
+        );
         assert_eq!(binding.roster_size, 4);
         assert_eq!(binding.geometry, profile.derive(4).unwrap());
         assert_eq!(
@@ -254,22 +261,198 @@ fn profile_node_file_layers_the_profile_and_completes_data_dir() {
 }
 
 #[test]
-fn node_file_overrides_policy_and_overlay_but_not_static() {
+fn omitted_role_defaults_to_validator() {
+    let dir = NodeDir::new("default_role");
+    let explicit = profile_node(&dir, "validator", "");
+    let path = dir.write(
+        "config.toml",
+        &explicit.replace("role = \"validator\"\n", ""),
+    );
+    let (config, binding) = parse(&path);
+    assert_eq!(binding.unwrap().role, ProfileRole::Validator);
+    assert_eq!(config.sumeragi.role, actual::NodeRole::Validator);
+    assert!(config.soracloud_runtime.production_mode);
+}
+
+#[test]
+fn every_profile_supplies_its_chain_discriminant() {
+    for id in ProfileId::ALL {
+        let dir = NodeDir::new("profile_discriminant");
+        let contents = profile_node(&dir, "observer", "").replace("sora-nexus-v1", id.as_str());
+        let path = dir.write("config.toml", &contents);
+        let (config, binding) = parse(&path);
+        let profile = Profile::compiled(id).unwrap();
+        assert_eq!(binding.unwrap().profile, id);
+        assert_eq!(
+            *config.common.chain_discriminant.value(),
+            profile.chain_discriminant(),
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn checked_in_node_example_parses_with_real_public_bindings() {
+    let dir = NodeDir::new("example");
+    let mut example = include_str!("../../../../configs/validator.example.toml").to_owned();
+    assert!(
+        example.lines().count() <= 40,
+        "keep the starter config small"
+    );
+    let fixture: toml::Table = toml::from_str(&profile_node(&dir, "validator", "")).unwrap();
+    let signer = &fixture["soracloud_runtime"]["submission"]["signer"];
+    for (placeholder, value) in [
+        ("CHAIN_ID", fixture["chain"].as_str().unwrap().to_owned()),
+        ("VALIDATOR_PUBLIC_KEY", VALIDATOR_PUBLIC.to_owned()),
+        ("SEED_PEER", format!("{VALIDATOR_PUBLIC}@127.0.0.1:1337")),
+        ("SEED_PUBLIC_KEY", VALIDATOR_PUBLIC.to_owned()),
+        ("SEED_POP", VALIDATOR_POP.to_owned()),
+        ("PUBLIC_ADDRESS", "addr:127.0.0.1:1337#8F78".to_owned()),
+        ("GENESIS_PUBLIC_KEY", GENESIS_PUBLIC.to_owned()),
+        ("GENESIS_HASH", EXPECTED_HASH.to_owned()),
+        (
+            "SIGNER_HANDLE",
+            signer["handle"].as_str().unwrap().to_owned(),
+        ),
+        (
+            "SIGNER_AUTHORITY",
+            signer["authority"].as_str().unwrap().to_owned(),
+        ),
+        (
+            "SIGNER_PUBLIC_KEY_HEX",
+            signer["public_key_hex"].as_str().unwrap().to_owned(),
+        ),
+        (
+            "SIGNER_POLICY_DIGEST_HEX",
+            signer["policy_digest_hex"].as_str().unwrap().to_owned(),
+        ),
+    ] {
+        let placeholder = format!("REPLACE_WITH_{placeholder}");
+        assert_eq!(example.matches(&placeholder).count(), 1, "{placeholder}");
+        example = example.replace(&placeholder, &value);
+    }
+    assert!(!example.contains("REPLACE_WITH_"));
+    let mut node: toml::Table = toml::from_str(&example).expect("example is valid TOML");
+    assert_eq!(node["data_dir"].as_str(), Some("./node"));
+    *node.get_mut("data_dir").unwrap() = fixture["data_dir"].clone();
+    let path = dir.write("config.toml", &toml::to_string(&node).unwrap());
+    let (config, binding) = parse(&path);
+    assert_eq!(binding.unwrap().role, ProfileRole::Validator);
+    assert_eq!(*config.common.chain_discriminant.value(), 369);
+    assert!(config.soracloud_runtime.production_mode);
+}
+
+#[test]
+fn selectors_reject_wrong_types_and_invalid_values_with_file_and_key() {
+    let dir = NodeDir::new("invalid_selectors");
+    let base: toml::Table = toml::from_str(&profile_node(&dir, "observer", "")).unwrap();
+    for (key, values) in [
+        (PROFILE_KEY, vec!["false", "7", "[]", "{}", "\"unknown\""]),
+        (
+            ROLE_KEY,
+            vec!["false", "7", "[]", "{}", "\"voter\"", "\"Validator\""],
+        ),
+        (
+            VALIDATORS_KEY,
+            vec![
+                "false", "\"4\"", "4.0", "[]", "{}", "-1", "0", "1", "5", "34",
+            ],
+        ),
+    ] {
+        for value in values {
+            let mut node = base.clone();
+            let replacement: toml::Table = toml::from_str(&format!("value = {value}")).unwrap();
+            node.insert(key.to_owned(), replacement["value"].clone());
+            let path = dir.write("config.toml", &toml::to_string(&node).unwrap());
+            let error = open(&path).expect_err("invalid selectors must fail");
+            match error.current_context() {
+                NodeConfigError::ProfileKey {
+                    path: origin,
+                    key: invalid,
+                    ..
+                } => {
+                    assert_eq!(origin, &path);
+                    assert_eq!(*invalid, key, "{key} = {value}");
+                }
+                other => panic!("{key} = {value}: {other:?}"),
+            }
+            assert!(error.to_string().contains(&path.display().to_string()));
+            assert!(error.to_string().contains(&format!("`{key}`")));
+        }
+    }
+}
+
+#[test]
+fn retired_selectors_and_duplicate_role_or_network_identity_are_rejected() {
+    let dir = NodeDir::new("retired_selectors");
+    for (key, extra, advice) in [
+        (
+            "role_overlay",
+            "role_overlay = \"observer\"",
+            "top-level `role`",
+        ),
+        (
+            "profile_roster_size",
+            "profile_roster_size = 4",
+            "set `validators`",
+        ),
+        (
+            "chain_discriminant",
+            "chain_discriminant = 369",
+            "supplied by `profile`",
+        ),
+        (
+            "sumeragi.role",
+            "[sumeragi]\nrole = \"observer\"",
+            "top-level `role`",
+        ),
+    ] {
+        let path = dir.write("config.toml", &profile_node(&dir, "lane_validator", extra));
+        let error = open(&path).expect_err("old and duplicate selectors must fail");
+        match error.current_context() {
+            NodeConfigError::ProfileKey {
+                path: origin,
+                key: invalid,
+                message,
+            } => {
+                assert_eq!(origin, &path);
+                assert_eq!(*invalid, key);
+                assert!(message.contains(advice), "{message}");
+            }
+            other => panic!("{key}: {other:?}"),
+        }
+    }
+    // Diagnose the retired key even when the required new count is absent.
+    let old = profile_node(&dir, "observer", "")
+        .replace("role =", "role_overlay =")
+        .replace("validators =", "profile_roster_size =");
+    let path = dir.write("old.toml", &old);
+    assert!(matches!(
+        open(&path).unwrap_err().current_context(),
+        NodeConfigError::ProfileKey {
+            key: "role_overlay",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn node_file_overrides_tunables_but_not_network_policy() {
     let dir = NodeDir::new("override");
     let extra = "[torii.transport]\ntrusted_proxy_cidrs = [\"10.0.0.1/32\"]\n\
-                 [sumeragi]\nrole = \"observer\"\n\
                  [logger]\nlevel = \"debug\"\n\
                  [lifecycle]\nexit_on_stdin_close = true\n";
     let path = dir.write("config.toml", &profile_node(&dir, "lane_validator", extra));
     let (config, _) = parse(&path);
     assert_eq!(config.torii.transport.trusted_proxy_cidrs, ["10.0.0.1/32"]);
-    assert_eq!(config.sumeragi.role, actual::NodeRole::Observer);
+    assert_eq!(config.sumeragi.role, actual::NodeRole::Validator);
     assert_eq!(config.logger.level.to_string().to_lowercase(), "debug");
     assert!(config.lifecycle.exit_on_stdin_close);
 
     for key in [
         "[sumeragi.keys]\nallowed_algorithms = [\"bls_normal\"]\n",
         "nexus = { lane_count = 1 }\n",
+        "[kura]\nfsync_mode = \"strict\"\n",
     ] {
         let path = dir.write("static.toml", &profile_node(&dir, "observer", key));
         let error = open(&path).expect_err("static keys are not per-node");
@@ -319,44 +502,27 @@ fn selectors_and_profile_rules_are_enforced() {
             |error| matches!(error, NodeConfigError::ProfileKey { key: "profile", .. }),
         ),
         (
-            base.replace("role_overlay = \"observer\"", "role_overlay = \"voter\""),
-            |error| {
-                matches!(
-                    error,
-                    NodeConfigError::ProfileKey {
-                        key: "role_overlay",
-                        ..
-                    }
-                )
-            },
+            base.replace("role = \"observer\"", "role = \"voter\""),
+            |error| matches!(error, NodeConfigError::ProfileKey { key: "role", .. }),
         ),
-        (base.replace("profile_roster_size = 4\n", ""), |error| {
+        (base.replace("validators = 4\n", ""), |error| {
             matches!(
                 error,
                 NodeConfigError::ProfileKey {
-                    key: "profile_roster_size",
+                    key: "validators",
                     ..
                 }
             )
         }),
-        (
-            base.replace("profile_roster_size = 4", "profile_roster_size = 5"),
-            |error| {
-                matches!(
-                    error,
-                    NodeConfigError::Profile(ProfileError::Geometry { validators: 5, .. })
-                )
-            },
-        ),
-        (
-            base.replace("chain_discriminant = 369", "chain_discriminant = 753"),
-            |error| {
-                matches!(
-                    error,
-                    NodeConfigError::ChainDiscriminant { actual: 753, .. }
-                )
-            },
-        ),
+        (base.replace("validators = 4", "validators = 5"), |error| {
+            matches!(
+                error,
+                NodeConfigError::ProfileKey {
+                    key: "validators",
+                    ..
+                }
+            )
+        }),
         (
             base.replace(
                 &format!("data_dir = \"{}\"\n", dir.data_dir().display()),

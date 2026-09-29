@@ -127,12 +127,10 @@ pub struct ToriiHarness {
 }
 #[allow(dead_code)]
 impl ToriiHarness {
-    /// Construct Torii from explicit, already-seeded ledger dependencies.
+    /// Construct Torii using the identity of the supplied, already-seeded ledger.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &iroha_config::parameters::actual::Root,
-        chain_id: ChainId,
-        network_id: NetworkId,
         kura: &Arc<Kura>,
         state: &Arc<State>,
         queue: &Arc<Queue>,
@@ -174,8 +172,8 @@ impl ToriiHarness {
             MaybeTelemetry::disabled()
         };
         let torii = Torii::new_with_handle(
-            chain_id,
-            network_id,
+            state.chain_id_ref().clone(),
+            *state.network_id_ref(),
             kiso,
             cfg.torii.clone(),
             queue.clone(),
@@ -201,8 +199,6 @@ impl ToriiHarness {
     /// Construct Torii with telemetry disabled when the ledger has no local peer fixture.
     pub fn new_without_telemetry(
         cfg: &iroha_config::parameters::actual::Root,
-        chain_id: ChainId,
-        network_id: NetworkId,
         kura: &Arc<Kura>,
         state: &Arc<State>,
         queue: &Arc<Queue>,
@@ -211,8 +207,6 @@ impl ToriiHarness {
         let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
         Self::new(
             cfg,
-            chain_id,
-            network_id,
             kura,
             state,
             queue,
@@ -268,8 +262,6 @@ impl StandardToriiHarness {
         ));
         let harness = ToriiHarness::new(
             cfg,
-            state.chain_id_ref().clone(),
-            *state.network_id_ref(),
             kura,
             &state,
             &queue,
@@ -408,6 +400,7 @@ pub fn operator_signed_request(
 /// Attach app-canonical signature headers to a request targeting app-authenticated endpoints.
 #[allow(dead_code)]
 pub fn app_signed_request(
+    network_id: &NetworkId,
     account_id: &AccountId,
     key_pair: &KeyPair,
     mut request: Request<Body>,
@@ -432,7 +425,7 @@ pub fn app_signed_request(
         request.uri().path()
     );
     let msg = iroha_torii::canonical_network_request_signature_message(
-        &iroha_torii::test_utils::signed_query_network_id(),
+        network_id,
         request.method(),
         request.uri(),
         body_bytes,

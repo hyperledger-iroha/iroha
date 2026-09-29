@@ -18,6 +18,11 @@ FIXTURES = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = FIXTURES
 SPEC.loader.exec_module(FIXTURES)
 RUNNER = FIXTURES.MODULE
+import retained_scope_foundation as RETAINED
+from scripts.tests.private_settlement_registered_accounting_fixture import fixture_admission
+
+CONTROL = RETAINED.control
+ACCOUNTING = RETAINED.accounting
 
 
 class ScopeProducerTests(unittest.TestCase):
@@ -78,53 +83,86 @@ class ScopeProducerTests(unittest.TestCase):
                     RUNNER.register_benchmark_scope(root / "scope.json", source_root=source,
                                                    campaign_plans={name: paths[0]})
 
-    def closure_fixture(self, root: Path):
-        """Produce one bound synthetic start followed by a second planned job."""
-        jobs = [{"request_id": "1" * 64, "kind": "benchmark"}, {"request_id": "2" * 64, "kind": "benchmark"}]
-        identity = {"scope_sha256": "a" * 64, "campaign_id": "first", "plan_sha256": "b" * 64}
-        start = {**identity, "attempt_id": "c" * 64, "request_id": jobs[0]["request_id"], "invocation_nonce": "d" * 64}
-        (root / "attempts").mkdir()
-        attempt = root / "attempts" / ("00001-" + jobs[0]["request_id"])
-        attempt.mkdir()
-        RUNNER.private_record(attempt / "started.json", start)
-        RUNNER.private_record(attempt / "process-outcome.json", {**start, "pid": 654321, "owned_process_group_gone": True})
-        return {"jobs": jobs}, identity, attempt
+    def scope_fixture(self):
+        """Use current retained owners with explicitly synthetic process facts."""
+        fixture = RETAINED.RegisteredScopeIntegrationTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        return fixture
+
+    def closure_fixture(self):
+        """Retain one actual session acceptance and its unstarted suffix."""
+        fixture = self.scope_fixture()
+        fixture.accepted_sample_graph()
+        root = fixture.root / "campaigns" / "campaign-0"
+        closure = json.loads((root / "campaign-closure.json").read_bytes())
+        (root / "campaign-closure.json").unlink()
+        arguments = dict(
+            plan=fixture.plans["campaign-0"], scope_path=fixture.scope_path,
+            scope_sha256=RUNNER.file_binding(fixture.scope_path)["sha256"],
+            campaign_id="campaign-0", plan_sha256=fixture.scope["campaigns"][0]["plan"]["sha256"],
+            validate_success=fixture.callback,
+        )
+        return fixture, root, closure, arguments
+
+    def unstarted_fixture(self, admission):
+        """Freeze the full registered plan before claiming its output directory."""
+        fixture = self.scope_fixture()
+        fixture.harness = RUNNER.verify_harness(admission["plan_harness"])
+        fixture.materialize()
+        output = fixture.root / "campaigns" / "campaign-0"
+        inputs = fixture.root / "frozen-input"
+        output.rename(inputs)
+        arguments = dict(
+            campaign_id="campaign-0", plan_path=inputs / "frozen-plan.json",
+            source_root=admission["source_root"], harness=admission["plan_harness"],
+            smoke_campaign=admission["smoke_campaign"], worker_path=admission["worker_path"],
+            validator_path=admission["validator_path"],
+        )
+        return fixture, inputs, output, arguments
 
     def test_campaign_closure_binds_actual_durable_starts_without_fabricating_success(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            plan, identity, _ = self.closure_fixture(root)
-            with mock.patch.object(RUNNER, "_process_group_exists", return_value=False):
-                path = RUNNER.close_benchmark_campaign(root, plan=plan, reason="fail_fast", **identity)
-            closure = json.loads(path.read_text())
-            self.assertEqual(closure["started_request_ids"], [plan["jobs"][0]["request_id"]])
-            self.assertEqual(closure["reason"], "fail_fast")
-            self.assertNotIn("succeeded", closure)
-            with mock.patch.object(RUNNER, "_process_group_exists", return_value=False), self.assertRaises(FileExistsError):
-                RUNNER.close_benchmark_campaign(root, plan=plan, reason="fail_fast", **identity)
+        fixture, root, original, arguments = self.closure_fixture()
+        with mock.patch.object(RUNNER, "_process_group_exists", side_effect=AssertionError("historical PID reused")) as groups:
+            result = RUNNER.close_benchmark_campaign(root, reason="fail_fast", **arguments)
+        groups.assert_not_called()
+        raw = result["path"].read_bytes()
+        closure = json.loads(raw)
+        self.assertEqual(closure["started_request_ids"], original["started_request_ids"])
+        self.assertEqual(closure["reason"], "fail_fast")
+        self.assertNotIn("succeeded", closure)
+        self.assertEqual(result["campaign"]["counts"]["succeeded"], 1)
+        self.assertEqual(result["campaign"]["counts"]["not_started"], 799)
+        self.assertFalse(result["release_qualified"])
+        with self.assertRaisesRegex(CONTROL.SessionProtocolError, "closure already exists"):
+            RUNNER.close_benchmark_campaign(root, reason="fail_fast", **arguments)
+        self.assertEqual(result["path"].read_bytes(), raw)
 
     def test_closure_refuses_missing_terminal_live_group_and_substituted_identity(self) -> None:
         for mutation in ("missing", "live", "identity", "extra", "completed"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
-                plan, identity, attempt = self.closure_fixture(root)
-                path = attempt / "process-outcome.json"
+            with self.subTest(mutation=mutation):
+                fixture, root, _, arguments = self.closure_fixture()
+                path = next((root / "attempts").glob("*/process-outcome.json"))
                 if mutation == "missing":
-                    path.unlink()
+                    (root / fixture.sample_fixture.prefix / "session-closure.json").unlink()
+                elif mutation == "live":
+                    value = json.loads(path.read_bytes()); value["owned_process_group_gone"] = False
+                    path.write_bytes(CONTROL.canonical(value))
                 elif mutation == "identity":
                     value = json.loads(path.read_text()); value["attempt_id"] = "e" * 64
-                    path.write_text(json.dumps(value))
+                    path.write_bytes(CONTROL.canonical(value))
                 elif mutation == "extra":
-                    (root / "attempts" / "undeclared").mkdir()
-                with mock.patch.object(RUNNER, "_process_group_exists", return_value=mutation == "live"), self.assertRaises(RUNNER.RunnerError):
-                    RUNNER.close_benchmark_campaign(root, plan=plan,
-                        reason="completed" if mutation == "completed" else "fail_fast", **identity)
+                    (root / "attempts" / "undeclared").mkdir(mode=0o700)
+                with mock.patch.object(RUNNER, "_process_group_exists", side_effect=AssertionError("historical PID reused")) as groups, self.assertRaises((CONTROL.SessionProtocolError, ACCOUNTING.AccountingError)):
+                    RUNNER.close_benchmark_campaign(root,
+                        reason="completed" if mutation == "completed" else "fail_fast", **arguments)
+                groups.assert_not_called()
                 self.assertFalse((root / "campaign-closure.json").exists())
 
     def test_benchmark_invocation_requires_scope_before_creating_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            with mock.patch.object(RUNNER.subprocess, "Popen") as spawn, self.assertRaisesRegex(RUNNER.RunnerError, "registered"):
+            with mock.patch.object(RUNNER.subprocess, "Popen") as spawn, self.assertRaisesRegex(RUNNER.RunnerError, "retained session execution owner"):
                 RUNNER.invoke_harness(root / "harness", {"kind": "benchmark"}, attempt_dir=root / "attempt", timeout_seconds=1)
             spawn.assert_not_called()
             self.assertFalse((root / "attempt").exists())
@@ -134,7 +172,7 @@ class ScopeProducerTests(unittest.TestCase):
             root = Path(temporary).resolve()
             identity = {"scope_sha256": "a" * 64, "campaign_id": "test", "plan_sha256": "b" * 64, "attempt_id": RUNNER.attempt_accounting.registered_attempt_id("a" * 64, "test", "b" * 64, "d" * 64)}
             with mock.patch.object(RUNNER.subprocess, "Popen", side_effect=OSError("synthetic spawn failure")), self.assertRaises(RUNNER.RunnerError):
-                RUNNER.invoke_harness(root / "harness", {"kind": "benchmark", "request_id": "d" * 64, "invocation_nonce": "e" * 64},
+                RUNNER.invoke_harness(root / "harness", {"kind": "fault", "request_id": "d" * 64, "invocation_nonce": "e" * 64},
                     attempt_dir=root / "attempt", timeout_seconds=1, accounting_identity=identity)
             outcome = json.loads((root / "attempt" / "process-outcome.json").read_text())
             self.assertEqual(outcome["completion_kind"], "spawn_failed")
@@ -148,175 +186,215 @@ class ScopeProducerTests(unittest.TestCase):
         owner = FIXTURES.PrivateSettlementFailureRetentionTests()
         with tempfile.TemporaryDirectory() as temporary, owner.execution_fixture(Path(temporary).resolve()) as fixture:
             fixture["leakage"].side_effect = RUNNER.RunnerError("synthetic later audit failure")
-            with self.assertRaisesRegex(RUNNER.RunnerError, "later audit failure"):
+            with self.assertRaises(FIXTURES.EXECUTION.CampaignExecutionIncomplete) as failure:
                 fixture["execute"]()
-            attempts = sorted((fixture["output"] / "attempts").iterdir())
-            sample = attempts[1] / "benchmark-sample.json"
-            validation = json.loads((attempts[1] / "validation-outcome.json").read_text())
+            self.assertIn("later audit failure", str(failure.exception.owner.error))
+            ordinal, job = next((i, job) for i, job in enumerate(fixture["plan"]["jobs"], 1)
+                                if job["kind"] == "benchmark")
+            attempt = fixture["output"] / "attempts" / f"{ordinal:05}-{job['request_id']}"
+            sample = attempt / "benchmark-sample.json"
+            validation = json.loads((attempt / "validation-outcome.json").read_text())
             self.assertEqual(validation["validation_kind"], "accepted")
-            self.assertEqual(validation["sample"], RUNNER.file_binding(sample))
+            self.assertEqual(validation["sample"], RUNNER.file_binding(sample, relative_to=fixture["output"]))
             self.assertEqual(json.loads(sample.read_text())["attempt_id"], validation["attempt_id"])
             closure = json.loads((fixture["output"] / "campaign-closure.json").read_text())
-            self.assertEqual(len(closure["started_request_ids"]), 4)
+            self.assertEqual(closure["started_request_ids"],
+                             [job["request_id"] for job in fixture["plan"]["jobs"]])
             self.assertFalse((fixture["output"] / "release-artifact-fragment-v1.json").exists())
+            self.assertFalse((fixture["output"] / "campaign-artifacts.json").exists())
 
     def test_unused_campaign_closure_is_exclusive_and_retains_original_plan_inputs(self) -> None:
-        owner = FIXTURES.PrivateSettlementFailureRetentionTests()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            with owner.execution_fixture(root) as fixture:
-                output = RUNNER.close_unstarted_campaign(root / "scope.json", campaign_id="test",
-                    plan_path=root / "plan.json", source_root=root / "source")
-                closure = json.loads(output.read_text())
-                self.assertEqual(closure["reason"], "not_run")
-                self.assertEqual(closure["started_request_ids"], [])
-                self.assertFalse((output.parent / "attempts").exists())
-                self.assertEqual((output.parent / "frozen-plan.json").read_bytes(), (root / "plan.json").read_bytes())
-                for key in ("hardware", "canary_manifest", "configuration_manifest"):
-                    relative = fixture["plan"][key]["path"]
-                    self.assertEqual((output.parent / relative).read_bytes(), (root / relative).read_bytes())
-                with self.assertRaises(FileExistsError):
-                    RUNNER.close_unstarted_campaign(root / "scope.json", campaign_id="test",
-                        plan_path=root / "plan.json", source_root=root / "source")
-                fixture["process"].assert_not_called()
+        with fixture_admission() as admission, mock.patch.object(RUNNER.subprocess, "Popen") as spawn:
+            fixture, inputs, _, arguments = self.unstarted_fixture(admission)
+            output = RUNNER.close_unstarted_campaign(fixture.scope_path, **arguments)
+            closure = json.loads(output.read_text())
+            self.assertEqual(closure["reason"], "not_run")
+            self.assertEqual(closure["started_request_ids"], [])
+            self.assertFalse((output.parent / "attempts").exists())
+            self.assertEqual((output.parent / "frozen-plan.json").read_bytes(),
+                             (inputs / "frozen-plan.json").read_bytes())
+            for key in ("hardware", "canary_manifest", "configuration_manifest"):
+                relative = fixture.plans["campaign-0"][key]["path"]
+                self.assertEqual((output.parent / relative).read_bytes(), (inputs / relative).read_bytes())
+            with self.assertRaises(FileExistsError):
+                RUNNER.close_unstarted_campaign(fixture.scope_path, **arguments)
+            spawn.assert_not_called()
 
     def test_frozen_input_binding_failure_preserves_unclosed_claim_without_launching(self) -> None:
-        owner = FIXTURES.PrivateSettlementFailureRetentionTests()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            with owner.execution_fixture(root) as fixture:
-                (root / fixture["plan"]["hardware"]["path"]).write_bytes(b"changed input")
-                with self.assertRaises(RUNNER.RunnerError):
-                    RUNNER.close_unstarted_campaign(root / "scope.json", campaign_id="test",
-                        plan_path=root / "plan.json", source_root=root / "source")
-                self.assertTrue(fixture["output"].is_dir())
-                self.assertFalse((fixture["output"] / "campaign-closure.json").exists())
-                fixture["process"].assert_not_called()
+        with fixture_admission() as admission, mock.patch.object(RUNNER.subprocess, "Popen") as spawn:
+            fixture, inputs, output, arguments = self.unstarted_fixture(admission)
+            retain = RUNNER.retain_frozen_plan_inputs
+            def substitute(plan_path, destination, **kwargs):
+                self.assertTrue(destination.is_dir(), "the exclusive output claim already exists")
+                (inputs / fixture.plans["campaign-0"]["hardware"]["path"]).write_bytes(b"changed input")
+                return retain(plan_path, destination, **kwargs)
+            with mock.patch.object(RUNNER, "retain_frozen_plan_inputs", side_effect=substitute) as frozen, self.assertRaises(RUNNER.RunnerError):
+                RUNNER.close_unstarted_campaign(fixture.scope_path, **arguments)
+            frozen.assert_called_once()
+            self.assertTrue(output.is_dir())
+            self.assertFalse((output / "campaign-closure.json").exists())
+            spawn.assert_not_called()
 
 
 class ScopeCollectionTests(unittest.TestCase):
-    """Read authentic byte fixtures through the filesystem-to-reducer boundary."""
+    """Read synthetic native records through the actual retained scope owners."""
 
     def write_fixture(self, root: Path):
-        """Materialize the pure reducer's clearly synthetic protocol records."""
-        spec = importlib.util.spec_from_file_location("collection_fixtures", TESTS / "private_settlement_campaign_accounting_test.py")
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        scope, campaigns, samples = module.fixture([["succeeded", "failed", "not_started"], ["timed_out"]])
-        (root / "scope.json").write_bytes(scope)
-        names = {"request": "request.json", "started": "started.json", "process": "process-outcome.json",
-                 "adapter": "evidence/benchmark-protocol/adapter-outcome.json", "rust_terminal": "evidence/benchmark-protocol/rust-result.json",
-                 "response": "response.json", "response_outcome": "response-outcome.json", "validation": "validation-outcome.json", "sample": "benchmark-sample.json"}
-        for campaign in campaigns:
-            directory = root / "campaigns" / campaign["campaign_id"]
-            directory.mkdir(parents=True)
-            for name, raw in (("registered-scope.json", scope), ("frozen-plan.json", campaign["plan"]), ("campaign-closure.json", campaign["closure"])):
-                (directory / name).write_bytes(raw)
-            for ordinal, packet in enumerate(campaign["attempts"], 1):
-                for key, name in names.items():
-                    if packet[key] is not None:
-                        destination = directory / "attempts" / f"{ordinal:05}-{packet['request_id']}" / name
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        destination.write_bytes(packet[key])
-        return scope, campaigns, samples
+        """Keep failed predecessors and a complete session in the full denominator."""
+        from scripts.tests.private_settlement_registered_accounting_fixture import (
+            admitted_images, build_registered_accounting_fixture,
+        )
+        foundation = RETAINED.RegisteredScopeIntegrationTests()
+        foundation.setUp()
+        self.addCleanup(foundation.doCleanups)
+        seed = root / "frozen-inputs"
+        plan = foundation.plan(seed)
+        configurations = json.loads((seed / plan["configuration_manifest"]["path"]).read_bytes())
+        fixture = build_registered_accounting_fixture(
+            root, commit=foundation.commit,
+            hardware_path=Path(plan["hardware"]["path"]),
+            hardware_payload=(seed / plan["hardware"]["path"]).read_bytes(),
+            configuration_manifest_path=Path(plan["configuration_manifest"]["path"]),
+            configuration_manifest_payload=(seed / plan["configuration_manifest"]["path"]).read_bytes(),
+            configuration_payloads={Path(row["path"]): (seed / row["path"]).read_bytes()
+                                    for row in configurations["configurations"]},
+            validator_sha256=admitted_images()["validator"]["sha256"],
+            complete_session_count=1,
+        )
+        fixture["scope_path"] = root / "accounting" / "scope.json"
+        fixture["campaign"] = root / "accounting" / "campaigns" / "campaign-0-failed"
+        return fixture
 
     def test_complete_scope_reduction_preserves_failed_predecessors_and_successes(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, fixture_admission() as admission:
             root = Path(temporary).resolve()
-            expected = self.write_fixture(root)
-            collected = RUNNER.collect_benchmark_scope(root / "scope.json")
-            self.assertEqual(collected, expected)
-            source = root / "source"; source.mkdir()
-            output = RUNNER.write_benchmark_scope_accounting(root / "scope.json", root / "accounting.json", source_root=source)
-            result = json.loads(output.read_text())
-            self.assertEqual(result["counts"], {"planned": 4, "attempted": 3, "not_started": 1,
-                                              "succeeded": 1, "failed": 1, "timed_out": 1, "incomplete": 0})
+            fixture = self.write_fixture(root)
+            with RUNNER.collect_benchmark_scope(fixture["scope_path"], **admission) as held:
+                self.assertEqual(held.result["accounting"], fixture["accounting"])
+                self.assertEqual([json.loads(raw) for raw in held.successful_rows], fixture["rows"])
+                self.assertFalse(held.result["source_and_smoke_admitted"])
+                self.assertFalse(held.result["release_qualified"])
+                held.validate()
+            self.assertTrue(held.result["source_and_smoke_admitted"])
+            output = RUNNER.write_benchmark_scope_accounting(
+                fixture["scope_path"], root / "accounting.json", **admission)
+            result = json.loads(output.read_bytes())
+            self.assertEqual(result["counts"], dict(planned=1600, attempted=10, not_started=1590,
+                                                    succeeded=9, failed=1, timed_out=0, incomplete=0))
             self.assertTrue(result["accounting_complete"])
             self.assertNotIn("release_qualified", result)
             with self.assertRaises(FileExistsError):
-                RUNNER.write_benchmark_scope_accounting(root / "scope.json", output, source_root=source)
+                RUNNER.write_benchmark_scope_accounting(fixture["scope_path"], output, **admission)
+
+    def test_retained_timeout_is_counted_without_a_censored_latency_sample(self) -> None:
+        import retained_accounting_fixture as small
+        fixture = small.Fixture(("timed_out",))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "campaign-a"
+            root.mkdir(mode=0o700)
+            values = {**fixture.store.values, "frozen-plan.json": fixture.plan_raw,
+                      "registered-scope.json": fixture.scope_raw,
+                      "campaign-closure.json": fixture.packet["closure"]}
+            for name, raw in values.items():
+                path = root / name
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                path.write_bytes(raw)
+                path.chmod(0o600)
+            for path in root.rglob("*"):
+                if path.is_dir():
+                    path.chmod(0o700)
+            with RETAINED.replay.collection.collect_closed_campaign(
+                    root, scope_raw=fixture.scope_raw, campaign_id="campaign-a",
+                    plan_binding=fixture.scope["campaigns"][0]["plan"]) as held:
+                result = ACCOUNTING.reduce_retained_campaign(
+                    fixture.scope_raw, held.packet, held.successful_rows,
+                    worker_command=fixture.command, worker_image=fixture.image,
+                    validate_success=fixture.recompute)
+                held.validate()
+                self.assertEqual(held.successful_rows, [])
+            self.assertEqual(result["counts"], dict(planned=800, attempted=1, not_started=799,
+                                                    succeeded=0, failed=0, timed_out=1, incomplete=0))
 
     def test_collection_rejects_omitted_closure_changed_scope_and_symlink_records(self) -> None:
-        for mutation in ("closure", "scope", "symlink", "extra"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+        for mutation in ("closure", "scope", "symlink", "scope_symlink", "extra"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary, fixture_admission() as admission:
                 root = Path(temporary).resolve()
-                self.write_fixture(root)
-                campaign = root / "campaigns" / "campaign-0"
+                fixture = self.write_fixture(root)
+                campaign = fixture["campaign"]
                 if mutation == "closure":
                     (campaign / "campaign-closure.json").unlink()
                 elif mutation == "scope":
                     (campaign / "registered-scope.json").write_bytes(b"{}")
-                elif mutation == "symlink":
-                    path = campaign / "campaign-closure.json"; raw = path.read_bytes(); path.unlink()
-                    (root / "outside.json").write_bytes(raw); path.symlink_to(root / "outside.json")
+                elif mutation in {"symlink", "scope_symlink"}:
+                    path = fixture["scope_path"] if mutation == "scope_symlink" else campaign / "campaign-closure.json"
+                    raw = path.read_bytes()
+                    path.unlink()
+                    (root / "outside.json").write_bytes(raw)
+                    path.symlink_to(root / "outside.json")
                 else:
-                    (campaign / "attempts" / "undeclared").mkdir()
-                with self.assertRaises((OSError, RUNNER.RunnerError)):
-                    RUNNER.collect_benchmark_scope(root / "scope.json")
+                    (campaign / "attempts" / "undeclared").mkdir(mode=0o700)
+                with self.assertRaises((OSError, ValueError, RUNNER.RunnerError)):
+                    with RUNNER.collect_benchmark_scope(fixture["scope_path"], **admission):
+                        self.fail("changed scope was admitted")
 
     def test_collection_rejects_changed_earlier_record_and_late_terminal_appearance(self) -> None:
         for mutation in ("changed", "appeared", "extra_protocol"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
-                _, campaigns, _ = self.write_fixture(root)
-                first = root / "campaigns" / "campaign-0" / "attempts"
-                original = RUNNER.retained_accounting_bytes
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary, fixture_admission() as admission:
+                fixture = self.write_fixture(Path(temporary).resolve())
+                jobs = [(ordinal, job) for ordinal, job in enumerate(fixture["plan"]["jobs"], 1)
+                        if job["kind"] == "benchmark"]
+                first = fixture["campaign"] / "attempts" / f"{jobs[0][0]:05}-{jobs[0][1]['request_id']}"
+                unstarted = fixture["campaign"] / "attempts" / f"{jobs[2][0]:05}-{jobs[2][1]['request_id']}"
+                collection = RETAINED.replay.collection
+                original = collection.collect_closed_campaign
                 fired = False
-                def read(path, **kwargs):
+                def collect(path, **kwargs):
                     nonlocal fired
-                    if path == root / "campaigns" / "campaign-1" / "frozen-plan.json" and not fired:
+                    if path.name == "campaign-1-complete" and not fired:
                         fired = True
                         if mutation == "changed":
-                            target = first / ("00001-" + campaigns[0]["attempts"][0]["request_id"]) / "request.json"
+                            target = first / "request.json"
                             target.write_bytes(target.read_bytes() + b" ")
                         elif mutation == "appeared":
-                            target = first / ("00003-" + campaigns[0]["attempts"][2]["request_id"]) / "evidence/benchmark-protocol/rust-result.json"
-                            target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b"{}")
-                        else:
-                            target = first / ("00001-" + campaigns[0]["attempts"][0]["request_id"]) / "evidence/benchmark-protocol/undeclared.json"
+                            target = unstarted / "evidence/benchmark-protocol/rust-result.json"
+                            target.parent.mkdir(parents=True, mode=0o700)
                             target.write_bytes(b"{}")
+                            target.chmod(0o600)
+                        else:
+                            target = first / "evidence/benchmark-protocol/undeclared.json"
+                            target.write_bytes(b"{}")
+                            target.chmod(0o600)
                     return original(path, **kwargs)
-                with mock.patch.object(RUNNER, "retained_accounting_bytes", side_effect=read), self.assertRaises(RUNNER.RunnerError):
-                    RUNNER.collect_benchmark_scope(root / "scope.json")
+                with mock.patch.object(collection, "collect_closed_campaign", side_effect=collect), self.assertRaises((OSError, ValueError, RUNNER.RunnerError)):
+                    with RUNNER.collect_benchmark_scope(fixture["scope_path"], **admission):
+                        self.fail("earlier retained owner changed during collection")
                 self.assertTrue(fired)
 
     def test_full_plan_fault_start_requires_exact_quiescent_process_closure(self) -> None:
-        spec = importlib.util.spec_from_file_location("prefix_fixtures", TESTS / "private_settlement_campaign_accounting_test.py")
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         for mutation in (None, "missing", "identity", "live"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
-                scope, campaigns, _ = module.fixture([["not_started"]], fault_prefix=True)
-                campaign = campaigns[0]; plan = json.loads(campaign["plan"]); job = plan["jobs"][0]
-                (root / "scope.json").write_bytes(scope)
-                directory = root / "campaigns" / "campaign-0"; directory.mkdir(parents=True)
-                for name, raw in (("registered-scope.json", scope), ("frozen-plan.json", campaign["plan"]), ("campaign-closure.json", campaign["closure"])):
-                    (directory / name).write_bytes(raw)
-                attempt = directory / "attempts" / ("00001-" + job["request_id"]); attempt.mkdir(parents=True)
-                identity = {"scope_sha256": module.binding(scope)["sha256"], "campaign_id": "campaign-0",
-                            "plan_sha256": module.binding(campaign["plan"])["sha256"]}
-                identity["attempt_id"] = RUNNER.attempt_accounting.registered_attempt_id(
-                    identity["scope_sha256"], "campaign-0", identity["plan_sha256"], job["request_id"])
-                identity.update(request_id=job["request_id"], invocation_nonce="a" * 64)
-                request = module.raw(job); (attempt / "request.json").write_bytes(request)
-                start = {"version": 1, "protocol": RUNNER.PROTOCOL, **identity, "command": ["synthetic"],
-                         "request": module.binding(request), "harness": plan["harness"], "timeout_seconds": 3600, "started_ns": 2000}
-                (attempt / "started.json").write_bytes(module.raw(start))
-                process = {"version": 1, "protocol": RUNNER.PROTOCOL, **identity, "finished_ns": 4000,
-                           "pid": 1234, "exit_code": 2, "timed_out": False, "error": "synthetic failure", "passed": False,
-                           "retained_files": [], "completion_kind": "exited", "elapsed_ms": 100,
-                           "owned_process_group_gone": mutation != "live", "bindings_unchanged": True}
-                if mutation == "identity": process["invocation_nonce"] = "b" * 64
-                if mutation != "missing": (attempt / "process-outcome.json").write_bytes(module.raw(process))
+            with self.subTest(mutation=mutation):
+                fixture = RETAINED.RegisteredScopeIntegrationTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                fixture.accepted_sample_graph()
+                path = next((fixture.root / "campaigns/campaign-0/attempts").glob("*/process-outcome.json"))
+                value = json.loads(path.read_bytes())
+                if mutation == "missing":
+                    path.unlink()
+                elif mutation == "identity":
+                    value["invocation_nonce"] = "b" * 64
+                    path.write_bytes(CONTROL.canonical(value))
+                elif mutation == "live":
+                    value["owned_process_group_gone"] = False
+                    path.write_bytes(CONTROL.canonical(value))
                 if mutation is None:
-                    collected = RUNNER.collect_benchmark_scope(root / "scope.json")
-                    result = RUNNER.attempt_accounting.reduce_registered_scope(*collected)
-                    self.assertEqual(result["counts"]["not_started"], 1)
+                    result = fixture.invoke()
+                    self.assertEqual(result["accounting"]["counts"]["not_started"], 799)
+                    self.assertEqual(result["accounting"]["counts"]["succeeded"], 1)
+                    self.assertFalse(result["release_qualified"])
                 else:
-                    with self.assertRaises(RUNNER.RunnerError):
-                        RUNNER.collect_benchmark_scope(root / "scope.json")
+                    with self.assertRaises((OSError, ValueError, RUNNER.RunnerError)):
+                        fixture.invoke()
 
     def test_oversized_accounting_record_is_rejected_before_hashing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -328,15 +406,18 @@ class ScopeCollectionTests(unittest.TestCase):
             hashing.assert_not_called()
 
     def test_csv_preserves_the_registered_attempt_join(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, fixture_admission() as admission:
             root = Path(temporary).resolve()
-            _, _, samples = self.write_fixture(root)
-            sample = json.loads(samples[0])
-            output = root / "raw.csv"
-            RUNNER.write_benchmark_csv(output, [sample])
-            with output.open() as stream:
-                rows = list(RUNNER.csv.DictReader(stream))
-            self.assertEqual(rows[0]["attempt_id"], sample["attempt_id"])
+            fixture = self.write_fixture(root)
+            with RUNNER.collect_benchmark_scope(fixture["scope_path"], **admission) as held:
+                samples = [json.loads(raw) for raw in held.successful_rows]
+                output = root / "raw.csv"
+                RUNNER.write_benchmark_csv(output, samples)
+                with output.open() as stream:
+                    rows = list(RUNNER.csv.DictReader(stream))
+                self.assertEqual([row["attempt_id"] for row in rows],
+                                 [sample["attempt_id"] for sample in samples])
+                self.assertEqual(len(rows), 9)
 
     def test_destination_io_is_typed_without_reclassifying_source_binding_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -348,21 +429,28 @@ class ScopeCollectionTests(unittest.TestCase):
             self.assertNotIsInstance(result.exception, RUNNER.OutputPublicationError)
 
     def test_sample_publication_failure_is_a_job_failure_without_accepted_metric(self) -> None:
-        owner = FIXTURES.PrivateSettlementFailureRetentionTests()
-        with tempfile.TemporaryDirectory() as temporary, owner.execution_fixture(Path(temporary).resolve()) as fixture:
-            original = RUNNER.private_record
-            def write(path, value):
-                if path.name == "benchmark-sample.json":
-                    raise OSError("synthetic disk full")
-                return original(path, value)
-            with mock.patch.object(RUNNER, "private_record", side_effect=write), self.assertRaises(RUNNER.OutputPublicationError):
-                fixture["execute"]()
-            attempt = sorted((fixture["output"] / "attempts").iterdir())[1]
-            outcome = json.loads((attempt / "validation-outcome.json").read_text())
-            self.assertEqual(outcome["validation_kind"], "publication_failed")
-            self.assertFalse(outcome["passed"])
-            self.assertFalse((attempt / "benchmark-sample.json").exists())
-
+        from private_settlement_session_runtime_test import RunnerCallbackControls
+        fixture = RunnerCallbackControls()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        bound = fixture.completed()
+        original = fixture.records.publish
+        attempted = []
+        def publish(path, raw):
+            attempted.append(path)
+            if path.endswith("/benchmark-sample.json"):
+                raise OSError("synthetic disk full")
+            return original(path, raw)
+        with mock.patch.object(fixture.records, "publish", side_effect=publish), self.assertRaisesRegex(OSError, "synthetic disk full"):
+            fixture.callbacks.validate_completion(0, bound)
+        attempt = fixture.records.path / fixture.row["output_directory"]
+        self.assertEqual(attempted, [fixture.row["output_directory"] + "/benchmark-sample.json"])
+        self.assertFalse((attempt / "benchmark-sample.json").exists())
+        self.assertFalse((attempt / "validation-outcome.json").exists())
+        self.assertEqual(list(fixture.records.path.glob("sessions/*/control/ack-*")), [])
+        self.assertEqual(fixture.records.read(fixture.records.locate(
+            fixture.row["output_directory"] + "/evidence/benchmark-protocol/rust-result.json")),
+            bound["rust_terminal"])
 
 if __name__ == "__main__":
     unittest.main()

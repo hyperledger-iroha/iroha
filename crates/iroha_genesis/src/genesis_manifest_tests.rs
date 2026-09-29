@@ -11,7 +11,7 @@ fn manifest_chain_discriminant_value() -> norito::json::Value {
 }
 fn manifest_sumeragi_context_value() -> norito::json::Value {
     norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
-        .expect("serialize v2 genesis context")
+        .expect("serialize Sumeragi genesis context")
 }
 fn manifest_kagemusha_mint_finality_value() -> norito::json::Value {
     norito::json::value::to_value(&deterministic_test_kagemusha_mint_finality_genesis_parameters())
@@ -810,7 +810,10 @@ fn set_parameter_inside_instructions_is_rejected() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
-    manifest_fields.insert("sumeragi_context".to_string(), manifest_sumeragi_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -873,7 +876,10 @@ fn raw_genesis_requires_chain_discriminant() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
-    manifest_fields.insert("sumeragi_context".to_string(), manifest_sumeragi_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -953,7 +959,10 @@ fn topology_entries_parse_with_pop_hex() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_context".to_string(), manifest_sumeragi_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -1025,7 +1034,10 @@ fn topology_entries_allow_missing_pop_hex() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_context".to_string(), manifest_sumeragi_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -1076,7 +1088,10 @@ fn topology_entries_reject_peer_value() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_context".to_string(), manifest_sumeragi_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),

@@ -2,7 +2,7 @@
 //!
 //! This checks two values against one supplied accumulated contract-state root.
 //! It does not authenticate that root, its finalized height, or its freshness.
-//! In particular, Sumeragi-v2's per-block execution-witness `post_state_root`
+//! In particular, Sumeragi's per-block execution-witness `post_state_root`
 //! must never be supplied as the accumulated map root.
 
 use crate::{

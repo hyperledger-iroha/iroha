@@ -2047,12 +2047,16 @@ item 4 ensures while an SCCP attempt is active.
    The driver reads `GET /v1/sccp/governance/proposals` and, per active
    attempt, `GET /v1/gov/parliament/attempts/{id}/plan`. Core computes the
    plan over one committed view by trial-applying every permissionless
-   transition to the reducer at the execution height of a transaction sent
-   now (tip + 3 under `QueuePlan`): the due transitions go out in one
-   transaction; each exact-height checkpoint (registration close, survivor
-   freeze, ballot registration) goes out alone when the tip is 3 blocks
-   before its height, and also at 4 blocks before in case admission slips a
-   block (the early copy fails harmlessly);
+   transition to the reducer at the next native candidate height (`tip + 1`).
+   This is advice, not a reservation: queueing, lane routing and consensus
+   determine actual inclusion, and execution checks the actual carrier height.
+   The due transitions go out in one transaction; each exact-height checkpoint
+   (registration close, survivor freeze, ballot registration) goes out alone
+   when the next candidate reaches its height, and also one candidate earlier
+   in case inclusion is delayed (an early copy fails and pays its fee).
+   Retry suppression follows each submission's candidate height and expires
+   after the committed tip passes it. The driver refreshes the plan as the tip
+   advances;
    ballots in `TimedCommitment` are relayed from published records and
    ballots in `Opening` finalized from the signer peers' partials. A missed
    checkpoint is failed by the next plan, and the retry ballot is planned

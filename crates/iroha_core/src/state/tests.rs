@@ -7563,13 +7563,15 @@ state_test! { sync normal_validation_requires_can_set_parameters_for_lane_lifecy
                 BTreeSet::from([Permission::from(CanSetParameters)]),
             );
         }
-        let state = manual_lane_lifecycle_test_state(world);
+        let chain = manual_lane_lifecycle_test_chain(world);
+        let state = chain.state();
         let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( manual_lane_lifecycle_payload().into_custom_parameter(), ))]) .sign(signer.private_key()) };
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-        let_row! { parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new()) .chain(0, None) .sign(signer.private_key()) .unpack(|_| {}) .into() };
+        let parent = state.view().latest_block().expect("original native predecessor");
         let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-        let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), &state).expect("original recorder before execution");
-        let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+        let source: SignedBlock = unverified.into();
+        let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+        let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
         let signed: SignedBlock = committed.into();
         if authorized {
             assert!(
@@ -7605,8 +7607,9 @@ state_test! { sync signed_lane_lifecycle_transaction_rejects_duplicate_transitio
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([instruction(), instruction()]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), state).expect("original recorder before execution");
-    let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+    let source: SignedBlock = unverified.into();
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("duplicate signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("already staged"), "{rejection}");
@@ -7635,8 +7638,9 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( stale_payload.into_custom_parameter(), ))]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(first.block().as_ref())) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), state).expect("original recorder before execution");
-    let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+    let source: SignedBlock = unverified.into();
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("stale signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("expected catalog hash"), "{rejection}");
@@ -20895,13 +20899,21 @@ fn sample_snapshot_training_job_audit_event(
     }
 }
 fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
-    let bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
+    let mut bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
         "../../../../fixtures/soracloud/sora_deployment_bundle_v1.json"
     ))
     .expect("decode canonical deployment-bundle fixture");
+    // Snapshot invariants use supported storage. FHE refusal has a separate
+    // restore control below; this fixture conversion is not a runtime decoder.
+    for binding in &mut bundle.service.state_bindings {
+        binding.encryption = iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext;
+    }
     bundle
         .validate_for_admission()
         .expect("deployment-bundle fixture remains canonical");
+    bundle
+        .require_production_support()
+        .expect("snapshot fixture uses supported storage");
     bundle
 }
 fn sample_snapshot_mailbox_message(bundle: &SoraDeploymentBundleV1) -> SoraServiceMailboxMessageV1 {
@@ -21604,6 +21616,68 @@ state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_
                 .contains("soracloud_inrou_replica_runtime"),
             "unexpected replica-slot error for `{slot_key}`: {error}"
         );
+    }
+}
+state_test! { sync service_restore_rejects_fhe_bindings_secrets_and_rows
+    use iroha_data_model::soracloud::{
+        SECRET_ENVELOPE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SecretEnvelopeEncryptionV1,
+        SecretEnvelopeV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
+        SoraStateEncryptionV1,
+    };
+    for variant in 0..4 {
+        let mut bundle = sample_snapshot_service_bundle();
+        if variant == 1 {
+            bundle.service.state_bindings[0].encryption = SoraStateEncryptionV1::FheCiphertext;
+        }
+        let mut deployment = sample_snapshot_service_deployment(&bundle);
+        if variant == 2 {
+            deployment.secret_generation = 1;
+            deployment.service_secrets.insert("retired_secret".to_owned(), SoraServiceSecretEntryV1 {
+                schema_version: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                secret_name: "retired_secret".to_owned(),
+                envelope: SecretEnvelopeV1 {
+                    schema_version: SECRET_ENVELOPE_VERSION_V1,
+                    encryption: SecretEnvelopeEncryptionV1::FheCiphertext,
+                    key_id: "diagnostic-key".to_owned(),
+                    key_version: NonZeroU32::new(1).unwrap(),
+                    nonce: vec![1], ciphertext: vec![2], commitment: Hash::new([2]),
+                    aad_digest: None,
+                },
+                last_update_sequence: 1,
+            });
+        }
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (bundle.service.service_name.as_ref().to_owned(), bundle.service.service_version.clone()),
+            bundle.clone(),
+        );
+        world.soracloud_service_deployments.insert(deployment.service_name.clone(), deployment);
+        world.soracloud_service_audit_events.insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+        if variant == 3 {
+            let binding = &bundle.service.state_bindings[0];
+            let entry = SoraServiceStateEntryV1 {
+                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                service_name: bundle.service.service_name.clone(),
+                service_version: bundle.service.service_version.clone(),
+                binding_name: binding.binding_name.clone(),
+                state_key: format!("{}/diagnostic", binding.key_prefix),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload_bytes: NonZeroU64::new(1).unwrap(), payload: vec![1],
+                payload_commitment: Hash::new([1]), fhe_public_key_digest: None,
+                fhe_residual_multiple_bound: None, fhe_bound_mode: None,
+                last_update_sequence: 1, governance_tx_hash: Hash::new(b"diagnostic"),
+                source_action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+            };
+            world.soracloud_service_state_entries.insert((entry.service_name.as_ref().to_owned(), entry.binding_name.as_ref().to_owned(), entry.state_key.clone()), entry);
+        }
+        let value = norito::json::to_value(&snapshot_state_from_world(world)).expect("encode restore fixture");
+        if variant == 0 {
+            deserialize_state_snapshot_value(value).expect("supported storage restores");
+        } else {
+            let error = deserialize_state_snapshot_value(value).err().expect("FHE restore must fail closed");
+            assert!(error.to_string().contains("soracloud_fhe_unavailable"), "variant {variant}: {error}");
+        }
     }
 }
 state_test! { sync service_deployment_restore_requires_exact_admitted_revision_binding
@@ -25588,9 +25662,8 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
         state_block.commit_world_overlay_for_testing().unwrap();
     }
     // Execute the trigger and expect rejection; state changes must rollback.
-    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
     {
-        let mut state_block = state.block(block.as_ref().header());
         // Exercise atomic rollback through the signed executor, which owns the
         // callback journal and discards the failed transaction overlay.
         let mut builder = TransactionBuilder::new(
@@ -25605,7 +25678,17 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
         let mut source = iroha_data_model::block::builder::BlockBuilder::new(block.as_ref().header());
         source.push_transaction(signed);
         let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal();
-        ValidBlock::execute_block_outputs_for_test(&mut source, &mut state_block, None)
+        let entrypoint_hash = source.external_entrypoints_cloned().next().unwrap().hash();
+        source.set_execution_context(Some(iroha_data_model::block::BlockExecutionContextBundle::new(
+            vec![iroha_data_model::block::ExternalExecutionContext::new(
+                entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )],
+        )));
+        let (mut state_block, recorder) = ValidBlock::start_component_execution(&source, &state)
+            .expect("original callback source starts recording before block effects");
+        ValidBlock::execute_recorded_component_outputs(&mut source, &mut state_block, &recorder)
             .expect("original signed callback completes with an ordinary rejection");
         let err = source.output_error(0).expect("trigger must fail to execute");
         assert!(

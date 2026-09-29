@@ -73,7 +73,6 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
@@ -3701,8 +3700,7 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "contract call draft",
-            TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
+            "contract call draft");
     final TransactionPayload expected =
         TransactionPayload.builder()
             .setNetworkId(expectedNetworkId)
@@ -3710,7 +3708,6 @@ public final class HttpClientTransport implements IrohaClient {
             .setCreationTimeMs(response.creationTimeMs())
             .setExecutable(Executable.contractCall(draftIntent.invocation()))
             .setFeePayment(responseFee)
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(draftIntent.metadata())
             .buildDecodedForCodec();
     if (!sameTransactionPayload(decoded, expected)) {
@@ -3873,8 +3870,7 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "multisig response",
-            TransactionAdmissionIntent.ORDINARY);
+            "multisig response");
     if (!response.feePayment().equals(decoded.feePayment())) {
       throw new IllegalStateException(
           "multisig response fee_payment does not match the transaction payload");
@@ -3905,7 +3901,6 @@ public final class HttpClientTransport implements IrohaClient {
             .setCreationTimeMs(response.creationTimeMs())
             .setExecutable(decoded.executable())
             .setFeePayment(response.feePayment())
-            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
             .setMetadata(canonicalMultisigTransactionMetadata(request))
             .buildDecodedForCodec();
     if (!sameTransactionPayload(decoded, expected)) {
@@ -3955,8 +3950,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static TransactionPayload decodeUnsignedDraftPayload(
       final String transactionPayloadB64,
       final String signingMessageB64,
-      final String context,
-      final TransactionAdmissionIntent expectedAdmissionIntent) {
+      final String context) {
     final byte[] transactionPayload;
     final byte[] signingMessage;
     try {
@@ -3980,8 +3974,7 @@ public final class HttpClientTransport implements IrohaClient {
           context + ".signing_message_b64 must be the exact TransactionPayload hash");
     }
     try {
-      return NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
-          transactionPayload, expectedAdmissionIntent);
+      return NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(transactionPayload);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload",
@@ -3998,7 +3991,6 @@ public final class HttpClientTransport implements IrohaClient {
         && left.timeToLiveMs().equals(right.timeToLiveMs())
         && left.nonce().equals(right.nonce())
         && left.feePayment().equals(right.feePayment())
-        && left.admissionIntent() == right.admissionIntent()
         && left.metadata().equals(right.metadata())
         && left.attachments().equals(right.attachments());
   }

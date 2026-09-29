@@ -104,18 +104,17 @@ mod tests {
     }
     fn npos_params() -> ConsensusGenesisParams {
         let mut params = permissioned_params();
-        params.mode =
-            ConsensusGenesisModeParams::Npos(super::super::NposGenesisParams {
-                epoch_length_blocks: core::num::NonZeroU64::new(3_600).unwrap(),
-                epoch_seed: [7; 32],
-                max_validators: 31,
-                min_self_bond: 1_000_u64.into(),
-                min_nomination_bond: 1_u64.into(),
-                finality_margin_blocks: 8,
-                evidence_horizon_blocks: 7_200,
-                activation_lag_blocks: 1,
-                slashing_delay_blocks: 3_600,
-            });
+        params.mode = ConsensusGenesisModeParams::Npos(super::super::NposGenesisParams {
+            epoch_length_blocks: core::num::NonZeroU64::new(3_600).unwrap(),
+            epoch_seed: [7; 32],
+            max_validators: 31,
+            min_self_bond: 1_000_u64.into(),
+            min_nomination_bond: 1_u64.into(),
+            finality_margin_blocks: 8,
+            evidence_horizon_blocks: 7_200,
+            activation_lag_blocks: 1,
+            slashing_delay_blocks: 3_600,
+        });
         params
     }
     #[test]

@@ -13,7 +13,6 @@ import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -498,34 +497,14 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
   /** Rejects transaction payload bytes that are not the exact canonical Norito encoding. */
   public static void validateCanonicalTransactionPayload(final byte[] encoded)
       throws NoritoException {
-    decodeCanonicalTransactionPayload(encoded, null);
-  }
-
-  /** Rejects non-canonical payloads and payloads with a different admission intent. */
-  public static void validateCanonicalTransactionPayload(
-      final byte[] encoded, final TransactionAdmissionIntent expectedAdmissionIntent)
-      throws NoritoException {
-    decodeCanonicalTransactionPayload(encoded, expectedAdmissionIntent);
+    decodeCanonicalTransactionPayload(encoded);
   }
 
   /** Decodes one exact canonical payload so callers can verify signature-bound fields. */
   public static TransactionPayload decodeCanonicalTransactionPayload(final byte[] encoded)
       throws NoritoException {
-    return decodeCanonicalTransactionPayload(encoded, null);
-  }
-
-  /** Decodes one exact canonical payload and enforces its admission intent when supplied. */
-  public static TransactionPayload decodeCanonicalTransactionPayload(
-      final byte[] encoded, final TransactionAdmissionIntent expectedAdmissionIntent)
-      throws NoritoException {
     try {
-      final TransactionPayload payload =
-          TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded);
-      if (expectedAdmissionIntent != null && payload.admissionIntent() != expectedAdmissionIntent) {
-        throw new IllegalArgumentException(
-            "transaction payload admission intent must be " + expectedAdmissionIntent);
-      }
-      return payload;
+      return TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded);
     } catch (final Exception ex) {
       throw new NoritoException("Invalid canonical Norito transaction payload", ex);
     }

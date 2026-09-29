@@ -479,7 +479,7 @@ async fn wait_for_common_v2_subject(
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{context}: v2 DA/RBC committed subject did not converge within \
+                "{context}: DA/RBC committed subject did not converge within \
                  {PEER_CONVERGENCE_TIMEOUT:?}; {}",
                 last_observed.join("; ")
             ));

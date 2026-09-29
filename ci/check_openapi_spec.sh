@@ -12,12 +12,12 @@ export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PROCESS_POLICY="${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+PROCESS_POLICY="${REPO_ROOT}/scripts/sumeragi_release_process_policy.sh"
 if [[ ! -f "${PROCESS_POLICY}" || -L "${PROCESS_POLICY}" ]]; then
   echo "error: shared release process policy is unavailable or symbolic." >&2
   exit 2
 fi
-# shellcheck source=../scripts/sumeragi_v2_release_process_policy.sh
+# shellcheck source=../scripts/sumeragi_release_process_policy.sh
 source "${PROCESS_POLICY}"
 
 umask 077

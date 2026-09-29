@@ -42,19 +42,10 @@ public final class IdentifierResolveRequest {
     return encrypted(policy.policyId(), encryptedInputHex, outputOpening);
   }
 
+  /** Refuses encryption until a secure replacement profile is qualified. */
   public static IdentifierResolveRequest encryptedFromInput(
       final IdentifierPolicySummary policy, final String input, final RamLfeOutputOpening outputOpening) {
-    return encryptedFromInput(policy, input, outputOpening, null);
-  }
-
-  public static IdentifierResolveRequest encryptedFromInput(
-      final IdentifierPolicySummary policy,
-      final String input,
-      final RamLfeOutputOpening outputOpening,
-      final byte[] seed) {
-    Objects.requireNonNull(policy, "policy");
-    return encrypted(
-        policy.policyId(), IdentifierBfvEnvelopeBuilder.encrypt(policy, input, seed), outputOpening);
+    throw new UnsupportedOperationException("ram_lfe_encryption_unavailable: RAM-LFE encryption is unavailable: the insecure exact-lift BFV profile must be replaced");
   }
 
   public String policyId() {

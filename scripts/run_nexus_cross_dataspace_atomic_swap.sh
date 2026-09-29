@@ -242,7 +242,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     fi
   done
 fi
-source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
+source "${repo_root}/scripts/sumeragi_release_process_policy.sh"
 release_head_commit="${IROHA_RELEASE_HEAD_COMMIT:-}"
 release_head_tree="${IROHA_RELEASE_HEAD_TREE:-}"
 release_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"
@@ -279,7 +279,7 @@ if [[ -n "$TARGET_DIR" ]]; then
 fi
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   nexus_invocation_root="$(
-    mktemp -d /private/tmp/iroha-sumeragi-v2-nexus-cross.XXXXXX
+    mktemp -d /private/tmp/iroha-sumeragi-nexus-cross.XXXXXX
   )"
   mkdir -m 0700 -- \
     "$nexus_invocation_root/target" \
@@ -290,7 +290,7 @@ if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
 elif [[ -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
   && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
   nexus_output_root="$(
-    mktemp -d /private/tmp/iroha-sumeragi-v2-nexus-output.XXXXXX
+    mktemp -d /private/tmp/iroha-sumeragi-nexus-output.XXXXXX
   )"
   mkdir -m 0700 -- "$nexus_output_root/artifacts"
   export IROHA_RELEASE_ARTIFACT_ROOT="$nexus_output_root/artifacts"

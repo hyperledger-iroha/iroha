@@ -507,14 +507,15 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
-When participant effects enter the global carrier through an autonomous lane
-merge, the merge validator applies the publication fence defined in
-`specs/merge_ledger.md`. A State or Kura frontier advance during candidate
-revalidation makes that global round unavailable and preserves the durable
-signing journal for retry; it does not turn the already valid private-settlement
-effect into a semantic failure. The private-key action occurs only after the
-validator rechecks the exact State generation and durable Kura parent while
-both publication leases are held.
+When participant transactions travel on a lane, the lane only certifies their
+admission; the global block that merges the lane block executes them against
+the world state in its one canonical order
+([`sumeragi_lanes.md`](sumeragi_lanes.md)). A State or Kura frontier advance
+during candidate revalidation makes that round unavailable and preserves the
+durable signing journal for retry; it does not turn the already valid
+private-settlement effect into a semantic failure. The private-key action occurs
+only after the validator rechecks the exact State generation and durable Kura
+parent while both publication leases are held.
 
 The complete prepared-bundle digest commits to every certified Prepare body and
 authority-catalog index, but normalizes away the signer bitmap and aggregate
@@ -663,15 +664,20 @@ protocol limits are configuration errors.
 - Loading verified relay caches never mutates canonical contract storage. Stale or mismatched-incarnation records remain ineligible; canonical removal occurs only through the committed lane lifecycle transition.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
-- Snapshot restore accepts exactly the current 188-field `World` schema,
+- Snapshot decoding accepts exactly the current `World` schema,
   including all eight private-settlement maps. Missing, reordered, renamed,
   additional, or retired fields are rejected; V1 has no predecessor-schema
-  migration path.
+  migration path. A positive-height signed snapshot remains an export rather than
+  execution authority; startup requires the original signed genesis and complete
+  native certified replay history.
 - Governed pool projections retain exact policy-revision lineage so historical
   finalized receipts remain restart-valid after a rotation while exact replay
   is rejected byte-silently and old-policy in-flight bundles remain inadmissible.
-- Mandatory signed RS16 DA/RBC remains enabled in every deployment and fault
-  test; there is no private-settlement bypass.
+- Signed RS16 `PayloadManifest`/`PayloadChunk` availability is mandatory for
+  deployment qualification. The native core's full-body transport does not yet
+  integrate that contract; private-settlement qualification fails closed until
+  the actual signed availability path is exercised. Full-body delivery is not
+  substitute evidence; see `sumeragi_goals.md`, open question 8.
 
 ## Verification and publication gates
 

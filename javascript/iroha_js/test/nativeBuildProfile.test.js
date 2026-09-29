@@ -24,8 +24,10 @@ import {
   resolveNativeBuildProfile,
 } from "../scripts/native-build-profile.mjs";
 import {
-  nativeBuildOutputPath,
-  runNativeBuild,
+  nativeBuildOutputPath as completedBuildOutputPath,
+  nativeBuildNamespace,
+  runNativeBuild as actualRunNativeBuild,
+  verifyCargoDependencyArtifacts,
 } from "../scripts/build-native.mjs";
 import { publishNativeBinding } from "../scripts/copy-native.mjs";
 import {
@@ -34,6 +36,15 @@ import {
   writeNativeBuildProvenance,
 } from "../scripts/native-build-provenance.mjs";
 import { nativeSourceProvenanceMatches } from "../src/native.js";
+
+const FIXTURE_ATTEMPT_ID = "00000000-0000-4000-8000-000000000001";
+function nativeBuildOutputPath(options) {
+  return path.join(nativeBuildNamespace(options), FIXTURE_ATTEMPT_ID, options.cargoProfile,
+    options.platform === "darwin" ? "libiroha_js_host.dylib" : "libiroha_js_host.so");
+}
+function runNativeBuild(options) {
+  return actualRunNativeBuild({ newAttemptId: () => FIXTURE_ATTEMPT_ID, ...options });
+}
 
 const SOURCE_DIGEST = "b".repeat(64);
 const SOURCE_REVISION = "a".repeat(40);
@@ -153,6 +164,7 @@ function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1
   };
   const nativePath = nativeBuildOutputPath({
     repoRoot,
+    sourceState: sourceState(),
     cargoProfile: profile,
     env,
     platform: "linux",
@@ -356,7 +368,7 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
       assert.equal(options.cwd, fixture.repoRoot);
       assert.equal(
         options.cargoEnv.CARGO_TARGET_DIR,
-        fixture.targetRoot,
+        path.dirname(path.dirname(fixture.nativePath)),
       );
       assert.equal(options.cargoEnv.CARGO, fixture.cargoPath);
       assert.equal(options.cargoEnv.RUSTC, fixture.env.RUSTC);
@@ -381,7 +393,7 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
         "iroha_js_host",
         "--lib",
         "--target-dir",
-        fixture.targetRoot,
+        path.dirname(path.dirname(fixture.nativePath)),
         "--message-format=json-render-diagnostics",
       ]);
       writeNativeOutput(fixture, "authenticated-live-root-output");
@@ -421,6 +433,7 @@ test("macOS native build seals SDK, deployment target, and Apple tools into Carg
   const fixture = createFixture(t);
   fixture.nativePath = nativeBuildOutputPath({
     repoRoot: fixture.repoRoot,
+    sourceState: sourceState(),
     cargoProfile: "debug",
     env: fixture.env,
     platform: "darwin",
@@ -463,6 +476,7 @@ test("macOS native build seals SDK, deployment target, and Apple tools into Carg
       SDKROOT: sdkRoot,
       MACOSX_DEPLOYMENT_TARGET: "11.0",
     };
+    fixture.nativePath = nativeBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: "debug", env, platform: "darwin", sourceState: sourceState() });
     let rustflags;
     const result = runNativeBuild({
       repoRoot: fixture.repoRoot,
@@ -523,7 +537,12 @@ test("macOS native build seals SDK, deployment target, and Apple tools into Carg
 
 test("a fresh Cargo artifact is authenticated without forcing a rebuild", (t) => {
   const fixture = createFixture(t);
-  writeNativeOutput(fixture, "already-current-output");
+  assert.equal(buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture, "already-current-output");
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+  }), 0);
   const originalInode = lstatSync(fixture.nativePath, {
     bigint: true,
   }).ino;
@@ -1045,11 +1064,11 @@ test("exact canonical ROOT/target is admitted as the generated cache", (t) => {
   const fixture = createFixture(t);
   fixture.targetRoot = path.join(fixture.repoRoot, "target");
   fixture.env.CARGO_TARGET_DIR = fixture.targetRoot;
-  fixture.nativePath = nativeBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: fixture.profile, env: fixture.env, platform: "linux" });
+  fixture.nativePath = nativeBuildOutputPath({ repoRoot: fixture.repoRoot, sourceState: sourceState(), cargoProfile: fixture.profile, env: fixture.env, platform: "linux" });
   assert.equal(buildFixture(fixture, {
     runCargo(_cargo, args, { cargoEnv }) {
-      assert.equal(args[args.indexOf("--target-dir") + 1], fixture.targetRoot);
-      assert.equal(cargoEnv.CARGO_TARGET_DIR, fixture.targetRoot);
+      assert.equal(args[args.indexOf("--target-dir") + 1], path.dirname(path.dirname(fixture.nativePath)));
+      assert.equal(cargoEnv.CARGO_TARGET_DIR, path.dirname(path.dirname(fixture.nativePath)));
       writeNativeOutput(fixture);
       return { status: 0, stdout: successfulCargoJson(fixture) };
     },
@@ -1071,6 +1090,7 @@ test("privacy native build passes an external lock and disjoint target to Cargo"
   fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH = lock;
   fixture.nativePath = nativeBuildOutputPath({
     repoRoot: fixture.repoRoot,
+    sourceState: sourceState(),
     cargoProfile: fixture.profile,
     env: fixture.env,
     platform: "linux",
@@ -1081,7 +1101,7 @@ test("privacy native build passes an external lock and disjoint target to Cargo"
         args.slice(args.indexOf("--lockfile-path"), args.indexOf("--lockfile-path") + 2),
         ["--lockfile-path", lock],
       );
-      assert.equal(cargoEnv.CARGO_TARGET_DIR, fixture.targetRoot);
+      assert.equal(cargoEnv.CARGO_TARGET_DIR, path.dirname(path.dirname(fixture.nativePath)));
       writeNativeOutput(fixture);
       return { status: 0, stdout: successfulCargoJson(fixture) };
     },
@@ -1621,4 +1641,221 @@ test("final publication does not invalidate receipts through a replaced profile 
     }),
   }), /profile directory changed identity/u);
   assert.equal(readFileSync(nativeBuildProvenancePath(fixture.nativePath), "utf8"), "foreign-receipt");
+});
+
+function namespacedOutput(fixture, overrides = {}) {
+  return nativeBuildOutputPath({
+    repoRoot: fixture.repoRoot, cargoProfile: "debug", env: fixture.env,
+    platform: "linux", sourceState: sourceState(), ...overrides,
+  });
+}
+
+test("source cache namespaces separate checkouts sharing a target and toolchain", (t) => {
+  const first = createFixture(t);
+  const second = createFixture(t);
+  const sameInputs = { env: first.env, sourceState: sourceState() };
+  assert.notEqual(namespacedOutput(first, sameInputs), namespacedOutput(second, sameInputs));
+  assert.equal(namespacedOutput(first), namespacedOutput(first));
+  assert.notEqual(namespacedOutput(first), namespacedOutput(first, { cargoProfile: "release" }));
+  assert.notEqual(namespacedOutput(first), namespacedOutput(first, { env: { ...first.env, RUSTFLAGS: "-Ctarget-cpu=native" } }));
+});
+
+test("source content changes select a new cache even after restoring mtimes", (t) => {
+  const fixture = createFixture(t);
+  const before = lstatSync(fixture.sourcePath);
+  const firstState = sourceState({ sourceTreeSha256: sha256File(fixture.sourcePath) });
+  const first = namespacedOutput(fixture, { sourceState: firstState });
+  writeFileSync(fixture.sourcePath, "pub fn changed() {}\n");
+  fs.utimesSync(fixture.sourcePath, before.atime, before.mtime);
+  const secondState = sourceState({ sourceTreeSha256: sha256File(fixture.sourcePath) });
+  assert.notEqual(namespacedOutput(fixture, { sourceState: secondState }), first);
+});
+
+test("toolchain bytes select a new cache even at the same canonical path", (t) => {
+  const fixture = createFixture(t);
+  const first = namespacedOutput(fixture);
+  const before = lstatSync(fixture.env.RUSTC);
+  writeFileSync(fixture.env.RUSTC, "#!/bin/sh\nexit 98\n");
+  fs.utimesSync(fixture.env.RUSTC, before.atime, before.mtime);
+  assert.notEqual(namespacedOutput(fixture), first);
+});
+
+function dependencyArtifact(fixture, overrides = {}) {
+  const packageRoot = path.join(fixture.repoRoot, "crates", "dependency");
+  const sourcePath = path.join(packageRoot, "src", "lib.rs");
+  mkdirSync(path.dirname(sourcePath), { recursive: true });
+  writeFileSync(sourcePath, "pub fn dependency() {}\n");
+  writeFileSync(path.join(packageRoot, "Cargo.toml"), '[package]\nname = "dependency"\nversion = "1.0.0"\n');
+  const filename = path.join(path.dirname(fixture.nativePath), "deps", "libdependency-fixture.rlib");
+  mkdirSync(path.dirname(filename), { recursive: true });
+  writeFileSync(filename, "dependency bytes");
+  return intendedCargoArtifact(fixture, {
+    package_id: "path+" + pathToFileURL(packageRoot).href + "#1.0.0",
+    manifest_path: path.join(packageRoot, "Cargo.toml"),
+    target: { name: "dependency", kind: ["rlib"], crate_types: ["rlib"], src_path: sourcePath },
+    filenames: [filename], ...overrides,
+  });
+}
+
+for (const mutation of ["foreign-manifest", "foreign-source", "foreign-output", "external-label"]) {
+  test(`dependency closure rejects ${mutation} even when the final addon is valid`, (t) => {
+    const fixture = createFixture(t);
+    const foreign = createFixture(t);
+    let written = false;
+    assert.throws(() => buildFixture(fixture, {
+      runCargo() {
+        writeNativeOutput(fixture);
+        const dependency = dependencyArtifact(fixture);
+        if (mutation === "foreign-manifest") {
+          dependency.manifest_path = path.join(foreign.packageRoot, "Cargo.toml");
+          dependency.package_id = "path+" + pathToFileURL(foreign.packageRoot).href + "#0.0.0";
+        } else if (mutation === "foreign-source") {
+          dependency.target.src_path = foreign.sourcePath;
+        } else if (mutation === "foreign-output") {
+          const file = path.join(fixture.targetRoot, "unrelated.rlib");
+          writeFileSync(file, "outside namespace");
+          dependency.filenames = [file];
+        } else {
+          dependency.package_id = "registry+https://example.invalid/index#dependency@1.0.0";
+        }
+        return { status: 0, stdout: cargoJson(dependency, intendedCargoArtifact(fixture),
+          { reason: "build-finished", success: true }) };
+      },
+      writeProvenance() { written = true; },
+    }), /authenticated checkout|outside the authenticated source target|mislabeled a local dependency/u);
+    assert.equal(written, false);
+  });
+}
+
+test("build retains exact compiler messages and hashes every local dependency output", (t) => {
+  const fixture = createFixture(t);
+  let compilerMessages;
+  assert.equal(buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture);
+      compilerMessages = cargoJson(dependencyArtifact(fixture), intendedCargoArtifact(fixture),
+        { reason: "build-finished", success: true });
+      return { status: 0, stdout: compilerMessages };
+    },
+  }), 0);
+  const profile = path.dirname(fixture.nativePath);
+  const logs = fs.readdirSync(profile).filter((name) => name.endsWith(".jsonl"));
+  assert.equal(logs.length, 1);
+  const log = path.join(profile, logs[0]);
+  assert.equal(readFileSync(log, "utf8"), compilerMessages);
+  const receipt = JSON.parse(readFileSync(log + ".inputs.json", "utf8"));
+  assert.equal(receipt.compiler_log_sha256, sha256File(log));
+  assert.equal(receipt.native_sha256, sha256File(fixture.nativePath));
+  assert.equal(completedBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: "debug",
+    env: fixture.env, platform: "linux", sourceState: sourceState() }), fixture.nativePath);
+  assert.equal(receipt.local_artifacts.length, 2);
+  assert.equal(receipt.local_files.length, 2);
+  for (const file of receipt.local_files) assert.equal(file.sha256, sha256File(file.path));
+  assert.equal(verifyCargoDependencyArtifacts(compilerMessages, {
+    repoRoot: fixture.repoRoot, targetRoot: path.dirname(profile),
+  }).length, 2);
+});
+
+test("toolchain mutation during Cargo cannot publish dependency qualification", (t) => {
+  const fixture = createFixture(t);
+  assert.throws(() => buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture);
+      writeFileSync(fixture.env.RUSTC, "#!/bin/sh\nexit 98\n");
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+    writeProvenance() { assert.fail("changed toolchain cannot publish"); },
+  }), /toolchain or input namespace changed/u);
+  assert.equal(fs.readdirSync(path.dirname(fixture.nativePath))
+    .some((name) => name.endsWith(".inputs.json")), false);
+});
+
+const RETRY_ATTEMPT_ID = "00000000-0000-4000-8000-000000000002";
+function setRetryOutput(fixture) {
+  fixture.nativePath = path.join(nativeBuildNamespace({ repoRoot: fixture.repoRoot,
+    cargoProfile: "debug", env: fixture.env, platform: "linux", sourceState: sourceState() }),
+  RETRY_ATTEMPT_ID, "debug", "libiroha_js_host.so");
+}
+
+for (const failure of ["interrupted", "source-drift", "cargo-failure"]) {
+  test(`same-input retry after ${failure} preserves the failed attempt and builds in a fresh target`, (t) => {
+    const fixture = createFixture(t);
+    const failedPath = fixture.nativePath;
+    let reads = 0;
+    const run = () => buildFixture(fixture, {
+      readSourceState() {
+        reads += 1;
+        return failure === "source-drift" && reads > 1
+          ? sourceState({ sourceTreeSha256: "c".repeat(64) }) : sourceState();
+      },
+      runCargo() {
+        writeNativeOutput(fixture, "failed attempt bytes");
+        if (failure === "interrupted") throw new Error("injected interrupted compiler");
+        return { status: failure === "cargo-failure" ? 7 : 0,
+          stdout: successfulCargoJson(fixture) };
+      },
+    });
+    if (failure === "cargo-failure") assert.equal(run(), 7);
+    else assert.throws(run, /interrupted compiler|source tree changed/u);
+    const failedHash = sha256File(failedPath);
+    assert.equal(existsSync(path.join(path.dirname(path.dirname(failedPath)), ".in-progress.json")), true);
+    assert.throws(() => completedBuildOutputPath({ repoRoot: fixture.repoRoot,
+      cargoProfile: "debug", env: fixture.env, platform: "linux", sourceState: sourceState() }));
+    setRetryOutput(fixture);
+    assert.equal(buildFixture(fixture, { newAttemptId: () => RETRY_ATTEMPT_ID }), 0);
+    assert.notEqual(path.dirname(fixture.nativePath), path.dirname(failedPath));
+    assert.equal(sha256File(failedPath), failedHash);
+    assert.equal(completedBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: "debug",
+      env: fixture.env, platform: "linux", sourceState: sourceState() }), fixture.nativePath);
+  });
+}
+
+test("corrupted completed local dependency forces a fresh target without deleting evidence", (t) => {
+  const fixture = createFixture(t);
+  let localOutput;
+  assert.equal(buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture);
+      const dependency = dependencyArtifact(fixture);
+      localOutput = dependency.filenames[0];
+      return { status: 0, stdout: cargoJson(dependency, intendedCargoArtifact(fixture),
+        { reason: "build-finished", success: true }) };
+    },
+  }), 0);
+  writeFileSync(localOutput, "corrupted warm artifact");
+  assert.throws(() => completedBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: "debug",
+    env: fixture.env, platform: "linux", sourceState: sourceState() }), /dependency output changed/u);
+  setRetryOutput(fixture);
+  assert.equal(buildFixture(fixture, { newAttemptId: () => RETRY_ATTEMPT_ID }), 0);
+  assert.equal(readFileSync(localOutput, "utf8"), "corrupted warm artifact");
+});
+
+test("fresh local artifacts without successful dependency evidence are rejected", (t) => {
+  const fixture = createFixture(t);
+  assert.throws(() => buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture);
+      return { status: 0, stdout: successfulCargoJson(fixture, { fresh: true }) };
+    },
+  }), /without a matching completed dependency receipt/u);
+});
+
+test("warm dependency corruption during Cargo cannot qualify a fresh artifact", (t) => {
+  const fixture = createFixture(t);
+  let dependency;
+  assert.equal(buildFixture(fixture, {
+    runCargo() {
+      writeNativeOutput(fixture);
+      dependency = dependencyArtifact(fixture);
+      return { status: 0, stdout: cargoJson(dependency, intendedCargoArtifact(fixture),
+        { reason: "build-finished", success: true }) };
+    },
+  }), 0);
+  assert.throws(() => buildFixture(fixture, {
+    runCargo() {
+      writeFileSync(dependency.filenames[0], "changed after namespace authentication");
+      return { status: 0, stdout: cargoJson({ ...dependency, fresh: true },
+        intendedCargoArtifact(fixture, { fresh: true }), { reason: "build-finished", success: true }) };
+    },
+  }), /without a matching completed dependency receipt/u);
 });

@@ -613,17 +613,13 @@ impl<T: Write> RunArgs<T> for Args {
         let signed_context = manifest.sumeragi_context_parameters();
         for (config, binding) in configs.iter().zip(&validator_bindings) {
             let (nexus_amx_context_hash, execution_policy_hash) =
-                super::staged_signed_sumeragi_context_hashes(
-                    &manifest,
-                    validated.block(),
-                    config,
-                )
-                .wrap_err_with(|| {
-                    format!(
-                        "restage signed genesis under effective validator policy {}",
-                        binding.slug
-                    )
-                })?;
+                super::staged_signed_sumeragi_context_hashes(&manifest, validated.block(), config)
+                    .wrap_err_with(|| {
+                        format!(
+                            "restage signed genesis under effective validator policy {}",
+                            binding.slug
+                        )
+                    })?;
             ensure!(
                 nexus_amx_context_hash == Hash::prehashed(signed_context.nexus_amx_context_hash),
                 "effective validator {} Nexus/AMX context differs from signed genesis",

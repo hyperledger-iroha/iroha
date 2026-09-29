@@ -3106,7 +3106,7 @@ def test_call_contract_rejects_rehashed_retired_admission_slots(
 
     # The fixture recomputes the signing hash from the substituted payload.
     # A matching prehash cannot authorize an obsolete wire layout.
-    with pytest.raises(RuntimeError, match="trailing bytes"):
+    with pytest.raises(RuntimeError, match="one canonical transaction payload"):
         client.prepare_contract_call(
             canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
@@ -6060,6 +6060,20 @@ def test_get_configuration_returns_snapshot() -> None:
 
 
 
+@pytest.mark.parametrize(
+    "field_name", ["lane_commitments", "dataspace_commitments", "pipeline_execution"]
+)
+@pytest.mark.parametrize("value", [None, [], [{"block_height": 10}]])
+def test_status_rejects_retired_commitment_projections(field_name: str, value: object) -> None:
+    payload = _status_payload(queue_size=0, approved=0, rejected=0, views=0)
+    payload[field_name] = value
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(RuntimeError, match=f"retired field `{field_name}`"):
+        client.get_status_snapshot()
+
+
 def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=_status_payload(queue_size=4, approved=3, rejected=1, views=2)))
@@ -6081,9 +6095,9 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert first.status.is_queue_stalled(1_000) is False
     assert first.metrics.queue_delta == 0
     assert first.metrics.has_activity is False
-    assert first.status.lane_commitments[0].lane_id == 7
-    assert first.status.dataspace_commitments[0].dataspace_id == 9
     assert first.status.dataspace_catalog[0].alias == "alpha"
+    assert not hasattr(first.status, "lane_commitments")
+    assert not hasattr(first.status, "dataspace_commitments")
 
     assert second.status.queue_size == 9
     assert second.metrics.queue_queued == 7
@@ -6337,29 +6351,6 @@ def _status_payload(
             }
         ],
     }
-    lane_commitments = [
-        {
-            "block_height": 10,
-            "lane_id": 7,
-            "tx_count": 2,
-            "total_chunks": 4,
-            "rbc_bytes_total": 64,
-            "teu_total": 128,
-            "block_hash": "hash-lane",
-        }
-    ]
-    dataspace_commitments = [
-        {
-            "block_height": 10,
-            "lane_id": 7,
-            "dataspace_id": 9,
-            "tx_count": 2,
-            "total_chunks": 4,
-            "rbc_bytes_total": 64,
-            "teu_total": 128,
-            "block_hash": "hash-dataspace",
-        }
-    ]
     lane_governance = [
         {
             "lane_id": 7,
@@ -6412,8 +6403,6 @@ def _status_payload(
         "txs_rejected": rejected,
         "view_changes": views,
         "governance": governance,
-        "lane_commitments": lane_commitments,
-        "dataspace_commitments": dataspace_commitments,
         "lane_governance": lane_governance,
         "dataspace_catalog": dataspace_catalog,
         "lane_governance_sealed_total": 1,
@@ -7432,8 +7421,6 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
                 "txs_approved": 5,
                 "txs_rejected": 6,
                 "view_changes": 7,
-                "lane_commitments": [],
-                "dataspace_commitments": [],
                 "lane_governance": [],
                 "lane_governance_sealed_total": 0,
                 "lane_governance_sealed_aliases": [],
@@ -7459,7 +7446,7 @@ def test_contract_prepare_rejects_retired_extra_slot_before_returning_signable_d
         fee_payment=_authority_fee_payment(5000), retired_admission_tag=0,
     )))
     client = ToriiClient("https://node.test", session=session, local_signing_context=_local_signing_context())
-    with pytest.raises(RuntimeError, match="trailing bytes"):
+    with pytest.raises(RuntimeError, match="one canonical transaction payload"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER, contract_alias="router::universal", entrypoint="ping",
             fee_payment=_authority_fee_payment(5000), draft_intent=_contract_draft_intent(),

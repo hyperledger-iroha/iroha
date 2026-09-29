@@ -2,7 +2,7 @@
 
 The development gate in `scripts/taira_release_check.py` selects current executable tests. Its source check rejects absent declarations before Cargo; the compiled harness listing must then contain every exact selected name, and each selected test must actually pass. A source inventory pass is not release evidence.
 
-`scripts/taira_native_test_inventory.py` pins 154 tests in 18 registered native source owners. Its independent census checks the complete direct test declarations and exact parent-to-source module registration. Removing a test, adding an unreviewed test, substituting a source path, or duplicating a selected name fails the check. The ordinary application, configuration, SDK and HTTP suites remain independently selected by the gate.
+`scripts/taira_native_test_inventory.py` pins 155 tests in 18 registered native source owners. Its independent census checks the complete direct test declarations and exact parent-to-source module registration. Removing a test, adding an unreviewed test, substituting a source path, or duplicating a selected name fails the check. The ordinary application, configuration, SDK and HTTP suites remain independently selected by the gate. Authenticated preparation retains and verifies the gate, inventory and Rust-source masking helper before executing any of them; later filesystem replacement cannot substitute executable helper code.
 
 | Current owner | Required behavior |
 | --- | --- |

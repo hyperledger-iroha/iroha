@@ -392,7 +392,7 @@ fn non_faulty_sync_timeout(
             .saturating_mul(2)
             .saturating_add(Duration::from_secs(2))
     } else {
-        // One faulty validator is within quorum tolerance. Allow one absolute v2 round timeout
+        // One faulty validator is within quorum tolerance. Allow one absolute round timeout
         // for a faulty leader to rotate, followed by one normal pipeline window to finalize.
         pipeline_time
             .saturating_mul(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER)

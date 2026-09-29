@@ -143,7 +143,7 @@ the disposable data root remains available for audit.
 
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
 mandatory Nexus routing (with no availability switch) and `confidential.enabled = true`. Consensus mode is
-carried by the signed genesis/height context, so Mochi does not emit the retired mutable
+carried by signed genesis and committed state, so Mochi does not emit the retired mutable
 `sumeragi.consensus_mode` setting. The canonical one-lane topology works with permissioned
 consensus; Mochi requires an NPoS signed genesis for custom multi-lane topology.
 

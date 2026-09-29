@@ -303,7 +303,7 @@ impl std::io::Write for ResultPreimageWriter<'_> {
 /// The KAGEMUSHA top-up root and count of the witness (`None` without top-ups), from the
 /// canonical last-write-wins receipt writes. No sparse-tree path is built: `R` needs the leaves
 /// only. Duplicate receipt writes and receipts whose key does not match their operation fail
-/// closed, as in the v2 projection.
+/// closed.
 fn kagemusha_top_ups(witness: &ExecWitness) -> Result<Option<(Hash, u32)>, CommitmentError> {
     let is_receipt =
         |key: &[u8]| key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);

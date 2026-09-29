@@ -595,6 +595,16 @@ impl Context {
     }
 
     /// Construct a body for a closed internal protocol owner.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one parameter per canonical `Frame` body field; a parameter struct would \
+                  duplicate `Frame` itself"
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the framing `Context` is the closed owner through which sibling DEEP code \
+                  builds every body (`framing.frame(..)`); `Frame` fields stay private here"
+    )]
     pub(super) fn frame<'a>(
         &self,
         kind: u8,

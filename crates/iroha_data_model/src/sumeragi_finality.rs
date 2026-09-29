@@ -354,7 +354,7 @@ impl VerifiedSumeragiBlock {
     pub fn context_id(&self) -> Hash {
         certified_block_context_id(&self.core_hash(), &self.result())
     }
-    /// The current execution commitment, authenticated without a V2 projection.
+    /// The authenticated execution commitment.
     #[must_use]
     pub fn execution(&self) -> &ExecutionCommitment {
         &self.0.commitment.execution
@@ -761,11 +761,15 @@ impl SumeragiFinalityAttestation {
     }
 }
 
-struct ProofCrypto {
+/// BLS-normal crypto over one proof-of-possession-verified committee, in canonical order.
+/// Shared with the AMX foreign-committee tracker (`crate::sumeragi_amx`).
+pub(crate) struct ProofCrypto {
     keys: BTreeMap<CoreKey, BlsNormalPopVerifiedKey>,
 }
 impl ProofCrypto {
-    fn new(validators: &[FinalityValidator]) -> Result<(Self, Committee), FinalityError> {
+    pub(crate) fn new(
+        validators: &[FinalityValidator],
+    ) -> Result<(Self, Committee), FinalityError> {
         need(
             crate::block::consensus::is_valid_committee_size(validators.len()),
             "committee must have exact first-release global voting geometry",

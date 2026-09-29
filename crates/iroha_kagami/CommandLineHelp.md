@@ -43,13 +43,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced codec norito-to-json`↴](#kagami-advanced-codec-norito-to-json)
 * [`kagami advanced codec json-to-norito`↴](#kagami-advanced-codec-json-to-norito)
 * [`kagami advanced kura`↴](#kagami-advanced-kura)
-* [`kagami advanced kura scaling-evidence`↴](#kagami-advanced-kura-scaling-evidence)
-* [`kagami advanced kura scaling-evidence collect`↴](#kagami-advanced-kura-scaling-evidence-collect)
-* [`kagami advanced kura scaling-evidence stopped-tip`↴](#kagami-advanced-kura-scaling-evidence-stopped-tip)
-* [`kagami advanced kura scaling-evidence facts`↴](#kagami-advanced-kura-scaling-evidence-facts)
-* [`kagami advanced kura scaling-evidence prepare`↴](#kagami-advanced-kura-scaling-evidence-prepare)
-* [`kagami advanced kura scaling-evidence export`↴](#kagami-advanced-kura-scaling-evidence-export)
-* [`kagami advanced kura scaling-evidence replay`↴](#kagami-advanced-kura-scaling-evidence-replay)
 * [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
@@ -144,7 +137,6 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys.
 
    Omit this option to generate independent keys from operating-system entropy.
-* `--seed-fd <FD>` — Fixed scaling only: inherited read-only nonblocking pipe with exactly 64 lowercase hex bytes and EOF
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
 
   Default value: `00000000-0000-0000-0000-000000000000`
@@ -164,15 +156,6 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
   Possible values: `10k-permissioned`, `10k-npos`
 
-* `--scaling-lanes <LANES>` — Generate a fixed execution-lane layout with four NPoS validators and autoscaling disabled. Use the same private development seed and options for both variants
-
-  Possible values:
-  - `1`:
-    One execution lane
-  - `4`:
-    Four execution lanes sharing the same validator committee
-
-* `--scaling-accounts <COUNT>` — Ordered workload accounts for a fixed scaling layout (4..=64, in groups of four). Defaults to four when --scaling-lanes is present
 * `--bind-host <HOST>` — Host to bind P2P and Torii listeners to (host/IP only, no port)
 
   Default value: `0.0.0.0`
@@ -194,7 +177,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
 * `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
-* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets and `npos` for fixed scaling layouts. Sora profile localnets and perf profiles require `npos`
+* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned`. Sora profile localnets and perf profiles require `npos`
 
   Possible values: `permissioned`, `npos`
 
@@ -211,7 +194,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
 * `-p`, `--peers <COUNT>` — Number of peer services in the configuration.
 
-   Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
+   Must be an exact Sumeragi `3f + 1` committee in the range 4..=31.
 * `-s`, `--seed <SEED>` — Enable deterministic development mode with this UTF-8 validator seed.
 
    When omitted, `--config-dir` must be an authoritative prepared bundle containing `peerN.toml`, signed genesis, verifier-key, and exact-hash files. Production workflows should omit this option so Compose cannot generate identities that diverge from genesis.
@@ -297,7 +280,7 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 
 Prepare one mobile checkpoint from an authenticated Experimental release
 
-**Usage:** `kagami kagemusha prepare-mobile-bootstrap-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --attestation <PATH> --artifact-root <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --first-context-id <LOWER_HEX> --sequence <SEQUENCE> --issued-at-ms <ISSUED_AT_MS> --expires-at-ms <EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --checkpoint-output <PATH>`
+**Usage:** `kagami kagemusha prepare-mobile-bootstrap-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --attestation <PATH> --artifact-root <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --finality-checkpoint <PATH> --sequence <SEQUENCE> --issued-at-ms <ISSUED_AT_MS> --expires-at-ms <EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --checkpoint-output <PATH>`
 
 ###### **Options:**
 
@@ -312,7 +295,7 @@ Prepare one mobile checkpoint from an authenticated Experimental release
 * `--expected-asset-incarnation <LOWER_HEX>` — Independently pinned asset incarnation as lowercase hex
 * `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
 * `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
-* `--first-context-id <LOWER_HEX>` — Independently verified first consensus height-context identity as lowercase hex
+* `--finality-checkpoint <PATH>` — Independently authenticated complete native finality checkpoint
 * `--sequence <SEQUENCE>` — New monotonically increasing deployment checkpoint sequence; nonzero
 * `--issued-at-ms <ISSUED_AT_MS>` — Inclusive authority issuance time in Unix milliseconds
 * `--expires-at-ms <EXPIRES_AT_MS>` — Exclusive authority expiry time in Unix milliseconds
@@ -325,7 +308,7 @@ Prepare one mobile checkpoint from an authenticated Experimental release
 
 Sign one independently pinned mobile bootstrap checkpoint
 
-**Usage:** `kagami kagemusha sign-mobile-bootstrap-approval-v1 --checkpoint <PATH> --authority-policy <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --expected-release-attestation-digest <LOWER_HEX> --expected-first-context-id <LOWER_HEX> --expected-sequence <EXPECTED_SEQUENCE> --expected-issued-at-ms <EXPECTED_ISSUED_AT_MS> --expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --signer-private-key <PATH> --approval-output <PATH>`
+**Usage:** `kagami kagemusha sign-mobile-bootstrap-approval-v1 --checkpoint <PATH> --authority-policy <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --expected-release-attestation-digest <LOWER_HEX> --expected-finality-checkpoint <PATH> --expected-sequence <EXPECTED_SEQUENCE> --expected-issued-at-ms <EXPECTED_ISSUED_AT_MS> --expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --signer-private-key <PATH> --approval-output <PATH>`
 
 ###### **Options:**
 
@@ -338,7 +321,7 @@ Sign one independently pinned mobile bootstrap checkpoint
 * `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
 * `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
 * `--expected-release-attestation-digest <LOWER_HEX>` — Independently authenticated exact release-attestation digest
-* `--expected-first-context-id <LOWER_HEX>` — Independently verified first consensus height-context identity
+* `--expected-finality-checkpoint <PATH>` — Independently selected exact canonical native finality checkpoint
 * `--expected-sequence <EXPECTED_SEQUENCE>` — Exact reviewed deployment checkpoint sequence, not a downloaded sequence floor
 * `--expected-issued-at-ms <EXPECTED_ISSUED_AT_MS>` — Exact reviewed issuance time in Unix milliseconds
 * `--expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS>` — Exact reviewed exclusive expiry in Unix milliseconds
@@ -352,7 +335,7 @@ Sign one independently pinned mobile bootstrap checkpoint
 
 Authenticate and assemble distinct approvals into a mobile bootstrap package
 
-**Usage:** `kagami kagemusha assemble-mobile-bootstrap-v1 --checkpoint <PATH> --authority-policy <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --expected-release-attestation-digest <LOWER_HEX> --expected-first-context-id <LOWER_HEX> --expected-sequence <EXPECTED_SEQUENCE> --expected-issued-at-ms <EXPECTED_ISSUED_AT_MS> --expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --approval <PATH> --package-output <PATH>`
+**Usage:** `kagami kagemusha assemble-mobile-bootstrap-v1 --checkpoint <PATH> --authority-policy <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX> --expected-release-attestation-digest <LOWER_HEX> --expected-finality-checkpoint <PATH> --expected-sequence <EXPECTED_SEQUENCE> --expected-issued-at-ms <EXPECTED_ISSUED_AT_MS> --expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS> --trusted-now-ms <TRUSTED_NOW_MS> --approval <PATH> --package-output <PATH>`
 
 ###### **Options:**
 
@@ -365,7 +348,7 @@ Authenticate and assemble distinct approvals into a mobile bootstrap package
 * `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
 * `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
 * `--expected-release-attestation-digest <LOWER_HEX>` — Independently authenticated exact release-attestation digest
-* `--expected-first-context-id <LOWER_HEX>` — Independently verified first consensus height-context identity
+* `--expected-finality-checkpoint <PATH>` — Independently selected exact canonical native finality checkpoint
 * `--expected-sequence <EXPECTED_SEQUENCE>` — Exact reviewed deployment checkpoint sequence, not a downloaded sequence floor
 * `--expected-issued-at-ms <EXPECTED_ISSUED_AT_MS>` — Exact reviewed issuance time in Unix milliseconds
 * `--expected-expires-at-ms <EXPECTED_EXPIRES_AT_MS>` — Exact reviewed exclusive expiry in Unix milliseconds
@@ -524,6 +507,7 @@ Sign the genesis block
 * `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
    Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
+* `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all three output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
@@ -912,262 +896,10 @@ Commands related to block inspection
 
 ###### **Subcommands:**
 
-* `scaling-evidence` — Prepare, export or independently replay canonical scaling evidence
 * `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `finality` — Verify a locally anchored retained prefix and export its exact finality proof
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
-
-
-
-## `kagami advanced kura scaling-evidence`
-
-Prepare, export or independently replay canonical scaling evidence
-
-**Usage:** `kagami advanced kura scaling-evidence <COMMAND>`
-
-###### **Subcommands:**
-
-* `collect` — Collect complete native carriers and actual query proofs from a stopped store
-* `stopped-tip` — Observe a stopped store's durable height under retained original genesis
-* `facts` — Authenticate original launch inputs and publish canonical preparation facts
-* `prepare` — Prepare two canonical transports from independently retained launch facts
-* `export` — Authenticate an immutable Kura interval and publish one canonical proof
-* `replay` — Reauthenticate a canonical proof and emit its complete ordered rows
-
-
-
-## `kagami advanced kura scaling-evidence collect`
-
-Collect complete native carriers and actual query proofs from a stopped store
-
-**Usage:** `kagami advanced kura scaling-evidence collect --invocation-id <INVOCATION_ID> --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --genesis-epoch-context-id <GENESIS_EPOCH_CONTEXT_ID> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --context <CONTEXT> --context-sha256 <CONTEXT_SHA256> --context-max-bytes <CONTEXT_MAX_BYTES> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --carrier-out <CARRIER_OUT> --queries-out <QUERIES_OUT> --carrier-max-bytes <CARRIER_MAX_BYTES> --queries-max-bytes <QUERIES_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES> --max-total-leaves <MAX_TOTAL_LEAVES> --max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--chain-id <CHAIN_ID>` — Independent original chain identity
-* `--network-id <NETWORK_ID>` — Independent original genesis network identity
-* `--genesis-epoch-context-id <GENESIS_EPOCH_CONTEXT_ID>` — Independent native epoch context identity from the original signed genesis
-* `--signed-genesis <SIGNED_GENESIS>` — Absolute original canonical signed genesis path
-* `--signed-genesis-sha256 <SIGNED_GENESIS_SHA256>` — Raw SHA-256 of the independently retained original genesis
-* `--signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES>` — Maximum original genesis bytes
-* `--context <CONTEXT>` — Absolute original canonical genesis epoch context path
-* `--context-sha256 <CONTEXT_SHA256>` — Raw SHA-256 of the independently retained original epoch context
-* `--context-max-bytes <CONTEXT_MAX_BYTES>` — Maximum original epoch context and each archived complete context projection
-* `--block-store <BLOCK_STORE>` — Exact stopped canonical Kura store root
-* `--merge-log <MERGE_LOG>` — Exact stopped canonical merge log path
-* `--carrier-out <CARRIER_OUT>` — New complete carrier/context vector destination
-* `--queries-out <QUERIES_OUT>` — New complete actual query vector destination
-* `--carrier-max-bytes <CARRIER_MAX_BYTES>` — Maximum complete carrier/context vector bytes
-* `--queries-max-bytes <QUERIES_MAX_BYTES>` — Maximum complete query vector bytes
-* `--total-max-bytes <TOTAL_MAX_BYTES>` — Aggregate original inputs and output byte reservations
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Complete reply bytes including its final newline
-* `--max-total-leaves <MAX_TOTAL_LEAVES>` — Maximum complete Network query count across all native Decision carriers
-* `--max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER>` — Maximum complete Network input and typed output count per carrier
-* `--first-height <FIRST_HEIGHT>` — First required carrier height, inclusive
-* `--last-height <LAST_HEIGHT>` — Last required carrier height, inclusive
-* `--max-committed-blocks <MAX_COMMITTED_BLOCKS>` — Maximum complete journal height admitted before reading
-* `--max-store-data-bytes <MAX_STORE_DATA_BYTES>` — Maximum underlying blocks.data bytes
-* `--max-carrier-bytes <MAX_CARRIER_BYTES>` — Maximum canonical wire bytes for one carrier
-* `--max-merge-log-bytes <MAX_MERGE_LOG_BYTES>` — Maximum complete merge-log bytes
-* `--max-merge-frames <MAX_MERGE_FRAMES>` — Maximum frames in the complete merge log
-* `--reader-max-output-bytes <READER_MAX_OUTPUT_BYTES>` — Maximum cumulative carrier and merge-entry bytes returned by the reader
-* `--max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES>` — Maximum cumulative owned allocation per decoder invocation
-* `--owner-uid <OWNER_UID>` — Independently expected Unix owner of the store directories and files
-
-
-
-## `kagami advanced kura scaling-evidence stopped-tip`
-
-Observe a stopped store's durable height under retained original genesis
-
-**Usage:** `kagami advanced kura scaling-evidence stopped-tip --invocation-id <INVOCATION_ID> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --network-id <NETWORK_ID> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --reply-max-bytes <REPLY_MAX_BYTES> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--signed-genesis <SIGNED_GENESIS>` — Absolute path to the independently retained original canonical signed genesis
-* `--signed-genesis-sha256 <SIGNED_GENESIS_SHA256>` — Independently pinned raw SHA-256 of the original signed genesis
-* `--signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES>` — Maximum original genesis bytes, between 1 and 33554432
-* `--network-id <NETWORK_ID>` — Expected genesis-header NetworkId in its canonical checked hash literal form
-* `--block-store <BLOCK_STORE>` — Exact absolute stopped lane directory containing the canonical block journals
-* `--merge-log <MERGE_LOG>` — Exact absolute stopped canonical merge-log file
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Reserved complete JSON reply bytes, including its final newline
-* `--first-height <FIRST_HEIGHT>` — First required carrier height, inclusive
-* `--last-height <LAST_HEIGHT>` — Last required carrier height, inclusive
-* `--max-committed-blocks <MAX_COMMITTED_BLOCKS>` — Maximum complete journal height admitted before reading
-* `--max-store-data-bytes <MAX_STORE_DATA_BYTES>` — Maximum underlying blocks.data bytes
-* `--max-carrier-bytes <MAX_CARRIER_BYTES>` — Maximum canonical wire bytes for one carrier
-* `--max-merge-log-bytes <MAX_MERGE_LOG_BYTES>` — Maximum complete merge-log bytes
-* `--max-merge-frames <MAX_MERGE_FRAMES>` — Maximum frames in the complete merge log
-* `--reader-max-output-bytes <READER_MAX_OUTPUT_BYTES>` — Maximum cumulative carrier and merge-entry bytes returned by the reader
-* `--max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES>` — Maximum cumulative owned allocation per decoder invocation
-* `--owner-uid <OWNER_UID>` — Independently expected Unix owner of the store directories and files
-
-
-
-## `kagami advanced kura scaling-evidence facts`
-
-Authenticate original launch inputs and publish canonical preparation facts
-
-**Usage:** `kagami advanced kura scaling-evidence facts --invocation-id <INVOCATION_ID> --manifest <MANIFEST> --manifest-sha256 <MANIFEST_SHA256> --manifest-max-bytes <MANIFEST_MAX_BYTES> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --peer-config <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> --peer-config-sha256 <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> --peer-config-max-bytes <PEER_CONFIG_MAX_BYTES> --context <CONTEXT> --context-sha256 <CONTEXT_SHA256> --context-max-bytes <CONTEXT_MAX_BYTES> --journal <JOURNAL> --journal-sha256 <JOURNAL_SHA256> --journal-max-bytes <JOURNAL_MAX_BYTES> --carrier <CARRIER> --carrier-sha256 <CARRIER_SHA256> --carrier-max-bytes <CARRIER_MAX_BYTES> --queries <QUERIES> --queries-sha256 <QUERIES_SHA256> --queries-max-bytes <QUERIES_MAX_BYTES> --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --chain-discriminant <CHAIN_DISCRIMINANT> --genesis-public-key <GENESIS_PUBLIC_KEY> --validator <VALIDATOR> <VALIDATOR> <VALIDATOR> <VALIDATOR> --lanes <LANES> --workload-seed <WORKLOAD_SEED> --pair-index <PAIR_INDEX> --account <ACCOUNT> <ACCOUNT> <ACCOUNT> <ACCOUNT>... --rate-numerator <RATE_NUMERATOR> --rate-denominator <RATE_DENOMINATOR> --warmup-ns <WARMUP_NS> --measurement-ns <MEASUREMENT_NS> --drain-ns <DRAIN_NS> --submission-lag-bound-ns <SUBMISSION_LAG_BOUND_NS> --preparation-lookahead <PREPARATION_LOOKAHEAD> --preparation-concurrency <PREPARATION_CONCURRENCY> --preparation-ahead-ns <PREPARATION_AHEAD_NS> --max-submissions <MAX_SUBMISSIONS> --max-in-flight <MAX_IN_FLIGHT> --max-status-requests <MAX_STATUS_REQUESTS> --poll-interval-ns <POLL_INTERVAL_NS> --journal-max-requests <JOURNAL_MAX_REQUESTS> --resource-interval-ns <RESOURCE_INTERVAL_NS> --resource-response-deadline-ns <RESOURCE_RESPONSE_DEADLINE_NS> --resource-max-start-lag-ns <RESOURCE_MAX_START_LAG_NS> --proof-max-bytes <PROOF_MAX_BYTES> --verification-input-max-bytes <VERIFICATION_INPUT_MAX_BYTES> --verification-output-max-bytes <VERIFICATION_OUTPUT_MAX_BYTES> --max-heights <MAX_HEIGHTS> --max-requests <MAX_REQUESTS> --max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --facts-output <FACTS_OUTPUT> --source-max-bytes <SOURCE_MAX_BYTES> --facts-max-bytes <FACTS_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --assembly-decode-max-bytes <ASSEMBLY_DECODE_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--manifest <MANIFEST>` — Original final manifest absolute path; external artifact references are rejected
-* `--manifest-sha256 <MANIFEST_SHA256>` — Independently pinned raw SHA-256 of the final manifest
-* `--manifest-max-bytes <MANIFEST_MAX_BYTES>` — Maximum original final manifest bytes
-* `--signed-genesis <SIGNED_GENESIS>` — Original canonical signed genesis absolute path
-* `--signed-genesis-sha256 <SIGNED_GENESIS_SHA256>` — Independently pinned raw SHA-256 of canonical signed genesis
-* `--signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES>` — Maximum original signed genesis bytes
-* `--peer-config <PEER_CONFIG>` — Four original final peer config absolute paths, in independently selected validator order
-* `--peer-config-sha256 <PEER_CONFIG_SHA256>` — Four independently pinned raw config SHA-256 values, in the same order
-* `--peer-config-max-bytes <PEER_CONFIG_MAX_BYTES>` — Maximum bytes for each of the four original peer configs
-* `--context <CONTEXT>` — Original independent canonical genesis ValidatorEpochContextV1 absolute path
-* `--context-sha256 <CONTEXT_SHA256>` — Independently pinned raw SHA-256 of the original context
-* `--context-max-bytes <CONTEXT_MAX_BYTES>` — Maximum original context bytes, at most 8388608
-* `--journal <JOURNAL>` — Original complete signed-request collector journal absolute path
-* `--journal-sha256 <JOURNAL_SHA256>` — Independently pinned raw SHA-256 of the complete original journal
-* `--journal-max-bytes <JOURNAL_MAX_BYTES>` — Maximum complete original journal bytes
-* `--carrier <CARRIER>` — Original canonical Vec<NativeHeightEvidenceV1> absolute path
-* `--carrier-sha256 <CARRIER_SHA256>` — Independently pinned raw SHA-256 of the complete native carrier/context vector
-* `--carrier-max-bytes <CARRIER_MAX_BYTES>` — Maximum complete native carrier/context vector bytes
-* `--queries <QUERIES>` — Original canonical Vec<CommittedTransaction> absolute path, preserving every query
-* `--queries-sha256 <QUERIES_SHA256>` — Independently pinned raw SHA-256 of the complete query vector
-* `--queries-max-bytes <QUERIES_MAX_BYTES>` — Maximum complete query vector bytes
-* `--chain-id <CHAIN_ID>` — Independently selected canonical chain label
-* `--network-id <NETWORK_ID>` — Exact expected genesis-header NetworkId in canonical checked hash literal form
-* `--chain-discriminant <CHAIN_DISCRIMINANT>` — Independently selected I105 chain discriminant
-* `--genesis-public-key <GENESIS_PUBLIC_KEY>` — Independently selected public genesis signer; no private signing input is accepted
-* `--validator <VALIDATOR>` — Four selected validator public keys in the same original role order as peer configs
-* `--lanes <LANES>` — Fixed execution-lane count, either 1 or 4
-
-  Possible values:
-  - `1`:
-    One fixed active execution lane
-  - `4`:
-    Four fixed active execution lanes
-
-* `--workload-seed <WORKLOAD_SEED>` — Public workload seed as exactly 64 lowercase hex characters; never the development key seed
-* `--pair-index <PAIR_INDEX>` — Independent paired-run index from 1 through 5
-* `--account <ACCOUNT>` — Ordered canonical I105 account pool, 4 through 64 accounts in complete groups of four
-* `--rate-numerator <RATE_NUMERATOR>` — Exact positive rational offered-rate numerator, in requests per second
-* `--rate-denominator <RATE_DENOMINATOR>` — Exact positive rational offered-rate denominator
-* `--warmup-ns <WARMUP_NS>` — Independent warmup duration in nanoseconds
-* `--measurement-ns <MEASUREMENT_NS>` — Independent measurement duration in nanoseconds
-* `--drain-ns <DRAIN_NS>` — Independent drain duration in nanoseconds
-* `--submission-lag-bound-ns <SUBMISSION_LAG_BOUND_NS>` — Maximum allowed submission lag in nanoseconds
-* `--preparation-lookahead <PREPARATION_LOOKAHEAD>` — Independently selected signed-request preparation lookahead
-* `--preparation-concurrency <PREPARATION_CONCURRENCY>` — Independently selected preparation concurrency
-* `--preparation-ahead-ns <PREPARATION_AHEAD_NS>` — Maximum preparation lead time in nanoseconds
-* `--max-submissions <MAX_SUBMISSIONS>` — Maximum concurrent submissions selected before collection
-* `--max-in-flight <MAX_IN_FLIGHT>` — Maximum in-flight requests selected before collection
-* `--max-status-requests <MAX_STATUS_REQUESTS>` — Maximum concurrent status requests selected before collection
-* `--poll-interval-ns <POLL_INTERVAL_NS>` — Independent status poll interval in nanoseconds
-* `--journal-max-requests <JOURNAL_MAX_REQUESTS>` — Maximum complete journal schedule requests
-* `--resource-interval-ns <RESOURCE_INTERVAL_NS>` — Independent resource sampling interval in nanoseconds
-* `--resource-response-deadline-ns <RESOURCE_RESPONSE_DEADLINE_NS>` — Independent resource response deadline in nanoseconds
-* `--resource-max-start-lag-ns <RESOURCE_MAX_START_LAG_NS>` — Maximum resource sampling start lag in nanoseconds
-* `--proof-max-bytes <PROOF_MAX_BYTES>` — Independent admitted canonical proof byte allocation
-* `--verification-input-max-bytes <VERIFICATION_INPUT_MAX_BYTES>` — Maximum cumulative verifier input bytes including the signed schedule
-* `--verification-output-max-bytes <VERIFICATION_OUTPUT_MAX_BYTES>` — Reserved canonical proof and complete result-row output bytes
-* `--max-heights <MAX_HEIGHTS>` — Maximum contiguous global heights, at most 65536
-* `--max-requests <MAX_REQUESTS>` — Maximum complete scheduled request count, at most 1000000
-* `--max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER>` — Maximum ordinary and merged leaves in one carrier, at most 1000000
-* `--first-height <FIRST_HEIGHT>` — First required carrier height, inclusive
-* `--last-height <LAST_HEIGHT>` — Last required carrier height, inclusive
-* `--max-committed-blocks <MAX_COMMITTED_BLOCKS>` — Maximum complete journal height admitted before reading
-* `--max-store-data-bytes <MAX_STORE_DATA_BYTES>` — Maximum underlying blocks.data bytes
-* `--max-carrier-bytes <MAX_CARRIER_BYTES>` — Maximum canonical wire bytes for one carrier
-* `--max-merge-log-bytes <MAX_MERGE_LOG_BYTES>` — Maximum complete merge-log bytes
-* `--max-merge-frames <MAX_MERGE_FRAMES>` — Maximum frames in the complete merge log
-* `--reader-max-output-bytes <READER_MAX_OUTPUT_BYTES>` — Maximum cumulative carrier and merge-entry bytes returned by the reader
-* `--max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES>` — Maximum cumulative owned allocation per decoder invocation
-* `--owner-uid <OWNER_UID>` — Independently expected Unix owner of the store directories and files
-* `--block-store <BLOCK_STORE>` — Exact absolute stopped validator directory containing canonical block journals
-* `--merge-log <MERGE_LOG>` — Exact absolute original canonical merge log
-* `--facts-output <FACTS_OUTPUT>` — New absolute canonical facts output; existing stage or destination fails
-* `--source-max-bytes <SOURCE_MAX_BYTES>` — Reserved cumulative original-file bytes, at most 268435456
-* `--facts-max-bytes <FACTS_MAX_BYTES>` — Reserved canonical facts output bytes, at most 268435456
-* `--total-max-bytes <TOTAL_MAX_BYTES>` — Aggregate source and facts reservations, at most 268435456
-* `--assembly-decode-max-bytes <ASSEMBLY_DECODE_MAX_BYTES>` — Cumulative Norito allocation budget for the entire assembly, at most 536870912
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Maximum complete five-field JSON reply including its final newline
-
-
-
-## `kagami advanced kura scaling-evidence prepare`
-
-Prepare two canonical transports from independently retained launch facts
-
-**Usage:** `kagami advanced kura scaling-evidence prepare --invocation-id <INVOCATION_ID> --facts <FACTS> --facts-sha256 <FACTS_SHA256> --facts-max-bytes <FACTS_MAX_BYTES> --request-output <REQUEST_OUTPUT> --bundle-output <BUNDLE_OUTPUT> --request-max-bytes <REQUEST_MAX_BYTES> --bundle-max-bytes <BUNDLE_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--facts <FACTS>` — Absolute path to independently retained canonical preparation facts
-* `--facts-sha256 <FACTS_SHA256>` — Independently pinned raw SHA-256 of the facts file
-* `--facts-max-bytes <FACTS_MAX_BYTES>` — Reserved facts bytes, between 1 and 268435456
-* `--request-output <REQUEST_OUTPUT>` — New absolute launcher request path; existing destinations are rejected
-* `--bundle-output <BUNDLE_OUTPUT>` — New absolute supplied evidence bundle path; existing destinations are rejected
-* `--request-max-bytes <REQUEST_MAX_BYTES>` — Reserved request output bytes, between 1 and 268435456
-* `--bundle-max-bytes <BUNDLE_MAX_BYTES>` — Reserved bundle output bytes, between 1 and 268435456
-* `--total-max-bytes <TOTAL_MAX_BYTES>` — Aggregate facts and both output reservations, between 1 and 268435456
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Reserved complete JSON reply bytes, including its final newline
-
-
-
-## `kagami advanced kura scaling-evidence export`
-
-Authenticate an immutable Kura interval and publish one canonical proof
-
-**Usage:** `kagami advanced kura scaling-evidence export --invocation-id <INVOCATION_ID> --request <REQUEST> --request-sha256 <REQUEST_SHA256> --request-max-bytes <REQUEST_MAX_BYTES> --input <INPUT> --input-sha256 <INPUT_SHA256> --input-max-bytes <INPUT_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --output <OUTPUT> --output-max-bytes <OUTPUT_MAX_BYTES> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--request <REQUEST>` — Absolute path to the independently retained canonical launcher request
-* `--request-sha256 <REQUEST_SHA256>` — Independently pinned raw SHA-256 of the request file
-* `--request-max-bytes <REQUEST_MAX_BYTES>` — Reserved request bytes, between 1 and 268435456
-* `--input <INPUT>` — Absolute path to the supplied evidence bundle or canonical replay proof
-* `--input-sha256 <INPUT_SHA256>` — Independently pinned raw SHA-256 of the input file
-* `--input-max-bytes <INPUT_MAX_BYTES>` — Reserved input bytes, between 1 and 268435456
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Reserved complete JSON reply bytes, including its final newline
-* `--block-store <BLOCK_STORE>` — Exact absolute lane directory containing the canonical block journals
-* `--merge-log <MERGE_LOG>` — Exact absolute canonical merge-log file
-* `--output <OUTPUT>` — New absolute proof path; existing destinations are rejected
-* `--output-max-bytes <OUTPUT_MAX_BYTES>` — Reserved canonical output bytes, between 1 and 268435456
-* `--first-height <FIRST_HEIGHT>` — First required carrier height, inclusive
-* `--last-height <LAST_HEIGHT>` — Last required carrier height, inclusive
-* `--max-committed-blocks <MAX_COMMITTED_BLOCKS>` — Maximum complete journal height admitted before reading
-* `--max-store-data-bytes <MAX_STORE_DATA_BYTES>` — Maximum underlying blocks.data bytes
-* `--max-carrier-bytes <MAX_CARRIER_BYTES>` — Maximum canonical wire bytes for one carrier
-* `--max-merge-log-bytes <MAX_MERGE_LOG_BYTES>` — Maximum complete merge-log bytes
-* `--max-merge-frames <MAX_MERGE_FRAMES>` — Maximum frames in the complete merge log
-* `--reader-max-output-bytes <READER_MAX_OUTPUT_BYTES>` — Maximum cumulative carrier and merge-entry bytes returned by the reader
-* `--max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES>` — Maximum cumulative owned allocation per decoder invocation
-* `--owner-uid <OWNER_UID>` — Independently expected Unix owner of the store directories and files
-
-
-
-## `kagami advanced kura scaling-evidence replay`
-
-Reauthenticate a canonical proof and emit its complete ordered rows
-
-**Usage:** `kagami advanced kura scaling-evidence replay --invocation-id <INVOCATION_ID> --request <REQUEST> --request-sha256 <REQUEST_SHA256> --request-max-bytes <REQUEST_MAX_BYTES> --input <INPUT> --input-sha256 <INPUT_SHA256> --input-max-bytes <INPUT_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES> --proof-iroha-hash <PROOF_IROHA_HASH>`
-
-###### **Options:**
-
-* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
-* `--request <REQUEST>` — Absolute path to the independently retained canonical launcher request
-* `--request-sha256 <REQUEST_SHA256>` — Independently pinned raw SHA-256 of the request file
-* `--request-max-bytes <REQUEST_MAX_BYTES>` — Reserved request bytes, between 1 and 268435456
-* `--input <INPUT>` — Absolute path to the supplied evidence bundle or canonical replay proof
-* `--input-sha256 <INPUT_SHA256>` — Independently pinned raw SHA-256 of the input file
-* `--input-max-bytes <INPUT_MAX_BYTES>` — Reserved input bytes, between 1 and 268435456
-* `--reply-max-bytes <REPLY_MAX_BYTES>` — Reserved complete JSON reply bytes, including its final newline
-* `--proof-iroha-hash <PROOF_IROHA_HASH>` — Independently pinned marked Iroha hash of the canonical proof bytes
 
 
 

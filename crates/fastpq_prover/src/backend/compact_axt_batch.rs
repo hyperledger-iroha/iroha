@@ -91,6 +91,11 @@ impl AxtTransferBatch {
     /// before cloning/commitment hashing. All remote occurrences are validated
     /// against the whole batch; no individual delta is re-prepared or validated
     /// as if it were the complete AXT source transaction.
+    #[allow(
+        clippy::large_types_passed_by_value,
+        reason = "the 272-byte `Copy` view of borrowed AXT inputs is copied once per batch; \
+                  sibling producer, verifier, diagnostic and test modules pass it by value"
+    )]
     pub(super) fn new<V: CompactTransferValue>(
         prepared: &PreparedPublicTransfers<'_, V>,
         expected: &PublicIO,

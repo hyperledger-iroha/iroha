@@ -1,24 +1,16 @@
 //! Process-local, non-consensus operator diagnostics.
 //!
 //! These snapshots are not consensus state: Nexus fee and public-lane staking
-//! economics, DvP/PvP settlement events, lane relay envelopes, lane and
-//! dataspace commitment snapshots, lane governance readiness, block-pipeline
-//! execution diagnostics, the gossip duplicate counter, transaction-queue
-//! pressure, peer key policy rejects, and the local-peer-removed flag.
+//! economics, DvP/PvP settlement events, physical-lane governance readiness,
+//! the gossip duplicate counter, peer key policy rejects, and the local-peer-removed flag.
 //! Consensus status is published separately by the consensus driver.
-use crate::{
-    governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
-    queue::QueuePressureSnapshot,
-};
+use crate::governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use iroha_crypto::{
     Hash, Hash as UntypedHash, HashOf,
     privacy::{CommitmentScheme, LanePrivacyCommitment},
 };
-use iroha_data_model::{
-    block::BlockHeader,
-    isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
-};
+use iroha_data_model::isi::settlement::{SettlementAtomicity, SettlementExecutionOrder};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
@@ -43,11 +35,6 @@ pub(crate) fn lock_operator_status_slot<T>(
     }
 }
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
-static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
-static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock::new();
-static DATASPACE_ACTIVITY: OnceLock<Mutex<Vec<DataspaceActivitySnapshot>>> = OnceLock::new();
-static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock::new();
-static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 #[derive(Debug, Default)]
@@ -150,15 +137,6 @@ pub(crate) fn begin_public_lane_staking_status_overlay() -> PublicLaneStakingSta
         _not_send_or_sync: core::marker::PhantomData,
     }
 }
-static TX_QUEUE_DEPTH: AtomicU64 = AtomicU64::new(0);
-static TX_QUEUE_CAPACITY: AtomicU64 = AtomicU64::new(0);
-static TX_QUEUE_RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
-static TX_QUEUE_MAX_RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
-static TX_QUEUE_SATURATED: AtomicBool = AtomicBool::new(false);
-static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
-static TX_QUEUE_SATURATED_BY_BYTES: AtomicBool = AtomicBool::new(false);
-static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
-static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NexusFeePayer {
@@ -524,132 +502,6 @@ pub fn settlement_snapshot() -> SettlementStatusSnapshot {
         pvp: guard.pvp.clone(),
     }
 }
-/// Per-lane execution summary for operator dashboards.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LaneActivitySnapshot {
-    /// Lane identifier (numeric).
-    pub lane_id: u32,
-    /// Transactions executed for this lane.
-    pub tx_vertices: u64,
-    /// Conflict edges among those transactions.
-    pub tx_edges: u64,
-    /// Overlay fragments executed for this lane.
-    pub overlay_count: u64,
-    /// Total overlay instructions executed for this lane.
-    pub overlay_instr_total: u64,
-    /// Total overlay bytes executed for this lane.
-    pub overlay_bytes_total: u64,
-    /// Approximate number of RBC chunks attributed to this lane.
-    pub rbc_chunks: u64,
-    /// Approximate total RBC payload bytes attributed to this lane.
-    pub rbc_bytes_total: u64,
-    /// Transactions prepared for detached overlay execution.
-    pub detached_prepared: u64,
-    /// Detached transaction deltas merged without sequential fallback.
-    pub detached_merged: u64,
-    /// Detached transaction deltas that fell back to sequential execution.
-    pub detached_fallback: u64,
-    /// Sequential fallbacks caused by fee postprocessing requirements.
-    pub detached_fallback_fee_postprocessing: u64,
-    /// Sequential fallbacks caused by a user-provided executor.
-    pub detached_fallback_user_executor: u64,
-    /// Sequential fallbacks caused by durable smart-contract state changes.
-    pub detached_fallback_durable_state: u64,
-    /// Sequential fallbacks caused by unsupported detached instructions.
-    pub detached_fallback_unsupported_instruction: u64,
-    /// Sequential fallbacks caused by rejected detached evaluation.
-    pub detached_fallback_rejected_eval: u64,
-    /// Sequential fallbacks caused by overlay build errors.
-    pub detached_fallback_overlay_error: u64,
-    /// Quarantine transactions executed in the sequential quarantine lane.
-    pub quarantine_executed: u64,
-}
-/// Aggregate execution summary for the latest block pipeline run.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PipelineExecutionSnapshot {
-    /// Total transaction vertices across all lanes.
-    pub tx_vertices_total: u64,
-    /// Total conflict edges across all lanes.
-    pub tx_edges_total: u64,
-    /// Total overlay fragments executed across all lanes.
-    pub overlay_count_total: u64,
-    /// Total overlay instructions executed across all lanes.
-    pub overlay_instr_total: u64,
-    /// Total overlay bytes executed across all lanes.
-    pub overlay_bytes_total: u64,
-    /// Total RBC chunks attributed across all lanes.
-    pub rbc_chunks_total: u64,
-    /// Total RBC payload bytes attributed across all lanes.
-    pub rbc_bytes_total: u64,
-    /// Transactions prepared for detached overlay execution.
-    pub detached_prepared_total: u64,
-    /// Detached transaction deltas merged without sequential fallback.
-    pub detached_merged_total: u64,
-    /// Detached transaction deltas that fell back to sequential execution.
-    pub detached_fallback_total: u64,
-    /// Sequential fallbacks caused by fee postprocessing requirements.
-    pub detached_fallback_fee_postprocessing_total: u64,
-    /// Sequential fallbacks caused by a user-provided executor.
-    pub detached_fallback_user_executor_total: u64,
-    /// Sequential fallbacks caused by durable smart-contract state changes.
-    pub detached_fallback_durable_state_total: u64,
-    /// Sequential fallbacks caused by unsupported detached instructions.
-    pub detached_fallback_unsupported_instruction_total: u64,
-    /// Sequential fallbacks caused by rejected detached evaluation.
-    pub detached_fallback_rejected_eval_total: u64,
-    /// Sequential fallbacks caused by overlay build errors.
-    pub detached_fallback_overlay_error_total: u64,
-    /// Quarantine transactions executed in the sequential quarantine lane.
-    pub quarantine_executed_total: u64,
-}
-/// Per-dataspace execution summary for operator dashboards.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DataspaceActivitySnapshot {
-    /// Owning lane identifier (numeric).
-    pub lane_id: u32,
-    /// Dataspace identifier.
-    pub dataspace_id: u64,
-    /// Transactions executed for this dataspace.
-    pub tx_served: u64,
-}
-/// Aggregated per-lane commitment summary for recently committed blocks.
-#[derive(Clone, Copy, Debug)]
-pub struct LaneCommitmentSnapshot {
-    /// Block height associated with the commitment.
-    pub block_height: u64,
-    /// Lane identifier (numeric).
-    pub lane_id: u32,
-    /// Number of transactions routed to this lane in the block.
-    pub tx_count: u64,
-    /// Total RBC chunks attributed to this lane.
-    pub total_chunks: u64,
-    /// Total RBC payload bytes attributed to this lane.
-    pub rbc_bytes_total: u64,
-    /// Total TEU attributed to this lane.
-    pub teu_total: u64,
-    /// Block hash identifying the commitment.
-    pub block_hash: HashOf<BlockHeader>,
-}
-/// Aggregated per-dataspace commitment summary for recently committed blocks.
-#[derive(Clone, Copy, Debug)]
-pub struct DataspaceCommitmentSnapshot {
-    /// Block height associated with the commitment.
-    pub block_height: u64,
-    /// Lane identifier (numeric).
-    pub lane_id: u32,
-    /// Dataspace identifier (numeric).
-    pub dataspace_id: u64,
-    /// Number of transactions routed to this dataspace.
-    pub tx_count: u64,
-    /// Total RBC chunks attributed to this dataspace.
-    pub total_chunks: u64,
-    /// Total RBC payload bytes attributed to this dataspace.
-    pub rbc_bytes_total: u64,
-    /// Total TEU attributed to this dataspace.
-    pub teu_total: u64,
-    /// Block hash identifying the commitment.
-    pub block_hash: HashOf<BlockHeader>,
-}
 /// Governance manifest snapshot for a lane.
 #[derive(Clone, Debug, Default)]
 pub struct LaneGovernanceSnapshot {
@@ -740,7 +592,7 @@ fn nexus_staking_slot() -> &'static Mutex<NexusStakingStatusState> {
 /// Record a Nexus fee debit outcome for later status/telemetry surfacing.
 pub fn record_nexus_fee_event(event: NexusFeeEvent) {
     #[cfg(test)]
-    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+    let Some(_guard) = try_reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK) else {
         return;
     };
     let mut guard = lock_operator_status_slot(nexus_fee_slot(), "nexus fee status");
@@ -857,7 +709,7 @@ fn apply_public_lane_staking_status_updates(
     updates: impl IntoIterator<Item = PublicLaneStakingStatusUpdate>,
 ) {
     #[cfg(test)]
-    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+    let Some(_guard) = try_reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK) else {
         return;
     };
     let mut status = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
@@ -908,7 +760,7 @@ pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
         return;
     }
     #[cfg(test)]
-    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+    let Some(_guard) = try_reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK) else {
         return;
     };
     let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
@@ -943,7 +795,7 @@ pub(crate) fn nexus_fee_test_lock() -> &'static NexusFeeTestLock {
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {
     #[cfg(test)]
-    let _guard = rbc_status_test_guard();
+    let _guard = operator_status_test_guard();
     {
         let mut guard = lock_operator_status_slot(nexus_fee_slot(), "nexus fee status");
         *guard = NexusFeeSnapshot::default();
@@ -970,7 +822,7 @@ mod public_lane_staking_status_overlay_tests {
 
     #[test]
     fn updates_remain_immediate_without_an_overlay() {
-        let _guard = rbc_status_test_guard();
+        let _guard = operator_status_test_guard();
         reset_nexus_economics_for_tests();
         let lane_id = LaneId::new(41);
 
@@ -987,7 +839,7 @@ mod public_lane_staking_status_overlay_tests {
 
     #[test]
     fn dropping_an_overlay_discards_every_staking_update() {
-        let _guard = rbc_status_test_guard();
+        let _guard = operator_status_test_guard();
         reset_nexus_economics_for_tests();
         let lane_id = LaneId::new(42);
 
@@ -1005,7 +857,7 @@ mod public_lane_staking_status_overlay_tests {
 
     #[test]
     fn committing_an_overlay_publishes_ordered_updates() {
-        let _guard = rbc_status_test_guard();
+        let _guard = operator_status_test_guard();
         reset_nexus_economics_for_tests();
         let lane_id = LaneId::new(43);
         let overlay = begin_public_lane_staking_status_overlay();
@@ -1027,7 +879,7 @@ mod public_lane_staking_status_overlay_tests {
 
     #[test]
     fn lifecycle_reset_prevents_a_stale_overlay_from_resurrecting_a_lane() {
-        let _guard = rbc_status_test_guard();
+        let _guard = operator_status_test_guard();
         reset_nexus_economics_for_tests();
         let lane_id = LaneId::new(44);
         record_public_lane_bonded_delta(lane_id, &Quantity::from(1_u32), true);
@@ -1047,7 +899,7 @@ mod public_lane_staking_status_overlay_tests {
 
     #[test]
     fn nested_commit_remains_private_and_follows_the_outer_outcome() {
-        let _guard = rbc_status_test_guard();
+        let _guard = operator_status_test_guard();
         reset_nexus_economics_for_tests();
         let discarded_lane = LaneId::new(45);
         {
@@ -1148,87 +1000,25 @@ static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub fn inc_gossip_duplicate_known_skipped() {
     GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-fn lane_activity_slot() -> &'static Mutex<Vec<LaneActivitySnapshot>> {
-    LANE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn dataspace_activity_slot() -> &'static Mutex<Vec<DataspaceActivitySnapshot>> {
-    DATASPACE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn pipeline_execution_slot() -> &'static Mutex<PipelineExecutionSnapshot> {
-    PIPELINE_EXECUTION.get_or_init(|| Mutex::new(PipelineExecutionSnapshot::default()))
-}
-fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
-    LANE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn dataspace_commitments_slot() -> &'static Mutex<Vec<DataspaceCommitmentSnapshot>> {
-    DATASPACE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
-}
-#[cfg(any(test, feature = "iroha-core-tests"))]
-/// Replace the aggregated lane/dataspace commitment snapshots used by Nexus diagnostics.
-pub fn set_lane_commitments(
-    lane_entries: Vec<LaneCommitmentSnapshot>,
-    dataspace_entries: Vec<DataspaceCommitmentSnapshot>,
-) {
-    {
-        let mut guard =
-            lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot");
-        *guard = lane_entries;
-    }
-    {
-        let mut guard = lock_operator_status_slot(
-            dataspace_commitments_slot(),
-            "dataspace commitments snapshot",
-        );
-        *guard = dataspace_entries;
-    }
-}
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
         return;
     }
     let lane_matches = |lane_id: u32| lanes_to_reset.contains(&LaneId::new(lane_id));
-    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot")
-        .retain(|entry| !lane_matches(entry.lane_id));
-    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot")
-        .retain(|entry| !lane_matches(entry.lane_id));
-    lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot")
-        .retain(|entry| !lane_matches(entry.lane_id));
-    lock_operator_status_slot(
-        dataspace_commitments_slot(),
-        "dataspace commitments snapshot",
-    )
-    .retain(|entry| !lane_matches(entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
 #[cfg(test)]
 pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
     format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-        lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
-        lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
-        lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
-        lock_operator_status_slot(
-            dataspace_commitments_slot(),
-            "dataspace commitments snapshot"
-        ),
+        "{:?}|{:?}|{:?}",
         lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
         lock_operator_status_slot(nexus_staking_slot(), "nexus staking status")
             .lanes
             .clone(),
         lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
     )
-}
-fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
-    lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot").clone()
-}
-fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
-    lock_operator_status_slot(
-        dataspace_commitments_slot(),
-        "dataspace commitments snapshot",
-    )
-    .clone()
 }
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))
@@ -1323,16 +1113,9 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
         .collect();
     set_lane_governance_snapshot(snapshots);
 }
-/// Lane-local Nexus diagnostics kept separate from global v2 consensus status.
+/// Physical-lane Nexus diagnostics kept separate from native consensus status.
 #[derive(Clone, Debug, Default)]
 pub struct StatusSnapshot {
-    /// Aggregate block-pipeline execution diagnostics; this is adapter state,
-    /// not a global consensus phase or recovery signal.
-    pub pipeline_execution: PipelineExecutionSnapshot,
-    /// Lane-local block commitments retained for Nexus diagnostics.
-    pub lane_commitments: Vec<LaneCommitmentSnapshot>,
-    /// Dataspace-local commitments retained for Nexus diagnostics.
-    pub dataspace_commitments: Vec<DataspaceCommitmentSnapshot>,
     /// Count of governance-sealed lanes.
     pub lane_governance_sealed_total: u32,
     /// Aliases of governance-sealed lanes.
@@ -1356,114 +1139,42 @@ pub fn snapshot() -> StatusSnapshot {
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance) =
         lane_governance_sealed_summary();
     StatusSnapshot {
-        pipeline_execution: lock_operator_status_slot(
-            pipeline_execution_slot(),
-            "pipeline execution snapshot",
-        )
-        .clone(),
-        lane_commitments: lane_commitments_snapshot(),
-        dataspace_commitments: dataspace_commitments_snapshot(),
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance,
     }
 }
-/// Latest transaction-queue pressure published for operator queries.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TxQueueBackpressureSnapshot {
-    /// Number of transactions waiting in the local queue.
-    pub depth: u64,
-    /// Configured transaction queue capacity.
-    pub capacity: u64,
-    /// Estimated retained transaction queue bytes.
-    pub retained_bytes: u64,
-    /// Configured retained transaction queue byte budget.
-    pub max_retained_bytes: u64,
-    /// Whether the queue reached capacity. This mirrors the public `saturated` field.
-    pub saturated: bool,
-    /// Whether the queue reached capacity.
-    pub saturated_by_count: bool,
-    /// Whether the queue exhausted its retained-byte budget.
-    pub saturated_by_bytes: bool,
-    /// Whether the oldest queued transaction exceeded the latency budget.
-    pub saturated_by_age: bool,
-    /// Age in milliseconds of the oldest queued transaction.
-    pub oldest_queued_age_ms: u64,
-}
-/// Record the latest transaction-queue pressure snapshot for operator queries.
-pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
-    let saturated_by_count = snapshot.saturated_by_count;
-    let saturated_by_bytes = snapshot.saturated_by_bytes;
-    let saturated = saturated_by_count || saturated_by_bytes;
-    TX_QUEUE_DEPTH.store(snapshot.queued_tx_count as u64, Ordering::Relaxed);
-    TX_QUEUE_CAPACITY.store(snapshot.capacity.get() as u64, Ordering::Relaxed);
-    TX_QUEUE_RETAINED_BYTES.store(snapshot.retained_bytes, Ordering::Relaxed);
-    TX_QUEUE_MAX_RETAINED_BYTES.store(snapshot.max_retained_bytes.get(), Ordering::Relaxed);
-    TX_QUEUE_SATURATED.store(saturated, Ordering::Relaxed);
-    TX_QUEUE_SATURATED_BY_COUNT.store(saturated_by_count, Ordering::Relaxed);
-    TX_QUEUE_SATURATED_BY_BYTES.store(saturated_by_bytes, Ordering::Relaxed);
-    TX_QUEUE_SATURATED_BY_AGE.store(snapshot.saturated_by_age, Ordering::Relaxed);
-    TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(snapshot.oldest_queued_tx_age_ms, Ordering::Relaxed);
-}
-/// Snapshot the recorded transaction-queue backpressure state.
-pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {
-    TxQueueBackpressureSnapshot {
-        depth: TX_QUEUE_DEPTH.load(Ordering::Relaxed),
-        capacity: TX_QUEUE_CAPACITY.load(Ordering::Relaxed),
-        retained_bytes: TX_QUEUE_RETAINED_BYTES.load(Ordering::Relaxed),
-        max_retained_bytes: TX_QUEUE_MAX_RETAINED_BYTES.load(Ordering::Relaxed),
-        saturated: TX_QUEUE_SATURATED.load(Ordering::Relaxed),
-        saturated_by_count: TX_QUEUE_SATURATED_BY_COUNT.load(Ordering::Relaxed),
-        saturated_by_bytes: TX_QUEUE_SATURATED_BY_BYTES.load(Ordering::Relaxed),
-        saturated_by_age: TX_QUEUE_SATURATED_BY_AGE.load(Ordering::Relaxed),
-        oldest_queued_age_ms: TX_QUEUE_OLDEST_QUEUED_AGE_MS.load(Ordering::Relaxed),
-    }
-}
 #[cfg(test)]
 mod tests {
     #[test]
-    fn lane_rbc_reset_clears_surviving_adapter_diagnostics() {
-        let _guard = super::rbc_status_test_guard();
-        super::lock_operator_status_slot(super::lane_activity_slot(), "lane activity test").push(
-            super::LaneActivitySnapshot {
-                lane_id: 7,
-                ..super::LaneActivitySnapshot::default()
-            },
-        );
-        super::lock_operator_status_slot(
-            super::dataspace_activity_slot(),
-            "dataspace activity test",
-        )
-        .push(super::DataspaceActivitySnapshot {
-            lane_id: 7,
-            dataspace_id: 9,
-            tx_served: 1,
-        });
-        super::lock_operator_status_slot(
-            super::pipeline_execution_slot(),
-            "pipeline execution test",
-        )
-        .rbc_chunks_total = 3;
-        super::reset_rbc_backlog_stats_for_tests();
-        assert!(
-            super::lock_operator_status_slot(super::lane_activity_slot(), "lane activity test")
-                .is_empty()
-        );
-        assert!(
-            super::lock_operator_status_slot(
-                super::dataspace_activity_slot(),
-                "dataspace activity test",
-            )
-            .is_empty()
-        );
-        assert_eq!(
-            super::lock_operator_status_slot(
-                super::pipeline_execution_slot(),
-                "pipeline execution test",
-            )
-            .rbc_chunks_total,
-            0
-        );
+    fn prune_lane_snapshots_preserves_other_physical_governance() {
+        let _guard = super::operator_status_test_guard();
+        let original = super::lane_governance_snapshot();
+        let entries = [7, 8]
+            .map(|lane_id| super::LaneGovernanceSnapshot {
+                lane_id,
+                alias: format!("physical-{lane_id}"),
+                dataspace_id: 9,
+                manifest_required: true,
+                manifest_ready: lane_id == 8,
+                ..super::LaneGovernanceSnapshot::default()
+            })
+            .to_vec();
+        super::set_lane_governance_snapshot(entries);
+        super::prune_lane_scoped_snapshots(&Default::default());
+        let before = super::snapshot();
+        assert_eq!(before.lane_governance.len(), 2);
+        assert_eq!(before.lane_governance_sealed_total, 1);
+        assert_eq!(before.lane_governance_sealed_aliases, ["physical-7"]);
+        super::prune_lane_scoped_snapshots(&[super::LaneId::new(7)].into_iter().collect());
+        let after = super::snapshot();
+        assert_eq!(after.lane_governance.len(), 1);
+        assert_eq!(after.lane_governance[0].lane_id, 8);
+        assert_eq!(after.lane_governance[0].dataspace_id, 9);
+        assert!(after.lane_governance[0].manifest_ready);
+        assert_eq!(after.lane_governance_sealed_total, 0);
+        assert!(after.lane_governance_sealed_aliases.is_empty());
+        super::set_lane_governance_snapshot(original);
     }
 }
 include!("status/test_guards.rs");

@@ -46,7 +46,7 @@ but never transaction validity or gas.
    result, gas, error, state, event and commitment behavior across CPU, SIMD,
    Metal and CUDA.
 4. Run a mixed-hardware four-validator network with mandatory signed RS16
-   DA/RBC availability, failure/quarantine injection and restart recovery.
+   payload availability, failure/quarantine injection and restart recovery.
 
 These physical and artifact checks are open; local component tests do not
 qualify an unchanged release candidate.

@@ -13,10 +13,12 @@ import {
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
+  RamLfeEncryptionUnavailableError,
   getIdentifierBfvPublicParameters,
   hashIdentifierEncryptedInput,
   verifyIdentifierResolutionReceipt,
 } from "../src/toriiClient.js";
+import { encryptDiagnosticIdentifierInputForPolicy } from "./helpers/diagnosticIdentifierBfv.js";
 import { NetworkId } from "../src/networkId.js";
 import { normalizeIdentifierInput } from "../src/normalizers.js";
 import { blake2b256 } from "../src/blake2b.js";
@@ -82,6 +84,17 @@ const IDENTIFIER_RECEIPT_VECTOR_FIXTURE = JSON.parse(
     "utf8",
   ),
 );
+// These shared arithmetic/receipt fixtures have explicit policy metadata in this SDK suite.
+const BFV_POLICY_FIXTURE = {
+  ...BFV_VECTOR_FIXTURE.policy,
+  program_id: PROGRAM_ID,
+  output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
+};
+const IDENTIFIER_RECEIPT_POLICY_FIXTURE = {
+  ...IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+  program_id: PROGRAM_ID,
+  output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
+};
 const BFV_COMPONENT_DIGEST_RE = /^[0-9A-F]{64}$/u;
 const BFV_CHAIN_DIGEST_RE = /^[0-9a-f]{64}$/u;
 function jsonResponse(status, body) {
@@ -620,12 +633,38 @@ test("listIdentifierPolicies normalizes BFV and proof-verifier metadata", async 
   });
 });
 
+test("identifier policy helpers require explicit program and independent opening key", () => {
+  const policy = identifierPolicyFixture();
+  const signed = signedReceiptFixture();
+  const receipt = { payload: signed.payload, attestation: signed.attestation };
+  const consumers = [
+    (value) => getIdentifierBfvPublicParameters(value),
+    (value) => buildIdentifierRequestForPolicy(value, {
+      encryptedInput: "abcd", outputOpening: sampleOutputOpening(),
+    }),
+    (value) => verifyIdentifierResolutionReceipt(receipt, value),
+  ];
+  for (const field of ["program_id", "output_opening_public_key"]) {
+    const missing = { ...policy };
+    delete missing[field];
+    for (const consume of consumers) {
+      assert.throws(() => consume(missing), new RegExp(field, "u"));
+      for (const invalid of [null, "", " ", " padded", "padded ", "embedded space", "control\u0001", 7]) {
+        assert.throws(() => consume({ ...policy, [field]: invalid }), new RegExp(field, "u"));
+      }
+    }
+  }
+});
+
 test("listIdentifierPolicies rejects non-exact policy metadata", async () => {
   const cases = [
     ["program_id", { program_id: ` ${PROGRAM_ID}` }],
     ["owner", { owner: ` ${ACCOUNT_ID}` }],
     ["normalization", { normalization: "Phone_E164" }],
     ["backend", { backend: "bfv-affine-v1 " }],
+    ["backend", { backend: "bfv-affine-sha3-256-v1" }],
+    ["backend", { backend: "bfv-programmed-sha3-256-v1" }],
+    ["backend", { backend: "unknown" }],
     [
       "output_opening_public_key",
       { output_opening_public_key: ` ${OUTPUT_OPENING_PUBLIC_KEY}` },
@@ -822,6 +861,8 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
   assert.equal(result.payload.execution.input_ciphertext_hash, INPUT_CIPHERTEXT_HASH);
   assert.equal(
     verifyIdentifierResolutionReceipt(result, {
+      program_id: PROGRAM_ID,
+      output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
       policy_id: POLICY_ID,
       owner: ACCOUNT_ID,
       active: true,
@@ -831,6 +872,35 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
     }),
     true,
   );
+});
+
+test("resolveIdentifier rejects retired or unknown execution tags during response decoding", async () => {
+  const receipt = signedReceiptFixture();
+  for (const [field, value] of [
+    ["backend", "bfv-affine-sha3-256-v1"],
+    ["backend", "bfv-programmed-sha3-256-v1"],
+    ["backend", "unknown"],
+    ["verification_mode", "signed-v1"],
+    ["verification_mode", "unknown"],
+  ]) {
+    const body = {
+      payload: { ...receipt.payload, execution: { ...receipt.payload.execution, [field]: value } },
+      attestation: receipt.attestation,
+    };
+    const client = new ToriiClient("https://example.test", {
+      localSigningContext: APPLICATION_SIGNING_CONTEXT,
+      fetchImpl: async () => jsonResponse(200, body),
+    });
+    await assert.rejects(
+      () => client.resolveIdentifier({
+        policyId: POLICY_ID,
+        encryptedInput: "ABCD",
+        outputOpening: sampleOutputOpening(),
+        canonicalAuth: APPLICATION_AUTH,
+      }),
+      new RegExp(`execution\\.${field} must be one of:`),
+    );
+  }
 });
 
 test("resolveIdentifier requires encrypted input and output opening", async () => {
@@ -917,6 +987,8 @@ test("identifier request builders fail closed for phone without canonicality sup
 test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", () => {
   const signedReceipt = signedReceiptFixture();
   const policy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: POLICY_ID,
     owner: ACCOUNT_ID,
     active: true,
@@ -1088,7 +1160,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
   assert.equal(
     verifyIdentifierResolutionReceipt(
       IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt,
-      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+      IDENTIFIER_RECEIPT_POLICY_FIXTURE,
     ),
     true,
   );
@@ -1115,7 +1187,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
               payload: IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload,
               attestation: vector.attestation,
             },
-            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+            IDENTIFIER_RECEIPT_POLICY_FIXTURE,
           ),
         /proof attestations require an external verifier/,
         `${vector.name}: proof verifier gate`,
@@ -1130,7 +1202,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
       () =>
         verifyIdentifierResolutionReceipt(
           paddedPolicyId,
-          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          IDENTIFIER_RECEIPT_POLICY_FIXTURE,
         ),
       /payload\.policy_id/,
       `policy_id exactness ${policyId}`,
@@ -1144,7 +1216,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
       () =>
         verifyIdentifierResolutionReceipt(
           paddedExecutionProgram,
-          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          IDENTIFIER_RECEIPT_POLICY_FIXTURE,
         ),
       /payload\.execution\.program_id/,
       `execution program_id exactness ${programId}`,
@@ -1156,7 +1228,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
       () =>
         verifyIdentifierResolutionReceipt(
           paddedOpeningProgram,
-          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          IDENTIFIER_RECEIPT_POLICY_FIXTURE,
         ),
       /payload\.opening\.payload\.program_id/,
       `opening program_id exactness ${programId}`,
@@ -1173,7 +1245,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
       () =>
         verifyIdentifierResolutionReceipt(
           paddedAccountId,
-          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          IDENTIFIER_RECEIPT_POLICY_FIXTURE,
         ),
       /payload\.account_id/,
       "account_id exactness",
@@ -1207,7 +1279,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
         () =>
           verifyIdentifierResolutionReceipt(
             paddedHash,
-            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+            IDENTIFIER_RECEIPT_POLICY_FIXTURE,
           ),
         new RegExp(context.replaceAll(".", "\\.")),
         `hash exactness ${context}`,
@@ -1249,7 +1321,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
         () =>
           verifyIdentifierResolutionReceipt(
             paddedTimestamp,
-            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+            IDENTIFIER_RECEIPT_POLICY_FIXTURE,
           ),
         new RegExp(context.replaceAll(".", "\\.")),
         `timestamp exactness ${context}`,
@@ -1259,7 +1331,7 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
 
   for (const negative of IDENTIFIER_RECEIPT_VECTOR_FIXTURE.negative_cases) {
     const receipt = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
-    const policy = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy));
+    const policy = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_POLICY_FIXTURE));
     switch (negative.mutation) {
       case "receipt.payload.execution.output_ciphertext_hash":
         receipt.payload.execution.output_ciphertext_hash = negative.value;
@@ -1296,8 +1368,26 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
   }
 });
 
-test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes", () => {
+test("public identifier encryption refuses before inspecting inputs or randomness", () => {
+  let reads = 0;
+  const unreadable = new Proxy({}, {
+    get() { reads += 1; throw new Error("must not read private input or policy"); },
+    ownKeys() { reads += 1; throw new Error("must not enumerate private input or policy"); },
+  });
+  for (const [policy, input] of [[unreadable, unreadable], [null, null], [{}, "private identifier"]]) {
+    assert.throws(
+      () => encryptIdentifierInputForPolicy(policy, input),
+      (error) => error instanceof RamLfeEncryptionUnavailableError
+        && error.code === "ram_lfe_encryption_unavailable",
+    );
+  }
+  assert.equal(reads, 0);
+});
+
+test("encryptDiagnosticIdentifierInputForPolicy builds deterministic BFV Norito envelopes", () => {
   const policy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: "string#retail",
     owner: ACCOUNT_ID,
     active: true,
@@ -1309,14 +1399,12 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
   };
 
   assert.equal(
-    encryptIdentifierInputForPolicy(policy, "ab", { seedHex: BFV_SEED_HEX }),
+    encryptDiagnosticIdentifierInputForPolicy(policy, "ab", { seedHex: BFV_SEED_HEX }),
     BFV_ENCRYPTED_INPUT_HEX,
   );
   assert.deepEqual(
     buildIdentifierRequestForPolicy(policy, {
-      input: "ab",
-      encrypt: true,
-      seedHex: BFV_SEED_HEX,
+      encryptedInput: BFV_ENCRYPTED_INPUT_HEX,
       outputOpening: sampleOutputOpening(),
     }),
     {
@@ -1327,13 +1415,13 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
   );
 });
 
-test("encryptIdentifierInputForPolicy matches shared Soracloud BFV vectors", () => {
+test("encryptDiagnosticIdentifierInputForPolicy matches shared Soracloud BFV vectors", () => {
   assert.equal(BFV_VECTOR_FIXTURE.vector_set, "soracloud-bfv-identifier-envelope-v1");
   const observedDigests = new Set();
 
   for (const vector of BFV_VECTOR_FIXTURE.vectors) {
-    const ciphertextHex = encryptIdentifierInputForPolicy(
-      BFV_VECTOR_FIXTURE.policy,
+    const ciphertextHex = encryptDiagnosticIdentifierInputForPolicy(
+      BFV_POLICY_FIXTURE,
       vector.input_utf8,
       { seedHex: vector.seed_hex },
     );
@@ -1357,11 +1445,13 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV vectors", () 
   );
 });
 
-test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation input vectors", () => {
+test("encryptDiagnosticIdentifierInputForPolicy matches shared Soracloud BFV operation input vectors", () => {
   const operationVectors = BFV_VECTOR_FIXTURE.operation_vectors;
   assert.equal(operationVectors.vector_set, "soracloud-bfv-operation-v1");
   assertBfvOperationKeyComponentVectors(operationVectors);
   const policy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: "soracloud-operation#fixture",
     owner: ACCOUNT_ID,
     active: true,
@@ -1386,7 +1476,7 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation inp
         observedDigests.add(input.expected_ciphertext_sha256);
         continue;
       }
-      const ciphertextHex = encryptIdentifierInputForPolicy(
+      const ciphertextHex = encryptDiagnosticIdentifierInputForPolicy(
         policy,
         Buffer.from(input.input_hex, "hex"),
         { seed: Buffer.from(input.seed_utf8, "utf8") },
@@ -1516,9 +1606,11 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
   }
 });
 
-test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector inputs", () => {
+test("encryptDiagnosticIdentifierInputForPolicy rejects adversarial BFV operation vector inputs", () => {
   const operationVectors = BFV_VECTOR_FIXTURE.operation_vectors;
   const basePolicy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: "soracloud-operation#fixture",
     owner: ACCOUNT_ID,
     active: true,
@@ -1532,10 +1624,15 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
   const [input] = operationVectors.vectors[0].inputs;
   const inputBytes = Buffer.from(input.input_hex, "hex");
   const seed = Buffer.from(input.seed_utf8, "utf8");
+  assert.equal(
+    sha256HexFromHex(encryptDiagnosticIdentifierInputForPolicy(basePolicy, inputBytes, { seed })),
+    input.expected_ciphertext_sha256,
+    "the unchanged operation fixture must encrypt before any single-field mutation",
+  );
 
   assert.throws(
     () =>
-      encryptIdentifierInputForPolicy(
+      encryptDiagnosticIdentifierInputForPolicy(
         { ...basePolicy, normalization: "lowercase_trimmed" },
         inputBytes,
         { seed },
@@ -1544,7 +1641,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
     "raw byte operation inputs must not bypass non-exact normalization",
   );
   assert.throws(
-    () => encryptIdentifierInputForPolicy(basePolicy, Buffer.alloc(0), { seed }),
+    () => encryptDiagnosticIdentifierInputForPolicy(basePolicy, Buffer.alloc(0), { seed }),
     ValidationError,
     "empty raw byte operation inputs must be rejected",
   );
@@ -1555,7 +1652,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
   unsupportedEncoding.norito_length_encoding = "compact-v9";
   assert.throws(
     () =>
-      encryptIdentifierInputForPolicy(
+      encryptDiagnosticIdentifierInputForPolicy(
         {
           ...basePolicy,
           input_encryption_public_parameters_decoded: unsupportedEncoding,
@@ -1575,7 +1672,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
   );
   assert.throws(
     () =>
-      encryptIdentifierInputForPolicy(
+      encryptDiagnosticIdentifierInputForPolicy(
         {
           ...basePolicy,
           input_encryption_public_parameters_decoded: unsafeModulus,
@@ -1593,7 +1690,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
   unsafePublicKey.public_key.b[2] = Number(unsafePublicKey.public_key.b[2]);
   assert.throws(
     () =>
-      encryptIdentifierInputForPolicy(
+      encryptDiagnosticIdentifierInputForPolicy(
         {
           ...basePolicy,
           input_encryption_public_parameters_decoded: unsafePublicKey,
@@ -1606,8 +1703,10 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
   );
 });
 
-test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters", () => {
+test("encryptDiagnosticIdentifierInputForPolicy rejects adversarial BFV public parameters", () => {
   const basePolicy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: "string#retail",
     owner: ACCOUNT_ID,
     active: true,
@@ -1617,6 +1716,15 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
     input_encryption: "bfv-v1",
   };
   const cloneParameters = () => JSON.parse(JSON.stringify(BFV_PUBLIC_PARAMETERS));
+  assert.match(
+    encryptDiagnosticIdentifierInputForPolicy(
+      { ...basePolicy, input_encryption_public_parameters_decoded: cloneParameters() },
+      "ab",
+      { seedHex: BFV_SEED_HEX },
+    ),
+    /^[0-9a-f]+$/u,
+    "the unchanged policy must encrypt before any single-parameter mutation",
+  );
   const cases = [
     {
       name: "non-divisible ciphertext modulus",
@@ -1700,7 +1808,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
   for (const { name, expected, params } of cases) {
     assert.throws(
       () =>
-        encryptIdentifierInputForPolicy(
+        encryptDiagnosticIdentifierInputForPolicy(
           { ...basePolicy, input_encryption_public_parameters_decoded: params },
           "ab",
           { seedHex: BFV_SEED_HEX },
@@ -1711,8 +1819,10 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
   }
 });
 
-test("encryptIdentifierInputForPolicy rejects adversarial client encryption inputs", () => {
+test("encryptDiagnosticIdentifierInputForPolicy rejects adversarial client encryption inputs", () => {
   const policy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: "string#retail",
     owner: ACCOUNT_ID,
     active: true,
@@ -1724,13 +1834,13 @@ test("encryptIdentifierInputForPolicy rejects adversarial client encryption inpu
   };
 
   assert.throws(
-    () => encryptIdentifierInputForPolicy(policy, "abcd", { seedHex: BFV_SEED_HEX }),
+    () => encryptDiagnosticIdentifierInputForPolicy(policy, "abcd", { seedHex: BFV_SEED_HEX }),
     ValidationError,
     "input longer than max_input_bytes must be rejected before encryption",
   );
   assert.throws(
     () =>
-      encryptIdentifierInputForPolicy(policy, "ab", {
+      encryptDiagnosticIdentifierInputForPolicy(policy, "ab", {
         seed: Buffer.alloc(32, 1),
         seedHex: BFV_SEED_HEX,
       }),
@@ -1820,8 +1930,30 @@ test("issueIdentifierClaimReceipt rejects account aliases before dispatch", asyn
   assert.equal(dispatched, false);
 });
 
+test("buildIdentifierRequestForPolicy requires declared encryption for ciphertext DTOs", () => {
+  const policy = identifierPolicyFixture();
+  const options = { encryptedInput: "ABCD", outputOpening: sampleOutputOpening() };
+  assert.deepEqual(buildIdentifierRequestForPolicy(policy, options), {
+    policyId: policy.policy_id,
+    encryptedInput: "ABCD",
+    outputOpening: options.outputOpening,
+  });
+  for (const overrides of [
+    { input_encryption: undefined },
+    { input_encryption: null },
+    { backend: "hkdf-sha3-512-prf-v1", input_encryption: undefined },
+  ]) {
+    assert.throws(
+      () => buildIdentifierRequestForPolicy({ ...policy, ...overrides }, options),
+      /does not publish BFV encrypted-input support/u,
+    );
+  }
+});
+
 test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
   const policy = {
+    program_id: PROGRAM_ID,
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     policy_id: POLICY_ID,
     owner: ACCOUNT_ID,
     active: true,

@@ -1,7 +1,9 @@
 //! Final witness capture requires intact validator-owned source inventory and applied seals.
 
 use super::{
-    tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
+    tests::{
+        apply_source, cache_canonical_test_transaction_set, delta, header, recorded_block, state,
+    },
     *,
 };
 use iroha_model_base::topology::LaneId;
@@ -55,11 +57,9 @@ fn cache_transfer_capture(block: &mut StateBlock<'_>, hash: Hash) {
 
 #[test]
 fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for failed_inventory in [false, true] {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let hash = Hash::new(b"capture requires owned inventory");
         apply_source(&mut block, hash, false, None);
@@ -94,11 +94,9 @@ fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() 
 
 #[test]
 fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for with_transfer in [false, true] {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         if with_transfer {
             apply_source(&mut block, Hash::new(b"sealed transfer"), false, None);
@@ -146,12 +144,10 @@ fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
 
 #[test]
 fn same_or_new_key_late_apply_refuses_capture_even_after_late_data_is_drained() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for same_key in [false, true] {
         for drain_late in [false, true] {
-            crate::exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let original_hash = Hash::new(b"original sealed source");
             apply_source(&mut block, original_hash, false, None);
@@ -194,10 +190,8 @@ fn same_or_new_key_late_apply_refuses_capture_even_after_late_data_is_drained() 
 
 #[test]
 fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
     let state = state();
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let original_hash = Hash::new(b"sealed source survives rollback");
     apply_source(&mut block, original_hash, false, None);
@@ -236,10 +230,8 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
 
 #[test]
 fn later_applied_transfer_invalidates_and_clears_previously_cached_capture() {
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
     let state = state();
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let hash = Hash::new(b"cached source capture");
     apply_source(&mut block, hash, false, None);
@@ -260,11 +252,9 @@ fn later_applied_transfer_invalidates_and_clears_previously_cached_capture() {
 
 #[test]
 fn capture_rejects_unsealed_replaced_contexts_and_changed_source_caches() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for mutation in 0..8 {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let hash = Hash::new(b"capture consistency");
         apply_source(&mut block, hash, false, None);
@@ -324,9 +314,8 @@ fn capture_rejects_unsealed_replaced_contexts_and_changed_source_caches() {
 
 #[test]
 fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     apply_source(
         &mut block,
@@ -361,11 +350,9 @@ fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
 
 #[test]
 fn unowned_capture_rejects_without_consuming_the_active_recorder() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for failed_inventory in [false, true] {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         apply_source(&mut block, Hash::new(b"replay active witness"), false, None);
         if failed_inventory {
@@ -384,11 +371,9 @@ fn unowned_capture_rejects_without_consuming_the_active_recorder() {
 
 #[test]
 fn intact_capture_outputs_can_be_taken_in_every_order_without_recapture() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for order in CAPTURE_EXTRACTION_ORDERS {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         cache_transfer_capture(&mut block, Hash::new(b"healthy capture extraction order"));
         let mut expected_presence = [true; 3];
@@ -407,12 +392,10 @@ fn intact_capture_outputs_can_be_taken_in_every_order_without_recapture() {
 
 #[test]
 fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for same_key in [false, true] {
         for order in CAPTURE_EXTRACTION_ORDERS {
-            crate::exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let original = Hash::new(b"captured before direct extraction");
             cache_transfer_capture(&mut block, original);
@@ -447,11 +430,9 @@ fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
 
 #[test]
 fn repeat_capture_preserves_original_cached_outputs() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for order in CAPTURE_EXTRACTION_ORDERS {
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         cache_transfer_capture(&mut block, Hash::new(b"cached before replay transition"));
         let original_inventory = block.fastpq_source_inventory.clone();

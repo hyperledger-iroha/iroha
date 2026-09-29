@@ -350,6 +350,10 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
     for (path, expected, label) in contract_rows! { "/v1/sumeragi/status", "#/components/schemas/SumeragiStatusResponse", "authoritative status"; "/v1/sumeragi/diagnostics", "#/components/schemas/SumeragiDiagnosticsResponse", "operator diagnostics"; } {
         let actual = document.get("paths").and_then(Value::as_object).and_then(|paths| paths.get(path)).and_then(Value::as_object).and_then(|item| item.get("get")).and_then(Value::as_object).map(|operation| operation_response_schema_ref(operation, "200", path));
         assert_eq!(actual, catalog_openapi_route_enabled(CatalogHttpMethod::Get, path).then_some(expected), "{label} catalog projection");
+        if path == "/v1/sumeragi/diagnostics" && actual.is_some() {
+            let operation = openapi_operation(&document, path, "get");
+            text_contracts! { operation_response_schema_ref(operation, "503", path) => "#/components/schemas/ErrorEnvelope"; }
+        }
     }
     assert_exact_closed_required_schema_fields(schemas, "SumeragiStatusResponse", &contract_strings("status.required"));
     let properties = contract_object(contract_schema(schemas, "SumeragiStatusResponse").get("properties"), "status properties");
@@ -360,18 +364,16 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
     let diagnostics = contract_object(diagnostics.get("properties"), "diagnostics properties");
     member_contracts! { diagnostics; Present => ["npos"]; }
     for (field, expected) in contract_rows! {
-        "lane_commitments", "#/components/schemas/SumeragiLaneCommitment";
-        "dataspace_commitments", "#/components/schemas/SumeragiDataspaceCommitment";
         "lane_governance", "#/components/schemas/SumeragiLaneGovernance";
     } {
         scalar_contracts! { diagnostics.get(field).and_then(|schema| schema.get("items")).and_then(|items| items.get("$ref")) => Text(expected); }
     }
     member_contracts! { diagnostics; Absent => contract_words("height view phase leader locked_prepare_qc"); }
     member_contracts! { diagnostics; Absent => contract_words(
-        "lane_settlement_commitments lane_relay_envelopes lane_payload_ownerships committed_lane_blocks lane_block_sessions native_amx_participant_applications autonomous_lane_executions"
+        "pipeline_execution lane_commitments dataspace_commitments lane_settlement_commitments lane_relay_envelopes lane_payload_ownerships committed_lane_blocks lane_block_sessions native_amx_participant_applications autonomous_lane_executions"
     ); }
     member_contracts! { schemas; Absent => contract_words(
-        "LaneSettlementCommitment LaneRelayEnvelope NativeAmxReceipt SumeragiCommittedLaneBlock SumeragiLaneBlockSessionStatus SumeragiLanePayloadOwnership SumeragiNativeAmxParticipantApplication SumeragiAutonomousLaneExecution"
+        "SumeragiPipelineExecutionDiagnostics SumeragiLaneCommitment SumeragiDataspaceCommitment LaneSettlementCommitment LaneRelayEnvelope NativeAmxReceipt SumeragiCommittedLaneBlock SumeragiLaneBlockSessionStatus SumeragiLanePayloadOwnership SumeragiNativeAmxParticipantApplication SumeragiAutonomousLaneExecution"
     ); }
 
 }

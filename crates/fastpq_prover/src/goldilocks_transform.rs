@@ -244,7 +244,7 @@ pub fn transform_goldilocks_columns_v1(
                                 )
                             }
                         }
-                        .and_then(|dispatch| dispatch.wait()),
+                        .and_then(crate::gpu::ColumnDispatch::wait),
                     };
                     // Partial-batch cleanup can discover uncertain completion
                     // while an earlier ordinary error is being returned. Inspect
@@ -550,26 +550,7 @@ mod tests {
         let common_root = root_v1(COMMON_LOG, 1);
         let native_rows = 1 << NATIVE_LOG;
         let common_rows = 1 << COMMON_LOG;
-        // Non-default primitive roots establish that dispatch uses the supplied
-        // root, not a catalog root hidden in a kernel or planner.
-        for odd in [1, 3, 5] {
-            let root = root_v1(4, odd);
-            let mut values = vec![(0..16).map(|i| (i * 31 + 17) as u64).collect::<Vec<_>>()];
-            let expected = (0..16)
-                .map(|i| horner_v1(&values[0], power_v1(root, i)))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                transform_goldilocks_columns_v1(
-                    &mut values,
-                    root,
-                    GoldilocksTransformDirectionV1::Forward,
-                    ExecutionMode::Gpu
-                )
-                .unwrap(),
-                GoldilocksTransformBackendV1::Metal,
-            );
-            assert_eq!(values[0], expected);
-        }
+        assert_metal_uses_supplied_roots();
 
         let source = (0..COLUMNS)
             .map(|column| {
@@ -605,30 +586,8 @@ mod tests {
         drop(actual);
 
         // Use every mask coefficient, including the highest X^(N+1815) term.
-        for (column, coefficients) in coefficients.iter_mut().enumerate() {
-            coefficients.resize(native_rows + MASK_COEFFICIENTS, 0);
-            for index in 0..MASK_COEFFICIENTS {
-                let mask = (index * 13 + column * 19 + 1) as u64;
-                coefficients[index] = ((u128::from(coefficients[index])
-                    + u128::from(FIELD_MODULUS)
-                    - u128::from(mask))
-                    % u128::from(FIELD_MODULUS)) as u64;
-                coefficients[native_rows + index] = mask;
-            }
-        }
-        let shifted = coefficients
-            .iter()
-            .map(|coefficients| {
-                let mut values = vec![0; common_rows];
-                let mut shift = 1;
-                for (output, coefficient) in values.iter_mut().zip(coefficients) {
-                    *output = ((u128::from(*coefficient) * u128::from(shift))
-                        % u128::from(FIELD_MODULUS)) as u64;
-                    shift = ((u128::from(shift) * 7) % u128::from(FIELD_MODULUS)) as u64;
-                }
-                values
-            })
-            .collect::<Vec<_>>();
+        apply_vanishing_masks(&mut coefficients, native_rows, MASK_COEFFICIENTS);
+        let shifted = coset_shifted(&coefficients, common_rows);
         let mut expected = shifted.clone();
         let started = Instant::now();
         transform_goldilocks_columns_v1(
@@ -641,8 +600,7 @@ mod tests {
         let cpu_forward = started.elapsed();
         for (coefficients, values) in coefficients.iter().zip(&expected) {
             for index in [0, 1, 17, common_rows / 2 + 3, common_rows - 1] {
-                let point = ((7 * u128::from(power_v1(common_root, index as u64)))
-                    % u128::from(FIELD_MODULUS)) as u64;
+                let point = mul_mod_v1(7, power_v1(common_root, index as u64));
                 assert_eq!(values[index], horner_v1(coefficients, point));
             }
         }
@@ -667,5 +625,66 @@ mod tests {
                 "exact-root Metal transform: native_rows={native_rows}, common_rows={common_rows}, resident_columns={COLUMNS}, dispatch_columns={device_batch}, mask_coefficients={MASK_COEFFICIENTS}, cpu_inverse={cpu_inverse:?}, metal_inverse={metal_inverse:?}, cpu_forward={cpu_forward:?}, metal_forward={elapsed:?}; includes dispatch/staging/wait/clearing, excludes source construction, coset packing, row hashing, constraints and full proof; concurrent host load must be recorded"
             );
         }
+    }
+
+    /// Non-default primitive roots establish that dispatch uses the supplied
+    /// root, not a catalog root hidden in a kernel or planner.
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn assert_metal_uses_supplied_roots() {
+        for odd in [1, 3, 5] {
+            let root = root_v1(4, odd);
+            let mut values = vec![(0_u64..16).map(|i| i * 31 + 17).collect::<Vec<_>>()];
+            let expected = (0..16)
+                .map(|i| horner_v1(&values[0], power_v1(root, i)))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                transform_goldilocks_columns_v1(
+                    &mut values,
+                    root,
+                    GoldilocksTransformDirectionV1::Forward,
+                    ExecutionMode::Gpu
+                )
+                .unwrap(),
+                GoldilocksTransformBackendV1::Metal,
+            );
+            assert_eq!(values[0], expected);
+        }
+    }
+
+    /// Extend each coefficient column by `masks` terms: subtract each mask from
+    /// coefficient `i` and place it at coefficient `native_rows + i`.
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn apply_vanishing_masks(coefficients: &mut [Vec<u64>], native_rows: usize, masks: usize) {
+        for (column, coefficients) in coefficients.iter_mut().enumerate() {
+            coefficients.resize(native_rows + masks, 0);
+            for index in 0..masks {
+                let mask = (index * 13 + column * 19 + 1) as u64;
+                coefficients[index] = u64::try_from(
+                    (u128::from(coefficients[index]) + u128::from(FIELD_MODULUS)
+                        - u128::from(mask))
+                        % u128::from(FIELD_MODULUS),
+                )
+                .expect("a residue modulo the Goldilocks prime fits u64");
+                coefficients[native_rows + index] = mask;
+            }
+        }
+    }
+
+    /// Scale coefficient `i` of every column by `7^i` into a zero-padded
+    /// `common_rows` vector, so a forward transform evaluates on the 7-coset.
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn coset_shifted(coefficients: &[Vec<u64>], common_rows: usize) -> Vec<Vec<u64>> {
+        coefficients
+            .iter()
+            .map(|coefficients| {
+                let mut values = vec![0; common_rows];
+                let mut shift = 1;
+                for (output, coefficient) in values.iter_mut().zip(coefficients) {
+                    *output = mul_mod_v1(*coefficient, shift);
+                    shift = mul_mod_v1(shift, 7);
+                }
+                values
+            })
+            .collect()
     }
 }

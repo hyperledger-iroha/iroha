@@ -12,9 +12,7 @@ import struct
 import unicodedata
 from collections import deque
 
-from copy_sumeragi_v2_release_cargo_cache_cli import (
-    _MachOError, _parse_macho_thin, _macho_c_string,
-)
+from macho_decoder import MachOError, macho_c_string, parse_macho_thin
 
 MAX_IMAGE_BYTES = 256 * 1024 * 1024
 MAX_COMMAND_BYTES = 1024 * 1024
@@ -199,7 +197,7 @@ def project_node_image(raw: bytes, *, offset: int, size: int,
     require(0 < header[4] <= MAX_COMMANDS and 0 < header[5] <= MAX_COMMAND_BYTES
             and 32 + header[5] <= size, "runtime command table admission bound")
     try:
-        image = _parse_macho_thin(raw, offset, size, path)
+        image = parse_macho_thin(raw, offset, size, path)
         commands = image["commands"]
         require(all(row["command"] in COMMANDS for row in commands),
                 "runtime load command is outside the closed profile")
@@ -218,7 +216,7 @@ def project_node_image(raw: bytes, *, offset: int, size: int,
             require(row["size"] >= 12, "runtime dynamic linker command is truncated")
             name_offset = struct.unpack_from("<I", raw, row["offset"] + 8)[0]
             require(12 <= name_offset < row["size"], "runtime dynamic linker string extent")
-            name = _macho_c_string(raw, row["offset"] + name_offset,
+            name = macho_c_string(raw, row["offset"] + name_offset,
                                    row["offset"] + row["size"], path)
             require(name == "/usr/lib/dyld", "runtime dynamic linker differs")
         loads = []
@@ -245,6 +243,6 @@ def project_node_image(raw: bytes, *, offset: int, size: int,
                     "token-expanded normal-OS lookup is unsupported")
             candidate_count += len(candidates)
             loads.append(ImageLoad(row["index"], row["command"], name, candidates, system))
-    except _MachOError as error:
+    except MachOError as error:
         raise RuntimeInputError("invalid runtime Mach-O input: " + str(error)) from error
     return ImageProjection(path, ids[0] if ids else None, rpaths, tuple(loads))

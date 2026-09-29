@@ -11,7 +11,6 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
@@ -95,7 +94,6 @@ public final class AliasLifecyclePlanApply {
         .setTimeToLiveMs(plan.body().validUntilMs() - creationTimeMs)
         .setNonce(nonce)
         .setFeePayment(feePayment)
-        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
         .setMetadata(metadata == null ? Collections.emptyMap() : metadata)
         .build();
   }

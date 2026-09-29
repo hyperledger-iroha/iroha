@@ -120,7 +120,7 @@ pub enum Strategy {
     /// own valid echo reporting a low height (a Byzantine member counts as one reply) (F24).
     ForgeEchoes,
     /// As proxy tail, strip the attestations of the flagged `CommitQC`s it forms, and clear
-    /// their flag every other time (§3.7, F37, MA2, MA6).
+    /// their flag and result witness every other time (§3.7, F37, MA2, MA6).
     StripAttestations,
     /// Send its Commit votes of flagged blocks with a forged attestation, or with none, in
     /// turn (§3.7, F37, MA1).
@@ -527,7 +527,9 @@ impl World {
                         q.attestations.clear();
                         self.adv.counter += 1;
                         if self.adv.counter.is_multiple_of(2) {
+                            // Shaped as unflagged, so only the signed flag rejects it (MA6).
                             q.attest = false;
+                            q.attestation_witness = None;
                         }
                         msg = WireMessage::Qc(q);
                     }

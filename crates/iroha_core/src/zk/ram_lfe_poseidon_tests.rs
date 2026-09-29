@@ -36,8 +36,7 @@ struct HashCircuit<F: PastaField, const L: usize> {
     values: Arc<Inputs<L>>,
     faults: Vec<Fault<F>>,
     bind_output: bool,
-    fail_after_absorb: bool,
-    panic_after_absorb: bool,
+    stop: Stop,
 }
 
 impl<F: PastaField, const L: usize> HashCircuit<F, L> {
@@ -46,8 +45,7 @@ impl<F: PastaField, const L: usize> HashCircuit<F, L> {
             values: Arc::new(Inputs(values.map(|value| value.to_repr()))),
             faults: Vec::new(),
             bind_output: true,
-            fail_after_absorb: false,
-            panic_after_absorb: false,
+            stop: Stop::None,
         }
     }
 
@@ -131,8 +129,7 @@ impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
             &inputs,
             &self.values.0,
             &self.faults,
-            self.fail_after_absorb,
-            self.panic_after_absorb,
+            self.stop,
         )?;
         if self.bind_output {
             layouter.constrain_instance(output, instance, 0);
@@ -209,11 +206,34 @@ fn failures<F: PastaField>(fault: Fault<F>) -> Vec<VerifyFailure> {
 fn every_round_rejects_propagated_arbitrary_field_changes_without_output_checks() {
     fn check<F: PastaField>() {
         let half = Option::<F>::from(F::from(2).invert()).unwrap();
-        for round in 0..64 {
-            for column in 0..3 {
-                let rejected = failures(Fault::State {
-                    row: round + 2,
-                    column,
+        for block in 0..2 {
+            for round_row in 0..ROUND_ROWS {
+                for column in 0..3 {
+                    let rejected = failures(Fault::State {
+                        row: block * (ROUND_ROWS + 1) + round_row + 2,
+                        column,
+                        value: half,
+                    });
+                    assert!(rejected.iter().all(|failure| matches!(
+                        failure,
+                        VerifyFailure::ConstraintNotSatisfied { .. }
+                    )));
+                }
+            }
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn every_paired_first_sbox_rejects_propagated_fractions_without_output_checks() {
+    fn check<F: PastaField>() {
+        let half = Option::<F>::from(F::from(2).invert()).unwrap();
+        for block in 0..2 {
+            for pair in 0..28 {
+                let rejected = failures(Fault::PartialSbox {
+                    row: block * (ROUND_ROWS + 1) + 5 + pair,
                     value: half,
                 });
                 assert!(rejected.iter().all(|failure| matches!(
@@ -243,7 +263,7 @@ fn initial_absorption_copy_and_padding_constraints_reject_coordinated_fractions(
                     .all(|failure| matches!(failure, VerifyFailure::ConstraintNotSatisfied { .. }))
             );
         }
-        for row in [1, 66] {
+        for row in [1, ROUND_ROWS + 2] {
             for column in 0..3 {
                 failures(Fault::<F>::State {
                     row,
@@ -282,18 +302,23 @@ fn initial_absorption_copy_and_padding_constraints_reject_coordinated_fractions(
 #[test]
 fn actual_owned_field_and_input_cells_clear_on_success_error_and_unwind() {
     fn check<F: PastaField>() {
-        for (fail, panic) in [(false, false), (true, false), (false, true)] {
+        for stop in [
+            Stop::None,
+            Stop::ErrorAfterAbsorb,
+            Stop::PanicAfterAbsorb,
+            Stop::ErrorAfterPartialSbox,
+            Stop::PanicAfterPartialSbox,
+        ] {
             CLEARED.with(|values| values.borrow_mut().clear());
             INPUTS_CLEARED.with(|values| values.borrow_mut().clear());
             let outcome = std::panic::catch_unwind(|| {
                 let mut circuit = HashCircuit::new([F::ONE; 3]);
-                circuit.fail_after_absorb = fail;
-                circuit.panic_after_absorb = panic;
+                circuit.stop = stop;
                 circuit.mock(8, vec![circuit.expected()])
             });
-            if panic {
+            if matches!(stop, Stop::PanicAfterAbsorb | Stop::PanicAfterPartialSbox) {
                 assert!(outcome.is_err());
-            } else if fail {
+            } else if matches!(stop, Stop::ErrorAfterAbsorb | Stop::ErrorAfterPartialSbox) {
                 assert!(outcome.unwrap().is_err());
             } else {
                 outcome.unwrap().unwrap().assert_satisfied();
@@ -320,11 +345,13 @@ fn geometry_and_fixed_bounds_are_explicit() {
     assert_eq!(meta.advice_queries().len(), 8);
     assert_eq!(meta.lookups().len(), 0);
     assert_eq!(meta.permutation().get_columns().len(), 6);
-    assert_eq!(hash_rows(3), 131);
-    assert_eq!(hash_rows(2054), 66756);
+    assert_eq!(meta.num_fixed_columns(), 6);
+    assert_eq!(meta.fixed_queries().len(), 6);
+    assert_eq!(hash_rows(3), 75);
+    assert_eq!(hash_rows(2054), 38000);
     assert!(
-        hash_rows(MAX_FIELDS) > 1 << 16,
-        "one lane does not fit the maximum record at default k"
+        hash_rows(MAX_FIELDS) + MAX_FIELDS + meta.minimum_rows() <= 1 << 16,
+        "maximum record and source copies fit the default k"
     );
     assert!(
         HashCircuit::<Fp, 0>::new([])
@@ -353,13 +380,15 @@ fn geometry_and_fixed_bounds_are_explicit() {
 #[test]
 fn maximum_record_matches_native_and_refuses_insufficient_rows() {
     fn check<F: PastaField>() {
-        let circuit = HashCircuit::new([F::ZERO; MAX_FIELDS]);
+        let circuit = HashCircuit::new(std::array::from_fn::<_, MAX_FIELDS, _>(|i| {
+            F::from(17 * i as u64 + 3)
+        }));
         assert!(matches!(
-            circuit.mock(16, vec![circuit.expected()]),
-            Err(Error::NotEnoughRowsAvailable { current_k: 16 })
+            circuit.mock(15, vec![circuit.expected()]),
+            Err(Error::NotEnoughRowsAvailable { current_k: 15 })
         ));
         circuit
-            .mock(17, vec![circuit.expected()])
+            .mock(16, vec![circuit.expected()])
             .unwrap()
             .assert_satisfied();
     }
@@ -367,12 +396,10 @@ fn maximum_record_matches_native_and_refuses_insufficient_rows() {
     check::<Fq>();
 }
 
-#[test]
-fn genuine_ipa_sample_rejects_wrong_instance_tamper_and_trailing_bytes() {
-    let circuit = HashCircuit::new([Fp::from(3), Fp::from(7), Fp::from(11)]);
-    HashCircuit::<Fp, 3>::preflight(8).unwrap();
+fn genuine_ipa<const L: usize>(circuit: HashCircuit<Fp, L>, k: u32) {
+    HashCircuit::<Fp, L>::preflight(k).unwrap();
     let started = Instant::now();
-    let params = halo2_backend::params_new(8);
+    let params = halo2_backend::params_new(k);
     let vk = halo2_backend::keygen_vk(&params, &circuit.without_witnesses()).unwrap();
     let vk_bytes = halo2_backend::verifying_key_to_processed_bytes(&vk).len();
     let pk = halo2_backend::keygen_pk(&params, vk.clone(), &circuit.without_witnesses()).unwrap();
@@ -397,7 +424,27 @@ fn genuine_ipa_sample_rejects_wrong_instance_tamper_and_trailing_bytes() {
     assert!(halo2_backend::verify_ipa_proof(&params, &vk, &suffixed, &instances).is_err());
     assert!(proof.len() < 192 * 1024);
     println!(
-        "RAM_LFE_POSEIDON_METRICS k=8 inputs=3 hash_rows=131 proof_bytes={} vk_bytes={vk_bytes} keygen_ms={keygen_ms:.3} prove_ms={prove_ms:.3} verify_ms={verify_ms:.3}",
-        proof.len()
+        "RAM_LFE_POSEIDON_METRICS k={k} inputs={L} hash_rows={} proof_bytes={} vk_bytes={vk_bytes} keygen_ms={keygen_ms:.3} prove_ms={prove_ms:.3} verify_ms={verify_ms:.3} owned_input_bytes={} owned_working_fields=8",
+        hash_rows(L),
+        proof.len(),
+        L * 32
+    );
+}
+
+#[test]
+fn genuine_ipa_sample_rejects_wrong_instance_tamper_and_trailing_bytes() {
+    genuine_ipa(
+        HashCircuit::new([Fp::from(3), Fp::from(7), Fp::from(11)]),
+        8,
+    );
+}
+
+#[test]
+fn genuine_ipa_maximum_rejects_wrong_instance_tamper_and_trailing_bytes() {
+    genuine_ipa(
+        HashCircuit::new(std::array::from_fn::<_, MAX_FIELDS, _>(|i| {
+            Fp::from(17 * i as u64 + 3)
+        })),
+        16,
     );
 }

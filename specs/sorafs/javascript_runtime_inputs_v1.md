@@ -86,11 +86,11 @@ These are bounded component limits, not funded production admission evidence.
 
 ## Deliberately restricted loader relation
 
-`sorafs_javascript_runtime_graph.py` calls the existing sole
-`copy_sumeragi_v2_release_cargo_cache_cli.py::_parse_macho_thin`; it does not copy
-or replace the Mach-O decoder. A thin little-endian arm64 CPU subtype 0 image
-must have the expected executable/dylib type and one fixed `/usr/lib/dyld`
-launcher command where appropriate. Fat/arm64e/other architectures, weak,
+`sorafs_javascript_runtime_graph.py` calls the repository's sole Mach-O decoder,
+`scripts/macho_decoder.py::parse_macho_thin`; it does not copy or replace it.
+A thin little-endian arm64 CPU subtype 0 image must have the expected
+executable/dylib type and one fixed `/usr/lib/dyld` launcher command
+where appropriate. Fat/arm64e/other architectures, weak,
 reexport, lazy, upward, environment and unknown commands are rejected. Dylib
 install IDs must be canonical captured-original names, resolve to that same
 image and be unique, preventing a claimed cached-name substitution.

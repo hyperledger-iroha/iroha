@@ -27,7 +27,7 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
-    sumeragi::SumeragiStatus,
+    sumeragi::{PROTOCOL_VERSION, SumeragiStatus},
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -213,7 +213,6 @@ impl Default for MockToriiData {
             footprint: Default::default(),
         };
         let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
-            pipeline_execution: Default::default(),
             tx_queue_depth: 4,
             tx_queue_capacity: 1024,
             tx_queue_retained_bytes: 0,
@@ -224,8 +223,6 @@ impl Default for MockToriiData {
             tx_queue_saturated_by_age: false,
             tx_queue_oldest_queued_age_ms: 0,
             npos: None,
-            lane_commitments: Vec::new(),
-            dataspace_commitments: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),

@@ -474,8 +474,8 @@ fn openapi_operations_equal_the_enabled_catalog_projection() {
     ))]
     assert_eq!(
         expected.len(),
-        553,
-        "the supported full Torii documentation profile must remain exactly 553 cataloged operations"
+        572,
+        "the supported full Torii documentation profile must remain exactly 572 cataloged operations"
     );
     let spec = generate_spec();
     let paths = spec
@@ -1994,7 +1994,10 @@ fn generated_operations_declare_tool_effects() {
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("{method} {path} must declare {TOOL_EFFECT_EXTENSION}"));
             assert!(
-                matches!(effect, "read" | "write" | "operator" | "build_instruction"),
+                matches!(
+                    effect,
+                    "read" | "write" | "operator" | "build_instruction" | "expensive"
+                ),
                 "{method} {path} declared invalid effect {effect}"
             );
         }
@@ -2820,8 +2823,7 @@ fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("POST {path} HTTP 503 description"));
         for required_text in [
-            "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
-            "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+            "transaction_dispatch_outcome_unknown",
             "ErrorEnvelope.details.entrypoint_hash",
             "ErrorEnvelope.details.tx_hash",
             "does not fabricate queue-pressure",
@@ -2848,9 +2850,9 @@ fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name} description"));
             assert!(
-                header_description.contains(
-                    "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
-                ) && header_description.contains(detail_name),
+                header_description
+                    .contains("Present exactly once only for transaction_dispatch_outcome_unknown")
+                    && header_description.contains(detail_name),
                 "POST {path} HTTP 503 {header_name} must document its conditional exact body binding"
             );
             if path == route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path()
@@ -2964,5 +2966,11 @@ fn openapi_schemas_include_system_keys() {
     let schemas = openapi_schemas();
     for key in openapi_contract_strings("openapi.openapi_schemas_include_system_keys.strings.1") {
         assert!(schemas.contains_key(key), "schema missing {key}");
+    }
+    for retired in openapi_contract_strings("openapi.openapi_schemas_include_system_keys.retired") {
+        assert!(
+            !schemas.contains_key(retired),
+            "retired schema remains: {retired}"
+        );
     }
 }

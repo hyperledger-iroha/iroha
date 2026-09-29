@@ -114,9 +114,6 @@ fn soracloud_provenance_rejects_multisig_authority_without_panicking() {
         "unexpected multisig provenance rejection: {error:?}"
     );
 }
-fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
-    state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-}
 fn seed_domain_name_lease_tx(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,

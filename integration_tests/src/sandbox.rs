@@ -1129,8 +1129,8 @@ mod tests {
     #[test]
     fn startup_retry_classifier_rejects_decisive_fatal_evidence() {
         for evidence in [
-            "Sumeragi v2 effect services failed closed: exact ownership violation",
-            "authoritative Sumeragi v2 runner stopped fail-closed",
+            "Sumeragi effect services failed closed: exact ownership violation",
+            "authoritative Sumeragi runner stopped fail-closed",
             "fatal consensus operation requires process restart",
             "process restart is required after a fatal consensus failure",
             "Sumeragi consensus is restart-required after a fatal live-runner failure",

@@ -203,12 +203,7 @@ struct ReleasePrebuiltFixture {
 }
 impl Drop for ReleasePrebuiltFixture {
     fn drop(&mut self) {
-        for directory in [
-            self.target.join("message-control/release"),
-            self.target.join("message-control"),
-            self.target.join("release"),
-            self.target.clone(),
-        ] {
+        for directory in [self.target.join("release"), self.target.clone()] {
             set_mode(&directory, 0o700);
         }
     }
@@ -305,12 +300,7 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
     let manifest_text = release_manifest_text(&source_manifest_sha256, &cargo_lock_sha256, &target);
     fs::write(&manifest, &manifest_text).expect("write prebuilt manifest");
     set_mode(&manifest, RELEASE_MANIFEST_MODE);
-    for directory in [
-        target.join("message-control/release"),
-        target.join("message-control"),
-        target.join("release"),
-        target.clone(),
-    ] {
+    for directory in [target.join("release"), target.clone()] {
         set_mode(&directory, RELEASE_BINARY_MODE);
     }
     let manifest_sha256 = lowercase_hex(&sha256(manifest_text.as_bytes()));
@@ -469,9 +459,7 @@ fn release_prebuilt_rejects_symlinked_artifact_paths() {
         assert!(err.to_string().contains("not a symlink"));
     }
 
-    let release_root = fixture
-        .artifact_root
-        .join(SUMERAGI_RELEASE_TARGET_SUBDIR);
+    let release_root = fixture.artifact_root.join(SUMERAGI_RELEASE_TARGET_SUBDIR);
     let relocated_release_root = fixture.artifact_root.join("relocated-release");
     fs::rename(&release_root, &relocated_release_root).expect("relocate release subtree");
     symlink(&relocated_release_root, &release_root).expect("replace release subtree with symlink");
@@ -1091,8 +1079,15 @@ fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
         &fixture.repo,
     )
     .unwrap();
-    assert_eq!(parsed.len(), 5);
-    assert_eq!(parsed[4].kind, ReleasePrebuiltBinary::IrohadTaira);
+    assert_eq!(
+        parsed.each_ref().map(|artifact| artifact.kind),
+        [
+            ReleasePrebuiltBinary::Irohad,
+            ReleasePrebuiltBinary::Iroha,
+            ReleasePrebuiltBinary::Kagami,
+            ReleasePrebuiltBinary::IrohadTaira,
+        ]
+    );
     let text = std::str::from_utf8(&source).unwrap();
     let missing = text
         .lines()

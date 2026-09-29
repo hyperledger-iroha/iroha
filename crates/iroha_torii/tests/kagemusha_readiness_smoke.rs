@@ -42,6 +42,15 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.max_content_len = KAGEMUSHA_COMMAND_BODY_LIMIT.into();
+    cfg.torii.kagemusha_v1_commands = Some(
+        iroha_config::parameters::actual::ToriiKagemushaV1Commands {
+            redemption_issuer: None,
+            operation_registry_max_entries: std::num::NonZeroUsize::new(1).unwrap(),
+            operation_registry_max_bytes: std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+            ).unwrap(),
+        },
+    );
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let app = torii.router();
     let readiness = fixtures::request(
@@ -88,7 +97,13 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
     let error: iroha_torii_shared::ErrorEnvelope =
         norito::json::from_slice(&legacy_selector_body).expect("decode selector rejection");
     assert_eq!(error.code(), "kagemusha_readiness_query_unsupported");
-    for path in ["/v1/kagemusha/top-up", "/v1/kagemusha/redeem"] {
+    // Top-up decodes its canonical signed transaction in the command owner;
+    // redemption uses the typed Norito request extractor.
+    let command_routes = [
+        ("/v1/kagemusha/top-up", "kagemusha_top_up_invalid"),
+        ("/v1/kagemusha/redeem", "request_norito_invalid"),
+    ];
+    for (path, invalid_body_code) in command_routes {
         enum RejectedHeaders {
             MissingIdempotency,
             DuplicateIdempotency,
@@ -201,6 +216,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
             StatusCode::BAD_REQUEST,
             "{path} must decode a direct typed Norito archive"
         );
+        fixtures::response_body(norito, "malformed typed command response").await;
         let missing_content_type = fixtures::request(
             &app,
             Request::builder()
@@ -285,7 +301,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
             "request_content_type_unsupported",
             "path={path}"
         );
-        for (content_type, expected_code) in [("application/x-norito", "request_norito_invalid")] {
+        for (content_type, expected_code) in [("application/x-norito", invalid_body_code)] {
             let empty = fixtures::request(
                 &app,
                 Request::builder()
@@ -307,7 +323,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
             assert_eq!(error.code(), expected_code, "path={path}");
         }
     }
-    for path in ["/v1/kagemusha/top-up", "/v1/kagemusha/redeem"] {
+    for (path, invalid_body_code) in command_routes {
         let oversized_len = usize::try_from(KAGEMUSHA_COMMAND_BODY_LIMIT)
             .expect("test limit fits usize")
             .checked_add(1)
@@ -375,7 +391,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
             fixtures::response_body(above_axum_default, "collect large in-limit response").await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode large in-limit error");
-        assert_eq!(error.code(), "request_norito_invalid", "path={path}");
+        assert_eq!(error.code(), invalid_body_code, "path={path}");
         let body_chunks = futures::stream::iter([
             Ok::<_, Infallible>(Bytes::from(vec![
                 b' ';

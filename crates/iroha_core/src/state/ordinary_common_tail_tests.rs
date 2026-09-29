@@ -140,51 +140,58 @@ fn run_ordinary_tail_independent_batches(
         .sign(key.private_key());
     let entry = TransactionEntrypoint::External(signed.clone());
     let prefix_call = Hash::from(entry.execution_call_hash());
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-    builder.push_transaction(signed);
-    let mut carrier = builder
-        .build(BTreeSet::new())
-        .canonical_resultless_proposal();
+    let mut carrier = fixture
+        ._chain
+        .proposal(Some(header.creation_time_ms), vec![signed]);
+    assert_eq!(carrier.header().creation_time_ms, header.creation_time_ms);
     let unexecuted = carrier.clone();
     let proposal_hash = carrier.hash();
-    let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     if prejoin_prefix {
-        let mut trial = state.block(carrier.header());
-        crate::block::ValidBlock::execute_block_outputs_for_test(&mut carrier, &mut trial, None)
+        let (mut trial, recorder) = ValidBlock::start_component_execution(&carrier, state)
+            .expect("record original component before its first effects");
+        ValidBlock::execute_recorded_component_outputs(&mut carrier, &mut trial, &recorder)
             .unwrap();
         drop(trial);
+        drop(recorder);
     }
     let advertised_wire = prejoin_prefix.then(|| carrier.encode_wire().unwrap());
-    let mut overlay = Box::new(state.block(carrier.header()));
     if leftover_call {
         let mut extra = TransactionBuilder::new(
             state.network_id,
             fixture.source.account().clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        extra.set_creation_time(header.creation_time() - Duration::from_millis(2));
-        let extra = TransactionEntrypoint::External(
-            extra
-                .with_instructions([ordinary_tail_batch(&fixture)])
-                .sign(key.private_key()),
+        extra.set_creation_time(header.creation_time() - Duration::from_millis(1));
+        let extra = extra
+            .with_instructions([
+                InstructionBox::from(ordinary_tail_batch(&fixture)),
+                Log::new(Level::INFO, "different original receipt owner".to_owned()).into(),
+            ])
+            .sign(key.private_key());
+        assert_ne!(
+            TransactionEntrypoint::External(extra.clone()).execution_call_hash(),
+            entry.execution_call_hash(),
         );
-        assert_ne!(extra.execution_call_hash(), entry.execution_call_hash());
-        let mut other =
-            iroha_data_model::block::builder::BlockBuilder::new(header).build(BTreeSet::new());
-        other.set_external_entrypoints(vec![extra]);
-        ValidBlock::execute_block_outputs_for_test(&mut other, &mut overlay, None)
+        let mut other = fixture
+            ._chain
+            .proposal(Some(header.creation_time_ms), vec![extra]);
+        assert_eq!(other.header().height(), carrier.header().height());
+        assert_eq!(
+            other.header().creation_time(),
+            carrier.header().creation_time()
+        );
+        let (mut overlay, recorder) = ValidBlock::start_component_execution(&other, state)
+            .expect("record the other exact source before its first effects");
+        ValidBlock::execute_recorded_component_outputs(&mut other, &mut overlay, &recorder)
             .expect("other original source completes on this overlay");
         let before = carrier.encode_wire().unwrap();
         assert!(
-            crate::block::ValidBlock::execute_block_outputs_for_test(
-                &mut carrier,
-                &mut overlay,
-                None
-            )
-            .is_err()
+            ValidBlock::execute_recorded_component_outputs(&mut carrier, &mut overlay, &recorder,)
+                .is_err()
         );
         assert_eq!(carrier.encode_wire().unwrap(), before);
         drop(overlay);
+        drop(recorder);
         assert_eq!(
             state
                 .world
@@ -205,8 +212,9 @@ fn run_ordinary_tail_independent_batches(
         );
         return;
     }
-    crate::block::ValidBlock::execute_block_outputs_for_test(&mut carrier, &mut overlay, None)
-        .unwrap();
+    let (mut overlay, recorder) = ValidBlock::start_component_execution(&carrier, state)
+        .expect("record the exact carrier before its first effects");
+    ValidBlock::execute_recorded_component_outputs(&mut carrier, &mut overlay, &recorder).unwrap();
     if let Some(expected) = advertised_wire {
         assert_eq!(carrier.encode_wire().unwrap(), expected);
     }
@@ -341,6 +349,7 @@ fn run_ordinary_tail_independent_batches(
         results
     );
     drop(overlay);
+    drop(recorder);
     assert_eq!(
         state
             .world

@@ -1,10 +1,9 @@
 package org.hyperledger.iroha.sdk.core.model
 
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Modifier
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
+import org.hyperledger.iroha.sdk.testing.JvmApiInventory
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -17,8 +16,11 @@ import kotlin.test.assertTrue
 
 class TransactionPayloadTest {
 
-    private fun defaultPayload() = testPayload(
+    private fun defaultPayload() = TransactionPayload(
+        networkId = TEST_NETWORK_ID,
+        authority = sampleAuthority(0x00),
         creationTimeMs = 1000L,
+        feePayment = FeePaymentIntent.authority(emptyList()),
     )
 
     @Test
@@ -30,56 +32,23 @@ class TransactionPayloadTest {
         assertEquals(100_000L, payload.timeToLiveMs)
         assertEquals(null, payload.nonce)
         assertEquals(emptyMap(), payload.metadata)
+        assertEquals(payload, TransactionPayloadJavaCalls.create(TEST_NETWORK_ID, sampleAuthority(0x00)))
     }
 
     @Test
-    fun `authority cannot be synthesized by the Kotlin default constructor`() {
-        val defaultingConstructor = TransactionPayload::class.java.declaredConstructors.single {
-            it.isSynthetic && it.parameterTypes.last().name == "kotlin.jvm.internal.DefaultConstructorMarker"
+    fun `Java constructor cannot synthesize a missing authority`() {
+        val error = assertFailsWith<NullPointerException> {
+            TransactionPayloadJavaCalls.create(TEST_NETWORK_ID, null)
         }
-        val error = assertFailsWith<InvocationTargetException> {
-            defaultingConstructor.newInstance(
-                TEST_NETWORK_ID,
-                null,
-                0L,
-                null,
-                null,
-                null,
-                FeePaymentIntent.authority(emptyList()),
-                null, // admission intent
-                null, // metadata
-                null, // attachments
-                0x3bf,
-                null,
-            )
-        }
-        assertTrue(error.cause is NullPointerException)
-        assertTrue(error.cause?.message?.contains("authority") == true)
+        assertTrue(error.message?.contains("authority") == true)
     }
 
     @Test
-    fun `networkId cannot be synthesized by the Kotlin default constructor`() {
-        val defaultingConstructor = TransactionPayload::class.java.declaredConstructors.single {
-            it.isSynthetic && it.parameterTypes.last().name == "kotlin.jvm.internal.DefaultConstructorMarker"
+    fun `Java constructor cannot synthesize a missing networkId`() {
+        val error = assertFailsWith<NullPointerException> {
+            TransactionPayloadJavaCalls.create(null, sampleAuthority(0x00))
         }
-        val error = assertFailsWith<InvocationTargetException> {
-            defaultingConstructor.newInstance(
-                null,
-                sampleAuthority(0x00),
-                0L,
-                null,
-                null,
-                null,
-                FeePaymentIntent.authority(emptyList()),
-                null, // admission intent
-                null, // metadata
-                null, // attachments
-                0x3bf,
-                null,
-            )
-        }
-        assertTrue(error.cause is NullPointerException)
-        assertTrue(error.cause?.message?.contains("networkId") == true)
+        assertTrue(error.message?.contains("networkId") == true)
     }
 
     @Test
@@ -161,11 +130,13 @@ class TransactionPayloadTest {
             NativeSignerBridge::class.java,
         )
         publicTypes.forEach { type ->
+            val api = JvmApiInventory.read(type)
+            assertEquals("java/lang/Object", api.superName, "review any inherited API")
             val exposedNames = buildList {
-                type.fields.mapTo(this) { it.name }
-                type.methods.mapTo(this) { it.name }
-                type.constructors.flatMapTo(this) { constructor ->
-                    constructor.parameters.map { it.name }
+                api.fields.filter { it.isPublic }.mapTo(this) { it.name }
+                api.methods.filter { it.isPublic }.forEach {
+                    add(it.name)
+                    if (it.name == "<init>") addAll(it.parameterNames)
                 }
             }
             assertFalse(
@@ -174,20 +145,19 @@ class TransactionPayloadTest {
             )
         }
 
-        val payloadConstructor = TransactionPayload::class.java.constructors.single {
-            Modifier.isPublic(it.modifiers) && !it.isSynthetic
+        val networkType = "Lorg/hyperledger/iroha/sdk/core/model/NetworkId;"
+        val payloadConstructor = JvmApiInventory.read(TransactionPayload::class.java).methods.single {
+            it.name == "<init>" && it.isPublic && !it.isSynthetic
         }
-        assertEquals(NetworkId::class.java, payloadConstructor.parameterTypes.first())
-        assertEquals(
-            NetworkId::class.java,
-            LocalSigningContext::class.java.constructors.single().parameterTypes.single(),
-        )
-        val signer = NativeSignerBridge::class.java.declaredMethods.single {
-            it.name == "encodeRegisterZkAssetSignedTransaction" &&
-                Modifier.isPublic(it.modifiers) &&
-                Modifier.isStatic(it.modifiers)
+        assertEquals(networkType, payloadConstructor.parameterTypes.first())
+        val signingConstructor = JvmApiInventory.read(LocalSigningContext::class.java).methods.single {
+            it.name == "<init>" && it.isPublic
         }
-        assertEquals(NetworkId::class.java, signer.parameterTypes[1])
+        assertEquals(listOf(networkType), signingConstructor.parameterTypes)
+        val signer = JvmApiInventory.read(NativeSignerBridge::class.java).methods.single {
+            it.name == "encodeRegisterZkAssetSignedTransaction" && it.isPublic && it.isStatic
+        }
+        assertEquals(networkType, signer.parameterTypes[1])
     }
 
     @Test

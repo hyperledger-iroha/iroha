@@ -155,8 +155,8 @@ sources, source seals and producer binaries. Their SHA-256 values are
 `fd224bb9248a7d1d9f8cd3a45ef706e5b3c3806afb53f092abfc90a4f294f3bc`
 and `c4e73559134736e2c72817ec1029e81c1a5fb41ba580bf4264696178956faa64`.
 The nine declared public tests pass on 19,317 unchanged inputs with no stack
-override. The same source passes 256 affected model tests, including all 32
-Native AMX cases, 28 public query integration tests and one allocation test,
+override. The same source passes 256 affected model tests, 28 public query
+integration tests and one allocation test,
 with zero failures or ignored cases across all four runs.
 The nine source/fixture paths are integrated from patch
 `651a055911da35e46c6339d3356c6b9db6e3a544972417a12b5ef3221c9f122b`.
@@ -197,7 +197,7 @@ The retained `time-event-frame-closure/` evidence binds both actual captures to
 their producer binary and 19,319 unchanged pre-declaration inputs. The final
 combined build and four runtime selections share 19,321 unchanged inputs and no
 stack override. All **301 focused tests pass**: 11 public frame tests, 256 model
-tests (including 21 time tests and all 32 Native AMX regressions), 28 query plus
+tests (including 21 time tests), 28 query plus
 five SM integration tests, and one allocation test. The unused SM framing-trait
 import is removed; the combined build reports no warnings.
 
@@ -241,18 +241,10 @@ complete valid payload. No public equality/debug traits or compatibility paths
 are added. The governance-disabled branch retains 98 applicable frames but has
 not been runtime-qualified in this stage.
 
-The Native AMX settlement tests now have one topic-owned module. All 104
-functions and 75 tests across the complete include closure are retained; moved
-bodies and signatures are unchanged. The former 3,083-line test root is 1,567
-lines and the new module is 1,719 lines. The maximum 4,096-source regression
-still constructs schemas, encodes, decodes, hashes and drops the finite
-participant control on the default stack. Its production record and HashOf
-schema implementation are unchanged by this stage.
-
 The final build, four runtime selections and codec guard share 19,341 unchanged
 inputs with no stack override. All **384 focused tests pass**, with no failures
 or ignored cases: 21 public tests preserving **525 immutable frames**, 329 model
-tests including all 32 Native AMX cases and 16 new identity suites, 33 query/SM
+tests including 16 new identity suites, 33 query/SM
 integration tests and one allocation test. Formatting and codec checks pass.
 The source budget removes exactly one finding, leaving 235 findings and 173
 unchanged exceptions under the existing 5,000/3,000-line limits.

@@ -50,7 +50,7 @@ parameters (`EvidenceListQuery`):
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Must be a canonical unsigned decimal integer in `1..=1000`. |
 | `offset`  | `usize` | `0` | Canonical unsigned decimal offset in `0..=10000`. |
-| `kind`    | `string` | _none_ | The sole accepted value is `SumeragiV2Equivocation`. |
+| `kind`    | `string` | _none_ | The sole accepted value is `NativeSumeragiEvidence`. |
 
 Response JSON is a Norito JSON object:
 
@@ -59,15 +59,16 @@ Response JSON is a Norito JSON object:
   "total": 1,
   "items": [
     {
-      "kind": "SumeragiV2Equivocation",
+      "kind": "NativeSumeragiEvidence",
       "class": "phase_vote",
+      "instance": "91c3…",
       "height": 1024,
-      "view": 8,
       "epoch": 0,
-      "signer": 3,
       "context_id": "2c5a…",
-      "artifact_hash_1": "8f0d…",
-      "artifact_hash_2": "4de1…",
+      "authority_generation": "07be…",
+      "offenders": [{ "signer": 3, "peer_id": "ea01…" }],
+      "safety_violation": true,
+      "native_frame_hash": "8f0d…",
       "recorded_height": 2048,
       "recorded_view": 16,
       "recorded_ms": 1731883656123,
@@ -94,12 +95,14 @@ jointly limited to 16 MiB, leaving bounded envelope headroom. Both formats use
 count-first bounded encoders, so an oversized body is rejected without first
 materializing an unbounded response.
 
-`SumeragiV2Equivocation` JSON includes `class`, `height`, `view`, `epoch`,
-`signer`, `context_id`, and canonical hashes of both retained signed artifacts.
-The binary record additionally contains the complete frozen context,
-roster-ordered BLS proofs of possession, and both exact artifacts.
-Retired global-v1 kind/payload layouts fail binary decode and are never
-upgraded or reconstructed by the endpoint.
+`NativeSumeragiEvidence` JSON includes `class` (`proposal`, `phase_vote`,
+`timeout_vote`, `invalid_proposal` or `conflicting_certificates`), the
+attributed `instance`, `height`, `epoch`, `context_id` and
+`authority_generation`, the `offenders` (committee signer index and peer id),
+`safety_violation`, and the hash of the canonical native evidence frame. The
+binary record additionally contains that exact native frame. Retired
+kind/payload layouts fail binary decode and are never upgraded or
+reconstructed by the endpoint.
 Every JSON record has a numeric `consensus_admitted_height`, equal to the WSV
 record's committed admission height. Node-local observations have no
 `EvidenceRecord` and never appear in either endpoint. The required closed
@@ -110,7 +113,7 @@ record's committed admission height. Node-local observations have no
 penalty booleans and nullable terminal-height fields are not emitted. Candidate
 blocks carry at most eight proofs and 4 MiB of encoded evidence in canonical
 key order; every follower anchors the embedded context to immutable committed
-v2 context history, revalidates the self-contained proof, and only permits
+context history, revalidates the self-contained proof, and only permits
 penalties to consume an admission from a prior committed block. The committed
 table additionally holds at most 124 records and 16 MiB of canonical proof
 payloads after deterministic stale-terminal reclamation.

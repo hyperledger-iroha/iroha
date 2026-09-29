@@ -2952,8 +2952,8 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     "scripts/tests/sorafs_javascript_parent_input_test.py",
     "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
     "scripts/tests/sorafs_javascript_child_process_test.py",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
     "scripts/tests/sorafs_javascript_installed_test.py",
 ))
 def test_release_parent_cleanup_controls_have_an_executable_registration(test):

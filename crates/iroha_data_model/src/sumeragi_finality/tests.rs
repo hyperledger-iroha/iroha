@@ -1,4 +1,4 @@
-//! Current-format cryptographic proof and wire regressions, independent of retired V2 fixtures.
+//! Cryptographic proof and wire regressions for the current finality format.
 use super::*;
 use crate::sumeragi::epoch::ValidatorEpochContextV1;
 use crate::{

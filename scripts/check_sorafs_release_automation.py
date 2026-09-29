@@ -1284,8 +1284,8 @@ SORAFS_JAVASCRIPT_CHILD_PATHS = frozenset({
     "scripts/sorafs_javascript_child_process.py",
     "scripts/tests/sorafs_javascript_child_process_test.py",
     "specs/sorafs/javascript_runtime_inputs_v1.md",
-    "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py",
+    "scripts/macho_decoder.py",
+    "scripts/tests/macho_decoder_test.py",
     "scripts/sorafs_python_consumer_artifact.py",
     "scripts/sorafs_python_consumer_cases.py",
     "ci/verify_privacy_python_wheel.py",
@@ -1311,8 +1311,8 @@ SORAFS_JAVASCRIPT_CHILD_PYTHON_TESTS = (
     "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
     "scripts/tests/sorafs_javascript_runtime_custody_test.py",
     "scripts/tests/sorafs_javascript_child_process_test.py",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
 )
 SORAFS_JAVASCRIPT_CHILD_WORKFLOWS = (
     ".github/workflows/sorafs-cli-release.yml",

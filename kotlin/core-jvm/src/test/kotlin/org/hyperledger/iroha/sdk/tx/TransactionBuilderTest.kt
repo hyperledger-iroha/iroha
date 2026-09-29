@@ -43,7 +43,8 @@ class TransactionBuilderTest {
         val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = payload(metadata = mapOf("channel" to JsonValue.string("sdk-test")))
         val canonical = codec.encodeTransaction(payload)
-        assertEquals(payload, NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(canonical))
+        NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(canonical)
+        assertEquals(payload, codec.decodeTransaction(canonical))
         for (tag in listOf(0, 1, 2)) {
             val retired = RetiredTransactionWire.insertAdmissionSlot(canonical, tag)
             assertFailsWith<NoritoException>("retired slot $tag") {

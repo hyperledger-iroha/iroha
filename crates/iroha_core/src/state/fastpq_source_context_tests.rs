@@ -8,6 +8,9 @@ use crate::{
 use iroha_data_model::{
     block::BlockHeader,
     fastpq::{FastpqSourceLaneV1, TransferSmtWitness},
+    nexus::{LaneCatalog, LaneConfig},
+    parameter::system::SumeragiParameters,
+    sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLaneRecord},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
@@ -22,6 +25,68 @@ fn state() -> State {
 
 fn header() -> BlockHeader {
     BlockHeader::new(nonzero!(1_u64), None, None, 7, 0)
+}
+
+fn native_lane() -> SumeragiLaneRecord {
+    SumeragiLaneRecord {
+        lane: LaneId::new(1),
+        dataspace: DataSpaceId::UNIVERSAL,
+        incarnation: Hash::new(b"committed native lane incarnation").into(),
+        params: SumeragiParameters::default(),
+        committee: crate::sumeragi::test_chain::fixture_validators()
+            .into_iter()
+            .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+            .collect(),
+        created_at: 1,
+        active_from: 3,
+        closing: None,
+        anchor_freshness: 16,
+        merged: SumeragiLaneFrontier::default(),
+        merged_at: 3,
+        rescued: 0,
+    }
+}
+
+// These component fixtures select the committed owner that source capture reads.
+// Signed policy creation and lane certificates are covered by the Kagami fixture.
+fn native_state(record: Option<SumeragiLaneRecord>, nexus_secondary: bool) -> State {
+    let world = World::default();
+    if let Some(record) = record {
+        let mut block = world.block();
+        block.sumeragi_lanes.get_mut().upsert(record);
+        block.commit();
+    }
+    if nexus_secondary {
+        State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus {
+                lane_catalog: LaneCatalog::new(
+                    nonzero!(2_u32),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: LaneId::new(1),
+                            alias: "separate-nexus-lane".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .unwrap(),
+                ..Default::default()
+            },
+            LiveQueryStore::start_test(),
+        )
+    } else {
+        State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+}
+
+fn native_header(height: u64) -> BlockHeader {
+    BlockHeader::new(height.try_into().unwrap(), None, None, 7, 0)
 }
 
 fn delta() -> TransferDeltaTranscript {
@@ -39,6 +104,173 @@ fn delta() -> TransferDeltaTranscript {
         to_balance_after: Quantity::from(1_u32),
         from_smt_witness: TransferSmtWitness::default(),
         to_smt_witness: TransferSmtWitness::default(),
+    }
+}
+
+#[test]
+fn native_lane_source_uses_its_committed_incarnation_without_a_physical_catalog_entry() {
+    use crate::sumeragi::test_chain::{
+        CertifiedTestChain, Signers, TestChainConfig, fixture_validators,
+    };
+    use iroha_data_model::{
+        isi::{Register, SetKeyValue},
+        parameter::Parameter,
+        sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        },
+    };
+    use iroha_test_samples::ALICE_KEYPAIR;
+
+    let lane = LaneId::new(2);
+    let policy = SumeragiLanePolicy {
+        anchor_freshness: 16,
+        max_merge_blocks: 8,
+        stall_window: 100,
+        lane_params: Default::default(),
+        fixed: vec![SumeragiFixedLane {
+            lane,
+            dataspace: DataSpaceId::UNIVERSAL,
+            committee: fixture_validators()
+                .into_iter()
+                .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+                .collect(),
+        }],
+        routes: vec![SumeragiLaneRoute {
+            lane,
+            account: Some(ALICE_ID.to_string()),
+            instruction: None,
+        }],
+        autoscale: None,
+    };
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config
+        .genesis_instructions
+        .push(Register::account(Account::new(ALICE_ID.clone())).into());
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(policy.into_custom_parameter()));
+    let mut chain = CertifiedTestChain::start(config).expect("original native lane policy");
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let original = chain
+        .state()
+        .view()
+        .world()
+        .sumeragi_lanes()
+        .lane(lane)
+        .unwrap()
+        .clone();
+    assert!(original.admits_anchor(chain.height()));
+    assert!(
+        !chain
+            .state()
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|entry| entry.id == lane)
+    );
+    let expected = Hash::from_marked_bytes(original.incarnation).expect("exact native chain hash");
+    let transaction = chain.sign(
+        &ALICE_KEYPAIR,
+        [SetKeyValue::account(
+            ALICE_ID.clone(),
+            "native_source".parse().unwrap(),
+            Json::new(1_u32),
+        )
+        .into()],
+        chain.committed(chain.height()).block_time_ms(),
+    );
+    let proposal = chain.proposal(None, vec![transaction]);
+    let mut pending = chain
+        .begin_proposal(proposal, Default::default())
+        .expect("native routed execution has its original frozen source");
+    pending
+        .inspect(move |execution| {
+            let inventory = execution.state.fastpq_source_inventory().unwrap().unwrap();
+            assert_eq!(inventory.entries().len(), 1);
+            assert_eq!(
+                inventory.entries()[0].route,
+                iroha_data_model::fastpq::FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
+                    lane_id: lane,
+                    lane_incarnation: expected
+                },)
+            );
+            let result = &execution
+                .block
+                .as_ref()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result;
+            assert!(
+                result.is_ok(),
+                "original native execution rejected: {result:?}"
+            );
+        })
+        .unwrap();
+    pending
+        .publish(Signers::Quorum)
+        .expect("publish the original native source");
+}
+
+#[test]
+fn native_source_freezes_original_activation_closing_and_incarnation() {
+    use iroha_data_model::sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneState};
+
+    let state = state();
+    let lane = LaneId::new(7);
+    let original = Hash::new(b"original native incarnation");
+    let record = SumeragiLaneRecord {
+        lane,
+        dataspace: DataSpaceId::UNIVERSAL,
+        incarnation: original.into(),
+        params: Default::default(),
+        committee: Vec::new(),
+        created_at: 10,
+        active_from: 12,
+        closing: Some(20),
+        anchor_freshness: 16,
+        merged: Default::default(),
+        merged_at: 12,
+        rescued: 0,
+    };
+    let native = SumeragiLaneState {
+        lanes: vec![record],
+        ..Default::default()
+    };
+    let mut lanes = state.world.sumeragi_lanes.block();
+    *lanes.get_mut() = native.clone();
+    lanes.commit();
+    for (height, expected) in [
+        (12, None),
+        (13, Some(original)),
+        (20, Some(original)),
+        (21, None),
+    ] {
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).unwrap(),
+            None,
+            None,
+            height,
+            0,
+        ));
+        let captured = Arc::clone(block.fastpq_source_context.as_ref().unwrap());
+        assert_eq!(
+            captured.lane_incarnations.get(&lane).copied().flatten(),
+            expected
+        );
+        assert!(captured.lane_incarnations[&LaneId::SINGLE].is_some());
+        let mut changed = native.clone();
+        changed.lanes[0].incarnation = Hash::new(b"later incarnation").into();
+        changed.lanes[0].active_from = 1;
+        changed.lanes[0].closing = None;
+        *block.world.sumeragi_lanes.get_mut() = changed;
+        assert_eq!(
+            captured.lane_incarnations.get(&lane).copied().flatten(),
+            expected,
+            "later overlay effects cannot alter the original source-height capture"
+        );
     }
 }
 
@@ -305,5 +537,158 @@ fn normal_and_replacement_scopes_freeze_incarnation_before_pristine_stage() {
                 lane_incarnation: original
             })
         );
+    }
+}
+
+#[test]
+fn native_source_uses_exact_committed_incarnation_without_nexus_fallback() {
+    let record = native_lane();
+    let original = Hash::from_marked_bytes(record.incarnation).unwrap();
+    for nexus_secondary in [false, true] {
+        let state = native_state(Some(record.clone()), nexus_secondary);
+        let mut block = state.merge_preexecution_block(native_header(4));
+        let separate = StateReadOnly::lane_incarnation_at_height(&block, record.lane, 4);
+        assert_eq!(separate.is_some(), nexus_secondary);
+        assert_ne!(separate, Some(original));
+        let hash = Hash::new(b"native source owner");
+        {
+            let mut tx = block.transaction_for_fastpq_testing(hash);
+            tx.current_lane_id = Some(record.lane);
+            tx.current_dataspace_id = Some(record.dataspace);
+            tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
+            tx.apply();
+        }
+        let captured = block.captured_fastpq_transcript_sources().unwrap()[&hash];
+        assert_eq!(
+            captured.route(),
+            FastpqCapturedSourceRoute::Lane(FastpqSourceLaneV1 {
+                lane_id: record.lane,
+                lane_incarnation: original,
+            })
+        );
+        assert_eq!(captured.dataspace_id(), record.dataspace);
+    }
+}
+
+#[test]
+fn native_source_uses_routing_parent_anchor_and_refuses_invalid_identity() {
+    for (height, closing, marked, admitted) in [
+        (3, None, true, false),
+        (4, None, true, true),
+        (7, Some(7), true, true),
+        (8, Some(7), true, false),
+        (4, None, false, false),
+    ] {
+        let mut record = native_lane();
+        record.closing = closing;
+        if !marked {
+            record.incarnation[31] &= !1;
+            assert_ne!(record.incarnation, [0; 32]);
+        }
+        let state = native_state(Some(record.clone()), false);
+        let mut block = state.merge_preexecution_block(native_header(height));
+        let hash = Hash::new(b"native source admission boundary");
+        let mut tx = block.transaction_for_fastpq_testing(hash);
+        tx.current_lane_id = Some(record.lane);
+        let result = tx.record_transfer_transcript(&ALICE_ID, delta());
+        assert_eq!(result.is_ok(), admitted, "height={height}, marked={marked}");
+        if !admitted {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no frozen active incarnation")
+            );
+        }
+        tx.apply();
+        assert_eq!(block.fastpq_transcripts.contains_key(&hash), admitted);
+    }
+}
+
+#[test]
+fn missing_native_record_cannot_use_a_configured_nexus_lane() {
+    // A retired lane has no native record, even if another subsystem retains
+    // a Nexus lane with the same numeric id.
+    let state = native_state(None, true);
+    let mut block = state.merge_preexecution_block(native_header(4));
+    assert!(StateReadOnly::lane_incarnation_at_height(&block, LaneId::new(1), 4).is_some());
+    let hash = Hash::new(b"missing native lane");
+    let mut tx = block.transaction_for_fastpq_testing(hash);
+    tx.current_lane_id = Some(LaneId::new(1));
+    assert!(tx.record_transfer_transcript(&ALICE_ID, delta()).is_err());
+    tx.apply();
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(output_capacity::ExecutionOutputPlanState::Poisoned)
+    ));
+}
+
+#[test]
+fn native_incarnation_is_frozen_before_world_and_transaction_mutation() {
+    let record = native_lane();
+    let original = Hash::from_marked_bytes(record.incarnation).unwrap();
+    let state = native_state(Some(record.clone()), false);
+    let mut block = state.merge_preexecution_block(native_header(4));
+    block
+        .world
+        .sumeragi_lanes
+        .get_mut()
+        .lane_mut(record.lane)
+        .unwrap()
+        .incarnation = Hash::new(b"later block native incarnation").into();
+    let hash = Hash::new(b"frozen native source");
+    {
+        let mut tx = block.transaction_for_fastpq_testing(hash);
+        tx.world
+            .sumeragi_lanes
+            .get_mut()
+            .lane_mut(record.lane)
+            .unwrap()
+            .incarnation = Hash::new(b"later transaction native incarnation").into();
+        tx.current_lane_id = Some(record.lane);
+        tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
+        tx.apply();
+    }
+    assert_eq!(
+        block.captured_fastpq_transcript_sources().unwrap()[&hash].route(),
+        FastpqCapturedSourceRoute::Lane(FastpqSourceLaneV1 {
+            lane_id: record.lane,
+            lane_incarnation: original,
+        })
+    );
+}
+
+#[test]
+fn normal_and_replacement_scopes_do_not_admit_native_lanes_created_after_freeze() {
+    fn create_stage(block: &mut StateBlock<'_>) -> Result<(), core::convert::Infallible> {
+        block.world.sumeragi_lanes.get_mut().upsert(native_lane());
+        Ok(())
+    }
+    let state = state();
+    for replacement in [false, true] {
+        let mut block = if replacement {
+            state
+                .block_and_revert_with_pristine_stage(native_header(4), create_stage)
+                .unwrap()
+        } else {
+            state
+                .block_with_pristine_stage(native_header(4), create_stage)
+                .unwrap()
+        };
+        assert!(
+            block
+                .world
+                .sumeragi_lanes
+                .get()
+                .lane(LaneId::new(1))
+                .is_some()
+        );
+        let hash = Hash::new(b"native lane created after capture");
+        let mut tx = block.transaction_for_fastpq_testing(hash);
+        tx.current_lane_id = Some(LaneId::new(1));
+        assert!(tx.record_transfer_transcript(&ALICE_ID, delta()).is_err());
+        tx.apply();
+        assert!(block.fastpq_transcripts.is_empty());
     }
 }

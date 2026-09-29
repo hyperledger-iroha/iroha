@@ -241,6 +241,7 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }
 crossbeam-epoch = "=0.9.20"
 futures = { workspace = true, features = ["std", "async-await"] }
@@ -355,6 +356,12 @@ required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 [[test]]
 name = "sccp_public_boundary"
 path = "tests/sccp_public_boundary.rs"
+
+# Certified dynamic private-dataspace registration and native execution through public APIs.
+[[test]]
+name = "private_dataspace_runtime"
+path = "tests/private_dataspace_runtime.rs"
+required-features = ["iroha-core-tests"]
 
 [[test]]
 name = "iroha_core_group_01"

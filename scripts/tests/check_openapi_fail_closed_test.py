@@ -30,7 +30,7 @@ INTEGRATION_TESTS_BUILD = REPO_ROOT / "integration_tests" / "build.rs"
 TEST_SAMPLES_BUILD = REPO_ROOT / "crates" / "iroha_test_samples" / "build.rs"
 TEST_SAMPLES_LIBRARY = REPO_ROOT / "crates" / "iroha_test_samples" / "src" / "lib.rs"
 RELEASE_PROCESS_POLICY = (
-    REPO_ROOT / "scripts" / "sumeragi_v2_release_process_policy.sh"
+    REPO_ROOT / "scripts" / "sumeragi_release_process_policy.sh"
 )
 OPENAPI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "openapi.yml"
 OPENAPI_README = REPO_ROOT / "tools" / "openapi" / "README.md"
@@ -140,6 +140,45 @@ def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
     assert 'for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"' in release_gate
     assert 'cmp -s "${SPEC_PATH}" "${authority}"' in release_gate
 
+
+
+def test_native_status_schema_accepts_the_rust_corpus_and_rejects_noncanonical_forms() -> None:
+    document = json.loads(OPENAPI_AUTHORITIES[0].read_text())
+    validator = Draft202012Validator({
+        "$ref": "#/components/schemas/SumeragiStatusResponse",
+        "components": document["components"],
+    })
+    corpus = REPO_ROOT / "fixtures/sumeragi/native_status_v1.tsv"
+    rows = {}
+    for line in corpus.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, payload, _wire = line.split("\t")
+        assert name not in rows
+        rows[name] = json.loads(payload)
+        validator.validate(rows[name])
+    assert set(rows) == {
+        "validator", "observer", "safety_record_corrupt", "safety_record_inconsistent",
+        "safety_violation", "apply_diverged", "publication_recovery_required", "driver_anomaly",
+    }
+    rejected = []
+    for field, value in (
+        ("protocol_version", 8), ("instance", rows["validator"]["instance"].upper()),
+        ("leader", "ed0120" + "A5" * 32), ("signer", "ea0130" + "ab" * 48),
+        ("view", 1 << 64), ("retired_height_context", {}),
+    ):
+        changed = copy.deepcopy(rows["validator"])
+        changed[field] = value
+        rejected.append(changed)
+    changed = copy.deepcopy(rows["validator"])
+    changed["beacon_horizon"]["active_session_id"] = [0xAB] * 32
+    rejected.append(changed)
+    for name in ("safety_record_corrupt", "publication_recovery_required"):
+        changed = copy.deepcopy(rows[name])
+        del changed["halted"]["details"]
+        rejected.append(changed)
+    for changed in rejected:
+        assert not validator.is_valid(changed), changed
 
 
 def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
@@ -655,7 +694,7 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "ci/check_openapi_spec.sh",
         "ci/run_openapi_generator.sh",
         "scripts/seal_workspace_source.py",
-        "scripts/sumeragi_v2_release_process_policy.sh",
+        "scripts/sumeragi_release_process_policy.sh",
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
         "tools/openapi/scripts/generate-unsigned-openapi.mjs",
         "tools/openapi/scripts/verify-openapi-release-inputs.mjs",
@@ -992,7 +1031,7 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
 
     assert policy.count("acquire_invocation_cargo_lock() {") == 1
     assert policy.count("release_invocation_cargo_lock() {") == 1
-    assert 'lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"' in policy
+    assert 'lock_path="${artifact_root}/.sumeragi-cargo.lock"' in policy
     assert "lock.mkdir(mode=0o700)" in policy
     assert "wait_for_external_cargo" not in policy
     assert "ps -" not in policy

@@ -23,11 +23,11 @@ from resource_evidence_budget import (
     CAPTURE_MANIFEST_BYTES as MAX_MANIFEST_BYTES, MAX_SAMPLES, MAX_WIRE_BYTES,
 )
 
-REQUEST_SCHEMA = 'iroha.sumeragi_v2.resource_probe.request.v1'
-RESPONSE_SCHEMA = 'iroha.sumeragi_v2.resource_probe.response.v1'
-CONFIG_SCHEMA = 'iroha.sumeragi_v2.resource_probe.config.v1'
-CAPTURE_SCHEMA = 'iroha.sumeragi_v2.resource_probe.capture.v1'
-ADMISSION_SCHEMA = 'iroha.sumeragi_v2.resource_probe.admission.v1'
+REQUEST_SCHEMA = 'iroha.sumeragi.resource_probe.request.v1'
+RESPONSE_SCHEMA = 'iroha.sumeragi.resource_probe.response.v1'
+CONFIG_SCHEMA = 'iroha.sumeragi.resource_probe.config.v1'
+CAPTURE_SCHEMA = 'iroha.sumeragi.resource_probe.capture.v1'
+ADMISSION_SCHEMA = 'iroha.sumeragi.resource_probe.admission.v1'
 MAX_FRAME_BYTES = 16 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 32

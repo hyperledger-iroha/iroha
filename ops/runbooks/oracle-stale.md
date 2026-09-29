@@ -7,7 +7,7 @@ summary: Response plan for `iroha_oracle_*` telemetry alerts so the NX-3 settlem
 
 - **Applies to:** Nexus Core operators, SRE/Telemetry on-call, Treasury, Governance reviewers.
 - **Roadmap links:** NX-3 “Unified lane settlement & XOR conversion” and NX-18 “1 s finality instrumentation.”
-- **Objective:** Detect and remediate stale or misconfigured oracle feeds so the settlement router never debits buffers with unverified data and the `/v1/sumeragi/status` commitments remain deterministic.
+- **Objective:** Detect and remediate stale or misconfigured oracle feeds so the settlement router never debits buffers with unverified data and settlement stays deterministic.
 - **Scenarios covered:** `iroha_oracle_staleness_seconds` or `iroha_oracle_twap_window_seconds` drifting, haircut tiers deviating from liquidity profiles, and router halts triggered by `ORACLE_STALE`.
 
 Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_finality.md`, and the Grafana boards under `dashboards/grafana/nexus_lanes.json`.
@@ -18,7 +18,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 |-------|--------|-------|
 | Oracle/TWAP dashboard | `dashboards/grafana/nexus_lanes.json` (Oracle panels) | Panel titles “Oracle Price”, “Oracle Staleness”, “Oracle TWAP Window”, “Oracle Haircut”. |
 | Alert rules | `dashboards/alerts/nexus_lane_rules.yml` | Pages on `ORACLE_STALE`, `TWAP_WINDOW_DRIFT`, or router halt events tied to oracle health. |
-| CLI/SDK status | `iroha_cli sumeragi status --format json`, `/v1/sumeragi/status` | Confirms lane settlement metadata and buffer state before/after remediation. |
+| Lane diagnostics | `ops sumeragi diagnostics` (`/v1/sumeragi/diagnostics`), `GET /v1/sumeragi/lanes` | Identify the affected lane and dataspace before/after remediation; buffer state comes from `iroha_settlement_buffer_*`. |
 | Smoke helper | `scripts/nexus_lane_smoke.py` | `--max-oracle-staleness`, `--expected-oracle-twap`, and `--max-oracle-haircut-bps` enforce the same thresholds locally or in CI. |
 | Telemetry reference | `specs/telemetry.md` | Defines `iroha_oracle_*` semantics and alert tolerances. |
 | Evidence log | `ops/drill-log.md` | Record every alert, intervention, rehearsal, and governance approval. |
@@ -56,7 +56,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 3. Run the smoke helper to double-check thresholds against the same metrics snapshot:
    ```bash
    scripts/nexus_lane_smoke.py \
-     --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
+     --lifecycle-file lane_catalog.json \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --max-oracle-staleness 75 \
@@ -67,7 +67,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 
 ### Step 2 — Identify the Failing Feed
 
-- Use `iroha --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi status` to locate the affected lane/dataspace and confirm whether `lane_settlement_commitments` are paused. The explicit allow-listed operator key is bound to the exact client `network_id`; do not substitute the account key or a token.
+- Use `iroha --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi diagnostics` and `GET /v1/sumeragi/lanes` to locate the affected lane/dataspace. The explicit allow-listed operator key is bound to the exact client `network_id`; do not substitute the account key or a token.
 - Inspect the oracle service logs (e.g., `kubectl logs deployment/nexus-oracle-payments` or `journalctl -u iroha-oracle@payments`) for vendor API failures, signature errors, or stalled timers.
 - Verify vendor-side health by querying the governance-approved price feed or checking the most recent TWAP snapshot referenced in `specs/nexus_settlement_faq.md`.
 
@@ -89,7 +89,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 ### Step 4 — Validate & Clear the Incident
 
 1. Re-run `scripts/nexus_lane_smoke.py` against the live endpoints (or captured metrics) and archive the JSON/Prometheus outputs.
-2. Confirm the router resumed normal mode by checking `iroha_settlement_buffer_status` and the `LaneSettlementReceipt` entries under `/v1/sumeragi/status`.
+2. Confirm the router resumed normal mode by checking `iroha_settlement_buffer_status`.
 3. Announce recovery in the on-call channel and attach artefacts (dashboards, PromQL output, restart evidence).
 
 ### Step 5 — Record Evidence

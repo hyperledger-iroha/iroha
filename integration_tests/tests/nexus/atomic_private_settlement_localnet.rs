@@ -796,10 +796,9 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
 }
 
 // EnvFilter matches target prefixes. Keep unselected Sumeragi modules at INFO,
-// then enable the exact body-progress adapter and selected runner/worker owners.
+// then enable the selected driver and executor owners.
 const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
     "iroha_torii::queue_plan_admission=debug,",
-    "iroha_core::sumeragi::v2=debug,",
     "iroha_core::sumeragi=info,",
     "iroha_core::sumeragi::driver=debug,",
     "iroha_core::sumeragi::executor=debug",
@@ -3496,8 +3495,8 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     signed_finality_timing.complete();
     let replay_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
-    // Replay the original signed carrier while it is live. QueuePlan acknowledges
-    // its immutable admission owner; this must not create another financial effect.
+    // Replay the original signed carrier while it is live. The acknowledgment must
+    // retain its finalized identity without creating another financial effect.
     let replay_height = sponsor
         .client()
         .get_privacy_capabilities()?
@@ -4462,12 +4461,11 @@ fn n3_diagnostic_logger_filter_parses_and_preserves_info_and_admission() {
     let directives = resolved.split(',').collect::<Vec<_>>();
     assert_eq!(
         directives.len(),
-        6,
-        "one default and five target directives"
+        5,
+        "one default and four target directives"
     );
     assert_eq!(directives[0], "info", "ordinary node logging stays at INFO");
     assert!(directives.contains(&"iroha_torii::queue_plan_admission=debug"));
-    assert!(directives.contains(&"iroha_core::sumeragi::v2=debug"));
     assert!(directives.contains(&"iroha_core::sumeragi=info"));
     assert!(directives.contains(&"iroha_core::sumeragi::driver=debug"));
     assert!(directives.contains(&"iroha_core::sumeragi::executor=debug"));

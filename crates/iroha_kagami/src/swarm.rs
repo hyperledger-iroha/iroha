@@ -44,7 +44,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 pub struct Args {
     /// Number of peer services in the configuration.
     ///
-    /// Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
+    /// Must be an exact Sumeragi `3f + 1` committee in the range 4..=31.
     #[arg(long, short, value_name = "COUNT")]
     peers: std::num::NonZeroU16,
     /// Enable deterministic development mode with this UTF-8 validator seed.
@@ -2668,7 +2668,9 @@ fn load_prepared_bundle(
         );
         ensure!(
             execution_policy
-                == iroha_crypto::Hash::prehashed(signed_metadata.sumeragi_context.execution_policy_hash),
+                == iroha_crypto::Hash::prehashed(
+                    signed_metadata.sumeragi_context.execution_policy_hash
+                ),
             "prepared validator {index} effective execution policy differs from signed genesis"
         );
         let peer = &runtime_peers[index];
@@ -2719,7 +2721,7 @@ impl<T: Write> RunArgs<T> for Args {
         let seed = args.seed.take().map(Zeroizing::new);
         ensure!(
             is_valid_committee_size(usize::from(args.peers.get())),
-            "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
+            "`--peers` ({}) must form an exact Sumeragi `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
             args.peers
         );
@@ -4041,7 +4043,7 @@ api_port = 9000
                 .run(&mut writer)
                 .expect_err("non-committee peer count must fail");
             assert!(
-                error.to_string().contains("exact Sumeragi v2 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }

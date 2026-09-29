@@ -21,7 +21,8 @@ use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
-        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
+        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferAssetBatch, TransferBox,
+        UnregisterBox,
         contract_alias::SetContractAlias,
         kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         musubi::{
@@ -1350,6 +1351,65 @@ fn asset_balance_operation_dataspace_target(
         .map(Some),
     )
 }
+
+fn transfer_batch_targets(
+    batch: &TransferAssetBatch,
+    mut definition: impl FnMut(
+        &AssetDefinitionId,
+    ) -> Result<AssetBalanceDefinitionRouteTarget, RoutingResolveError>,
+    mut account: impl FnMut(&AccountId) -> Option<DataSpaceId>,
+) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+    let mut targets = BTreeSet::new();
+    for entry in batch.entries() {
+        // Batch entries intentionally carry no AssetId scope. The committed definition
+        // policy and the two account contexts own their balance bucket selection.
+        targets.extend(asset_balance_operation_concrete_dataspaces(
+            definition(entry.asset_definition())?,
+            None,
+            [account(entry.from()), account(entry.to())],
+        ));
+    }
+    Ok(targets)
+}
+
+fn transfer_batch_targets_with_view(
+    batch: &TransferAssetBatch,
+    catalog: Option<&DataSpaceCatalog>,
+    view: Option<&StateView<'_>>,
+) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+    transfer_batch_targets(
+        batch,
+        |definition| asset_balance_definition_route_target(definition, catalog, view),
+        |account| {
+            account_dataspace_target(
+                view.map(StateView::world),
+                account,
+                view.map(state_view_ledger_time_ms),
+            )
+        },
+    )
+}
+
+fn transfer_batch_targets_with_world<W: WorldReadOnly>(
+    batch: &TransferAssetBatch,
+    catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
+    transfer_batch_targets(
+        batch,
+        |definition| {
+            asset_balance_definition_route_target_with_world(
+                definition,
+                catalog,
+                world,
+                ledger_time_ms,
+            )
+        },
+        |account| account_dataspace_target(Some(world), account, ledger_time_ms),
+    )
+}
+
 fn asset_definition_requires_universal_coordinator(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -2561,6 +2621,62 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     }
     Ok(target)
 }
+
+/// Native scope carried by a transaction before logical lane sharding.
+pub(crate) struct NativeExecutionTarget {
+    /// Concrete application scope, when the executable supplies one.
+    pub dataspace: Option<DataSpaceId>,
+    /// Registry/control-plane instructions and cross-dataspace coordinators use lane zero.
+    pub global: bool,
+}
+
+/// Resolve the native instruction/address scope without treating the authority's aliases as
+/// ownership of all of its transactions. Control-plane batches stay on the global chain so a
+/// new dataspace can register its bootstrap grant and name before its lane is active.
+pub(crate) fn native_execution_target<W: WorldReadOnly>(
+    tx: &dyn TransactionRoutingView,
+    dataspaces: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    if let Some(Executable::ContractCall(call)) = transaction_executable(tx) {
+        return Ok(NativeExecutionTarget {
+            dataspace: contract_address_dataspace_target(&call.contract_address),
+            global: false,
+        });
+    }
+    let mut target = transaction_dataspace_routing_target_info_with_world(
+        tx,
+        Some(dataspaces),
+        world,
+        Some(ledger_time_ms),
+    )?;
+    apply_settlement_routing_target(
+        &mut target,
+        settlement_transaction_dataspace_target_with_world(
+            tx,
+            Some(dataspaces),
+            world,
+            Some(ledger_time_ms),
+        )?,
+    );
+    let control_plane = match transaction_executable(tx) {
+        Some(Executable::Instructions(instructions)) => {
+            !instructions.is_empty()
+                && instructions.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .is::<iroha_data_model::isi::SetParameter>()
+                        || instruction_routes_to_universal_dataspace(&**instruction)
+                })
+        }
+        _ => false,
+    };
+    Ok(NativeExecutionTarget {
+        dataspace: target.dataspace_id,
+        global: control_plane || target.coordinator_route,
+    })
+}
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the
@@ -2918,6 +3034,17 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         )?,
     );
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        for dataspace in transfer_batch_targets_with_world(
+            batch,
+            Some(dataspace_catalog),
+            world,
+            ledger_time_ms,
+        )? {
+            insert_native_amx_participant(dataspaces, Some(dataspace));
+        }
+        return Ok(());
+    }
     if let Some(atomic) = settlement_atomic::instruction(instruction) {
         for dataspace in settlement_atomic::concrete_dataspaces(atomic)? {
             insert_native_amx_participant(dataspaces, Some(dataspace));
@@ -3282,6 +3409,13 @@ fn instruction_transaction_dataspace_target(
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return Ok(merge_instruction_dataspace_targets(
+            transfer_batch_targets_with_view(batch, dataspace_catalog, state_view)?
+                .into_iter()
+                .map(Some),
+        ));
+    }
     if let Some(settlement_target) =
         instruction_settlement_dataspace_target(instruction, dataspace_catalog, state_view)?
     {
@@ -3663,6 +3797,13 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return Ok(merge_instruction_dataspace_targets(
+            transfer_batch_targets_with_world(batch, dataspace_catalog, world, ledger_time_ms)?
+                .into_iter()
+                .map(Some),
+        ));
+    }
     if let Some(settlement_target) = instruction_settlement_dataspace_target_with_world(
         instruction,
         dataspace_catalog,
@@ -4287,6 +4428,13 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return Ok(Some(transfer_batch_targets_with_view(
+            batch,
+            dataspace_catalog,
+            state_view,
+        )?));
+    }
     if let Some(atomic) = settlement_atomic::instruction(instruction) {
         return settlement_atomic::concrete_dataspaces(atomic).map(Some);
     }
@@ -4563,6 +4711,14 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return Ok(Some(transfer_batch_targets_with_world(
+            batch,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?));
+    }
     if let Some(atomic) = settlement_atomic::instruction(instruction) {
         return settlement_atomic::concrete_dataspaces(atomic).map(Some);
     }
@@ -5484,6 +5640,10 @@ fn instruction_transaction_target_requires_universal_coordinator(
     state_view: Option<&StateView<'_>>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        let targets = transfer_batch_targets_with_view(batch, dataspace_catalog, state_view)?;
+        return Ok(targets.len() > 1 || targets.contains(&DataSpaceId::UNIVERSAL));
+    }
     if let Some(atomic) = settlement_atomic::instruction(instruction) {
         return settlement_atomic::requires_universal_coordinator(atomic);
     }
@@ -5641,6 +5801,11 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        let targets =
+            transfer_batch_targets_with_world(batch, dataspace_catalog, world, ledger_time_ms)?;
+        return Ok(targets.len() > 1 || targets.contains(&DataSpaceId::UNIVERSAL));
+    }
     if let Some(atomic) = settlement_atomic::instruction(instruction) {
         return settlement_atomic::requires_universal_coordinator(atomic);
     }
@@ -6306,6 +6471,9 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
 }
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if any.is::<TransferAssetBatch>() {
+        return true;
+    }
     if settlement_atomic::instruction(instruction).is_some() {
         // Every movement binds an explicit scope; aliases cannot alter the signed routes.
         return false;
@@ -8251,6 +8419,14 @@ fn transfer_destination_matches_alias_scope(
         return false;
     }
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return state_view.is_some_and(|view| {
+            batch
+                .entries()
+                .iter()
+                .any(|entry| account_matches_alias_scope(scope, entry.to(), view))
+        });
+    }
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
         return false;
     };
@@ -8281,6 +8457,17 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
         return false;
     }
     let any = instruction.as_any();
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return batch.entries().iter().any(|entry| {
+            account_matches_alias_scope_with_world(
+                scope,
+                entry.to(),
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+        });
+    }
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
         return false;
     };
@@ -8333,6 +8520,9 @@ fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
 }
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if any.is::<TransferAssetBatch>() {
+        return matches_box_variant(matcher, "transfer", "transfer::asset");
+    }
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         let variant = match register {
             RegisterBox::Peer(_) => "register::peer",
@@ -11672,6 +11862,7 @@ mod tests {
             RoutingPlan::single(RoutingDecision::new(delivery_lane, delivery_dataspace,)),
         );
     }
+    include!("router_transfer_batch_tests.rs");
     include!("router_route_resolution_tests.rs"); // Preserve stable route-resolution test paths.
     #[test]
     fn matches_register_domain_rule() {

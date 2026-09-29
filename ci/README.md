@@ -21,7 +21,7 @@ packages are `iroha_test_network`, `izanami`, and `integration_tests`, which
 receive `iroha3d` and `iroha`. The first and third also receive
 `iroha3d_private_settlement_routes` through `TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES`.
 Its `irohad/test-network-private-settlement-route-control` feature is compiled separately under
-`target/ci-binaries/message-control`; shipping artifacts use
+`target/ci-binaries/private-settlement-route-control`; shipping artifacts use
 `target/ci-binaries/shipping`. Staging preserves both distinct daemon files.
 Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other package tests.
 
@@ -47,12 +47,11 @@ not. Inventory changes and missing Git/read evidence select the check
 conservatively. `docs/history` is excluded from executable qualification and
 cannot supply required or normative examples.
 
-The Parliament lifecycle, Nexus cross-dataspace and Nexus cross-lane proof
-corridors are separately selected consumers. Each declares its existing
-`qualified_runner` and retains that runner's owned binary construction and
-provenance checks. They do not download the PR shipping bundle. Ordinary prose
-and foundation-only changes do not run these corridors; direct corridor inputs,
-affected non-foundation owners and full selection do.
+The Parliament lifecycle corridor is a separately selected consumer. It
+declares its existing `qualified_runner` and retains that runner's owned binary
+construction and provenance checks. It does not download the PR shipping
+bundle. Ordinary prose and foundation-only changes do not run this corridor;
+direct corridor inputs, affected non-foundation owners and full selection do.
 The required result checks both Rust matrices, binary production,
 and every selected consumer, accepting a skipped job only when classification
 explicitly did not select it. Classifier failure never becomes a passing skip.
@@ -314,7 +313,6 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
-- `check_nexus_cross_dataspace_localnet.sh` – runs the Nexus 12-peer cross-dataspace proof on ten fresh deterministic seeds (`nexus-cross-dataspace-v1-seed-00` through `-09`). Each seed is a separate network/test process with no retry, and the launcher rejects missing or zero-test transcripts before publishing exact 10/10 completion accounting. Production release also invokes the launcher's ignored `--cross-dataspace-fault-soak` path, whose validated duration is exactly 7,200 seconds.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
 - `check_swift_pod_bridge.sh` – requires CocoaPods, authenticates the final
   packaged ZIP, generated binary podspec, checksum inventory, and package

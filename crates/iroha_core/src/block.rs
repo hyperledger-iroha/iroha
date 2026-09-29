@@ -1627,16 +1627,16 @@ pub enum BlockValidationError {
     BlockInThePast,
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
-    /// Sumeragi v2 block creation time is not the canonical logical time. Expected: {expected_ms} ms, actual: {actual_ms} ms
+    /// Sumeragi block creation time is not the canonical logical time. Expected: {expected_ms} ms, actual: {actual_ms} ms
     NonCanonicalBlockTime {
         /// Deterministic timestamp derived from the parent, cadence, and transactions.
         expected_ms: u64,
         /// Timestamp committed by the proposed block.
         actual_ms: u64,
     },
-    /// Sumeragi v2 logical block time exceeded the canonical u64-millisecond range
+    /// Sumeragi logical block time exceeded the canonical u64-millisecond range
     BlockTimeOverflow,
-    /// Sumeragi v2 finality authority does not bind this block and execution: {0}
+    /// Sumeragi finality authority does not bind this block and execution: {0}
     FinalityAuthorityInvalid(String),
     /// Some transaction in the block is created after the block itself
     TransactionInTheFuture,
@@ -1841,7 +1841,7 @@ fn epoch_schedule_allocator_refusal_and_invalid_context_stay_distinct() {
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
         // These errors arise while replaying already committed local history,
-        // including its cursors. Preserve that context so the v2 validator does
+        // including its cursors. Preserve that context so block validation does
         // not mistake local reconstruction failure for a malformed candidate.
         Self::DaIndexHydration(error.to_string())
     }
@@ -1994,6 +1994,67 @@ impl AuthenticatedGenesisOutputSource {
         }
         Ok(&self.account)
     }
+
+    /// Bind bootstrap admission to one original input of the authenticated proposal.
+    pub(crate) fn transaction_for(
+        &self,
+        block: &SignedBlock,
+        index: usize,
+    ) -> Result<AuthenticatedGenesisTransaction, String> {
+        self.account_for(block)?;
+        let input = block
+            .network_entrypoint_at(index)
+            .ok_or("authenticated genesis transaction is absent")?;
+        let TransactionEntrypoint::External(transaction) = input else {
+            return Err("authenticated genesis transaction is not external".into());
+        };
+        if transaction.authority() != &self.account {
+            return Err("authenticated genesis transaction has another authority".into());
+        }
+        transaction.verify_signature().map_err(|error| {
+            format!("authenticated genesis transaction signature changed: {error}")
+        })?;
+        Ok(AuthenticatedGenesisTransaction {
+            header: self.header,
+            entrypoint_hash: input.hash(),
+            signed_hash: HashOf::new(transaction),
+            index: u64::try_from(index).map_err(|_| "genesis input index exceeds u64")?,
+        })
+    }
+}
+
+/// Admission authority for one signed input of the configured, authenticated genesis.
+///
+/// A height-one header or component overlay cannot construct this capability. It only
+/// exempts the exact bootstrap input from runtime fraud-assessment metadata, which
+/// canonical genesis transactions cannot carry.
+pub(crate) struct AuthenticatedGenesisTransaction {
+    header: BlockHeader,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_hash: HashOf<SignedTransaction>,
+    index: u64,
+}
+
+impl AuthenticatedGenesisTransaction {
+    /// Recheck the original source and empty committed history at stateful admission.
+    pub(crate) fn validate(
+        &self,
+        transaction: &SignedTransaction,
+        state: &crate::state::StateTransaction<'_, '_>,
+    ) -> Result<(), String> {
+        if state._curr_block != self.header
+            || !state.block_hashes.is_empty()
+            || transaction.hash_as_entrypoint() != self.entrypoint_hash
+            || HashOf::new(transaction) != self.signed_hash
+            || state.current_network_entrypoint_hash != Some(self.entrypoint_hash)
+            || state.current_entrypoint_index != Some(self.index)
+        {
+            return Err(
+                "genesis admission does not belong to this original bootstrap input".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2143,7 +2204,7 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs<I, T>(minimum: Duration, inputs: I) -> Option<Duration>
+pub(crate) fn creation_time_after_inputs<I, T>(minimum: Duration, inputs: I) -> Option<Duration>
 where
     I: IntoIterator<Item = T>,
     T: core::borrow::Borrow<TransactionEntrypoint>,
@@ -2957,7 +3018,7 @@ pub(crate) mod valid {
         /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
         /// core header binds the nonempty payload, so block signatures are not checked;
         /// block time is canonical from the parent and
-        /// the cadence; nothing depends on a v2 height context.
+        /// the cadence; nothing depends on a separate height context.
         Sumeragi {
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
@@ -4368,11 +4429,31 @@ pub(crate) mod valid {
             native_payload: &[u8],
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            if let Err(error) = expansion.validate_publication(state) {
+                return WithEvents::new(Err((
+                    Box::new(block),
+                    Box::new(BlockValidationError::LocalStorageRecoveryRequired {
+                        reason: error.to_string(),
+                    }),
+                )));
+            }
             let source =
                 match Self::native_header_source(&block, state, native_header, native_payload) {
                     Ok(source) => source,
                     Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
                 };
+            if !block.has_consensus_work() {
+                let header = source.header();
+                return WithEvents::new(Err((
+                    Box::new(block),
+                    Box::new(BlockValidationError::EmptyBlock),
+                )))
+                .with_authenticated_rejection(
+                    header,
+                    source.state(),
+                    source.generation(),
+                );
+            }
             let (block, lanes) = match expansion.apply(block, source.state(), source.generation()) {
                 Ok(expanded) => expanded,
                 Err((block, error)) => {
@@ -4390,6 +4471,7 @@ pub(crate) mod valid {
                 }
             };
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
+            let authenticated_header = source.header();
             Self::validate_with_profile(
                 block,
                 topology,
@@ -4409,6 +4491,11 @@ pub(crate) mod valid {
                 },
                 true,
                 None,
+            )
+            .with_authenticated_rejection(
+                authenticated_header,
+                state,
+                source.generation,
             )
         }
 
@@ -4799,11 +4886,7 @@ pub(crate) mod valid {
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            Self::canonical_block_time_from_parent_time(
-                block,
-                parent_creation_time,
-                block_cadence,
-            )
+            Self::canonical_block_time_from_parent_time(block, parent_creation_time, block_cadence)
         }
         fn canonical_block_time_from_parent_time(
             block: &SignedBlock,
@@ -5363,13 +5446,7 @@ pub(crate) mod valid {
                 .filter_map(Self::signed_transaction_from_entrypoint)
                 .collect()
         }
-        /// Resolve the stateless-validation instant for each signed external entrypoint.
-        ///
-        /// Only an exact QueuePlan binding that was already pending in canonical parent state can
-        /// replace the block timestamp. The lookup authenticates the complete transaction wire,
-        /// committed routing plan, immutable registry owner, pending obligation, route markers,
-        /// lane incarnations, and minimum execution height before its enqueue timestamp is used.
-
+        /// Prepare metadata once for each signed external entrypoint in canonical order.
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
             Self::collect_external_signed_transactions(block)
                 .into_iter()
@@ -6095,6 +6172,9 @@ pub(crate) mod valid {
                 crate::state::ExecutionOutputSealError::Deferred(reason) => {
                     BlockValidationError::ExecutionDeferred(reason)
                 }
+                crate::state::ExecutionOutputSealError::RejectedGenesis => {
+                    BlockValidationError::InvalidGenesis(InvalidGenesisError::ContainsErrors)
+                }
                 crate::state::ExecutionOutputSealError::Finalizer(error) => error,
             })?;
             state_block
@@ -6128,18 +6208,32 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             exec_witness_guard: crate::exec_witness::ExecWitnessGuard,
         ) -> WithEvents<ValidBlock> {
-            Self::validate_staged_execution_controls(&block, state_block)
-                .expect("unchecked certified merge block requires its exact pre-staged sidecar");
-            Self::execute_and_record_canonical_outputs(&mut block, state_block, None, None)
-                .expect("unchecked block should have internally consistent entrypoint hashes");
-            if let Err(error) = validate_axt_envelopes(&block, state_block) {
-                panic!("AXT envelope validation failed on unchecked block: {error}");
-            }
-            state_block
-                .capture_exec_witness()
-                .expect("component output must preserve its exact execution witness");
+            Self::execute_recorded_component_outputs(&mut block, state_block, &exec_witness_guard)
+                .expect(
+                    "unchecked component execution must preserve its original source and witness",
+                );
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
+        }
+
+        /// Execute component outputs while retaining the recorder acquired before block effects.
+        /// This never creates recording authority or grants consensus/publication authority.
+        /// The producer rechecks the exact original carrier owned by `state_block`.
+        ///
+        /// # Errors
+        /// Refuses changed sources, execution controls, output ownership or witness capture.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        pub(crate) fn execute_recorded_component_outputs(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            _recorder: &crate::exec_witness::ExecWitnessGuard,
+        ) -> Result<(), BlockValidationError> {
+            Self::validate_staged_execution_controls(block, state_block)?;
+            Self::execute_and_record_canonical_outputs(block, state_block, None, None)?;
+            validate_axt_envelopes(block, state_block)?;
+            state_block
+                .capture_exec_witness()
+                .map_err(Self::execution_context_error)
         }
         #[cfg(any(test, feature = "iroha-core-tests"))]
         /// Add additional signature for [`Self`]
@@ -6834,12 +6928,14 @@ pub(crate) mod valid {
                 None,
                 None,
             )
-            .expect_err("an unknown default dataspace must invalidate the whole block");
+            .expect_err(
+                "a missing authenticated route must refuse the source before policy routing",
+            );
             assert_eq!(
                 error,
-                BlockValidationError::ExecutionContextInvalid(format!(
-                    "Network route cannot be frozen at index 0: dataspace {unknown_dataspace} is not present in the dataspace catalog"
-                ))
+                BlockValidationError::ExecutionContextInvalid(
+                    "Network source lacks its authenticated execution route".to_owned()
+                )
             );
             assert_eq!(
                 state_block.transactions.get(&entrypoint_hash),
@@ -7644,7 +7740,7 @@ pub(crate) mod valid {
             ));
         }
         #[test]
-        fn validate_and_record_transactions_skip_stateless_matches_full() {
+        fn canonical_output_execution_releases_the_original_recorder_between_attempts() {
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("valid domain");
@@ -7683,44 +7779,49 @@ pub(crate) mod valid {
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(alice_keypair.private_key())
                 .unpack(|_| {});
-            let mut full_block: SignedBlock = new_block.clone().into();
+            let mut first_block: SignedBlock = new_block.clone().into();
             let (mut state_block, state_block_recorder) =
                 crate::block::ValidBlock::start_component_execution(
-                    &full_block.clone().into(),
+                    &first_block.clone().into(),
                     &state,
                 )
                 .expect("original writer-first component execution");
             ValidBlock::execute_and_record_canonical_outputs(
-                &mut full_block,
+                &mut first_block,
                 &mut state_block,
                 None,
                 None,
             )
-            .expect("full validation should attach transaction results");
-            let full_results: Vec<_> = full_block
+            .expect("first original execution should attach transaction results");
+            let first_results: Vec<_> = first_block
                 .output_results()
                 .map(|result| result.as_ref().is_ok())
                 .collect();
             drop(state_block);
-            let mut skip_block: SignedBlock = new_block.into();
+            drop(state_block_recorder);
+            let mut second_block: SignedBlock = new_block.into();
             let (mut state_block, state_block_recorder) =
                 crate::block::ValidBlock::start_component_execution(
-                    &skip_block.clone().into(),
+                    &second_block.clone().into(),
                     &state,
                 )
                 .expect("original writer-first component execution");
             ValidBlock::execute_and_record_canonical_outputs(
-                &mut skip_block,
+                &mut second_block,
                 &mut state_block,
                 None,
                 None,
             )
-            .expect("skip-stateless validation should attach transaction results");
-            let skip_results: Vec<_> = skip_block
+            .expect("a new original recorder should attach transaction results");
+            let second_results: Vec<_> = second_block
                 .output_results()
                 .map(|result| result.as_ref().is_ok())
                 .collect();
-            assert_eq!(full_results, skip_results);
+            assert_eq!(first_results, vec![true]);
+            assert_eq!(first_results, second_results);
+            drop(state_block);
+            drop(state_block_recorder);
+            assert_eq!(state.view().height(), native_chain.height() as usize);
         }
         #[test]
         fn maps_signature_verification_errors() {
@@ -8059,105 +8160,83 @@ pub(crate) mod valid {
         include!("block/genesis_validation_regression_tests.rs");
         #[test]
         fn signed_genesis_validation_is_storage_side_effect_free() {
-            use crate::{
-                kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
-            };
-            use iroha_data_model::{
-                block::consensus::{
-                    ConsensusMode, SumeragiGenesisContextParameters, ValidatorPower,
-                },
-                parameter::{Parameter, system::SumeragiParameter},
-                prelude::*,
-            };
-            use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-            use iroha_model_base::peer::PeerId;
-            iroha_genesis::init_instruction_registry();
-            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
-            let genesis_keypair = crate::block::checked_keypair();
-            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
-            let mut topology = (0..4)
-                .map(|_| {
-                    let validator = crate::block::checked_keypair_with_algorithm(
-                        iroha_crypto::Algorithm::BlsNormal,
-                    );
-                    let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
-                        .expect("derive genesis side-effect fixture validator PoP");
-                    GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
-                })
-                .collect::<Vec<_>>();
-            topology.sort_by(|left, right| left.peer.cmp(&right.peer));
-            let roster = topology
-                .iter()
-                .map(|entry| ValidatorPower {
-                    validator: entry.peer.clone(),
-                    power: 1,
-                })
-                .collect::<Vec<_>>();
-            let mint_finality =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster);
-            let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .with_sumeragi_context_parameters(
-                    SumeragiGenesisContextParameters::recommended(),
-                )
-                .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
-                .next_transaction()
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-                .set_topology(topology)
-                .build_raw()
-                .expect("ordered genesis parameters form one valid raw transaction");
-            let genesis = manifest
-                .build_and_sign(&genesis_keypair)
-                .expect("ordered genesis parameters should build");
+            use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+            use iroha_data_model::parameter::{Parameter, system::SumeragiParameter};
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            config.genesis_parameters = vec![
+                Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
+                Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)),
+            ];
+            let prepared = CertifiedTestChain::prepare(config)
+                .expect("ordered parameters are bound into original signed genesis");
+            let genesis = prepared.genesis.block().clone();
+            let account = genesis
+                .external_transactions()
+                .next()
+                .unwrap()
+                .authority()
+                .clone();
             let topology = Topology::new(
-                crate::sumeragi::startup::genesis_committee_peers(&genesis.0)
-                    .expect("signed genesis must expose its exact voting roster"),
+                prepared
+                    .validator_keys
+                    .iter()
+                    .map(|key| PeerId::new(key.public_key().clone())),
             );
-            let genesis_domain =
-                Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
-            let genesis_account_model =
-                Account::new(genesis_account.clone()).build(&genesis_account);
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(
-                World::with([genesis_domain], [genesis_account_model], []),
-                Arc::clone(&kura),
-                query_handle,
-            );
-            install_test_lane_manifests_for_keypairs(
-                &state,
-                std::slice::from_ref(&genesis_keypair),
-            );
-            let genesis_block = with_current_state_confidential_features(
-                genesis.0,
-                &state,
-                &[(0, genesis_keypair.private_key())],
-            );
-            let time_source = TimeSource::new_system();
-            let result = ValidBlock::validate_signed_genesis(
-                genesis_block,
+            let (valid, overlay) = ValidBlock::validate_signed_genesis(
+                genesis.clone(),
                 &topology,
-                &genesis_account,
-                &time_source,
-                &state,
-                ConsensusMode::Permissioned,
+                &account,
+                &TimeSource::new_system(),
+                &prepared.state,
+                iroha_data_model::parameter::system::ConsensusMode::Permissioned,
             )
-            .unpack(|_| {});
-            if let Err((failed_block, err)) = result {
-                let results = failed_block
-                    .output_results()
-                    .map(|result| format!("{result:?}"))
-                    .collect::<Vec<_>>();
-                panic!(
-                    "ordered genesis parameter transactions should validate: {err}; results={results:?}"
-                );
-            }
+            .unpack(|_| {})
+            .expect("ordered original signed genesis executes in a disposable overlay");
             assert_eq!(
-                kura.pipeline_sidecar_queue_len_for_testing(),
+                overlay.world.parameters().sumeragi().max_clock_drift(),
+                Duration::from_millis(333),
+                "the last ordered genesis parameter wins in actual execution",
+            );
+            assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
+            assert_eq!(valid.as_ref().canonical_resultless_proposal(), genesis);
+            drop((valid, overlay));
+            assert_eq!(prepared.state.view().height(), 0);
+            assert_eq!(prepared.kura.blocks_count(), 0);
+            assert_eq!(
+                prepared.kura.pipeline_sidecar_queue_len_for_testing(),
                 0,
                 "disposable signed-genesis validation must not publish pipeline recovery metadata"
             );
         }
+    }
+    #[test]
+    fn rejected_genesis_outputs_fail_before_schedule_finalization() {
+        use crate::{
+            state::{StateReadOnly, World},
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::prelude::{Domain, Register};
+        use iroha_model_base::domain::DomainId;
+
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let domain = DomainId::try_new("duplicate", "universal").unwrap();
+        config.genesis_instructions = vec![
+            Register::domain(Domain::new(domain.clone())).into(),
+            Register::domain(Domain::new(domain)).into(),
+        ];
+        let failure = CertifiedTestChain::start(config)
+            .err()
+            .expect("duplicate registration must reject original signed genesis");
+        let error = failure.error.to_string();
+        assert!(
+            error.contains(&InvalidGenesisError::ContainsErrors.to_string()),
+            "report actual rejected outputs before rolled-back schedule state: {error}"
+        );
+        assert_eq!(
+            failure.state.view().height(),
+            0,
+            "genesis was not published"
+        );
     }
     #[test]
     fn insufficient_commit_quorum_maps_to_a_rejection_reason() {
@@ -8227,10 +8306,10 @@ mod event {
     }
     #[derive(Debug)]
     #[must_use]
-    pub struct WithEvents<B>(B);
+    pub struct WithEvents<B>(B, Option<PipelineEventBox>);
     impl<B> WithEvents<B> {
         pub(super) fn new(source: B) -> Self {
-            Self(source)
+            Self(source, None)
         }
     }
     impl<B: EventProducer, U> WithEvents<Result<B, (U, Box<BlockValidationError>)>> {
@@ -8239,21 +8318,45 @@ mod event {
             f: F,
         ) -> Result<B, (U, Box<BlockValidationError>)> {
             match self.0 {
-                Ok(ok) => Ok(WithEvents(ok).unpack(f)),
-                Err(err) => Err(WithEvents(err).unpack(f)),
+                Ok(ok) => Ok(WithEvents::new(ok).unpack(f)),
+                Err(err) => Err(WithEvents::new(err).unpack(f)),
             }
         }
     }
     impl<'state, B: EventProducer, U>
         WithEvents<Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)>>
     {
+        /// Retain a deterministic rejection only after its original native source was checked.
+        /// The caller still owns publication; local resource refusals produce no event.
+        pub(super) fn with_authenticated_rejection(
+            mut self,
+            header: BlockHeader,
+            state: &crate::state::State,
+            generation: u64,
+        ) -> Self {
+            if let Err((_, error)) = &mut self.0 {
+                if !crate::state::is_stable_state_view_generation(
+                    generation,
+                    state.state_view_generation(),
+                ) {
+                    *error = Box::new(BlockValidationError::LocalStorageRecoveryRequired {
+                        reason: "native rejection State cut advanced after source authentication"
+                            .into(),
+                    });
+                } else {
+                    emit_block_rejection(header, error, |event| self.1 = Some(event));
+                }
+            }
+            self
+        }
         pub fn unpack<F: FnMut(PipelineEventBox)>(
             self,
-            f: F,
+            mut f: F,
         ) -> Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)> {
+            self.1.into_iter().for_each(&mut f);
             match self.0 {
-                Ok((ok, state)) => Ok((WithEvents(ok).unpack(f), state)),
-                Err(err) => Err(WithEvents(err).unpack(f)),
+                Ok((ok, state)) => Ok((WithEvents::new(ok).unpack(f), state)),
+                Err(err) => Err(WithEvents::new(err).unpack(f)),
             }
         }
     }
@@ -8264,7 +8367,7 @@ mod event {
         ) -> Result<BTreeSet<BlockSignature>, SignatureVerificationError> {
             match self.0 {
                 Ok(ok) => Ok(ok),
-                Err(err) => Err(WithEvents(err).unpack(f)),
+                Err(err) => Err(WithEvents::new(err).unpack(f)),
             }
         }
     }
@@ -8863,10 +8966,26 @@ pub(crate) mod tests {
             &TimeSource::new_fixed(now),
         )
     }
-    /// Consume a pristine component fixture before any transaction is signed, then execute
-    /// its original genesis through the same owner used by node startup.
+    /// Decode the current schema-bound durable `int` record, including its pointer envelope.
     fn decode_stored_state_int(stored: &[u8]) -> i128 {
-        ivm::numeric_tlv::decode_int_bytes(stored)
+        use ivm::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let record: StateValueRecordV1 =
+            norito::decode_from_bytes(stored).expect("canonical persisted StateMap record");
+        assert_eq!(
+            record.schema_hash,
+            state_value_schema_hash_v1(&norito::to_bytes(&schema).unwrap())
+        );
+        assert!(schema.validate_atoms(&record.atoms));
+        let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+            panic!("StateMap int record must contain exactly one pointer atom");
+        };
+        ivm::numeric_tlv::decode_int_bytes(envelope)
             .expect("canonical persisted StateMap integer")
             .to_string()
             .parse()
@@ -8892,6 +9011,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn component_chain(state: State) -> crate::sumeragi::test_chain::CertifiedTestChain {
+        component_chain_with_genesis_parameters(state, Vec::new())
+    }
+
+    fn component_chain_with_genesis_parameters(
+        state: State,
+        genesis_parameters: Vec<iroha_data_model::parameter::Parameter>,
+    ) -> crate::sumeragi::test_chain::CertifiedTestChain {
         assert_eq!(
             state.committed_height(),
             0,
@@ -8912,6 +9038,7 @@ pub(crate) mod tests {
         #[cfg(feature = "telemetry")]
         let telemetry = state.telemetry.clone();
         let mut config = crate::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
+        config.genesis_parameters = genesis_parameters;
         config.chain_id = chain_id;
         config.pipeline = pipeline;
         config.nexus = Some(nexus);
@@ -10086,7 +10213,7 @@ seiyaku DynamicTarget {
     }
     #[test]
     fn block_validation_sealed_commitment_and_time_keep_distinct_canonical_sources() {
-        use crate::state::TransactionsReadOnly;
+        use crate::state::{StateReadOnlyWithTransactions, TransactionsReadOnly};
         use iroha_data_model::{
             events::time::{ExecutionTime, TimeEvent, TimeEventFilter, TimeInterval},
             fastpq::{FastpqSourceExecutionKindV1, FastpqSourceRouteV1},
@@ -10099,31 +10226,6 @@ seiyaku DynamicTarget {
         let chain_id = ChainId::from("non-external-sequential-fallback");
         let (authority, keypair) = gen_account_in("wonderland");
         let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
-        // A component predecessor establishes ordinary height; it makes no finality claim.
-        let mut parent = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
-            nonzero!(1_u64),
-            None,
-            None,
-            0,
-            0,
-        ))
-        .build_with_signature(0, keypair.private_key());
-        parent
-            .set_execution_outputs(
-                Vec::new(),
-                0,
-                Default::default(),
-                Vec::new(),
-                Default::default(),
-                Default::default(),
-                &crate::execution_output_test_support::structural_output_limits(),
-            )
-            .unwrap();
-        state
-            .kura()
-            .store_block(std::sync::Arc::new(parent.clone()))
-            .unwrap();
-        state.push_block_hash_for_testing(parent.hash());
         let time_trigger_id: iroha_data_model::trigger::TriggerId =
             "non_external_sequential_heartbeat"
                 .parse()
@@ -10133,7 +10235,7 @@ seiyaku DynamicTarget {
             "__registered_block_height"
                 .parse()
                 .expect("registered-height key"),
-            Json::new(0_u64),
+            Json::new(1_u64),
         );
         trigger_metadata.insert(
             "__registered_at_ms".parse().expect("registered-time key"),
@@ -10162,21 +10264,25 @@ seiyaku DynamicTarget {
             triggers_transaction.apply();
             triggers_block.commit();
         }
+        let mut native_chain = component_chain(state);
+        let state = Arc::clone(native_chain.state());
+        let parent = state
+            .view()
+            .latest_block()
+            .expect("original signed genesis");
         let metadata_key = Name::from_str("sequential_fallback_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 3, 4, metadata_key);
         let commitment_entrypoint_hash = commitment_entrypoint.hash();
         let commitment_call_hash = Hash::from(commitment_entrypoint.execution_call_hash());
-        let accepted =
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
-        let block = BlockBuilder::new(vec![accepted])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(keypair.private_key())
-            .unpack(|_| {});
+        let block = native_chain.proposal_entrypoints(vec![commitment_entrypoint]);
         let time_event = TimeEvent {
             interval: TimeInterval::new(
                 parent.header().creation_time(),
-                block.header().creation_time(),
+                block
+                    .header()
+                    .creation_time()
+                    .saturating_sub(parent.header().creation_time()),
             ),
         };
         let expected_invocation = iroha_data_model::block::execution_output::TimeInvocationV1 {
@@ -10193,87 +10299,108 @@ seiyaku DynamicTarget {
         let expected_time_call_hash = expected_invocation
             .execution_call_hash(block.header().hash())
             .unwrap();
-        let (mut state_block, state_block_recorder) =
-            crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
-                .expect("original writer-first component execution");
-        let valid_block = block
-            .validate_and_record_transactions(&mut state_block, state_block_recorder)
-            .unpack(|_| {});
-        let results: Vec<_> = valid_block
-            .as_ref()
-            .network_entrypoints()
-            .enumerate()
-            .map(|(index, entrypoint)| {
-                let (output_index, output) = valid_block
+        let mut pending = native_chain
+            .begin_proposal(block, Default::default())
+            .expect("original sealed and Time sources execute together");
+        let time_non_network_hash = pending
+            .inspect(move |execution| {
+                let valid_block = execution.block;
+                let state_block = execution.state;
+                let results: Vec<_> = valid_block
                     .as_ref()
-                    .network_output_at(
-                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    .network_entrypoints()
+                    .enumerate()
+                    .map(|(index, entrypoint)| {
+                        let (output_index, output) = valid_block
+                            .as_ref()
+                            .network_output_at(
+                                u32::try_from(index).expect("fixture Network index fits u32"),
+                            )
+                            .expect("every queried input has its explicit Network output");
+                        assert_eq!(usize::try_from(output_index).unwrap(), index);
+                        (index, entrypoint, &output.result)
+                    })
+                    .collect();
+                assert_eq!(results.len(), 1);
+                assert_eq!(valid_block.as_ref().execution_outputs().len(), 2);
+                assert_eq!(results[0].1.hash(), commitment_entrypoint_hash);
+                assert!(
+                    results[0].2.0.is_ok(),
+                    "non-external entrypoint fallback must preserve execution: {:?}",
+                    results[0].2
+                );
+                let time_output = &valid_block.as_ref().execution_outputs()[1];
+                let iroha_data_model::block::execution_output::ExecutionOutputV1::Time(time) =
+                    time_output
+                else {
+                    panic!("actual Time invocation follows the single Network output");
+                };
+                assert_eq!(time.invocation, expected_invocation);
+                assert!(
+                    time.result.is_ok(),
+                    "actual Time output must succeed: {:?}",
+                    time.result
+                );
+                let time_output_hash = HashOf::new(time_output);
+                let time_non_network_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    Hash::from(time_output_hash),
+                );
+                assert_eq!(
+                    state_block.transactions.get(&commitment_entrypoint_hash),
+                    None,
+                    "unpublished execution does not enter canonical replay history"
+                );
+                assert_eq!(
+                    state_block.transactions.get(&time_non_network_hash),
+                    None,
+                    "an internal output hash is not a signed canonical replay carrier"
+                );
+                let source_inventory = state_block
+                    .fastpq_source_inventory()
+                    .expect("valid finalized source inventory")
+                    .expect("execution retains its complete source inventory");
+                let canonical_entrypoints = valid_block
+                    .as_ref()
+                    .external_entrypoints_cloned()
+                    .collect::<Vec<_>>();
+                let expected_tx_set_hash: [u8; 32] =
+                    iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                        canonical_entrypoints.iter(),
                     )
-                    .expect("every queried input has its explicit Network output");
-                assert_eq!(usize::try_from(output_index).unwrap(), index);
-                (index, entrypoint, &output.result)
+                    .expect("canonical sequential transaction set")
+                    .into();
+                assert_eq!(source_inventory.tx_set_hash(), expected_tx_set_hash);
+                assert_eq!(source_inventory.entries().len(), 2);
+                assert_eq!(
+                    source_inventory.entries()[0].entry_hash,
+                    commitment_call_hash
+                );
+                let time_source = &source_inventory.entries()[1];
+                assert_eq!(time_source.entry_hash, expected_time_call_hash);
+                assert_ne!(time_source.entry_hash, Hash::from(time_output_hash));
+                assert_eq!(
+                    time_source.execution_kind,
+                    FastpqSourceExecutionKindV1::ExecutionCall
+                );
+                assert_eq!(time_source.route, FastpqSourceRouteV1::Unrouted);
+                assert_eq!(time_source.dataspace_id, DataSpaceId::UNIVERSAL);
+                time_non_network_hash
             })
-            .collect();
-        assert_eq!(results.len(), 1);
-        assert_eq!(valid_block.as_ref().execution_outputs().len(), 2);
-        assert_eq!(results[0].1.hash(), commitment_entrypoint_hash);
-        assert!(
-            results[0].2.0.is_ok(),
-            "non-external entrypoint fallback must preserve execution: {:?}",
-            results[0].2
-        );
-        let time_output = &valid_block.as_ref().execution_outputs()[1];
-        let iroha_data_model::block::execution_output::ExecutionOutputV1::Time(time) = time_output
-        else {
-            panic!("actual Time invocation follows the single Network output");
-        };
-        assert_eq!(time.invocation, expected_invocation);
-        assert!(
-            time.result.is_ok(),
-            "actual Time output must succeed: {:?}",
-            time.result
-        );
-        let time_output_hash = HashOf::new(time_output);
-        let time_non_network_hash =
-            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(time_output_hash));
+            .expect("inspect the original sealed and Time execution");
+        pending
+            .publish(crate::sumeragi::test_chain::Signers::Quorum)
+            .expect("publish the exact certified source execution");
+        drop(pending);
+        let view = state.view();
         assert_eq!(
-            state_block.transactions.get(&commitment_entrypoint_hash),
+            view.transactions().get(&commitment_entrypoint_hash),
             Some(nonzero!(2_usize))
         );
         assert_eq!(
-            state_block.transactions.get(&time_non_network_hash),
+            view.transactions().get(&time_non_network_hash),
             None,
-            "an internal output hash is not a signed canonical replay carrier"
+            "internal Time output never becomes a signed replay carrier"
         );
-        let source_inventory = state_block
-            .fastpq_source_inventory()
-            .expect("valid finalized source inventory")
-            .expect("execution retains its complete source inventory");
-        let canonical_entrypoints = valid_block
-            .as_ref()
-            .external_entrypoints_cloned()
-            .collect::<Vec<_>>();
-        let expected_tx_set_hash: [u8; 32] =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                canonical_entrypoints.iter(),
-            )
-            .expect("canonical sequential transaction set")
-            .into();
-        assert_eq!(source_inventory.tx_set_hash(), expected_tx_set_hash);
-        assert_eq!(source_inventory.entries().len(), 2);
-        assert_eq!(
-            source_inventory.entries()[0].entry_hash,
-            commitment_call_hash
-        );
-        let time_source = &source_inventory.entries()[1];
-        assert_eq!(time_source.entry_hash, expected_time_call_hash);
-        assert_ne!(time_source.entry_hash, Hash::from(time_output_hash));
-        assert_eq!(
-            time_source.execution_kind,
-            FastpqSourceExecutionKindV1::ExecutionCall
-        );
-        assert_eq!(time_source.route, FastpqSourceRouteV1::Unrouted);
-        assert_eq!(time_source.dataspace_id, DataSpaceId::UNIVERSAL);
     }
     #[test]
     fn block_validation_sealed_only_entrypoint_executes_only_block_pipeline_trigger() {
@@ -10417,10 +10544,10 @@ seiyaku DynamicTarget {
         let (authority, keypair) = gen_account_in("wonderland");
         let (fee_sink, _) = gen_account_in("wonderland");
         let domain = DomainId::try_new("wonderland", "universal").unwrap();
-        let fee_asset = AssetDefinitionId::derive_from_components(
-            domain.clone(),
-            "sealed_fee".parse().unwrap(),
-        );
+        let fee_asset = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("canonical network XOR identity");
         let world = World::with(
             [Domain::new(domain).build(&authority)],
             [Account::new(authority.clone()).build(&authority)],
@@ -10519,7 +10646,8 @@ seiyaku DynamicTarget {
                 .1
                 .result
                 .is_ok(),
-            "sealed reveal executes the signed inner transaction"
+            "sealed reveal executes the signed inner transaction: {:?}",
+            reveal.block().network_output_at(0).unwrap().1.result
         );
         assert_eq!(
             state.world.view().smart_contract_state.len(),
@@ -10572,14 +10700,18 @@ seiyaku DynamicTarget {
             [Asset::new(source_asset_id.clone(), Quantity::from(10_u32))],
             [],
         );
+        let sealed_lane = LaneId::new(1);
         let lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                id: LaneId::SINGLE,
-                dataspace_id: sealed_dataspace,
-                alias: "sealed-default".to_owned(),
-                ..LaneConfig::default()
-            }],
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sealed_lane,
+                    dataspace_id: sealed_dataspace,
+                    alias: "sealed-dataspace".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
         )
         .expect("sealed test lane catalog");
         let dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -10603,14 +10735,12 @@ seiyaku DynamicTarget {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = dataspace_catalog;
         nexus.routing_policy.default_lane = LaneId::SINGLE;
-        nexus.routing_policy.default_dataspace = sealed_dataspace;
+        nexus.routing_policy.default_dataspace = DataSpaceId::UNIVERSAL;
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
-        // Open the isolated test Kura at the authoritative pre-genesis geometry. Installing this
-        // catalog through `set_nexus` would instead model a lifecycle relabel of the already-open
-        // synthetic primary lane and correctly refuse to archive that active block store.
+        // Lane zero remains global/universal; the signed native policy authorizes DS7 separately.
         let state = State::new_with_pre_genesis_nexus_for_testing(
             world,
             nexus,
@@ -10626,8 +10756,40 @@ seiyaku DynamicTarget {
             "the fixture asset must be authoritative on the sealed execution dataspace"
         );
 
-        let mut native_chain = component_chain(state);
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        };
+        let lane_policy = SumeragiLanePolicy {
+            anchor_freshness: 64,
+            max_merge_blocks: 16,
+            stall_window: 1_000,
+            lane_params: Default::default(),
+            fixed: vec![SumeragiFixedLane {
+                lane: sealed_lane,
+                dataspace: sealed_dataspace,
+                committee: crate::sumeragi::test_chain::fixture_validators()
+                    .into_iter()
+                    .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+                    .collect(),
+            }],
+            routes: vec![SumeragiLaneRoute {
+                lane: sealed_lane,
+                account: Some(authority.to_string()),
+                instruction: None,
+            }],
+            autoscale: None,
+        };
+        let mut native_chain = component_chain_with_genesis_parameters(
+            state,
+            vec![iroha_data_model::parameter::Parameter::Custom(
+                lane_policy.into_custom_parameter(),
+            )],
+        );
+        native_chain.commit(Vec::new());
+        native_chain.commit(Vec::new());
         let state = Arc::clone(native_chain.state());
+        let reveal_height = native_chain.height() + 2;
+        let reveal_deadline = reveal_height + 1;
         let mut transaction_builder = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -10647,15 +10809,20 @@ seiyaku DynamicTarget {
             .sign(keypair.private_key());
         let inner_call_hash = signed.hash_as_entrypoint();
         let salt = [0x5B; 32];
-        let commitment = compute_sealed_transaction_commitment(&state.network_id, &signed, salt, 4);
+        let commitment = compute_sealed_transaction_commitment(
+            &state.network_id,
+            &signed,
+            salt,
+            reveal_deadline,
+        );
         let commitment_entrypoint =
             TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
                 SealedTransactionCommitmentPayload::new(
                     state.network_id,
                     authority,
                     commitment,
-                    3,
-                    4,
+                    reveal_height,
+                    reveal_deadline,
                     None,
                 ),
                 keypair.private_key(),
@@ -10678,7 +10845,8 @@ seiyaku DynamicTarget {
         );
         let accepted_reveal =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal_entrypoint.clone()));
-        let (_reveal_clock, reveal_time_source) = TimeSource::new_mock(Duration::from_millis(2));
+        let (_reveal_clock, reveal_time_source) =
+            TimeSource::new_mock(Duration::from_millis(reveal_height));
         let reveal_plan = {
             let view = state.view();
             crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
@@ -10686,13 +10854,13 @@ seiyaku DynamicTarget {
                 &accepted_reveal,
                 view.world(),
                 u64::try_from(reveal_time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
-                3,
+                reveal_height,
             )
             .expect("sealed batch route resolves from the installed Nexus catalog")
         };
         assert_eq!(
             reveal_plan.coordinator_route(),
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, sealed_dataspace),
+            crate::queue::RoutingDecision::new(sealed_lane, sealed_dataspace),
             "the production router must select the authoritative sealed dataspace"
         );
         let proposal = native_chain.proposal_entrypoints(vec![reveal_entrypoint]);

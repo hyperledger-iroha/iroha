@@ -3771,7 +3771,7 @@ public sealed partial class ToriiClientTests
         manifestAccess["issued_ms"] = 2;
         Assert.Equal(1710000000000, manifestDto.Manifest["issued_ms"]!.GetValue<long>());
         AssertSnapshot(
-            node => new ToriiIdentifierPolicySummary { InputEncryptionPublicParametersDecoded = node },
+            node => new ToriiIdentifierPolicySummary { ProgramId = "identifier_lookup_retail", OutputOpeningPublicKey = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE", InputEncryptionPublicParametersDecoded = node },
             dto => dto.InputEncryptionPublicParametersDecoded);
         AssertSnapshot(
             node => new ToriiIdentifierResolveResponse { SignaturePayload = node },
@@ -8557,6 +8557,8 @@ public sealed partial class ToriiClientTests
                       "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
+                      "program_id": "identifier_lookup_retail",
+                      "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                       "resolver_public_key": "ed0120abcd",
                       "backend": "bfv-affine-v1",
                       "input_encryption": "bfv-v1",
@@ -8578,6 +8580,8 @@ public sealed partial class ToriiClientTests
         Assert.Equal(1, policies.Total);
         Assert.Single(policies.Items);
         Assert.Equal("phone#retail", policies.Items[0].PolicyId);
+        Assert.Equal("identifier_lookup_retail", policies.Items[0].ProgramId);
+        Assert.Equal("ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE", policies.Items[0].OutputOpeningPublicKey);
         Assert.True(policies.Items[0].Active);
         Assert.Equal("bfv-affine-v1", policies.Items[0].Backend);
         Assert.Equal(2048, policies.Items[0].InputEncryptionPublicParametersDecoded!["degree"]!.GetValue<int>());
@@ -8614,6 +8618,8 @@ public sealed partial class ToriiClientTests
                       "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
+                      "program_id": "identifier_lookup_retail",
+                      "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                       "resolver_public_key": {{JsonSerializer.Serialize(resolverPublicKey)}},
                       "backend": "bfv-affine-v1"
                     }
@@ -11220,7 +11226,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/identifiers/resolve", request.RequestUri!.AbsolutePath);
             Assert.Equal("phone#retail", payload.RootElement.GetProperty("policy_id").GetString());
-            Assert.Equal("+15551234567", payload.RootElement.GetProperty("input").GetString());
+            Assert.Equal(IdentifierRequestFixtures.Ciphertext, payload.RootElement.GetProperty("encrypted_input").GetString());
+            Assert.False(payload.RootElement.TryGetProperty("input", out _));
+            Assert.Equal(IdentifierRequestFixtures.OpenedHash, payload.RootElement.GetProperty("output_opening").GetProperty("payload").GetProperty("opened_output_hash").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -11234,7 +11242,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("opaque-1", resolved.OpaqueId);
@@ -11266,7 +11275,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("phone#retail", resolved.PolicyId);
@@ -11298,7 +11308,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("phone#retail", resolved.PolicyId);
@@ -11336,7 +11347,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11360,7 +11372,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11387,7 +11400,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = policyId,
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("identifier resolve request.policy_id", error.Message);
@@ -11414,6 +11428,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 PolicyId = "phone#retail",
                 EncryptedInput = encryptedInput,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("EncryptedInput", error.ParamName);
@@ -11437,7 +11452,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("identifier resolve response.policy_id", error.Message);
@@ -11462,7 +11478,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11491,7 +11508,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11524,7 +11542,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11555,7 +11574,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11576,7 +11596,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("proof", resolved.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
@@ -11610,7 +11631,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11666,7 +11688,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
@@ -11728,7 +11751,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -16295,9 +16319,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         switch (mutation)
         {
             case "intent":
-                var changed = ReplaceTransactionAdmissionIntent(
+                var changed = InsertRetiredAdmissionIntent(
                     Convert.FromBase64String(detached.TransactionPayloadBase64!),
-                    TransactionAdmissionIntent.Ordinary, new TransactionEncodingContext(request.Authority));
+                    0U, new TransactionEncodingContext(request.Authority));
                 detached = detached with
                 {
                     TransactionPayloadBase64 = Convert.ToBase64String(changed),
@@ -16339,7 +16363,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var reader = new CanonicalNoritoReader(Convert.FromBase64String(request.TransactionPayloadBase64!), "TTL mutation", "payload");
         var writer = new CanonicalNoritoWriter();
-        for (var index = 0; index < 10; index++)
+        for (var index = 0; index < 9; index++)
         {
             var field = reader.ReadField($"field_{index}");
             writer.WriteField(index == 4 ? new byte[] { 0 } : field);
@@ -16591,15 +16615,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData(TransactionAdmissionIntent.Ordinary)]
-    [InlineData((TransactionAdmissionIntent)2)]
-    public async Task CallContractAsyncRejectsRehashedAdmissionIntentSubstitution(
-        TransactionAdmissionIntent admissionIntent)
+    [InlineData(0U)]
+    [InlineData(1U)]
+    [InlineData(2U)]
+    public async Task CallContractAsyncRejectsRehashedRetiredAdmissionField(
+        uint retiredAdmissionIntent)
     {
         var request = TrustedContractCallRequest();
         var responseJson = BoundContractCallResponseJsonObject(
             request,
-            transactionAdmissionIntent: admissionIntent);
+            retiredTransactionAdmissionIntent: retiredAdmissionIntent);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
         using var client = BoundContractToriiClient(handler);
 
@@ -16608,7 +16633,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("admission intent", error.Message);
+        Assert.Contains("canonical nine-field TransactionPayload", error.Message, StringComparison.Ordinal);
         Assert.NotNull(handler.LastRequest);
     }
 
@@ -23021,6 +23046,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiIdentifierPolicySummary
         {
             PolicyId = "phone#retail",
+            ProgramId = "identifier_lookup_retail",
+            OutputOpeningPublicKey = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             Owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             Active = true,
             Normalization = "phone_e164",
@@ -23048,6 +23075,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["owner"] = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             ["active"] = true,
             ["normalization"] = "phone_e164",
+            ["program_id"] = "identifier_lookup_retail",
+            ["output_opening_public_key"] = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             ["resolver_public_key"] = "ed0120abcd",
             ["backend"] = "bfv-affine-v1",
             ["input_encryption"] = "bfv-v1",
@@ -23067,6 +23096,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "active": true,
               "normalization": "phone_e164",
+              "program_id": "identifier_lookup_retail",
+              "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
               "resolver_public_key": "ed0120abcd",
               "backend": "bfv-affine-v1"
             }
@@ -23123,6 +23154,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "normalization": "phone_e164",
+                  "program_id": "identifier_lookup_retail",
+                  "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                   "resolver_public_key": "ed0120abcd",
                   "backend": "bfv-affine-v1"
                 }
@@ -28892,18 +28925,15 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             builder.ReplaceMetadata(metadata);
         }
         var encoding = new TransactionEncodingContext(signerAccountId);
-        var payload = ReplaceTransactionAdmissionIntent(
-            builder.BuildPayloadBytes(encoding),
-            TransactionAdmissionIntent.Ordinary,
-            encoding);
+        var payload = builder.BuildPayloadBytes(encoding);
         return (
             Convert.ToBase64String(payload),
             Convert.ToBase64String(IrohaHash.Hash(payload)));
     }
 
-    private static byte[] ReplaceTransactionAdmissionIntent(
+    private static byte[] InsertRetiredAdmissionIntent(
         byte[] payload,
-        TransactionAdmissionIntent admissionIntent,
+        uint retiredAdmissionIntent,
         TransactionEncodingContext encoding)
     {
         var reader = new CanonicalNoritoReader(
@@ -28911,17 +28941,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "test transaction payload",
             nameof(payload));
         var writer = new CanonicalNoritoWriter();
-        for (var index = 0; index < 10; index++)
+        for (var index = 0; index < 9; index++)
         {
             var field = reader.ReadField($"field_{index}");
             if (index == 7)
             {
-                writer.WriteField(encoding.EncodeUInt32((uint)admissionIntent));
+                writer.WriteField(encoding.EncodeUInt32(retiredAdmissionIntent));
             }
-            else
-            {
-                writer.WriteField(field);
-            }
+            writer.WriteField(field);
         }
         reader.RequireEnd();
         return writer.ToArray();
@@ -29074,7 +29101,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         TransactionContractInvocation invocation,
         IReadOnlyDictionary<string, JsonNode?> metadata,
         NetworkId? networkId = null,
-        TransactionAdmissionIntent admissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
+        uint? retiredAdmissionIntent = null)
     {
         var encoding = new TransactionEncodingContext(authority);
         var payload = new CanonicalNoritoWriter();
@@ -29089,7 +29116,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             encoding.EncodeUInt64));
         payload.WriteField(encoding.EncodeOption<uint>(null, encoding.EncodeUInt32));
         payload.WriteField(encoding.EncodeFeePaymentIntent(feePayment));
-        payload.WriteField(encoding.EncodeUInt32((uint)admissionIntent));
+        if (retiredAdmissionIntent is { } retiredIntent)
+        {
+            payload.WriteField(encoding.EncodeUInt32(retiredIntent));
+        }
         payload.WriteField(encoding.EncodeMetadata(metadata));
         payload.WriteField(new byte[] { 0 });
         var bytes = payload.ToArray();
@@ -29106,7 +29136,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null,
         ulong creationTimeMilliseconds = 123456,
         NetworkId? transactionNetworkId = null,
-        TransactionAdmissionIntent transactionAdmissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
+        uint? retiredTransactionAdmissionIntent = null)
     {
         var draftIntent = request.DraftIntent
             ?? throw new InvalidOperationException("Test request requires a draft intent.");
@@ -29119,7 +29149,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             transactionInvocation ?? draftIntent.Invocation,
             transactionMetadata ?? draftIntent.Metadata,
             transactionNetworkId,
-            transactionAdmissionIntent);
+            retiredTransactionAdmissionIntent);
         var response = new JsonObject
         {
             ["ok"] = true,
@@ -30285,7 +30315,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VkOption(VkUInt64(100_000)),
             [0],
             feePayment,
-            VkUInt32(1),
             VkUInt64(0),
             [0]);
     }

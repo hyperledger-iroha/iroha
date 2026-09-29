@@ -15929,7 +15929,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         }
         let genesis = beacon::plan_genesis(inventory, &genesis_wire)?;
         let peers = beacon::peers(inventory)?;
-        let mut observer = AuthenticatedHeightObserverV1::new(&genesis, peers)?;
+        let mut observer =
+            AuthenticatedHeightObserverV1::new(&genesis, &inventory.chain_id, peers)?;
         let clients = self.beacon_clients(deadline)?;
         let receipt_name = format!("convergence-wave-{wave}.json");
         let previous = if wave == 0 {
@@ -18352,6 +18353,7 @@ fn validate_convergence_wave(
     }
     let evidence = crate::taira_dataspace_deploy::VerifiedCommittedHeightV1::validate_retained(
         genesis,
+        &inventory.chain_id,
         beacon::peers(inventory)?,
         object
             .get("evidence")

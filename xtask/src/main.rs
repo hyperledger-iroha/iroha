@@ -311,10 +311,6 @@ enum CommandKind {
     NexusLaneAudit {
         options: nexus::LaneAuditOptions,
     },
-    NexusFixtures {
-        output: PathBuf,
-        verify: bool,
-    },
     NexusConnectFixture {
         options: nexus::NexusConnectFixtureOptions,
     },
@@ -1526,21 +1522,13 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::NexusLaneMaintenance { options } => {
             let report = nexus_lane_maintenance::run(options)?;
             eprintln!(
-                "surveyed {} declared lane(s), {} instance block path(s), and {} instance merge scaffold(s)",
+                "surveyed {} declared lane(s) and {} instance block path(s)",
                 report.declared_lanes.len(),
-                report.instance_blocks.len(),
-                report.instance_merge_scaffolds.len()
+                report.instance_blocks.len()
             );
         }
         CommandKind::NexusLaneAudit { options } => {
             nexus::run_lane_audit(&options)?;
-        }
-        CommandKind::NexusFixtures { output, verify } => {
-            if verify {
-                nexus::verify_lane_commitment_fixtures(&output)?;
-            } else {
-                nexus::write_lane_commitment_fixtures(&output)?;
-            }
         }
         CommandKind::NexusConnectFixture { options } => {
             nexus::run_nexus_connect_fixture(&options)?;
@@ -5247,27 +5235,6 @@ where
         "nexus-connect-fixture" => Ok(CommandKind::NexusConnectFixture {
             options: nexus::parse_nexus_connect_fixture_options(args)?,
         }),
-        "nexus-fixtures" => {
-            let mut output: Option<PathBuf> = None;
-            let mut verify = false;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "-o" | "--out" | "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--verify" => verify = true,
-                    flag => {
-                        return Err(format!("unknown flag for nexus-fixtures: {flag}").into());
-                    }
-                }
-            }
-            let output = output.unwrap_or_else(default_nexus_lane_commitment_dir);
-            Ok(CommandKind::NexusFixtures { output, verify })
-        }
         "nexus-lane-maintenance" => {
             let mut config: Option<PathBuf> = None;
             let mut pending = args.peekable();
@@ -11447,6 +11414,15 @@ mod acceleration_state_tests {
     use norito::json::Value;
     use soranet_pq::MlDsaSuite;
     #[test]
+    fn parse_rejects_retired_nexus_commitment_fixture_generator() {
+        let error = match parse_command(["xtask", "nexus-fixtures"].into_iter().map(String::from)) {
+            Ok(_) => panic!("retired lane commitment generator must not be accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "unknown command: nexus-fixtures");
+    }
+
+    #[test]
     fn parse_nexus_lane_maintenance_read_only_inventory() {
         let command = parse_command(
             ["xtask", "nexus-lane-maintenance", "--config", "config.toml"]
@@ -14190,12 +14166,6 @@ fn load_actual_config(path: &Path) -> eyre::Result<actual::Root> {
     user_cfg
         .parse()
         .map_err(|err| eyre!("configuration `{}` invalid: {err:?}", path.display()))
-}
-fn default_nexus_lane_commitment_dir() -> PathBuf {
-    workspace_root()
-        .join("fixtures")
-        .join("nexus")
-        .join("lane_commitments")
 }
 fn default_address_vectors_path() -> Result<PathBuf, Box<dyn Error>> {
     normalize_path(Path::new("fixtures/account/address_vectors.json"))

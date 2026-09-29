@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .native_sumeragi import SumeragiStatus, SumeragiFootprint, SumeragiBeaconHorizon, SumeragiHaltReason, parse_native_status_json
+from .native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters, parse_native_lanes_json
 from .iroha_hash import iroha_hash_bytes as _iroha_hash_bytes
 
 import base64
@@ -677,6 +678,7 @@ def inspect_i105_network_prefix(
 
 __all__ = [
     "SumeragiStatus", "SumeragiFootprint", "SumeragiBeaconHorizon", "SumeragiHaltReason",
+    "SumeragiLaneStatus", "SumeragiLaneRecord", "SumeragiLaneMember", "SumeragiLaneFrontier", "SumeragiParameters",
     "ToriiClient",
     "TairaTestnetProfile",
     "TAIRA_TESTNET_PROFILE",
@@ -748,8 +750,6 @@ __all__ = [
     "ConnectAppPolicyControls",
     "ConnectAdmissionManifestEntry",
     "ConnectAdmissionManifest",
-    "LaneCommitmentSnapshot",
-    "DataspaceCommitmentSnapshot",
     "UaidPortfolioTotals",
     "UaidPortfolioAsset",
     "UaidPortfolioAccount",
@@ -1730,15 +1730,8 @@ _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
-_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
-_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
 _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
-    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-)
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_MAX_JSON_DEPTH = 128
 _KAGEMUSHA_READINESS_MAX_BYTES_V1 = 4 * 1024
@@ -3512,33 +3505,6 @@ class ProtectedNamespacesStatus:
 
 
 @dataclass(frozen=True)
-class LaneCommitmentSnapshot:
-    """Aggregated TEU commitment for a Nexus lane."""
-
-    block_height: int
-    lane_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-
-@dataclass(frozen=True)
-class DataspaceCommitmentSnapshot:
-    """Aggregated TEU commitment for a Nexus dataspace."""
-
-    block_height: int
-    lane_id: int
-    dataspace_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-
-@dataclass(frozen=True)
 class UaidPortfolioTotals:
     """Aggregate counts returned by ``/v1/accounts/{uaid}/portfolio``."""
 
@@ -3817,8 +3783,6 @@ class StatusPayload:
     txs_rejected: int
     view_changes: int
     governance: Optional[GovernanceStatusSnapshot]
-    lane_commitments: List[LaneCommitmentSnapshot]
-    dataspace_commitments: List[DataspaceCommitmentSnapshot]
     lane_governance: List[LaneGovernanceSnapshot]
     dataspace_catalog: List[DataspaceCatalogEntry]
     lane_governance_sealed_total: int
@@ -4441,6 +4405,20 @@ class ToriiClient(
         maximum_body_bytes: int,
         parser: Callable[[bytes, str], Mapping[str, Any]] = parse_sumeragi_json_object,
     ) -> Mapping[str, Any]:
+        body = self._read_sumeragi_operator_json_body(
+            path, context=context, params=params, maximum_body_bytes=maximum_body_bytes,
+        )
+        return parser(body, context)
+
+    def _read_sumeragi_operator_json_body(
+        self,
+        path: str,
+        *,
+        context: str,
+        params: Optional[Mapping[str, Any]] = None,
+        maximum_body_bytes: int,
+    ) -> bytes:
+        """Read one operator-signed exact `application/json` body through an actual-byte bound."""
         query = urlencode(sorted(params.items()), doseq=True) if params else ""
         target = f"{path}?{query}" if query else path
         response = self._operator_get(target, stream=True)
@@ -4458,12 +4436,11 @@ class ToriiClient(
         ) is None:
             response.close()
             raise TypeError(f"{context} response must use application/json content type")
-        body = _read_bounded_response_body(
+        return _read_bounded_response_body(
             response,
             maximum_body_bytes,
             context,
         )
-        return parser(body, context)
 
     def _get_kaigi_relay_json_object(
         self,
@@ -5697,6 +5674,17 @@ class ToriiClient(
             maximum_body_bytes=1024 * 1024, parser=parse_native_status_json,
         )
         return SumeragiStatus.from_payload(payload)
+
+    def get_sumeragi_lanes(self) -> List[SumeragiLaneStatus]:
+        """Read every committed lane with this node's instance status (`GET /v1/sumeragi/lanes`).
+
+        Lane instance statuses are native observations, not finality authority.
+        """
+        body = self._read_sumeragi_operator_json_body(
+            "/v1/sumeragi/lanes", context="native sumeragi lanes",
+            maximum_body_bytes=16 * 1024 * 1024,
+        )
+        return parse_native_lanes_json(body, "native sumeragi lanes")
 
     def get_sumeragi_leader(self) -> SumeragiLeaderSnapshot:
         """Fetch leader/PRF state (`GET /v1/sumeragi/leader`)."""
@@ -9657,15 +9645,10 @@ class ToriiClient(
         context: str,
     ) -> StatusPayload:
         record = self._ensure_mapping(payload, context)
+        for field_name in ("lane_commitments", "dataspace_commitments", "pipeline_execution"):
+            if field_name in record:
+                raise RuntimeError(f"{context} contains retired field `{field_name}`")
         governance = self._parse_status_governance(record.get("governance"))
-        lane_commitments = self._parse_lane_commitments(
-            record.get("lane_commitments"),
-            context=f"{context}.lane_commitments",
-        )
-        dataspace_commitments = self._parse_dataspace_commitments(
-            record.get("dataspace_commitments"),
-            context=f"{context}.dataspace_commitments",
-        )
         lane_governance = self._parse_lane_governance(
             record.get("lane_governance"),
             context=f"{context}.lane_governance",
@@ -9721,8 +9704,6 @@ class ToriiClient(
             txs_rejected=self._coerce_int(record.get("txs_rejected"), f"{context}.txs_rejected"),
             view_changes=self._coerce_int(record.get("view_changes"), f"{context}.view_changes"),
             governance=governance,
-            lane_commitments=lane_commitments,
-            dataspace_commitments=dataspace_commitments,
             lane_governance=lane_governance,
             dataspace_catalog=dataspace_catalog,
             lane_governance_sealed_total=self._coerce_int(
@@ -10080,65 +10061,6 @@ class ToriiClient(
                 )
             )
         return activations
-
-    def _parse_lane_commitments(
-        self,
-        payload: Any,
-        *,
-        context: str,
-    ) -> List[LaneCommitmentSnapshot]:
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise RuntimeError(f"{context} must be a list")
-        snapshots: List[LaneCommitmentSnapshot] = []
-        for index, entry in enumerate(payload):
-            record = self._ensure_mapping(entry, f"{context}[{index}]")
-            snapshots.append(
-                LaneCommitmentSnapshot(
-                    block_height=self._coerce_int(record.get("block_height"), f"{context}[{index}].block_height"),
-                    lane_id=self._coerce_int(record.get("lane_id"), f"{context}[{index}].lane_id"),
-                    tx_count=self._coerce_int(record.get("tx_count"), f"{context}[{index}].tx_count"),
-                    total_chunks=self._coerce_int(record.get("total_chunks"), f"{context}[{index}].total_chunks"),
-                    rbc_bytes_total=self._coerce_int(
-                        record.get("rbc_bytes_total"),
-                        f"{context}[{index}].rbc_bytes_total",
-                    ),
-                    teu_total=self._coerce_int(record.get("teu_total"), f"{context}[{index}].teu_total"),
-                    block_hash="" if record.get("block_hash") is None else str(record.get("block_hash")),
-                )
-            )
-        return snapshots
-
-    def _parse_dataspace_commitments(
-        self,
-        payload: Any,
-        *,
-        context: str,
-    ) -> List[DataspaceCommitmentSnapshot]:
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise RuntimeError(f"{context} must be a list")
-        snapshots: List[DataspaceCommitmentSnapshot] = []
-        for index, entry in enumerate(payload):
-            record = self._ensure_mapping(entry, f"{context}[{index}]")
-            snapshots.append(
-                DataspaceCommitmentSnapshot(
-                    block_height=self._coerce_int(record.get("block_height"), f"{context}[{index}].block_height"),
-                    lane_id=self._coerce_int(record.get("lane_id"), f"{context}[{index}].lane_id"),
-                    dataspace_id=self._coerce_int(record.get("dataspace_id"), f"{context}[{index}].dataspace_id"),
-                    tx_count=self._coerce_int(record.get("tx_count"), f"{context}[{index}].tx_count"),
-                    total_chunks=self._coerce_int(record.get("total_chunks"), f"{context}[{index}].total_chunks"),
-                    rbc_bytes_total=self._coerce_int(
-                        record.get("rbc_bytes_total"),
-                        f"{context}[{index}].rbc_bytes_total",
-                    ),
-                    teu_total=self._coerce_int(record.get("teu_total"), f"{context}[{index}].teu_total"),
-                    block_hash="" if record.get("block_hash") is None else str(record.get("block_hash")),
-                )
-            )
-        return snapshots
 
     def _parse_dataspace_catalog(
         self,

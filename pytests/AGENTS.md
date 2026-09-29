@@ -6,7 +6,6 @@ These guidelines apply to the `pytests/` directory containing the Python test su
 - `iroha_cli_tests/` – end-to-end coverage for the CLI. Managed via Poetry; see its `README.md` for full environment notes.
 - `iroha_torii_tests/` – REST/Torii API coverage, also Poetry-managed and Allure-enabled.
 - `scripts/` – light-weight unit tests for helper scripts (e.g., `scripts/test_env.py`, `scripts/run_sumeragi_da.py`).
-- `test_run_sumeragi_da.py` – exercises report/fixture helpers for the DA stress scripts.
 
 ## Environment
 - Install shared Python deps once: `python3 -m pip install -r scripts/requirements.txt`.

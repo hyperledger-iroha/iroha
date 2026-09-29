@@ -366,7 +366,7 @@ pub struct ParliamentAttemptPlanResponseV1 {
     pub governance_attempt_id: GovernanceAttemptId,
     /// Committed height the plan was derived from.
     pub current_height: u64,
-    /// Height at which a transaction submitted now executes.
+    /// Next native candidate height used for this advice; inclusion is not reserved.
     pub execution_height: u64,
     /// Transitions the reducer accepts at `execution_height`, in submission order.
     pub due: Vec<ParliamentLifecycleTransitionV1>,

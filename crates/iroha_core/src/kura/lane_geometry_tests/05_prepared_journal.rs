@@ -386,6 +386,9 @@ fn prepared_geometry_journal_rejects_occupied_captured_absence() {
     let kura = open_kura(&root, &initial);
     authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
     let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
+    drop(prepared);
     let path = kura.lane_geometry_journal_path();
     // Opening Kura establishes its bootstrap journal. Remove only that file to
     // exercise captured absence while retaining the fixture's other storage.
@@ -394,16 +397,18 @@ fn prepared_geometry_journal_rejects_occupied_captured_absence() {
         !path.exists(),
         "fixture starts without an authenticated journal"
     );
-    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
-    let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
+    // An absent journal cannot authenticate a transition's predecessor. Exercise
+    // the prepared writer's absence custody directly using already validated bytes.
+    let mut writer =
+        super::retained_journal::RetainedGeometryJournal::capture(&kura, intended.len()).unwrap();
 
     fs::write(&path, &intended).unwrap();
     let occupant_metadata = secure_file_metadata::from_path(&path).unwrap();
     let before = native_observation_tree(&root);
-    prepared
-        .persist(&kura, LaneGeometryPhase::Intent)
+    writer
+        .persist(&kura, LaneGeometryPhase::Intent, &intended)
         .expect_err("an occupied absent slot cannot become this owner's prior publication");
-    drop(prepared);
+    drop(writer);
     assert_eq!(native_observation_tree(&root), before);
     assert_eq!(fs::read(&path).unwrap(), intended);
     assert!(Kura::sidecar_file_metadata_unchanged(

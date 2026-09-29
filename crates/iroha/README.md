@@ -86,12 +86,11 @@ The operation selects one response representation, enforces the context deadline
 and rejects oversized or ambiguously labelled responses. Transport errors retain
 their I/O category in `TransportErrorKind`; HTTP errors retain their bounded body.
 
-Consensus operational evidence comes from
+Consensus operational diagnostics come from
 `client.get_sumeragi_diagnostics().await?`, which sends an operator-signed request
-and validates Native AMX groups, participant applications, autonomous execution
-and relay evidence. `client.get_cross_lane_transfer_proofs().await?` additionally
-rejects duplicate relay proofs. Synchronous callers use the same method names on
-`iroha::blocking::Client`.
+and returns queue pressure, NPoS election state and lane governance readiness.
+Authoritative consensus state is `get_sumeragi_status()`. Synchronous callers use
+the same method names on `iroha::blocking::Client`.
 
 Submission discovers the node's data-model version and signed-transaction schema
 through public `/v1/node/capabilities` metadata before dispatching transaction

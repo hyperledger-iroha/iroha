@@ -12,12 +12,8 @@ use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
 use iroha_data_model::{
     account::{AccountAdmissionMode, admission::ImplicitAccountFeeDestination},
     asset::id::AssetId,
-    block::{
-        BlockHeader,
-        consensus::{
-            SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
-            SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
-        },
+    block::consensus::{
+        SumeragiDiagnosticsStatus, SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
     },
     da::commitment::DaProofScheme,
     events::{
@@ -25,7 +21,7 @@ use iroha_data_model::{
         time::{TimeEvent, TimeInterval},
     },
     nexus::{LaneStorageProfile, LaneVisibility},
-    prelude::{Hash, HashOf},
+    prelude::Hash,
     role::RoleId,
     sumeragi::SumeragiStatus,
 };
@@ -38,7 +34,6 @@ use mochi_core::{ExposedPrivateKey, ToriiError, torii::StatusMetrics};
 use norito::json::{self, Value};
 use std::{
     collections::VecDeque,
-    num::NonZeroU64,
     path::Path,
     time::{Duration, Instant},
 };
@@ -682,7 +677,7 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
 fn sample_sumeragi_status_wire() -> SumeragiStatus {
     SumeragiStatus {
         protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
-        config_fingerprint: iroha_crypto::Hash::new(b"mochi-status-config"),
+        config_fingerprint: Hash::new(b"mochi-status-config"),
         beacon_horizon: None,
         instance: [0x41; 32],
         height: 10,
@@ -707,7 +702,6 @@ fn sample_sumeragi_status_wire() -> SumeragiStatus {
 
 fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
     SumeragiDiagnosticsStatus {
-        pipeline_execution: Default::default(),
         tx_queue_depth: 4,
         tx_queue_capacity: 128,
         tx_queue_retained_bytes: 0,
@@ -718,29 +712,6 @@ fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
         tx_queue_saturated_by_age: false,
         tx_queue_oldest_queued_age_ms: 0,
         npos: None,
-        lane_commitments: vec![SumeragiLaneCommitment {
-            block_height: 10,
-            lane_id: LaneId::new(0),
-            tx_count: 3,
-            total_chunks: 4,
-            rbc_bytes_total: 384,
-            teu_total: 96,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0x90; Hash::LENGTH],
-            )),
-        }],
-        dataspace_commitments: vec![SumeragiDataspaceCommitment {
-            block_height: 10,
-            lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::new(2),
-            tx_count: 1,
-            total_chunks: 2,
-            rbc_bytes_total: 128,
-            teu_total: 32,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0x91; Hash::LENGTH],
-            )),
-        }],
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: vec![SumeragiLaneGovernance {
@@ -1663,7 +1634,7 @@ fn peer_status_view_surfaces_sealed_lanes() {
     );
 }
 #[test]
-fn lane_status_rows_surface_native_commitment_and_cursor() {
+fn lane_status_rows_surface_physical_catalog_governance_and_cursor() {
     let mut view = PeerStatusView::default();
     let now = Instant::now();
     let status = TelemetryStatus {
@@ -1680,15 +1651,17 @@ fn lane_status_rows_surface_native_commitment_and_cursor() {
         metrics: StatusMetrics::from_samples(None, &status),
     };
     let sumeragi = sample_sumeragi_status_wire();
-    let mut diagnostics = sample_sumeragi_diagnostics();
+    let diagnostics = sample_sumeragi_diagnostics();
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
-    let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
+    let mut catalog = lane_catalog_snapshot(None);
+    catalog.lane_dataspaces.insert(0, 2);
+    catalog.dataspace_aliases.insert(2, "payments".to_owned());
+    let rows = view.lane_status_rows(&catalog);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     assert_eq!(row.lane_id, 0);
     assert_eq!(row.alias, "alpha");
-    assert_eq!(row.block_height, Some(10));
-    assert_eq!(row.rbc_bytes, Some(384));
+    assert_eq!(row.dataspace, "payments");
     assert_eq!(row.da_cursor_label(), "e2 s7");
     assert!(matches!(row.manifest_state, LaneManifestState::Ready));
 }

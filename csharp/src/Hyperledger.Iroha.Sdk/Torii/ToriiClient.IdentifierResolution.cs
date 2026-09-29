@@ -15,7 +15,7 @@ public sealed partial class ToriiClient
         var normalizedRequest = request with
         {
             PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId)),
-            EncryptedInput = NormalizeOptionalIdentifierCiphertext(
+            EncryptedInput = NormalizeIdentifierCiphertext(
                 request.EncryptedInput,
                 nameof(request.EncryptedInput)),
         };

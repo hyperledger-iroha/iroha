@@ -60,43 +60,30 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
     (fixture, parent, child)
 }
 
-#[inline(never)]
-fn pipeline_receipt_owned_block(state: &State, header: BlockHeader) -> Box<StateBlock<'_>> {
-    let (block, ()) = state
-        .block_with_owned_start_stages(
-            header,
-            |_| Ok::<(), std::convert::Infallible>(()),
-            |_, ()| Ok(()),
-        )
-        .unwrap();
-    block
-}
-
 fn pipeline_receipt_carrier(fixture: &OrdinaryEconomicFixture) -> SignedBlock {
-    let base = empty_global_block_after(Some(&fixture.parent));
+    let candidate_time = fixture.parent.header().creation_time_ms
+        + fixture
+            .state
+            .world
+            .parameters
+            .view()
+            .sumeragi()
+            .block_cadence_ms()
+            .get();
     let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let mut transaction = TransactionBuilder::new(
         fixture.state.network_id,
         fixture.source.account().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-    transaction.set_creation_time(base.header().creation_time() - Duration::from_millis(1));
+    transaction.set_creation_time(Duration::from_millis(candidate_time - 1));
     let signed = transaction
         .with_instructions([Log::new(
             Level::INFO,
             "pipeline receipt owner probe".to_owned(),
         )])
         .sign(key.private_key());
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(base.header());
-    builder.push_transaction(signed);
-    let mut block = builder
-        .build(BTreeSet::new())
-        .canonical_resultless_proposal();
-    block.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-        &fixture.state.nexus_snapshot(),
-        block.header().height().get(),
-    )));
-    block
+    fixture._chain.proposal(Some(candidate_time), vec![signed])
 }
 
 #[inline(never)]
@@ -113,8 +100,9 @@ fn assert_pipeline_receipt_has_canonical_owner(nested: bool) {
     let mut expected_wire = None;
     for _ in 0..2 {
         let mut attempt = carrier.clone();
-        let mut overlay = pipeline_receipt_owned_block(state, attempt.header());
-        crate::block::ValidBlock::execute_block_outputs_for_test(&mut attempt, &mut overlay, None)
+        let (mut overlay, recorder) = ValidBlock::start_component_execution(&attempt, state)
+            .expect("record the original pipeline carrier before its first effects");
+        ValidBlock::execute_recorded_component_outputs(&mut attempt, &mut overlay, &recorder)
             .unwrap();
         assert_eq!(attempt.execution_outputs().len(), 2);
         assert!(
@@ -175,6 +163,7 @@ fn assert_pipeline_receipt_has_canonical_owner(nested: bool) {
             expected_wire = Some(wire);
         }
         drop(overlay);
+        drop(recorder);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(state)
                 .expect("stable valid fixture snapshot"),

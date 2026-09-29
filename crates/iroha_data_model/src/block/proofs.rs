@@ -163,7 +163,7 @@ pub struct BlockProofs {
 /// This capability is intentionally not serializable and its fields are private. Its public
 /// constructors require either the executed-wire identity a certified-chain reader authenticated
 /// for a committed block, or an independently trusted target height context and untrusted
-/// Sumeragi-v2 finality; both bind the exact executed wire before recomputing the Merkle
+/// Sumeragi finality; both bind the exact executed wire before recomputing the Merkle
 /// commitments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedBlockProofAnchor {

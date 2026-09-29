@@ -95,7 +95,6 @@ use iroha_config::{
 use iroha_core::telemetry::{StateTelemetry, StreamingTelemetry};
 use iroha_core::{
     IrohaNetwork,
-    block::ValidBlock,
     compliance::LaneComplianceEngine,
     gossiper::{TransactionGossiper, TransactionGossiperHandle},
     governance::manifest::{
@@ -112,8 +111,10 @@ use iroha_core::{
     },
     state::{State, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
-    sumeragi::{filter_validators_from_trusted, network_topology::Topology},
+    sumeragi::filter_validators_from_trusted,
 };
+#[cfg(test)]
+use iroha_core::{block::ValidBlock, sumeragi::network_topology::Topology};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
@@ -440,8 +441,7 @@ fn complete_test_genesis_builder_for_topology(
     builder
         .set_topology(topology)
         .with_sumeragi_context_parameters(
-            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(
-            ),
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)
 }
@@ -8750,7 +8750,7 @@ fn validate_available_genesis_for_check(
     let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms, _maximum_validator_roster_len) =
         consensus_caps_from_genesis(genesis, &config_caps).ok_or_else(|| {
             Report::new(MainError::Config).attach(
-                "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
+                "local genesis does not contain one valid canonical Sumeragi handshake context",
             )
         })?;
     verify_genesis_metadata(
@@ -9061,8 +9061,7 @@ fn consensus_caps_from_genesis(
     }
     let (permissioned_roster_len, npos_max_validators) = match &consensus_params.mode {
         iroha_data_model::block::consensus::ConsensusGenesisModeParams::Permissioned
-            if expected_mode
-                == iroha_data_model::block::consensus::ConsensusMode::Permissioned =>
+            if expected_mode == iroha_data_model::block::consensus::ConsensusMode::Permissioned =>
         {
             (
                 iroha_core::sumeragi::schedule::genesis_validators(genesis)
@@ -9117,7 +9116,7 @@ fn signed_genesis_context_metadata(
     for transaction in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(
-                "Sumeragi v2 genesis metadata must be carried by instruction batches".to_owned(),
+                "Sumeragi genesis metadata must be carried by instruction batches".to_owned(),
             );
         };
         for set_parameter in instructions
@@ -9137,14 +9136,14 @@ fn signed_genesis_context_metadata(
     }
     let [metadata] = metadata_entries.as_slice() else {
         return Err(format!(
-            "Sumeragi v2 genesis requires exactly one signed handshake metadata entry, found {}",
+            "Sumeragi genesis requires exactly one signed handshake metadata entry, found {}",
             metadata_entries.len()
         ));
     };
     let expected_protocol = u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION);
     if metadata.wire_protocol_version != expected_protocol {
         return Err(format!(
-            "Sumeragi v2 genesis requires wire_protocol_version = {expected_protocol}, got {}",
+            "Sumeragi genesis requires wire_protocol_version = {expected_protocol}, got {}",
             metadata.wire_protocol_version
         ));
     }
@@ -11193,7 +11192,7 @@ mod tests {
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-        use iroha_model_base::chain::ChainId;
+        use iroha_model_base::{chain::ChainId, domain::DomainId};
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
@@ -11633,7 +11632,7 @@ mod tests {
             );
             config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
-                signed_genesis_context_metadata(&genesis).expect("signed v2 metadata");
+                signed_genesis_context_metadata(&genesis).expect("signed genesis context metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)
@@ -11910,7 +11909,11 @@ mod tests {
                 )
                 .err()
                 .expect("same-named malformed token must never qualify");
-                assert!(format!("{error:?}").contains("genesis instruction execution failed"));
+                assert!(
+                    format!("{error:?}").contains(
+                        &iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()
+                    )
+                );
             }
         }
         #[test]
@@ -12009,7 +12012,8 @@ mod tests {
             .expect("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
             assert!(
-                rendered.contains("genesis instruction execution failed"),
+                rendered
+                    .contains(&iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()),
                 "unexpected offline validation error: {rendered}"
             );
         }
@@ -12062,7 +12066,7 @@ mod tests {
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _, _) =
                 consensus_caps_from_genesis(&permissioned_genesis, &config_caps)
-                    .expect("permissioned signed genesis must produce canonical v2 caps");
+                    .expect("permissioned signed genesis must produce canonical consensus caps");
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
                 verify_genesis_metadata(&npos_genesis, &config, &consensus_caps, &mode_tag, proto)
@@ -12091,7 +12095,7 @@ mod tests {
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, mut consensus_caps, _, _) =
                 consensus_caps_from_genesis(&genesis_block, &config_caps)
-                    .expect("signed genesis must produce canonical v2 caps");
+                    .expect("signed genesis must produce canonical consensus caps");
             // Raw manifest fingerprints are normalized during signing. Mutate
             // the expected admission fingerprint after deriving it from the
             // actual signed genesis so this exercises the mismatch gate.
@@ -12570,9 +12574,8 @@ fn authenticated_maximum_validator_roster_len(
 ) -> Result<usize, String> {
     match mode {
         iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
-            if !iroha_data_model::block::consensus::is_valid_committee_size(
-                permissioned_roster_len,
-            ) {
+            if !iroha_data_model::block::consensus::is_valid_committee_size(permissioned_roster_len)
+            {
                 return Err(
                     "authenticated permissioned roster is not a bounded 3f + 1 committee"
                         .to_owned(),

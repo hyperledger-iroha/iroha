@@ -61,8 +61,7 @@ Kotlin projects while preserving these exact coordinates in generated POMs.
 
 KAGEMUSHA reserve top-ups are payer-signed transactions. Construct the sole
 transaction instruction with `TopUpKagemushaV1Instruction`, sign the
-transaction through `TransactionBuilder` (which always binds the mandatory
-`QueuePlanSynced` admission intent), then call
+transaction through `TransactionBuilder`, then call
 `KagemushaToriiClientV1.submitTopUp(signedTransaction, operationId)` with the
 embedded request's exact nonzero 32-byte operation ID. The client forwards the
 canonical versioned signed bytes unchanged to `/v1/kagemusha/top-up` and uses
@@ -114,9 +113,9 @@ and buffered responses at 8 MiB.
 
 ## Authoritative Sumeragi status and operational diagnostics
 
-Kotlin `core-jvm` owns Sumeragi status, diagnostics, wire decoding and Native AMX
-validation for Kotlin and Java consumers. Use the `org.hyperledger.iroha.sdk`
-models and transport described in the [Kotlin SDK README](../../kotlin/README.md#authoritative-sumeragi-status-and-operational-diagnostics).
+Kotlin `core-jvm` owns Sumeragi status, diagnostics and wire decoding for Kotlin
+and Java consumers. Use the `org.hyperledger.iroha.sdk` models and transport
+described in the [Kotlin SDK README](../../kotlin/README.md#native-sumeragi-status).
 Java consumer tests live in `kotlin/core-jvm/src/test/java`; the separate Java
 release leg executes those tests against the same canonical production SDK.
 
@@ -1122,7 +1121,7 @@ Raw `witness_base64` body authentication is not exposed; multisig writes must
 use a canonical signed transaction or a closed typed signed intent.
 `prepareContractCall` requires `ToriiCanonicalRequestAuth` for the same authority
 and a configured `LocalSigningContext`. It signs the exact prepare request once
-and accepts only a canonical `QueuePlanSynced` contract payload. Keep the returned
+and accepts only a canonical contract-call transaction payload. Keep the returned
 payload bytes and quoted fee unchanged when signing and submitting through the
 transaction API; submission failures are reconciled by transaction hash.
 
@@ -1130,6 +1129,15 @@ transaction API; submission failures are reconciled by transaction hash.
 the exact lowercase BLAKE3-256 digest of the canonical UTF-8 JSON request
 payload. An omitted payload hashes the empty byte sequence; noncanonical hex or
 a digest mismatch fails closed before the draft is returned.
+Encrypted RAM-LFE is unavailable until its diagnostic exact-lift BFV profile is
+replaced. Execute responses contain ciphertext and a receipt; they do not provide
+a plaintext opening. Identifier requests require an independently authenticated
+opening. The retired execute `output_opening` field is rejected.
+Local plaintext encryption refuses with `ram_lfe_encryption_unavailable`; public
+seed overrides and the insecure production encryptor are removed. The canonical
+Kotlin/JVM API exposes `RamLfeEncryptionUnavailableException` to Java callers.
+Retired backend names and unknown modes are rejected on decode.
+
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require
 `ToriiCanonicalRequestAuth` plus `ClientConfig.localSigningContext`. They sign the
 exact POST path and body once, reject precomputed canonical headers, and bind a

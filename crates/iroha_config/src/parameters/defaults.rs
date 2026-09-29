@@ -1186,8 +1186,9 @@ pub mod network {
     // Maximum allowed encrypted frame size for peer messages (bytes).
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
-    /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,844,237 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// The cap was sized for a maximal certified-body response of 16,844,237 bytes
+    /// before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// TODO(S4): re-derive this bound from the current Sumeragi full-body transport message.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full

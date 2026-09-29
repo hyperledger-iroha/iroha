@@ -24,6 +24,8 @@ use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
 use iroha_crypto::Hash;
 #[cfg(test)]
+use iroha_data_model::nexus::VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX;
+#[cfg(test)]
 use iroha_data_model::prelude::Domain;
 use iroha_data_model::{
     Identifiable as _, ValidationFail,
@@ -47,7 +49,7 @@ use iroha_data_model::{
         FeeSponsorMultisigOperation, FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
-        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
+        VerifiedFeeSponsorVaultAllocation,
     },
     parameter::CustomParameterId,
     permission::Permission,
@@ -1706,6 +1708,7 @@ impl NexusFeeAdmissionError {
         }
     }
 }
+#[cfg(test)]
 fn smart_contract_state_name(
     raw: String,
     context: &'static str,
@@ -1716,6 +1719,7 @@ fn smart_contract_state_name(
         ))
     })
 }
+#[cfg(test)]
 fn decode_verified_fee_sponsor_vault_allocation_state(
     payload: &[u8],
 ) -> Result<VerifiedFeeSponsorVaultAllocation, NexusFeeAdmissionError> {
@@ -1730,6 +1734,7 @@ fn decode_verified_fee_sponsor_vault_allocation_state(
         ))
     })
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1738,6 +1743,7 @@ fn fee_sponsor_vault_allocation_usage_state_key(
         "verified fee sponsor vault allocation usage",
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1746,6 +1752,7 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
         "settled verified fee sponsor vault allocation usage",
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_quantity_at(
     world: &impl WorldReadOnly,
     key: &StatePath,
@@ -1761,6 +1768,7 @@ fn fee_sponsor_vault_allocation_quantity_at(
         },
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_spent(
     world: &impl WorldReadOnly,
     lease_id: &iroha_crypto::Hash,

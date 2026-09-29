@@ -90,6 +90,7 @@ def _bytes(value: int, length: int = 32) -> bytes:
 
 
 def _base_context() -> dict[str, object]:
+    """Build mutable codec-shape cases; Rust's shared fixture owns signed-positive parity."""
     network_id = NetworkId.from_bytes(bytes(range(1, 32)) + b"\x01")
     asset = Kagemusha.AssetDefinitionId("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
     incarnation = Kagemusha.AssetIncarnation(_bytes(1))
@@ -112,6 +113,7 @@ def _base_context() -> dict[str, object]:
         device_key_reference=Kagemusha.device_key_reference(public_key),
         issued_at_ms=1,
         expires_at_ms=10_000,
+        app_policy_binding_digest=_bytes(0xA6),
         governance_signature=Kagemusha.DeviceSignature(_CREDENTIAL_SIGNATURE),
     )
     return {
@@ -627,6 +629,31 @@ def test_three_message_shapes_and_canonical_norito_alignments() -> None:
         _replace(request, request_mode=object())
 
 
+def test_hardware_credential_requires_exact_app_policy_binding() -> None:
+    credential = _base_context()["credential"]
+    fields = {name: getattr(credential, name) for name in credential.__slots__}
+    del fields["app_policy_binding_digest"]
+    with pytest.raises(TypeError, match="missing or unknown fields"):
+        Kagemusha.HardwareCredential(**fields)
+    for invalid in (b"", bytes(31), bytes(32), bytes(33)):
+        with pytest.raises(Kagemusha.Error, match="app_policy_binding_digest"):
+            _replace(credential, app_policy_binding_digest=invalid)
+
+    # Recompute the outer archive checksum so rejection reaches the nested field
+    # decoder, rather than stopping at malformed transport framing.
+    request = _request()
+    payload = _MODULE._encode_model(request)
+    digest = credential.app_policy_binding_digest
+    assert payload.count(digest) == 1
+    malformed = _MODULE._frame(
+        _MODULE._SCHEMAS[Kagemusha.PaymentRequest],
+        payload.replace(digest, bytes(32)),
+        _MODULE._model_alignment(Kagemusha.PaymentRequest),
+    )
+    with pytest.raises(Kagemusha.Error, match="app_policy_binding_digest"):
+        Kagemusha.decode_payment_request(malformed)
+
+
 def test_request_exact_amount_and_encryption_key_are_mandatory() -> None:
     request = _request(7)
     assert Kagemusha.decode_payment_request(Kagemusha.encode_payment_request(request)) == request
@@ -804,7 +831,7 @@ def test_payer_top_up_instruction_round_trips_unchanged_canonical_box() -> None:
     assert Kagemusha.top_up_instruction_wire_id == "iroha.kagemusha.v1.top_up"
     assert Kagemusha.decode_top_up_instruction(archive) == instruction
     assert hashlib.sha256(archive).hexdigest() == (
-        "97b5c65bb272242ddd90084d8ba95cc399cc1dfa92d91a8c46a1433c1769d086"
+        "7641bc5691b187fb0fd2f417152175b7aa202c18345812975f064198c205af06"
     )
     maximum = _top_up_request(2_495)
     assert len(Kagemusha.encode_top_up_request(maximum)) <= 16 * 1024

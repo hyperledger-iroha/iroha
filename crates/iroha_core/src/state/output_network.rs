@@ -48,6 +48,7 @@ fn freeze_network_route<W: WorldReadOnly>(
 struct FrozenNetworkSource<'source> {
     pub(super) routing: RoutingDecision,
     admission: Option<Result<AcceptedTransaction<'source>, TransactionRejectionReason>>,
+    genesis: Option<crate::block::AuthenticatedGenesisTransaction>,
     quarantine: QuarantineAdmission,
 }
 
@@ -216,6 +217,9 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             sources.push(FrozenNetworkSource {
                 routing,
                 admission: Some(admission),
+                genesis: genesis
+                    .map(|genesis| genesis.transaction_for(source, index))
+                    .transpose()?,
                 quarantine: QuarantineAdmission::Normal,
             });
         }
@@ -357,6 +361,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             self.source.header().height().get(),
             routing,
             admitted,
+            frozen.genesis.as_ref(),
             quarantine == QuarantineAdmission::Overflow,
             reservation,
             cache,
@@ -380,6 +385,7 @@ pub(in crate::state) fn execute_network_attempt(
     height: u64,
     routing: RoutingDecision,
     admitted: Result<AcceptedTransaction<'_>, TransactionRejectionReason>,
+    genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     quarantine_overflow: bool,
     reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
     cache: &mut IvmCache,
@@ -410,6 +416,7 @@ pub(in crate::state) fn execute_network_attempt(
             transaction,
             cache,
             Some(routing),
+            genesis,
         ) {
             Ok(sequence) => Ok(sequence),
             Err(ExecutionAttemptError::Rejected(reason)) => Err(reason),

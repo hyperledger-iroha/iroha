@@ -45,8 +45,8 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config` on the CLI).
    Nexus routing is mandatory; generated configs omit the retired availability
-   switch and require NPoS consensus for custom multi-lane topology. Sumeragi
-   mode and DA layout come from signed genesis/current height context; the
+   switch and require NPoS consensus for custom multi-lane topology. Consensus
+   mode and chain parameters come from signed genesis and committed state; the
    bundle exposes no node-local enable/disable switch. Torii DA replay and manifest
    roots are immutable per-generation managed paths; configured overrides are
    rejected before publication.
@@ -134,7 +134,7 @@ id = 0
 
 [sumeragi]
 # role = "validator"
-# Consensus mode, committee geometry, DA layout, and deadlines are signed context.
+# Consensus mode, committee geometry and deadlines come from signed genesis and committed state.
 ```
 
 Alternatively, store exactly the `[nexus]` block above, with no sibling root

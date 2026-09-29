@@ -76,8 +76,7 @@ fn complete_test_genesis_builder_for_topology(
     builder
         .set_topology(topology)
         .with_sumeragi_context_parameters(
-            iroha::data_model::block::consensus::SumeragiGenesisContextParameters::recommended(
-            ),
+            iroha::data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)
 }

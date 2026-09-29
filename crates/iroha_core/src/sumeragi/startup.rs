@@ -285,7 +285,7 @@ mod tests {
         SignedBlock::genesis(vec![transaction], genesis_key.private_key(), None, None)
     }
 
-    /// Every caller of the removed v2 `signed_genesis_voting_peers` (kagami, irohad, the test
+    /// Every caller of the removed `signed_genesis_voting_peers` (kagami, irohad, the test
     /// network, the beacon tools) now reads `schedule::genesis_validators` or
     /// `genesis_committee_peers`; both must yield the exact order it did: the signed validators in
     /// canonical `PeerId` order, independent of registration order, without committee-only peers.

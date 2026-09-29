@@ -1908,6 +1908,29 @@ def test_forbidden_feature_detection_rejects_core_test_surface() -> None:
     )
 
 
+@pytest.mark.parametrize("diagnostic_enabled", (False, True))
+def test_shipping_sdk_rejects_bfv_diagnostic_constructors(
+    monkeypatch, capsys, diagnostic_enabled: bool
+) -> None:
+    checker = load_checker()
+    profile = checker.ShippingProfile("connect_norito_bridge")
+    marker = 'iroha_crypto feature "bfv-test-fixtures"'
+    graph = "\n".join(checker.REQUIRED_FEATURES.get(profile.package, ()))
+    if diagnostic_enabled:
+        graph += "\n" + marker
+    monkeypatch.setattr(checker.sys, "argv", [str(SCRIPT)])
+    monkeypatch.setattr(checker, "shipping_profiles", lambda _repo: (profile,))
+    monkeypatch.setattr(checker, "feature_graph", lambda *_args: graph)
+
+    assert checker.main() == int(diagnostic_enabled)
+    result = capsys.readouterr()
+    if diagnostic_enabled:
+        assert f"enabled {marker}" in result.err
+    else:
+        assert result.err == ""
+        assert "exclude test fixtures" in result.out
+
+
 def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
     checker = load_checker()
     allowed = (

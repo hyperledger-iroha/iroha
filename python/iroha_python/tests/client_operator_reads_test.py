@@ -513,7 +513,7 @@ def test_native_evidence_requires_each_exact_field(field: str) -> None:
 
 
 @pytest.mark.parametrize("changes", [
-    {"kind": "SumeragiV2Equivocation"},
+    {"kind": "SumeragiEquivocation"},
     {"view": 4}, {"signer": 3}, {"artifact_hash_1": "22" * 32},
     {"offenders": []}, {"offenders": [{}]},
     {"offenders": [{"signer": 1024, "peer_id": "invalid"}]},

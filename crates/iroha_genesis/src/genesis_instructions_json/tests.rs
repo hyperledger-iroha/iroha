@@ -954,7 +954,7 @@ fn parse_allows_null_executor_in_canonical_manifest() {
     manifest_fields.insert(
         "sumeragi_context".to_string(),
         norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
-            .expect("serialize v2 genesis context"),
+            .expect("serialize Sumeragi genesis context"),
     );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),

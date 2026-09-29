@@ -26,7 +26,9 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.consensus.SUMERAGI_LANES_JSON_MAX_BYTES
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_STATUS_JSON_MAX_BYTES
+import org.hyperledger.iroha.sdk.consensus.SumeragiLaneStatus
 import org.hyperledger.iroha.sdk.consensus.SumeragiStatus
 import org.hyperledger.iroha.sdk.nexus.*
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1
@@ -814,6 +816,16 @@ class HttpClientTransport private constructor(
             ),
             Function { payload -> SumeragiStatus.parseJson(payload) },
             "Sumeragi status",
+        )
+
+    override fun getSumeragiLanes(): CompletableFuture<List<SumeragiLaneStatus>> =
+        fetchExactJson(
+            buildExactOperatorJsonGetRequest(
+                "/v1/sumeragi/lanes",
+                SUMERAGI_LANES_JSON_MAX_BYTES,
+            ),
+            Function { payload -> SumeragiLaneStatus.parseJsonList(payload) },
+            "Sumeragi lanes",
         )
 
     override fun resolveAccountAliasIndex(

@@ -1187,7 +1187,7 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
 #[cfg(all(test, feature = "fastpq-gpu"))]
 /// Flattened Poseidon column payloads used by GPU hashing parity tests.
 #[derive(Debug)]
-pub(crate) struct PoseidonColumnBatch {
+pub struct PoseidonColumnBatch {
     payloads: Vec<u64>,
     offsets: Vec<PoseidonColumnSlice>,
     block_count: usize,
@@ -1197,7 +1197,7 @@ pub(crate) struct PoseidonColumnBatch {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Offset metadata describing where a column resides inside the flattened payload buffer.
-pub(crate) struct PoseidonColumnSlice {
+pub struct PoseidonColumnSlice {
     offset: u32,
     len: u32,
 }
@@ -1221,7 +1221,7 @@ impl PoseidonColumnSlice {
     }
 }
 #[cfg(all(test, feature = "fastpq-gpu"))]
-pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
+pub fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
     let payload = limb_len.checked_add(1)?;
     let remainder = payload % RATE;
     if remainder == 0 {
@@ -1475,7 +1475,7 @@ impl PoseidonColumnBatch {
 /// Returns `None` when no accelerator is available or the GPU path encounters
 /// an execution error, allowing callers to fall back to the CPU sponge.
 #[cfg(test)]
-pub(crate) fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
+pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
     if POSEIDON_COLUMN_GPU_DISABLED.load(Ordering::Acquire) {
         return None;
@@ -1643,7 +1643,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
 /// Returns `None` when the domain and column shapes do not match, mirroring the
 /// validation performed by [`PoseidonColumnBatch::from_domains_and_columns`].
 #[cfg(test)]
-pub(crate) fn hash_columns_cpu_batch_inputs(
+pub fn hash_columns_cpu_batch_inputs(
     domains: &[&str],
     columns: &[Vec<u64>],
 ) -> Option<Vec<u64>> {

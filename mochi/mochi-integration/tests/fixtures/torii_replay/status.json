@@ -80,10 +80,10 @@
       "satisfied": 0,
       "rejected": 0
     },
+    "recent_manifest_activations": [],
     "sealed_lanes_total": 0,
     "sealed_lane_aliases": [],
-    "citizens_total": 0,
-    "recent_manifest_activations": []
+    "citizens_total": 0
   },
   "teu_lane_commit": [],
   "teu_dataspace_backlog": [],

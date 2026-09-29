@@ -24,7 +24,7 @@ test("submitTransactionBatch exposes exact ordered partial outcomes and rejects 
   const hashes = ["51".repeat(32), "52".repeat(32)];
   const expected = [
     { signed_transaction_hash: hashes[0], status: 202, reject_code: null },
-    { signed_transaction_hash: hashes[1], status: 503, reject_code: "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN" },
+    { signed_transaction_hash: hashes[1], status: 503, reject_code: "transaction_dispatch_outcome_unknown" },
   ];
   for (const mutation of ["none", "hash", "order", "count", "status", "missing"]) {
     const outcomes = structuredClone(expected);

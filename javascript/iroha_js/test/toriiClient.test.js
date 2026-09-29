@@ -10945,35 +10945,25 @@ test("autonomous diagnostics declarations expose provisional and optional identi
 
 
 
-test("Sumeragi execution commitment declarations expose current mandatory fields", () => {
+test("Sumeragi lane declarations expose the served record and nullable instance", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
-  const match = declarations.match(
-    /export interface ToriiSumeragiV2ExecutionCommitment \{([\s\S]*?)\n\}/,
-  );
-  assert.ok(match, "missing ToriiSumeragiV2ExecutionCommitment declaration");
+  const status = declarations.match(/export interface ToriiSumeragiLaneStatus \{([\s\S]*?)\n\}/u);
+  assert.ok(status, "missing ToriiSumeragiLaneStatus declaration");
+  assert.ok(status[1].includes("record: ToriiSumeragiLaneRecord;"));
+  assert.ok(status[1].includes("instance: ToriiSumeragiStatus | null;"));
+  const record = declarations.match(/export interface ToriiSumeragiLaneRecord \{([\s\S]*?)\n\}/u);
+  assert.ok(record, "missing ToriiSumeragiLaneRecord declaration");
   for (const field of [
-    "native_amx_application_manifest_version: number;",
-    "native_amx_application_manifest_root: string;",
-    "native_amx_application_manifest_count: number;",
-    "lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;",
-    "merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;",
-    "executed_block_wire_len: ToriiU64;",
-    "transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
-    "transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
+    "lane: number;",
+    "incarnation: string;",
+    "params: ToriiSumeragiParameters;",
+    "committee: ReadonlyArray<ToriiSumeragiLaneMember>;",
+    "closing: ToriiU64 | null;",
+    "merged: ToriiSumeragiLaneFrontier;",
   ]) {
-    assert.ok(match[1].includes(field), `missing declaration: ${field}`);
+    assert.ok(record[1].includes(field), `missing declaration: ${field}`);
   }
-  const carrierMatch = declarations.match(
-    /export interface ToriiSumeragiV2MergeCarrierCommitment \{([\s\S]*?)\n\}/,
-  );
-  assert.ok(carrierMatch, "missing ToriiSumeragiV2MergeCarrierCommitment declaration");
-  assert.match(carrierMatch[1], /version: 1;/u);
-  assert.match(
-    declarations,
-    /export interface ToriiSumeragiV2TransactionTreeCommitment \{ root: string; leaf_count: ToriiU64; \}/u,
-  );
-  assert.match(carrierMatch[1], /entry_hash: string;/u);
-  assert.match(declarations, /ToriiSumeragiV2LaneFinalityManifestCommitment \{[^}]*root: string;[^}]*leaf_count: number;/u);
+  assert.doesNotMatch(declarations, /ToriiSumeragiV2/u);
 });
 
 
@@ -11184,29 +11174,6 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           },
         ],
       },
-      lane_commitments: [
-        {
-          block_height: 12,
-          lane_id: 7,
-          tx_count: 2,
-          total_chunks: 3,
-          rbc_bytes_total: 256,
-          teu_total: 64,
-          block_hash: "feedface",
-        },
-      ],
-      dataspace_commitments: [
-        {
-          block_height: 12,
-          lane_id: 7,
-          dataspace_id: 9,
-          tx_count: 1,
-          total_chunks: 1,
-          rbc_bytes_total: 128,
-          teu_total: 16,
-          block_hash: "facedead",
-        },
-      ],
       dataspace_catalog: [
         {
           lane_id: 7,
@@ -11290,29 +11257,6 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           },
         ],
       },
-      lane_commitments: [
-        {
-          block_height: 13,
-          lane_id: 8,
-          tx_count: 1,
-          total_chunks: 2,
-          rbc_bytes_total: 200,
-          teu_total: 48,
-          block_hash: "cafebeef",
-        },
-      ],
-      dataspace_commitments: [
-        {
-          block_height: 13,
-          lane_id: 8,
-          dataspace_id: 4,
-          tx_count: 1,
-          total_chunks: 1,
-          rbc_bytes_total: 96,
-          teu_total: 24,
-          block_hash: "feedbead",
-        },
-      ],
       dataspace_catalog: [
         {
           lane_id: 8,
@@ -11392,29 +11336,8 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.status.raw.commit_time_ms, 420);
   assert.ok(first.status.governance);
   assert.equal(first.status.governance?.manifest_admission.runtime_hook_rejected, 0);
-  assert.deepEqual(first.status.lane_commitments, [
-    {
-      block_height: 12,
-      lane_id: 7,
-      tx_count: 2,
-      total_chunks: 3,
-      rbc_bytes_total: 256,
-      teu_total: 64,
-      block_hash: "feedface",
-    },
-  ]);
-  assert.deepEqual(first.status.dataspace_commitments, [
-    {
-      block_height: 12,
-      lane_id: 7,
-      dataspace_id: 9,
-      tx_count: 1,
-      total_chunks: 1,
-      rbc_bytes_total: 128,
-      teu_total: 16,
-      block_hash: "facedead",
-    },
-  ]);
+  assert.equal(Object.hasOwn(first.status, "lane_commitments"), false);
+  assert.equal(Object.hasOwn(first.status, "dataspace_commitments"), false);
   assert.deepEqual(first.status.dataspace_catalog, [
     {
       lane_id: 7,
@@ -11497,8 +11420,6 @@ test("getStatusSnapshot rejects non-integer counters", async () => {
         txs_rejected: 0,
         view_changes: 0,
         governance: null,
-        lane_commitments: [],
-        dataspace_commitments: [],
         lane_governance: [],
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: [],
@@ -11528,8 +11449,6 @@ test("getStatusSnapshot rejects removed SNARK lane commitments", async () => {
         txs_rejected: 0,
         view_changes: 0,
         governance: null,
-        lane_commitments: [],
-        dataspace_commitments: [],
         lane_governance: [
           {
             lane_id: 1,
@@ -11553,46 +11472,20 @@ test("getStatusSnapshot rejects removed SNARK lane commitments", async () => {
   );
 });
 
-test("getStatusSnapshot rejects non-integer lane commitment values", async () => {
-  const fetchImpl = async () =>
-    createResponse({
+for (const field of ["lane_commitments", "dataspace_commitments", "pipeline_execution"]) {
+  test(`getStatusSnapshot rejects retired ${field}`, async () => {
+    const fetchImpl = async () => createResponse({
       status: 200,
-      jsonData: {
-        peers: 1,
-        queue_size: 0,
-        commit_time_ms: 1,
-        txs_approved: 0,
-        txs_rejected: 0,
-        view_changes: 0,
-        governance: null,
-        lane_commitments: [
-          {
-            block_height: 1,
-            lane_id: 2,
-            tx_count: 1.5,
-            total_chunks: 0,
-            rbc_bytes_total: 0,
-            teu_total: 0,
-            block_hash: "deadbeef",
-          },
-        ],
-        dataspace_commitments: [],
-        lane_governance: [],
-        lane_governance_sealed_total: 0,
-        lane_governance_sealed_aliases: [],
-      },
+      jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1, [field]: [] },
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getStatusSnapshot(),
-    (error) => {
-      assert(error instanceof RangeError);
-      assert.match(error.message, /status\.lane_commitments\[0\]\.tx_count/);
-      return true;
-    },
-  );
-});
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    await assert.rejects(
+      () => client.getStatusSnapshot(),
+      (error) => error instanceof TypeError && error.message === `status.${field} is retired and unsupported`,
+    );
+  });
+}
 
 test("getStatusSnapshot forwards AbortSignal", async () => {
   const controller = new AbortController();

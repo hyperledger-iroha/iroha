@@ -4,6 +4,121 @@ use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 
 #[test]
+fn deployment_committee_preflight_checks_exact_role_pop_and_both_activation_heights() {
+    use iroha_data_model::consensus::{
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+    };
+    let authority = test_trust().authority(test_network_id()).unwrap();
+    let records: Vec<_> = authority
+        .validators
+        .iter()
+        .enumerate()
+        .map(|(index, validator)| ConsensusKeyRecord {
+            id: ConsensusKeyId::new(ConsensusKeyRole::Committee, format!("parent-{index}")),
+            public_key: validator.public_key.clone(),
+            pop: Some(validator.proof_of_possession.clone()),
+            activation_height: 12,
+            expiry_height: Some(14),
+            replaces: None,
+            // Pending is accepted at its scheduled height by the native lifecycle rule.
+            status: ConsensusKeyStatus::Pending,
+        })
+        .collect();
+    validate_committee_snapshot(&authority, &records, 10).unwrap();
+    let mut retiring = records.clone();
+    retiring[0].status = ConsensusKeyStatus::Retiring;
+    validate_committee_snapshot(&authority, &retiring, 10).unwrap();
+
+    for mutation in 0..7 {
+        let mut changed = records.clone();
+        match mutation {
+            0 => changed[0].id.role = ConsensusKeyRole::Validator,
+            1 => changed[0].status = ConsensusKeyStatus::Disabled,
+            2 => changed[0].activation_height = 13,
+            3 => changed[0].expiry_height = Some(13),
+            4 => changed[0].pop = None,
+            5 => changed[0].pop.as_mut().unwrap()[0] ^= 1,
+            _ => {
+                changed.remove(0);
+            }
+        }
+        let error = validate_committee_snapshot(&authority, &changed, 10).unwrap_err();
+        assert!(
+            error.to_string().contains("Committee credential"),
+            "{error}"
+        );
+    }
+    assert!(validate_committee_snapshot(&authority, &records, 0).is_err());
+    assert!(validate_committee_snapshot(&authority, &records, u64::MAX - 2).is_err());
+
+    // A scheduled replacement with the same trusted key may cover the second height.
+    let mut split = records;
+    split[0].expiry_height = Some(13);
+    let mut replacement = split[0].clone();
+    replacement.id = ConsensusKeyId::new(ConsensusKeyRole::Committee, "replacement");
+    replacement.activation_height = 13;
+    replacement.expiry_height = None;
+    split.push(replacement);
+    validate_committee_snapshot(&authority, &split, 10).unwrap();
+}
+
+#[test]
+fn deployment_committee_observation_refreshes_after_proof_replay_and_bounds_head_races() {
+    use iroha_data_model::consensus::{
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+    };
+    let authority = test_trust().authority(test_network_id()).unwrap();
+    let records: Vec<_> = authority
+        .validators
+        .iter()
+        .enumerate()
+        .map(|(index, validator)| ConsensusKeyRecord {
+            id: ConsensusKeyId::new(ConsensusKeyRole::Committee, format!("parent-{index}")),
+            public_key: validator.public_key.clone(),
+            pop: Some(validator.proof_of_possession.clone()),
+            activation_height: 1,
+            expiry_height: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        })
+        .collect();
+    for (heights, succeeds, snapshots) in [
+        (vec![50, 51, 52, 52], true, 2),
+        (vec![9], false, 0),
+        (vec![50, 49], false, 1),
+        (vec![50, 51, 51, 52, 52, 53], false, 3),
+    ] {
+        let mut heights = heights.into_iter();
+        let mut reads = 0;
+        let result = observe_committee_snapshot(
+            &authority,
+            10,
+            || Ok(heights.next().expect("bounded status reads")),
+            || {
+                reads += 1;
+                Ok(records.clone())
+            },
+        );
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        assert_eq!(reads, snapshots);
+        assert!(heights.next().is_none());
+    }
+    let mut reads = 0;
+    let error = observe_committee_snapshot(
+        &authority,
+        10,
+        || Ok(50),
+        || {
+            reads += 1;
+            eyre::bail!("invalid operator response")
+        },
+    )
+    .unwrap_err();
+    assert_eq!(reads, 1);
+    assert!(error.to_string().contains("invalid operator response"));
+}
+
+#[test]
 fn deployment_trust_derives_exact_genesis_roster_and_network() {
     let trust = test_trust();
     let network = test_network_id();
@@ -44,6 +159,67 @@ fn deployment_trust_derives_exact_genesis_roster_and_network() {
         .expect("explicit peer observation order");
     assert_eq!(reordered.validators, authority.validators);
     assert_eq!(reordered.trusted_genesis, authority.trusted_genesis);
+}
+
+#[test]
+fn deployment_trust_uses_explicit_chain_and_requires_address_profile() {
+    let mut trust = test_trust();
+    let original_instance = trust
+        .authority(test_network_id())
+        .unwrap()
+        .verifier()
+        .unwrap()
+        .instance();
+    trust.chain = "private-selected-chain".parse().unwrap();
+    trust.account_chain_discriminant = 901;
+    let authority = trust.authority(test_network_id()).unwrap();
+    assert_eq!(authority.chain, trust.chain);
+    assert_ne!(
+        authority.verifier().unwrap().instance(),
+        original_instance,
+        "changing the explicit chain must never fall back to the compiled Taira chain"
+    );
+    trust.account_chain_discriminant = 0;
+    assert!(trust.authority(test_network_id()).is_err());
+    for key in ["chain", "account_chain_discriminant"] {
+        let mut profile = json::to_value(&test_trust()).unwrap();
+        profile.as_object_mut().unwrap().remove(key);
+        assert!(
+            json::from_value::<TrustV1>(profile).is_err(),
+            "missing {key} must not infer a network pin"
+        );
+    }
+}
+
+#[test]
+fn deployment_peer_clients_reject_runtime_chain_pin_mismatch_before_io() {
+    let trust = test_trust();
+    let owner = KeyPair::try_from_seed(vec![0xAF; 32], Algorithm::Ed25519).unwrap();
+    let mut context = crate::PrintJsonContext {
+        write: Vec::<u8>::new(),
+        err_write: Vec::<u8>::new(),
+        config: crate::client_config_with_defaults(
+            trust.chain.clone(),
+            test_network_id(),
+            owner,
+            trust.account_chain_discriminant,
+            trust.peers[0].torii_origin.parse().unwrap(),
+        ),
+        filesystem_config: crate::client_config::FilesystemConfig::default(),
+        operator_key_pair: None,
+        transaction_metadata: None,
+        fee_payment: crate::FeePaymentArgs::default(),
+        input_instructions: false,
+        output_instructions: false,
+        output_format: crate::CliOutputFormat::Json,
+        i18n: iroha_i18n::Localizer::new(iroha_i18n::Bundle::Cli, iroha_i18n::Language::English),
+    };
+    assert_eq!(peer_clients(&context, &trust).unwrap().len(), 4);
+    context.config.chain = "other-chain".into();
+    assert!(peer_clients(&context, &trust).is_err());
+    context.config.chain = trust.chain.clone();
+    context.config.account_chain_discriminant = 901;
+    assert!(peer_clients(&context, &trust).is_err());
 }
 
 #[test]
@@ -414,4 +590,125 @@ fn deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors() 
             )
         );
     }
+}
+
+#[test]
+fn completion_requires_the_selected_running_native_dataspace_lane() {
+    use iroha_data_model::{
+        parameter::system::SumeragiParameters,
+        sumeragi::{PROTOCOL_VERSION, SumeragiFootprint, SumeragiStatus},
+        sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLanePolicy,
+            SumeragiLaneRecord, SumeragiLaneStatus,
+        },
+    };
+    let manifest = super::super::tests::manifest();
+    let genesis = iroha_genesis::decode_signed_genesis(
+        &hex::decode(&manifest.finality.genesis_signed_wire_hex).unwrap(),
+    )
+    .unwrap();
+    let committee: Vec<_> = iroha_genesis::signed_genesis_validator_pops(&genesis)
+        .unwrap()
+        .into_iter()
+        .map(|(key, pop)| SumeragiLaneMember {
+            peer: PeerId::new(key),
+            pop,
+        })
+        .collect();
+    let peer = committee[0].peer.clone();
+    let mut policy = SumeragiLanePolicy::for_chain(SumeragiParameters::default());
+    policy.fixed.push(SumeragiFixedLane {
+        lane: manifest.lane.id,
+        dataspace: manifest.lane.dataspace_id,
+        committee: committee.clone(),
+    });
+    let record = SumeragiLaneRecord {
+        lane: manifest.lane.id,
+        dataspace: manifest.lane.dataspace_id,
+        incarnation: [42; 32],
+        params: policy.lane_params.clone(),
+        committee,
+        created_at: 2,
+        active_from: 4,
+        closing: None,
+        anchor_freshness: policy.anchor_freshness,
+        merged: SumeragiLaneFrontier::default(),
+        merged_at: 4,
+        rescued: 0,
+    };
+    let instance = iroha_core::sumeragi::lanes::lane_instance(
+        &iroha_core::sumeragi::crypto::BlsCrypto::new(),
+        &manifest.network_id,
+        &manifest.finality.chain.to_string(),
+        &record,
+    );
+    let live = SumeragiLaneStatus {
+        record,
+        instance: Some(SumeragiStatus {
+            protocol_version: PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"test-lane"),
+            beacon_horizon: None,
+            instance: instance.0,
+            height: 1,
+            view: 0,
+            stage: 0,
+            leader: None,
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 250,
+            committed_height: 0,
+            applied_height: 0,
+            awaiting: false,
+            signer: Some(peer.public_key().clone()),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: SumeragiFootprint::default(),
+        }),
+    };
+    let verify =
+        |lanes, height| verify_native_lane_snapshot(&manifest, &policy, lanes, &peer, 2, height);
+    assert!(matches!(
+        verify(vec![live.clone()], 4).unwrap(),
+        PeerRead::Verified(_)
+    ));
+    assert!(matches!(verify(Vec::new(), 4).unwrap(), PeerRead::Pending));
+    assert!(matches!(
+        verify(vec![live.clone()], 3).unwrap(),
+        PeerRead::Pending
+    ));
+    let mut starting = live.clone();
+    starting.instance = None;
+    assert!(matches!(
+        verify(vec![starting], 4).unwrap(),
+        PeerRead::Pending
+    ));
+    assert!(verify(vec![live.clone(), live.clone()], 4).is_err());
+    for defect in 0..10 {
+        let mut broken = live.clone();
+        match defect {
+            0 => broken.record.dataspace = iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            1 => broken.record.created_at = 1,
+            2 => broken.record.active_from = 3,
+            3 => broken.record.closing = Some(5),
+            4 => broken.record.committee.pop().map(|_| ()).unwrap(),
+            5 => broken.record.incarnation = [0; 32],
+            6 => broken.instance.as_mut().unwrap().instance = [0; 32],
+            7 => broken.instance.as_mut().unwrap().abstaining = true,
+            8 => broken.instance.as_mut().unwrap().signer = None,
+            _ => broken.record.anchor_freshness = 0,
+        }
+        assert!(verify(vec![broken], 4).is_err(), "defect {defect}");
+    }
+    // Policy changes affect future lane incarnations; this lane retains its original rules.
+    let mut future_policy = policy.clone();
+    future_policy.anchor_freshness += 1;
+    future_policy.lane_params.block_cadence_ms =
+        NonZeroU64::new(future_policy.lane_params.block_cadence_ms.get() + 1).unwrap();
+    assert!(matches!(
+        verify_native_lane_snapshot(&manifest, &future_policy, vec![live], &peer, 2, 4).unwrap(),
+        PeerRead::Verified(_)
+    ));
 }

@@ -26,7 +26,7 @@ error. Every negotiated response declares `Vary: Accept`.
 - GET `/v1/sumeragi/evidence`
   - Lists recent evidence entries admitted by committed blocks and retained in
     the WSV audit snapshot; node-local pending observations are excluded.
-  - Query params: `limit` (default 50, range 1..=1000), `offset` (default 0, range 0..=10000), `kind` (optional; the sole accepted value is `SumeragiV2Equivocation`).
+  - Query params: `limit` (default 50, range 1..=1000), `offset` (default 0, range 0..=10000), `kind` (optional; the sole accepted value is `NativeSumeragiEvidence`).
   - Response (Norito payload): the shared `SumeragiEvidenceListWireResponse { total: u64, items: Vec<EvidenceRecord> }` DTO.
   - Set `Accept: application/json` to receive a JSON object `{ "total": <u64>, "items": [ ... ] }`.
   - The projected JSON body is limited to 1 MiB. The full-proof Norito body is
@@ -35,7 +35,7 @@ error. Every negotiated response declares `Vary: Accept`.
     measures first and allocates only an accepted exact-size body.
   - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
   - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
-  - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; full typed `SumeragiV2EquivocationEvidence` JSON, where embedded in signed data, is also a closed object.
+  - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; the embedded `Evidence` holds one canonical native Sumeragi evidence frame (`iroha_sumeragi::message::Evidence`).
   - Node-local pending observations have no data-model record and never appear in either endpoint. No instruction cancels a penalty; the `cancelled` status is never written.
 - Evidence with a subject height older than governed
   `SumeragiNposParameters.reconfig.evidence_horizon_blocks` is dropped on
@@ -45,10 +45,10 @@ error. Every negotiated response declares `Vary: Accept`.
   on-chain state, not local `[sumeragi]` config or executor-owned defaults.
 
 Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
-authenticated consensus peer path and, for exact v2 equivocation proofs,
+authenticated consensus peer path and, for exact native equivocation proofs,
 through canonically ordered proof batches bound to signed blocks. Validators
 anchor the frozen height context only to cryptographically verified committed
-v2 finality history (never the structural recovery context store), then reverify
+finality history (never the structural recovery context store), then reverify
 roster-ordered proofs of possession, both artifact signatures, referenced
 current-context certificates, the evidence horizon, canonical ordering, batch
 bounds, and the durable deduplication key before admission. Torii and the SDKs
@@ -62,21 +62,19 @@ canonical proof payloads after stale terminal records are reclaimed. Candidate
 validation, post-execution insertion, snapshot recovery, and proposer selection
 all enforce the same checked byte accounting.
 
-The binary `Evidence` shape is also v2-only. Retired global-v1 kind/payload
+The binary `Evidence` shape carries only the canonical native frame. Retired kind/payload
 records fail decode and are never reconstructed from mutable topology state.
 
 Additional consensus status
 
-- GET `/v1/sumeragi/status` — returns the typed Norito `SumeragiV2StatusResponse`
-  envelope by default. With `Accept: application/json`, Torii flattens the authoritative reducer
-  status and adds all five canonical lane arrays, `local_peer_removed`, and bounded local
-  `operator` diagnostics. Tagged unit enums retain their Norito object form, fixed byte arrays are
-  uppercase exact-width hex, and lane settlement `u128` totals and receipt amounts are canonical
-  unsigned decimal strings. Every current reducer-status field is required; nullable QC/TC,
-  persistence, commit-frontier, outbound-intent, queue-age, and liveness artifacts use explicit
-  `null` when absent. A sparse projection that omits one of those slots is rejected. See
-  `specs/sumeragi_v2.md` and the `SumeragiStatusResponse` OpenAPI schema for the exact fields.
-- GET `/v1/sumeragi/qc` — returns the canonical `SumeragiV2QcResponse` by default. Its required `highest_prepare_qc` and `locked_prepare_qc` slots are nullable; each non-null value carries the full context-bound `QuorumCertificateRef`. Set `Accept: application/json` for the identical schema, including explicit `null` for an unavailable reference.
+- GET `/v1/sumeragi/status` — operator-authenticated; returns the node's
+  `SumeragiStatus` (Norito by default, JSON with `Accept: application/json`):
+  protocol version, configuration fingerprint, instance id, round
+  height/view/stage, leader and proxy tail, lock view, pacemaker levels,
+  committed and applied heights, signer, halt reason and footprint counters.
+  It answers `503` before consensus starts. See [`sumeragi.md`](sumeragi.md).
+- GET `/v1/sumeragi/lanes` — every lane of the committed state with the status
+  of the node's instance of it ([`sumeragi_lanes.md`](sumeragi_lanes.md) §8).
 - GET `/v1/sumeragi/status/sse` — operator-authenticated SSE stream of the same payload (≈1s cadence).
 
 The current authenticated ledger state-root and proof contract is specified in

@@ -879,9 +879,7 @@ fn portable_bound_profile_manifest(
         return Err("generated profile manifest must use the portable `ivm_dir` value `.`".into());
     }
     let expected_fingerprint = generated_manifest
-        .with_sumeragi_context_parameters(
-            resolved_bound_manifest.sumeragi_context_parameters(),
-        )
+        .with_sumeragi_context_parameters(resolved_bound_manifest.sumeragi_context_parameters())
         .with_consensus_meta()
         .consensus_fingerprint();
     if expected_fingerprint != resolved_bound_manifest.consensus_fingerprint() {
@@ -2119,12 +2117,27 @@ mod tests {
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-            actual::Root::from_toml_source(TomlSource::new(path, table)).unwrap_or_else(|error| {
-                panic!(
-                    "rendered profile {} must pass exact runtime config admission: {error:?}",
+            actual::Root::from_toml_source(TomlSource::new(path.clone(), table.clone()))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "rendered profile {} must pass exact runtime config admission: {error:?}",
+                        profile.slug
+                    )
+                });
+            for retired in ["block", "queues"] {
+                let mut retired_config = table.clone();
+                retired_config
+                    .get_mut("sumeragi")
+                    .and_then(toml::Value::as_table_mut)
+                    .expect("node-local Sumeragi config")
+                    .insert(retired.to_owned(), toml::Value::Table(toml::Table::new()));
+                assert!(
+                    actual::Root::from_toml_source(TomlSource::new(path.clone(), retired_config))
+                        .is_err(),
+                    "profile {} must reject retired sumeragi.{retired} configuration",
                     profile.slug
-                )
-            });
+                );
+            }
         }
     }
     #[test]
@@ -2256,8 +2269,8 @@ mod tests {
             "- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs\n\nRegenerate:"
         ));
         let dev_config = render_config(&PROFILES[0], &dev_peers, genesis_key.public_key());
-        assert!(dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
-        assert!(!dev_config.contains("lane_count = 3\n\n\n\n\n[genesis]"));
+        assert!(dev_config.contains("lane_count = 3\n\n\n[genesis]"));
+        assert!(!dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
     }
     #[test]
     fn nexus_readme_regeneration_includes_asset_definition_id() {
@@ -2451,25 +2464,39 @@ mod tests {
             )
             .expect("derive deterministic genesis key");
             let rendered = render_config(profile, &peers, genesis_key.public_key());
-            let config: toml::Value =
-                toml::from_str(&rendered).expect("parse rendered profile config");
-            let sumeragi = config
-                .get("sumeragi")
-                .and_then(toml::Value::as_table)
-                .expect("profile config must render a [sumeragi] table");
-            let keys: Vec<&str> = sumeragi.keys().map(String::as_str).collect();
+            let config = rendered.parse::<toml::Table>().expect("profile TOML");
+            let sumeragi = config["sumeragi"]
+                .as_table()
+                .expect("node-local Sumeragi config");
             assert_eq!(
-                keys,
+                sumeragi.keys().map(String::as_str).collect::<Vec<_>>(),
                 ["role"],
                 "profile {} must render only the node-local Sumeragi role; block limits come from chain parameters",
                 profile.slug
             );
+            assert_eq!(sumeragi["role"].as_str(), Some("validator"));
+        }
+    }
+    #[test]
+    fn checked_in_dev_peers_use_the_current_sumeragi_node_parameters() {
+        for peer in 0..PROFILES[0].min_peers {
+            let path = workspace_root()
+                .join("defaults/kagami/iroha3-dev")
+                .join(peer_config_file_name(peer));
+            let config = fs::read_to_string(&path)
+                .expect("checked-in peer config")
+                .parse::<toml::Table>()
+                .expect("checked-in peer TOML");
+            let sumeragi = config["sumeragi"]
+                .as_table()
+                .expect("node-local Sumeragi config");
             assert_eq!(
-                sumeragi.get("role").and_then(toml::Value::as_str),
-                Some("validator"),
-                "profile {} peers are validators",
-                profile.slug
+                sumeragi.len(),
+                1,
+                "{} retains retired local policy",
+                path.display()
             );
+            assert_eq!(sumeragi["role"].as_str(), Some("validator"));
         }
     }
     #[test]
@@ -2614,19 +2641,26 @@ mod tests {
     fn checked_in_profile_transport_identities_are_reproducible() {
         let expected = [
             (
+                "iroha3-dev",
                 "ed01205A4FF1E3840273F79909F02BA854FE9394DE6FBAEF06B87397B059C16BAD6ADC",
                 "802620BBEB9930B26B2CFB85EF7683349DAB2921927F0EA1F5E5BFF89C7E60A7D1700B",
             ),
             (
-                "ed012080A47B672C44202B67EC8E81DFFA4D0B46AD2507113C8627F30599FB1CC83717",
-                "802620F18FE388B674C8831AB6061413C8184D7BC03C5595B3AD671852B8FE1611240F",
-            ),
-            (
+                "iroha3-nexus",
                 "ed01201F60DE7C82F77FF1EA9AA2DFC60166A0DF904A771DCBFF36186EFAE8AC8324D3",
                 "802620720B9507E31A382E02FF4523D0E22071E19D39974C9AE907492EEAE616F23E15",
             ),
         ];
-        for (spec, (public_key, private_key)) in PROFILES.iter().zip(expected) {
+        assert_eq!(
+            PROFILES.len(),
+            expected.len(),
+            "every current profile has a vector"
+        );
+        for (slug, public_key, private_key) in expected {
+            let spec = PROFILES
+                .iter()
+                .find(|spec| spec.slug == slug)
+                .expect("current profile");
             let peers = build_peers(spec).expect("build deterministic profile peers");
             assert_eq!(peers[0].soranet_transport_public_key, public_key);
             assert_eq!(peers[0].soranet_transport_private_key, private_key);

@@ -83,7 +83,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm", "bfv-test-fixtures"] }
 hex-literal = { workspace = true }
 ivm_abi = { path = "../ivm_abi" }
 

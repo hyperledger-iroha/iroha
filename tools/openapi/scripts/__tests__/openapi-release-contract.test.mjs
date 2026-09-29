@@ -134,7 +134,7 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     'utf8',
   );
   const policy = await readFile(
-    join(repoRoot, 'scripts', 'sumeragi_v2_release_process_policy.sh'),
+    join(repoRoot, 'scripts', 'sumeragi_release_process_policy.sh'),
     'utf8',
   );
 
@@ -566,7 +566,7 @@ test('OpenAPI owner commands stage out of tree through the compliant wrapper', a
     'ci/check_openapi_spec.sh',
     'ci/run_openapi_generator.sh',
     'scripts/seal_workspace_source.py',
-    'scripts/sumeragi_v2_release_process_policy.sh',
+    'scripts/sumeragi_release_process_policy.sh',
   ]) {
     assert.match(bundleEntry[0], new RegExp(sourcePath.replaceAll('.', '\\.')));
   }

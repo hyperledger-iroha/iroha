@@ -35,8 +35,8 @@ source commit when packaging its prebuilt release binaries. Container builds
 cannot infer a source identity from an empty build argument or omitted `.git`.
 
 The Sumeragi build fingerprint hashes the package version immediately followed
-by the source revision. One immutable daemon identity reaches normal startup,
-pending-Kura recovery and the resumed normal loop. The same identity reaches
+by the source revision. One immutable daemon identity reaches node startup
+and the running Sumeragi driver. The same identity reaches
 Torii public status and prover configuration. Prover reservations retain that
 identity through reconfiguration; processing contexts bind it so proof results
 cannot be reused across executable revisions. Target and feature metadata remain

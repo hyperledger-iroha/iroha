@@ -5,9 +5,8 @@
 # Sumeragi Threshold-Beacon & Evidence Runbook
 
 This runbook records the first-release operator boundary for consensus
-randomness and equivocation evidence. Use it with {doc}`sumeragi` and
-{doc}`sumeragi_chaos_performance_runbook` when qualifying a validator build or
-assembling release evidence.
+randomness and equivocation evidence. Use it with {doc}`sumeragi` when
+qualifying a validator build or assembling release evidence.
 
 ## Current protocol boundary
 

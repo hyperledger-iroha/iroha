@@ -1,7 +1,6 @@
 //! Current archive ownership after State publication, using genuine four-validator certificates.
 //!
-//! These replace the old pre-WSV V2 archive crash/reservation cases. Archive failure now retains
-//! an already committed decision; retry may capture it, but cannot execute or notify it twice.
+//! Archive failure retains an already committed decision; retry may capture it, but cannot execute or notify it twice.
 use super::*;
 use crate::{
     query::{

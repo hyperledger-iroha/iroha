@@ -692,8 +692,7 @@ mod tests {
             ".",
         )
         .with_sumeragi_context_parameters(
-            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(
-            ),
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::deterministic_test_kagemusha_mint_finality_genesis_parameters(),

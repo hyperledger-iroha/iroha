@@ -996,6 +996,12 @@ impl<'s> Worker<'s> {
         let (valid, mut overlay) = match validated.unpack(|event| events.push(event.into())) {
             Ok(executed) => executed,
             Err((_, error)) => {
+                // Native validation attaches a rejection only after checking the original
+                // header/payload source. Local refusals and unbound sources attach none.
+                // Rejection is an observation, not a committed transaction outcome.
+                for event in events {
+                    let _ = self.context.events.send(event);
+                }
                 if block.header.control_witness.is_empty() && control::transaction_rejection(&error)
                 {
                     self.quarantine_context = Some(QuarantineContext {

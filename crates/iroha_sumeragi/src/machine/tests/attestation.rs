@@ -447,11 +447,19 @@ fn det_a6_flag_is_signed() {
     let mut h = H::new(4, pick::set_b(0));
     let b = H::flagged(h.block(0, b"mint"));
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
+    // Well-formed as an unflagged certificate: without the witness too, only the signed flag
+    // can reject it (a kept witness is refused as `AttestationShape` before the signature).
     let stripped = Qc {
         attest: false,
         attestations: Vec::new(),
+        attestation_witness: None,
         ..genuine.clone()
     };
+    assert_eq!(
+        crate::crypto::verify_attestations(&FakeVerifier, &h.committee_at(1), &stripped),
+        Ok(()),
+        "the stripped certificate has the shape of an unflagged one"
+    );
     assert!(
         !h.core.blocks.contains_key(&h.bh(&b)),
         "the node lacks the header"

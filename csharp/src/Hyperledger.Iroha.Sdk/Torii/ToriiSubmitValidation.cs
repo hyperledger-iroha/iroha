@@ -62,17 +62,6 @@ internal static class ToriiSubmitValidation
         }
     }
 
-    /// <summary>Requires the signature-bound <c>QueuePlanSynced</c> admission intent.</summary>
-    internal static void RequireQueuePlanSyncedAdmissionIntent(ReadOnlySpan<byte> payload)
-    {
-        if (payload.Length != sizeof(uint)
-            || BinaryPrimitives.ReadUInt32LittleEndian(payload) != 1)
-        {
-            throw new ArgumentException(
-                "Transaction admission_intent must be QueuePlanSynced.");
-        }
-    }
-
     /// <summary>Requires one canonical authority- or sponsor-paid fee payment intent.</summary>
     internal static void RequireCanonicalTransactionFeePayment(ReadOnlySpan<byte> payload)
     {

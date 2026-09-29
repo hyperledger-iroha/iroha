@@ -196,6 +196,62 @@ test("listRamLfeProgramPolicies rejects non-exact policy metadata", async () => 
   }
 });
 
+test("RAM-LFE response parsers accept only current backend and verification mode tags", async () => {
+  async function parseAll(overrides, rejectField = null) {
+    const bodies = [
+      ramLfeProgramPolicyListResponse(overrides),
+      ramLfeExecuteResponse({
+        ...overrides,
+        receipt: { ...RECEIPT, payload: { ...RECEIPT.payload, ...overrides } },
+      }),
+      ramLfeReceiptVerifyResponse(overrides),
+    ];
+    for (const [index, body] of bodies.entries()) {
+      const client = new ToriiClient("https://example.test", {
+        localSigningContext: APPLICATION_SIGNING_CONTEXT,
+        fetchImpl: async () => jsonResponse(200, body),
+      });
+      const parse = [
+        () => client.listRamLfeProgramPolicies(),
+        () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD", canonicalAuth: APPLICATION_AUTH }),
+        () => client.verifyRamLfeReceipt({ receipt: RECEIPT, canonicalAuth: APPLICATION_AUTH }),
+      ][index];
+      if (rejectField) {
+        await assert.rejects(parse, new RegExp(`${rejectField} must be one of:`));
+      } else {
+        const result = await parse();
+        const metadata = index === 0 ? result.items[0] : result;
+        assert.equal(metadata.backend, overrides.backend);
+        assert.equal(metadata.verification_mode, overrides.verification_mode);
+      }
+    }
+  }
+  for (const backend of ["hkdf-sha3-512-prf-v1", "bfv-affine-v1", "bfv-programmed-v1"]) {
+    for (const verification_mode of ["signed", "proof"]) {
+      await parseAll({ backend, verification_mode });
+    }
+  }
+  for (const [field, value] of [
+    ["backend", "bfv-affine-sha3-256-v1"],
+    ["backend", "bfv-programmed-sha3-256-v1"],
+    ["backend", "unknown"],
+    ["verification_mode", "signed-v1"],
+    ["verification_mode", "unknown"],
+  ]) {
+    await parseAll({ [field]: value }, field);
+    const client = new ToriiClient("https://example.test", {
+      localSigningContext: APPLICATION_SIGNING_CONTEXT,
+      fetchImpl: async () => jsonResponse(200, ramLfeExecuteResponse({
+        receipt: { ...RECEIPT, payload: { ...RECEIPT.payload, [field]: value } },
+      })),
+    });
+    await assert.rejects(
+      () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD", canonicalAuth: APPLICATION_AUTH }),
+      new RegExp(`receipt\\.payload\\.${field} must be one of:`),
+    );
+  }
+});
+
 test("listRamLfeProgramPolicies rejects non-exact proof-verifier metadata", async () => {
   const cases = [
     ["proof_backend", { proof_backend: " halo2-ipa" }],

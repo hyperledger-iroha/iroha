@@ -80,12 +80,17 @@ object SumeragiStatusWire {
         val values = linkedMapOf<String, Any?>("votes" to r.number(8), "timeouts" to r.number(8), "blocks" to r.number(8), "exec_entries" to r.number(8), "wants" to r.number(8), "pending_apply" to r.number(8), "sync_entries" to r.number(8), "sync_bytes" to r.number(8), "peers" to r.number(8), "recent_headers" to r.number(8), "configs" to r.number(8), "cert_cache" to r.number(8), "evidence_keys" to r.number(8), "probe" to r.number(8))
         r.finish(); return values
     }
-    private fun encodeHorizon(v: SumeragiBeaconHorizon) = record(integer(v.epochLengthBlocks, 8), option(v.nextRequiredPulseHeight?.let { integer(it, 8) }), option(v.activeSessionId?.let(::hex)), boolean(v.sessionCoversNextPulse), boolean(v.localProviderReady))
+    private fun encodeHorizon(v: SumeragiBeaconHorizon) = record(integer(v.epochLengthBlocks, 8), option(v.nextRequiredPulseHeight?.let { integer(it, 8) }), option(v.activeSessionId?.let { record(*hex(it).map { byte -> byteArrayOf(byte) }.toTypedArray()) }), boolean(v.sessionCoversNextPulse), boolean(v.localProviderReady))
     private fun decodeHorizon(bytes: ByteArray): Map<String, Any?> {
         val r = Reader(bytes)
         val values = linkedMapOf<String, Any?>("epoch_length_blocks" to r.number(8),
             "next_required_pulse_height" to r.optional { Reader(it).wholeNumber(8) },
-            "active_session_id" to r.optional { require(it.size == 32); it.joinToString("") { byte -> "%02X".format(byte.toInt() and 255) } },
+            "active_session_id" to r.optional {
+                val array = Reader(it)
+                val bytes = ByteArray(32) { array.bytes(1)[0] }
+                array.finish()
+                bytes.joinToString("") { byte -> "%02X".format(byte.toInt() and 255) }
+            },
             "session_covers_next_pulse" to r.bool(), "local_provider_ready" to r.bool())
         r.finish(); return values
     }

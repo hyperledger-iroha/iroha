@@ -12,7 +12,7 @@ readonly INSTALL_ROOT="${TLA2TOOLS_INSTALL_ROOT:?TLA2TOOLS_INSTALL_ROOT must be 
 readonly INSTALL_DIR="${INSTALL_ROOT}/${VERSION}"
 readonly JAR="${INSTALL_DIR}/tla2tools.jar"
 
-source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+source "${REPO_ROOT}/scripts/sumeragi_release_process_policy.sh"
 require_external_private_directory \
   "$REPO_ROOT" "$INSTALL_ROOT" "TLA2Tools install" || exit $?
 

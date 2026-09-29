@@ -51,9 +51,6 @@ bodies. An idle mandatory height defers session activation and signing until
 independent work exists; useful work still requires its exact validated pulse.
 The bounded proposal snapshot retains its queue ownership while that pulse is
 pending, and the real threshold-signature regression checks the shared gate.
-Both scopes also verify a genuine threshold pulse composed with certified merge
-execution: original certified roots remain bound, the composed state commits
-once, and invalid effects or changes after sealing are rejected.
 
 Before the four-peer fixture, both scopes check that paid lane authorities come
 from registered and activated accounts bound to peers in signed genesis, and
@@ -78,8 +75,7 @@ The shipping Taira bootstrap executable is a separately authenticated artifact.
 The real four-peer fixture uses fresh native DKG custody and crosses the mandatory
 beacon pulse during the complete paid dataspace deployment and four-peer
 finality workflow, additive catalog recovery, and both public routing sequences.
-Its signed short epoch allows the real admission, payload-anchor and merge
-carriers to complete before certificate installation and signer activation. DKG
+DKG
 finalization records the actual authenticated committed height; it does not
 assume one block per operation. Pulse verification derives its height and parent
 anchor from the signed genesis and accepts only a nonempty canonical carrier.
@@ -93,13 +89,11 @@ concurrent cold initialization, canonical bytes/fingerprints, owned clone
 isolation, rejected domains, warm-cache malformed metadata and relabelled-key
 rejection. Caching public parameters never substitutes for key authentication.
 
-Both Core startup selections require interrupted Kura Apply recovery after a
-real persisted-block crash. Standalone and linked owners retain their original
-ledger rows until verified application completes. The checks reject changed
-owner, signed predecessor, and Decision-WAL identities without mutating the
-retained ledger. PendingKura recovery remains the sole executable Apply owner.
-This group runs immediately after configuration and MV ownership checks in both
-scopes. Any failure stops qualification before other startup groups, shipping binary builds
+Both Core startup selections run the native durable archive recovery group
+(`sumeragi::executor::archive_tests`): a partial archive failure retains the
+exact decision and retries without re-execution, and pending capture rejects a
+substituted header, certificate or state. This group runs immediately after
+configuration and MV ownership checks in both scopes. Any failure stops qualification before other startup groups, shipping binary builds
 or network execution; it reuses the same compiled harness and runs each case once.
 
 After startup checks, the gate runs the exact reset-scope CLI control and Torii
@@ -113,7 +107,7 @@ the immutable evidence graph. A failed four-peer fixture stops qualification;
 no release or live cutover is admitted from the earlier passing groups alone.
 
 Both scopes run their selected MV ownership checks after configuration and
-before PendingKura: finite allocation credits, exact release/poison wakes, charged
+before native archive recovery: finite allocation credits, exact release/poison wakes, charged
 Cell generations, original map/undo retention, actual epoch reclamation and
 strict allocation-free map handoff/publication. These run once from the same
 immutable copied artifacts and enter the exact pre-network and complete checkpoint
@@ -149,8 +143,7 @@ writable absolute directory visible to the build guest; a host-only path fails
 immediately with the path in the diagnostic. An unset `TMPDIR` keeps the
 platform default. When the exact four-peer beacon regression is focused, the
 diagnostic audits the complete shipping binary table but compiles only its
-runtime inputs: `iroha3d`, `iroha`, `iroha3d_taira`, and `kagami`, plus the
-separate message-control daemon. A future different network runtime selection
+runtime inputs: `iroha3d`, `iroha`, `iroha3d_taira`, and `kagami`. A future different network runtime selection
 uses the complete shipping build. Immutable qualification and signed release
 continue to compile and capture `sorafs-node` with all shipping binaries.
 
@@ -178,11 +171,8 @@ remain errors; a failed or late read cannot advance the verification anchor or
 cause a transaction resubmission.
 
 Both scopes require canonical transaction reads to release their State snapshot
-before Kura and merge-proof authentication, then recheck the exact committed
-binding. They exercise bounded lane-recovery batches, preserve completion and
-yield handling, and reject corrupt or foreign durable evidence while avoiding
-duplicate validation of already authenticated reads. These use the existing
-Core and Torii unit harnesses.
+before Kura authentication, then recheck the exact committed binding, and reject
+corrupt or foreign durable evidence. These use the existing Torii unit harness.
 
 Both scopes require the blocking SDK to drive pooled HTTP connections and
 background tasks between calls, preserve clone ownership, and cancel tasks after
@@ -193,21 +183,6 @@ asset alias resolution, disabled 403, route-catalog policy, OpenAPI shape and
 read-only MCP visibility and dispatch. These reuse the existing Torii HTTP,
 Torii unit and shared-library harnesses. Public discovery never replaces an
 independently trusted faucet authority pin.
-
-Both scopes cover Proposal Fetch-to-Store handoff after Prepare or Commit
-authority refinement, including a completion queued before the upgrade. The
-successor retains the original causal root and exact body coordinates. Restart
-recovery can cancel an obsolete Proposal output only when its authenticated
-SignProposal predecessor and installed WAL timeout prove that the view has
-closed. Cancellation preserves output ordering and the same durable row;
-failed persistence retains ownership and never invokes the output service.
-
-Both scopes exercise a full-block-gas contract call with another idle lane,
-reject over-budget sources before anchoring or shared execution, and verify that
-new work cannot repeatedly overtake an older source. Each lane may author a
-source up to the block gas limit. The merge selector reserves the shared budget
-in authenticated origin-height order, then executes its chosen sources in canonical
-lane order. Byte, transaction-count and scan quotas are unchanged.
 
 Both scopes require unsigned node-capability discovery before a fresh account's
 registration transaction can be submitted. The full production HTTP router is
@@ -230,8 +205,6 @@ catalog test adds a dataspace and lane through one committed transition, then
 checks retained history and replay. The data-model library joins the same native
 Cargo graph; its selected tests execute before any network or Linux release build.
 
-Canonical lane recovery also restores an orphaned certificate handoff only after
-proving its canonical application is missing and no downstream owner remains.
 Query failures decode the node's bounded error envelope; a missing asset, unknown
 route or malformed response cannot be reported as an expired or missing cursor
 solely from its HTTP status. Both scopes include these focused regressions.
@@ -249,15 +222,6 @@ candidate, not guarantees. Build, stage and test durations remain explicit.
 Python 3.11+, the repository Rust
 toolchain and previously fetched dependencies are required; Cargo runs offline.
 
-Preparation58 passed all 298 then-selected independent native cases, but the
-four-validator check failed after 19.3 seconds before genesis. Its runner fence
-still inferred startup quarantine from whether the replay contained owners.
-The early startup group now also selects the runner's empty-quarantined-replay
-regression and lifecycle startup-order contract. The latter checks that successful
-pending-Kura startup reconciliation clears its pending flag before handing off to
-the successor. These cover the directly changed startup paths in both scopes;
-basic still defers advanced fault matrices and requires actual network success.
-
 The Torii harness executes the shipping routes through plan, prepare and submit,
 checks SDK receipt verification, and applies queued fixture transactions. It
 covers a 33-hour-old committed anchor, expiry without a new block, exact replay,
@@ -267,15 +231,8 @@ hash and ledger time remain the anchor for state and lease observations. These
 contract tests use real route and ledger code with disposable inputs; they do
 not replace the deployed four-validator consensus and public application checks.
 
-The first gate compiles the dependency-free production consensus FSM directly
-with the selected Rust compiler. It lists and runs every reducer test without
-Cargo, rejecting missing, ignored, duplicated or failed cases. The four-reducer
-traces exercise reordered messages, duplicates, loss and recovery, including
-durable append before acknowledgement; they simulate authenticated I/O and do
-not replace cryptographic or network execution.
-
-After the standalone FSM and lifecycle source checks, Cargo checks metadata for
-the exact selected test graph before compiling its executables. This expands
+After the source inventory and Torii lifecycle registration checks, Cargo first
+checks metadata for the exact selected test graph before compiling its executables. This expands
 Rust macros and checks platform types that formatting and source audits cannot
 validate. The check and build share their package and feature selection,
 environment, warm target and held locks. A failed check stops code generation,
@@ -303,9 +260,7 @@ registration. Run the lightweight current-checkout guard after test refactors:
 It scans both qualification scopes and checks that every current per-seat beacon
 bootstrap test remains selected. The current census covers authenticated genesis
 and rotation seats, bounded proof frames, one-shot attempt custody, exact provider
-inputs, and consumed configuration descriptors. QueuePlan controls exercise
-durable receipts, partial-claim deadlines, physical capacity, and canonical
-publication; they do not require the retired consensus capacity-handoff API.
+inputs, and consumed configuration descriptors.
 
 The combined native test build selects the exact `iroha_cli --bin iroha`
 and `irohad --lib` test harnesses. The daemon cases execute signed genesis
@@ -325,17 +280,11 @@ and proof-bound checks retain their selected cases in both scopes. Adding the CL
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
-After configuration, MV ownership and the pending-Kura recovery group, both scopes execute empty-journal Queue
+After configuration, MV ownership and the native archive recovery group, both scopes execute empty-journal Queue
 admission, HTTP readiness and daemon startup-policy regressions before CLI and other
-runtime checks. Admission handoff controls require Torii to await a closed live owner
-within the original monotonic and wire deadlines, without creating a journal claim
-or dispatching during that wait. They verify exact successor admission, cancellation
-and memory release, and preserve exact transaction uncertainty for expired retries,
-partial durable claims and post-quorum expiry, including expiry before dispatch.
-Missing recovery, fail-stop and invalid capacity fail immediately.
+runtime checks.
 The full scope also executes Core snapshot-owner and cold
-certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
-reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
+certified-history groups at this early boundary. Full-scope cold storage cases restore multiple completed slots, recover only the current
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
 certificate history cannot be resurrected after replica application advances. The remaining startup
@@ -349,7 +298,7 @@ leak fails before any peer starts. This audit reruns on every attempt, including
 checkpoint reuse. The remaining groups execute each selected test once.
 Preparation keeps two checkpoints that bind the explicit scope, exact selected
 census and copied artifact identity. The pre-network checkpoint covers MV
-ownership, pending-Kura, startup and priority groups and is published before
+ownership, native archive recovery, startup and priority groups and is published before
 shipping codegen; a retry after a shipping, capacity or network failure reuses
 only that exact prefix. The complete checkpoint covers every selected independent
 test and is published only after the four-peer fixture and the deferred groups
@@ -415,35 +364,6 @@ dial/retry ownership. Dial plus preauth bounds outbound authentication and stand
 takeover independently of established-session idle. Dev/test profiles optimize
 Argon2 and Blake2 arithmetic while retaining the production puzzle policy.
 
-The full Core gate exercises bounded worker backpressure, durable-sidecar retry
-ownership, QueuePlan handoff across view changes and inventory changes, and
-participant predecessor recovery with the exact reservation retained. It also
-exercises the real candidate provider with multiple routable lanes.
-Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
-transactions require their autonomous reservations, and actual reservation
-conflicts still defer ordinary work. A selected regression failure stops preparation before the Linux release build.
-Basic deployment defers these advanced cases; their production checks stay enforced.
-
-QueuePlan admission authenticates immutable certificate bytes before opening a
-State view or acquiring the publication fence. Fresh history, committee, route,
-incarnation, registry and application checks remain under the coherent view.
-The regression observes the real decoder and fails if signature authentication
-holds the publication lock or repeats during classification, first persistence
-or exact replay. Companion cases retain historical authority, future-frontier,
-conflicting certificate and bounded one-ahead publication behavior.
-
-Finalization regressions keep a recipient permanently backpressured and require
-the exact durable output handoff to release its retained work. Foreign finality
-authority must fail without retiring output. Live and already-applied restart
-recovery drain their finite ingress prefix before reaching this handoff; remote
-delivery cannot block the local durable boundary that reconstructs that output.
-Before lane preflight, committed global finality and exact Kura sources can
-already release independently reconstructible fanouts. This frees shared
-capacity for pending historical responses and lane certification, including when
-older output owns an actor ticket, a parked route or an unfinished writer flush.
-The partial handoff preserves unresolved lane evidence, exact surviving FIFO
-ownership and sidecar receipts; it does not fabricate network delivery.
-
 The full proof-production gate produces and verifies fully witnessed eight- and sixteen-row
 transfers with the default resource limits, checks the maximum admitted proof
 shape against its canonical frame, and rejects proofs beyond explicit limits.
@@ -471,15 +391,13 @@ and restart with their retained storage and real custody. Every new process must
 load its exact snapshot, serve `/readyz`, and retain at least that height; the
 third transaction then proves renewed Applied execution on all four peers.
 The original transaction, observation and restart deadlines remain unchanged.
-The CLI gate also checks that prepared Inrou pin operations preserve sponsored
-fees and the public QueuePlanSynced intent through signing and replay validation.
 Dedicated service-owned Ordinary admission remains a separate contract. A sole
 native threshold-key lifecycle certificate also uses signed Ordinary admission
 so that its exact next-height authorization executes in the same global carrier.
 That ingress authenticates the current frozen-roster quorum certificate and
 preserves fee, signature, network, height and routing checks. The current driver
-does not consume QueuePlanSynced or multi-route work. Public single, entrypoint,
-batch and peer ingress reject those submissions with
+does not consume multi-route work. Public single, entrypoint,
+batch and peer ingress reject such submissions with
 `unsupported_transaction_admission` before canonical retry lookup or durable
 custody. Receiver regressions cover installed and absent journals, future
 contexts, predecessor advancement and retained canonical registry records.
@@ -546,7 +464,7 @@ release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The FSM, source checks, startup and priority native regressions precede the
+The source checks, startup and priority native regressions precede the
 four-validator runtime check; their failures stop before production binary
 compilation. The remaining independent regressions run after that check from the
 earlier combined graph shared by the contract test harnesses. Its log
@@ -605,6 +523,10 @@ The active journaled restart path waits for all four Torii `/readyz` responses
 before onboarding, using the deadline captured before its one restart submission.
 The endpoint rejects pending Queue reconciliation and restart-required admission;
 a responsive `/status` alone does not establish write readiness.
+<!-- TODO: the convergence wording below uses retired status vocabulary
+(successor context, re-proposal rounds). Rewrite it to the `SumeragiStatus`
+fields (`committed_height`, `applied_height`, one CommitQC per height) when the
+updater convergence check is ported to them. -->
 Signed convergence uses its own bounded phase and requires an opened successor
 context above a positive committed frontier, without requiring an empty block.
 A CommitQC or an `Applied` body at the same height
@@ -636,7 +558,7 @@ Missing, ignored or failed selected tests fail the command; deferred cases are
 omitted from the success census and independent-check evidence. After the mandatory startup
 preflight passes, the priority CLI/Torii groups report their combined failures
 before the four-peer fixture; the remaining independent cases report theirs after it.
-The pending-Kura group stops before other startup groups on failure; the remaining
+The native archive recovery group stops before other startup groups on failure; the remaining
 startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.

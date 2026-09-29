@@ -287,9 +287,7 @@ mod sign;
 pub(crate) use sign::prepared_native_test_chain;
 #[cfg(test)]
 pub(crate) use sign::tests::native_genesis_fixture_with_instructions;
-pub use sign::{
-    bind_and_sign_staged_sumeragi_context, staged_signed_sumeragi_context_hashes,
-};
+pub use sign::{bind_and_sign_staged_sumeragi_context, staged_signed_sumeragi_context_hashes};
 pub(crate) use sign::{staged_signed_native_genesis, staged_signed_native_genesis_with_projection};
 mod validate;
 pub use generate::{ConsensusPolicy, generate_default, validate_consensus_mode};

@@ -3,6 +3,9 @@
 //! Instruction subcommands output wire payload hex followed by input parameters.
 //! `multisig-accounts-v1` emits checked complete-controller vectors as Norito JSON.
 //! `fastpq-balance-keys-v1` emits their canonical typed FASTPQ balance keys.
+//! `native-sumeragi-status-v1` and `native-sumeragi-lanes-v1` emit the exact
+//! `GET /v1/sumeragi/status` and `GET /v1/sumeragi/lanes` JSON bodies with their
+//! canonical framed Norito encodings.
 //!
 //! When the Rust data model changes, this binary produces different
 //! bytes, causing the Kotlin parity tests to fail until the
@@ -36,6 +39,7 @@ use iroha_model_base::topology::DataSpaceId;
 use std::env;
 mod fastpq_balance_keys;
 mod multisig_accounts;
+mod native_sumeragi_lanes;
 mod native_sumeragi_status;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
@@ -49,7 +53,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|multisig-accounts-v1|fastpq-balance-keys-v1|native-sumeragi-status-v1>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|multisig-accounts-v1|fastpq-balance-keys-v1|native-sumeragi-status-v1|native-sumeragi-lanes-v1>",
             args[0]
         );
         std::process::exit(1);
@@ -64,6 +68,7 @@ fn main() {
         "multisig-accounts-v1" => multisig_accounts::emit(),
         "fastpq-balance-keys-v1" => fastpq_balance_keys::emit(),
         "native-sumeragi-status-v1" => native_sumeragi_status::emit(),
+        "native-sumeragi-lanes-v1" => native_sumeragi_lanes::emit(),
         other => {
             eprintln!("Unknown fixture: {other}");
             std::process::exit(1);

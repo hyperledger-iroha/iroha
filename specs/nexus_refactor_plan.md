@@ -1,10 +1,9 @@
 # Sora Nexus Ledger Refactor Plan
 
 > **Archived plan (2025-09-12):** This document records the original refactor
-> decomposition and is not current operational guidance. In particular,
-> DA/RBC is mandatory for Nexus lanes and certified lane work reaches the WSV
-> only through exact global merge carriers. See `nexus_cross_lane.md`,
-> `merge_ledger.md`, `status.md`, and `roadmap.md` for the implemented design
+> decomposition and is not current operational guidance. Lanes are separate
+> Sumeragi instances whose certified blocks the global chain merges. See
+> `sumeragi_lanes.md`, `status.md`, and `roadmap.md` for the implemented design
 > and outstanding validation gates.
 
 This document captured the initial roadmap for the Sora Nexus Ledger

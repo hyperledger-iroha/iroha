@@ -681,11 +681,24 @@ async fn ram_lfe_execute_rejects_unsupported_encrypted_backend() {
     )
     .await
     .expect_err("HKDF is not an encrypted execution backend");
-    assert!(
-        error
-            .to_string()
-            .contains("does not yet support Torii app execution receipts"),
-        "{error}"
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("ram_lfe_backend_unavailable"),
+    );
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+    assert_eq!(envelope.code, "ram_lfe_backend_unavailable");
+    assert_eq!(
+        envelope.message,
+        "This backend does not support encrypted execution."
     );
 }
 #[cfg(feature = "app_api")]
@@ -906,9 +919,7 @@ async fn identifier_resolve_rejects_unsupported_encryption() {
     .await
     .expect_err("HKDF policy cannot resolve encrypted identifiers");
     assert!(
-        error
-            .to_string()
-            .contains("requires a BFV-backed RAM-LFE program"),
+        identifier_fixture_error_message(&error).contains("requires a BFV-backed RAM-LFE program"),
         "{error}"
     );
 }
@@ -922,12 +933,14 @@ async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_wor
             RamLfeVerificationMode::Signed,
             RamLfeVerificationMode::Proof,
         ] {
-            for mismatch in [false, true] {
+            for (policy_backend, commitment_backend) in [
+                (backend, backend),
+                (backend, RamLfeBackend::HkdfSha3_512PrfV1),
+                (RamLfeBackend::HkdfSha3_512PrfV1, backend),
+            ] {
                 let mut program = base.clone();
-                program.commitment.backend = backend;
-                if !mismatch {
-                    program.backend = backend;
-                }
+                program.backend = policy_backend;
+                program.commitment.backend = commitment_backend;
                 program.verification_mode = mode;
                 let error = derive_identifier_request_draft(
                     &resolver,
@@ -943,7 +956,8 @@ async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_wor
                 )
                 .expect_err("unavailable before parse");
                 assert!(
-                    error.to_string().contains("noiseless public-key equation"),
+                    identifier_fixture_error_message(&error)
+                        .contains("noiseless public-key equation"),
                     "{error}"
                 );
                 let error = derive_ram_lfe_request_draft(
@@ -955,12 +969,75 @@ async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_wor
                 )
                 .expect_err("unavailable before parse");
                 assert!(
-                    error.to_string().contains("noiseless public-key equation"),
+                    identifier_fixture_error_message(&error)
+                        .contains("noiseless public-key equation"),
                     "{error}"
                 );
+                let response = error.into_response();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("x-iroha-reject-code")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("ram_lfe_encryption_unavailable"),
+                );
+                let body = http_body_util::BodyExt::collect(response.into_body())
+                    .await
+                    .unwrap()
+                    .to_bytes();
+                let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+                assert_eq!(envelope.code, "ram_lfe_encryption_unavailable");
+                assert!(envelope.message.contains("noiseless public-key equation"));
             }
         }
     }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_execution_unsupported_backend_has_typed_availability_error() {
+    let response = identifier_execution_error(
+        identifier_resolution::IdentifierResolutionError::UnsupportedBackend(
+            RamLfeBackend::HkdfSha3_512PrfV1,
+        ),
+    )
+    .into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("ram_lfe_backend_unavailable"),
+    );
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+    assert_eq!(envelope.code, "ram_lfe_backend_unavailable");
+    assert_eq!(
+        envelope.message,
+        "This backend does not support encrypted execution."
+    );
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_execution_internal_errors_remain_redacted() {
+    let response = identifier_execution_error(
+        identifier_resolution::IdentifierResolutionError::Signing("private marker".to_owned()),
+    )
+    .into_response();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get("x-iroha-reject-code").is_none());
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(!String::from_utf8_lossy(&body).contains("private marker"));
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+    assert_eq!(envelope.code, "internal_server_error");
+    assert_eq!(envelope.message, "Torii could not complete the request.");
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -973,6 +1050,8 @@ async fn identifier_receipt_dto_preserves_typed_bindings_without_execution_claim
     opening.payload.output_ciphertext_hash = execution.output_ciphertext_hash;
     opening.payload.parameter_digest = execution.parameter_digest;
     opening.payload.evaluation_key_digest = execution.evaluation_key_digest;
+    opening.payload.opened_at_ms = execution.executed_at_ms;
+    opening.payload.expires_at_ms = execution.expires_at_ms;
     opening.payload.opened_output_hash = Hash::new(b"synthetic-opened-plaintext");
     assert_ne!(
         opening.payload.opened_output_hash,
@@ -1019,21 +1098,37 @@ async fn identifier_receipt_dto_preserves_typed_bindings_without_execution_claim
 #[tokio::test]
 async fn identifier_resolve_rejects_malformed_ciphertext_without_panicking() {
     let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x1a);
-    for (wire, expected) in [("zz", "not valid hex"), ("00", "not valid Norito BFV data")] {
+    let mut malformed = hex::decode(synthetic_ciphertext_hex()).unwrap();
+    let payload_start = norito::core::Header::SIZE;
+    let mut payload = malformed[payload_start..].to_vec();
+    assert!(!payload.is_empty());
+    payload.pop();
+    malformed.truncate(payload_start);
+    malformed[23..31].copy_from_slice(&(payload.len() as u64).to_le_bytes());
+    malformed[31..39].copy_from_slice(&norito::hardware_crc64(&payload).to_le_bytes());
+    malformed.extend_from_slice(&payload);
+    for (wire, expected) in [
+        ("zz".to_owned(), "not valid hex"),
+        ("00".to_owned(), "not valid Norito BFV data"),
+        (hex::encode(malformed), "not valid Norito BFV data"),
+    ] {
         let error = handler_identifier_resolve(
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy.id.to_string(),
-                encrypted_input: wire.to_owned(),
+                encrypted_input: wire,
                 output_opening: dummy_output_opening_for_access_test(),
                 phone_retail_canonicality: None,
             }),
         )
         .await
         .expect_err("malformed ciphertext is rejected");
-        assert!(error.to_string().contains(expected), "{error}");
+        assert!(
+            identifier_fixture_error_message(&error).contains(expected),
+            "{error}"
+        );
     }
 }
 #[cfg(feature = "app_api")]
@@ -1082,9 +1177,7 @@ async fn identifier_claim_receipt_rejects_unsupported_encryption() {
     .await
     .expect_err("unsupported encryption cannot produce a claim receipt");
     assert!(
-        error
-            .to_string()
-            .contains("requires a BFV-backed RAM-LFE program"),
+        identifier_fixture_error_message(&error).contains("requires a BFV-backed RAM-LFE program"),
         "{error}"
     );
 }

@@ -96,7 +96,7 @@ public sealed class ToriiRamFheProfileTests
     public void TypedProfileIsImmutableAcrossPolicyRecordCopies()
     {
         var source = TypedProfile();
-        var policy = new ToriiIdentifierPolicySummary { RamFheProfile = source };
+        var policy = new ToriiIdentifierPolicySummary { ProgramId = "identifier_lookup_retail", OutputOpeningPublicKey = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE", RamFheProfile = source };
         var copy = policy with { Note = "copy" };
         Assert.Same(source, copy.RamFheProfile);
         var replacement = new ToriiRamFheProfile(1, 4, 32, 16,
@@ -247,6 +247,8 @@ public sealed class ToriiRamFheProfileTests
         ["owner"] = "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
         ["active"] = true,
         ["normalization"] = "phone_e164",
+        ["program_id"] = "identifier_lookup_retail",
+        ["output_opening_public_key"] = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
         ["resolver_public_key"] = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         ["backend"] = "bfv-programmed-v1",
         ["ram_fhe_profile"] = profile,

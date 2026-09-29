@@ -689,7 +689,16 @@ mod tests {
                 .try_sign(transaction_key.private_key())
                 .expect("fixture transaction signature")
         } else {
-            transaction.build_with_signature(Signature::from_bytes(&[0; 64]))
+            // Keep the envelope structurally canonical while proving that an authentic
+            // signature from a different wallet cannot authorize the selected authority.
+            let signature = Signature::try_new(
+                alternate_transaction_key.private_key(),
+                &transaction.payload_hash_bytes(),
+            )
+            .expect("actual foreign wallet signature");
+            let signed = transaction.build_with_signature(signature);
+            assert!(signed.verify_signature().is_err());
+            signed
         };
         let entry_hash = transaction.hash_as_entrypoint();
         let alternate_transaction = TransactionBuilder::new(

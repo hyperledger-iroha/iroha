@@ -61,7 +61,7 @@ impl NativeFinalityLimits {
 /// One original canonical `SignedBlockWire`, including its native certificate and result.
 ///
 /// This is untrusted transport data, never an authority capability. H1 is signed genesis;
-/// ordinary heights carry native CommitQCs. Retired V2 finality layouts are not accepted.
+/// ordinary heights carry native CommitQCs. No other finality layout is accepted.
 #[derive(
     Clone,
     Debug,

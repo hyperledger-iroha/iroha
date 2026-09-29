@@ -12785,18 +12785,19 @@ impl<'state> StateBlock<'state> {
             self.fastpq_source_inventory = Some(Err(error.clone()));
         }
         self.fastpq_source_quota = Some(quota);
-        let lane_incarnations = self
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                (
-                    lane.id,
-                    StateReadOnly::lane_incarnation_at_height(self, lane.id, height),
-                )
-            })
-            .collect();
+        // Global execution retains its original lane-zero identity. Every other execution
+        // lane comes from the native committed record used by routing and merge admission;
+        // physical Nexus catalogs do not authorize Sumeragi execution incarnations.
+        let global = crate::sumeragi::lanes::routing::GLOBAL_LANE;
+        let mut lane_incarnations = BTreeMap::from([(
+            global,
+            StateReadOnly::lane_incarnation_at_height(self, global, height),
+        )]);
+        for record in &self.world.sumeragi_lanes.get().lanes {
+            if record.lane != global && record.admits_anchor(height.saturating_sub(1)) {
+                lane_incarnations.insert(record.lane, Hash::from_marked_bytes(record.incarnation));
+            }
+        }
         self.fastpq_source_context = Some(Arc::new(crate::fastpq::FastpqBlockStartSourceContext {
             source: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
                 network_id: self.network_id,
@@ -30288,7 +30289,7 @@ impl State {
             cache.insert_ok(entry.key, entry.expires_at_ms, entry.not_before_ms);
         }
     }
-    /// Block cadence frozen into the Sumeragi v2 height profile.
+    /// Block cadence frozen into the Sumeragi height profile.
     #[track_caller]
     #[must_use]
     pub fn sumeragi_block_cadence(&self) -> Duration {
@@ -36737,13 +36738,12 @@ impl<'state> StateBlock<'state> {
             }
         };
         if self.exec_witness.is_none() {
-            if let Err(error) = self.require_original_execution_recorder() {
-                self.clear_cached_exec_witness();
-                return Err(error);
-            }
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
             let result = (|| {
                 let state = &mut *capture.state;
+                // Authority loss is a terminal local capture failure. Latch it without
+                // draining a recorder that may now belong to another execution.
+                state.require_original_execution_recorder()?;
                 let mut witness =
                     match crate::exec_witness::drain_exec_witness_checked(|transcripts| {
                         source_inventory.verify_finalized_transcript_map(transcripts)
@@ -38206,7 +38206,7 @@ mod public_lane_slash_observability_staging_tests {
 
     #[test]
     fn consensus_effects_apply_only_world_and_block_observability() {
-        let _status_guard = crate::status::rbc_status_test_guard();
+        let _status_guard = crate::status::operator_status_test_guard();
         crate::status::reset_nexus_economics_for_tests();
         let state = test_state();
         #[cfg(feature = "telemetry")]
@@ -39465,11 +39465,11 @@ mod fastpq_tx_set_hash_tests {
             .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
+        let source: SignedBlock = new_block.into();
         let (mut state_block, guard) =
-            crate::block::ValidBlock::start_component_execution(&new_block.clone().into(), state)
+            crate::block::ValidBlock::start_component_execution(&source, state)
                 .expect("original recorder before execution");
-        let _ = new_block
-            .validate_and_record_transactions(&mut state_block, guard)
+        let _ = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard)
             .unpack(|_| {});
         let entrypoints = [
             TransactionEntrypoint::External(tx1),

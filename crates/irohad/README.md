@@ -286,7 +286,8 @@ qualification:
 - The reputation finalized query is not an injectable registry object. The
   daemon opens the configured bounded archive, performs exact zero-gap
   reconciliation against Kura before Sumeragi starts, applies the configured
-  live-lag barrier, and installs that same archive in the v2 apply corridor.
+  live-lag barrier, and installs that same archive in the Sumeragi executor
+  apply path (`iroha_core::sumeragi::executor`).
   Every fresh height is captured after Kura finality and the durable WSV
   checkpoint but before live State publication; an archive failure makes the
   committed transition restart-required.
@@ -392,8 +393,12 @@ Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md
 See the current [peer configuration reference](https://docs.iroha.tech/reference/peer-config/params.html)
 for the complete parameter list and examples.
 
-`--config` accepts a flat file or a profile node file (one that sets `profile`,
-`role_overlay` and `profile_roster_size`). Both are read through
+`--config` accepts a custom flat file or a compact profile node file (one that
+sets `profile`, `validators` and `data_dir`). `role` defaults to `validator`;
+use `observer` or `lane_validator` explicitly. The profile supplies the network
+discriminant, and the role supplies `sumeragi.role`; neither is repeated in a
+profile node file. Start with [the validator example](../../configs/validator.example.toml).
+Both forms are read through
 `iroha_config::node_config`; a profile node file is layered over its compiled
 profile, may set only the per-node keys, and must not be combined with `--sora`.
 `--config-blake3` binds the exact bytes of either kind of file.

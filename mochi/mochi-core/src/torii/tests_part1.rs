@@ -352,14 +352,20 @@ fn bounded_json_response_rejects_excessive_depth_before_tree_decode() {
     assert_eq!(value.get("ok").and_then(json::Value::as_bool), Some(true));
 }
 #[test]
-fn queue_plan_outcome_unknown_requires_exact_submission_reconciliation() {
+fn dispatch_outcome_unknown_requires_exact_submission_reconciliation() {
     let ambiguous = ToriiError::UnexpectedStatus {
         status: StatusCode::SERVICE_UNAVAILABLE,
-        reject_code: Some(QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+        reject_code: Some(TRANSACTION_DISPATCH_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
         message: Some("admission outcome unknown".to_owned()),
     };
-    assert!(ambiguous.is_queue_plan_journal_outcome_unknown());
+    assert!(ambiguous.is_transaction_dispatch_outcome_unknown());
     assert!(!ambiguous.confirms_existing_submission());
+    let retired = ToriiError::UnexpectedStatus {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+        message: None,
+    };
+    assert!(!retired.is_transaction_dispatch_outcome_unknown());
     for reject_code in ["PRTRY:ALREADY_ENQUEUED", "PRTRY:ALREADY_COMMITTED"] {
         let reconciled = ToriiError::UnexpectedStatus {
             status: StatusCode::TOO_MANY_REQUESTS,

@@ -8993,7 +8993,7 @@ mod tests {
     }
     #[test]
     fn validation_only_consensus_slash_rolls_back_every_world_write() {
-        let _status_guard = crate::status::rbc_status_test_guard();
+        let _status_guard = crate::status::operator_status_test_guard();
         crate::status::reset_nexus_economics_for_tests();
         let state = setup_state();
         let block = new_block();

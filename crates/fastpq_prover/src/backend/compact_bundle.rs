@@ -281,6 +281,11 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
 /// source endpoints. Every segment statement binds the original whole AXT facts
 /// and remote occurrence list; a successful prefix is never returned.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "the 272-byte `Copy` AXT view is copied once per bundle; sibling test and \
+              diagnostic modules pass it by value"
+)]
 pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -398,6 +403,11 @@ pub(super) fn verify_transfer_bundle_with_allocation<V: CompactTransferValue>(
 
 /// Verify an ordered candidate AXT bundle with complete caller AXT context.
 /// Neither carrier nor successful proof prefixes grant authority or finality.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "the 272-byte `Copy` AXT view is copied once per bundle; the sibling artifact \
+              verifier, diagnostics and tests pass it by value"
+)]
 pub(super) fn verify_axt_transfer_bundle_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,

@@ -74,6 +74,22 @@ target must be the repository's `target` directory or wholly outside the source
 tree. Preserve `IROHA_JS_CARGO_LOCKFILE_PATH` through publication and loading so
 each provenance check observes the same selected dependency graph.
 
+The configured target is a cache parent. Builds use an `iroha-js-source` child
+keyed by the complete authenticated source fingerprint, canonical checkout,
+toolchain executable paths and hashes, platform, profile and build flags.
+Publication resolves the authenticated completed attempt in that child; it never
+falls back to a shared profile directory. This deliberately rebuilds after any
+authenticated source change. Interrupted, failed, drifted or corrupted attempts
+remain available as evidence, and retries automatically use a fresh attempt
+directory. Warm local artifacts require a completed receipt and matching output
+hashes before and after Cargo; an arbitrary prepopulated cache is not accepted.
+Each build retains its Cargo JSON stream beside the compiled addon. Successful
+builds also retain a `.jsonl.inputs.json` receipt with every local compiler
+artifact and its output hashes. Local manifests and entrypoints must belong to
+the captured checkout, and emitted artifacts must stay inside its selected
+target. Registry and Git dependencies still use ordinary locked, offline Cargo
+resolution; this receipt does not claim an archive of their source bytes.
+
 Loading a debug artifact from a dirty source tree verifies its recorded source
 seal in a separate process before loading native code. This verifier has a
 15-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
@@ -2141,11 +2157,9 @@ if (snapshot.status.governance) {
 
 ## Sumeragi Evidence
 
-Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
-does not expose global RBC backlog, per-session sampling, collector-plan, or
-evidence-mutation routes. Use the authenticated native Sumeragi status
-reads and Prometheus transport metrics for operations. Consensus evidence is
-available through the supported read-only endpoints:
+Torii exposes no evidence-mutation routes. Use the authenticated native
+Sumeragi status reads and Prometheus transport metrics for operations.
+Consensus evidence is available through the supported read-only endpoints:
 
 ```js
 const evidence = await torii.listSumeragiEvidence({
@@ -2714,6 +2728,11 @@ independently authenticated plaintext opening supplied through `outputOpening`.
 The current `bfv-affine-v1` and `bfv-programmed-v1` profiles are insecure and are
 rejected by production execution and admission; private identifier execution
 remains unavailable until a secure encryption profile is implemented and qualified.
+`encryptIdentifierInputForPolicy` throws `RamLfeEncryptionUnavailableError`
+with code `ram_lfe_encryption_unavailable` before reading policy or input. Seed
+overrides and plaintext request-builder options are removed. Request builders
+accept already-encrypted bytes and an independent opening; they do not establish
+encryption support. Exact-lift arithmetic exists only in test fixtures.
 
 ## Sora VPN lease receipts
 

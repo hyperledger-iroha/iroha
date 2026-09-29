@@ -1995,7 +1995,7 @@ fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
 #[test]
 #[expect(
     clippy::too_many_lines,
-    reason = "the test audits the complete generated Sumeragi v2 schema and its prohibited legacy fields"
+    reason = "the test audits the complete generated Sumeragi schema and its prohibited legacy fields"
 )]
 fn generated_configs_use_strict_sumeragi_schema() {
     let temp = tempfile::tempdir().expect("make temp dir");

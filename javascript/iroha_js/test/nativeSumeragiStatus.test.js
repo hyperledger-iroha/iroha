@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import { parseSumeragiStatusJson, parseSumeragiStatusPayload } from "../src/sumeragiTyped.js";
 // Syntax fixture only: no generated native finality or execution-capture claim.
 const BASE = {"protocol_version": 1, "config_fingerprint": "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C", "beacon_horizon": null, "instance": "0000000000000000000000000000000000000000000000000000000000000000", "height": 1, "view": 0, "stage": 0, "leader": null, "proxy_tail": null, "high_qc_view": null, "level": 0, "start_level": 0, "t_retx_ms": 1, "committed_height": 0, "applied_height": 0, "awaiting": false, "signer": null, "unanchored": true, "abstaining": true, "halted": null, "footprint": {"votes": 0, "timeouts": 0, "blocks": 0, "exec_entries": 0, "wants": 0, "pending_apply": 0, "sync_entries": 0, "sync_bytes": 0, "peers": 0, "recent_headers": 0, "configs": 0, "cert_cache": 0, "evidence_keys": 0, "probe": 0}};
@@ -55,3 +57,22 @@ for (const field of ["leader", "proxy_tail", "signer"]) test(`native ${field} ad
 for (const version of [0, 2, 4, 8]) test(`first release rejects protocol ${version}`, () => {
   const value = copy(); value.protocol_version = version; assert.throws(() => parse(value));
 });
+
+// This shared corpus is emitted and roundtripped by the canonical Rust generator.
+// JS exposes the JSON status contract; it does not interpret the TSV's Norito column.
+const nativeStatusRows = readFileSync(
+  new URL("../../../fixtures/sumeragi/native_status_v1.tsv", import.meta.url), "utf8",
+).trimEnd().split("\n").filter((line) => !line.startsWith("#"));
+assert.equal(nativeStatusRows.length, 8, "all native status producer cases must be exercised");
+for (const row of nativeStatusRows) {
+  const [name, json, noritoHex, ...extra] = row.split("\t");
+  assert.equal(extra.length, 0);
+  assert.ok(noritoHex.startsWith("4e525430"), "producer must retain its canonical Norito archive");
+  test(`current Rust status JSON corpus: ${name}`, () => {
+    const status = parseSumeragiStatusJson(json);
+    assert.equal(stringifyStrictLosslessIntegerJson(status, "native status corpus"), json);
+    assert.equal(status.view, (1n << 64n) - 1n);
+    assert.ok(Object.isFrozen(status));
+    assert.ok(Object.isFrozen(status.footprint));
+  });
+}

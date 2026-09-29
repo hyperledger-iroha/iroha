@@ -12,7 +12,7 @@ use iroha_config_base::{
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
+    block::consensus::MAX_VALIDATORS_PER_HEIGHT,
 };
 use iroha_primitives::numeric::Quantity;
 

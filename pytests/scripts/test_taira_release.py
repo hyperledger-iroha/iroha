@@ -809,6 +809,9 @@ class TairaPrepareTests(unittest.TestCase):
         self.fixture_git("init", "--quiet", "--initial-branch=optimizations")
         files = {name: (b"committed controller fixture: " + name.encode() + b"\n")
                  for name in release.BUILD_SOURCES}
+        files.update({name: b"# original captured Python fixture\n"
+                      for name in release.CAPTURED_GATE_SOURCES})
+        files["scripts/formal/rust_text.py"] += b"def mask_rust_comments(text): return text\n"
         files.update({"source.rs": b"committed build input\n", ".gitignore": b"target/\n"})
         for name, payload in files.items():
             path = self.root / name
@@ -976,15 +979,20 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual((self.root / relative).read_bytes(), live_code)
 
-    def test_missing_signed_native_gate_is_rejected_before_capture(self):
+    def test_missing_signed_native_gate_or_inventory_is_rejected_before_capture(self):
         self.controller_fixture()
-        self.fixture_git("update-index", "--force-remove", "scripts/taira_release_check.py")
-        commit = self.commit_controller_fixture("missing selected gate fixture")
-        self.args.expected_commit = commit
-        with self.fixture_signature(commit), \
-             patch.object(release, "verify_controller_module_origins"), \
-             self.assertRaisesRegex(release.PrepareError, "missing a required build controller source"):
-            release.verify_signed_source(self.root, commit, self.args.expected_signer)
+        for relative in release.CAPTURED_GATE_SOURCES:
+            with self.subTest(relative=relative):
+                self.assertIn(relative, release.BUILD_SOURCES)
+                self.assertNotIn(relative, release.BOOTSTRAP_SOURCES)
+                self.fixture_git("update-index", "--force-remove", relative)
+                commit = self.commit_controller_fixture("missing selected gate dependency fixture")
+                self.args.expected_commit = commit
+                with self.fixture_signature(commit), \
+                     patch.object(release, "verify_controller_module_origins"), \
+                     self.assertRaisesRegex(release.PrepareError, "missing a required build controller source"):
+                    release.verify_signed_source(self.root, commit, self.args.expected_signer)
+                self.fixture_git("add", "--", relative)
 
     def test_controller_drift_is_rejected_before_capture_even_when_staged_or_hidden(self):
         commit, files = self.controller_fixture()
@@ -1536,23 +1544,87 @@ class TairaPrepareTests(unittest.TestCase):
                 release.frozen_snapshot(source, entries, self.target)
 
     def test_native_gate_selection_is_loaded_from_verified_captured_source(self):
-        code = b"SELECTION = ('captured regression',)\n"
-        entries = self.source_entries({"scripts/taira_release_check.py": ("100644", code)})
+        code = b"SELECTION = _captured_native_inventory['SELECTION']\n"
+        payloads = {"scripts/taira_release_check.py": code,
+                    "scripts/taira_native_test_inventory.py": b"SELECTION = ('captured regression',)\n",
+                    "scripts/formal/rust_text.py": b"def mask_rust_comments(text): return text\n"}
+        entries = self.source_entries({path: ("100644", payload) for path, payload in payloads.items()})
         with release.source_lane(self.root, self.target) as (source, _fd):
             release.capture_source(self.root, source, self.target, "a" * 40, entries)
             before = release.frozen_snapshot(source, entries, self.target)
             (self.root / "scripts").mkdir()
-            (self.root / "scripts/taira_release_check.py").write_text("raise RuntimeError('mutable gate must not execute')")
+            for relative in payloads:
+                (self.root / relative).parent.mkdir(exist_ok=True)
+                (self.root / relative).write_text("raise RuntimeError('mutable dependency must not execute')")
             selected = release.captured_gate(source, before)
             self.assertEqual(selected.SELECTION, ("captured regression",))
-            captured = source / "scripts/taira_release_check.py"
-            marker = self.target / "altered-captured-gate-executed"
-            captured.chmod(0o600)
-            captured.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
-            captured.chmod(0o400)
-            with self.assertRaisesRegex(release.PrepareError, "captured native gate changed"):
-                release.captured_gate(source, before)
-            self.assertFalse(marker.exists())
+            for relative, original in payloads.items():
+                with self.subTest(relative=relative):
+                    captured = source / relative
+                    marker = self.target / "altered-captured-dependency-executed"
+                    captured.chmod(0o600)
+                    captured.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+                    captured.chmod(0o400)
+                    with self.assertRaisesRegex(release.PrepareError, "captured native gate changed"):
+                        release.captured_gate(source, before)
+                    self.assertFalse(marker.exists())
+                    captured.chmod(0o600)
+                    captured.write_bytes(original)
+                    captured.chmod(0o400)
+                    with self.assertRaisesRegex(release.PrepareError, "dependency is absent"):
+                        release.captured_gate(source, [row for row in before if row['path'] != relative])
+
+    def test_captured_native_inventory_uses_verified_bytes_after_path_substitution(self):
+        payloads = {relative: (SCRIPT.parent.parent / relative).read_bytes()
+                    for relative in release.CAPTURED_GATE_SOURCES}
+        entries = self.source_entries({path: ("100644", payload) for path, payload in payloads.items()})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            before = release.frozen_snapshot(source, entries, self.target)
+            original_open = release.stable_open_relative
+            for relative in release.CAPTURED_GATE_SOURCES[1:]:
+                with self.subTest(relative=relative):
+                    dependency = source / relative
+                    marker = self.target / "unverified-dependency-executed"
+                    substituted = []
+
+                    @contextlib.contextmanager
+                    def substitute_after_capture(*args, **kwargs):
+                        with original_open(*args, **kwargs) as descriptor:
+                            yield descriptor
+                        if Path(args[0]) / args[1] == dependency:
+                            dependency.chmod(0o600)
+                            dependency.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+                            dependency.chmod(0o400)
+                            substituted.append(dependency)
+
+                    with patch.object(release, "stable_open_relative", side_effect=substitute_after_capture):
+                        selected = release.captured_gate(source, before)
+                    self.assertEqual(substituted, [dependency])
+                    self.assertEqual(selected.native_owner_stages("native durable archive recovery"),
+                                     development_gate.native_owner_stages("native durable archive recovery"))
+                    mask = selected._native_inventory["rust_source_masker"](source)
+                    self.assertEqual(mask("// comment\nfn source() {}"), "          \nfn source() {}")
+                    self.assertFalse(marker.exists())
+                    self.assertNotEqual(dependency.read_bytes(), payloads[relative])
+                    dependency.chmod(0o600)
+                    dependency.write_bytes(payloads[relative])
+                    dependency.chmod(0o400)
+
+    def test_captured_gate_never_reopens_inventory_when_retained_owner_is_absent(self):
+        path = SCRIPT.with_name("taira_release_check.py")
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("no path fallback")):
+            with self.assertRaises(NameError):
+                exec(compile(path.read_text(), str(path), "exec"),
+                     {"__name__": "taira_captured_release_check", "__file__": str(path)})
+
+    def test_captured_inventory_never_reopens_masker_when_retained_owner_is_absent(self):
+        path = SCRIPT.with_name("taira_native_test_inventory.py")
+        namespace = {"__name__": "taira_captured_native_inventory", "__file__": str(path)}
+        exec(compile(path.read_text(), str(path), "exec"), namespace)
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("no path fallback")):
+            with self.assertRaises(NameError):
+                namespace["rust_source_masker"](self.root)
 
     def test_isolated_cargo_ignores_home_and_ancestor_configuration(self):
         self.source.mkdir()
@@ -2065,7 +2137,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_focused_prequalification_keeps_development_lock_and_sanitized_environment(self):
         repo, routine = self.development_paths()
-        focused = ("core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",)
+        focused = ("core=sumeragi::certified_chain::tests::borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash",)
         held = []
         def diagnostic(root, *, focused_regressions, environment, lock_fds, qualification_scope):
             self.assertEqual((root, focused_regressions, qualification_scope), (repo, focused, "basic"))
@@ -2102,7 +2174,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_development_gate_failures_keep_nonzero_cli_status_and_exact_diagnostics(self):
         repo, routine = self.development_paths()
-        focus = "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
+        focus = "core=sumeragi::certified_chain::tests::borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash"
         for focused, entrypoint in ((False, "release"), (True, "release"),
                                     (False, "gate"), (True, "gate")):
             argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
@@ -2130,12 +2202,12 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(development_gate, "run_prequalification") as prequalify:
             with self.assertRaisesRegex(release.PrepareError, "authenticated release lane"):
                 release.development_check(repo, repo / "target", {}, focused_regressions=(
-                    "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",))
+                    "core=sumeragi::certified_chain::tests::borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash",))
         tools.assert_not_called()
         prequalify.assert_not_called()
 
     def test_only_check_parser_admits_focus_and_forwards_exact_names(self):
-        focus = "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
+        focus = "core=sumeragi::certified_chain::tests::borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash"
         with patch.object(release.sys, "argv", ["taira_release.py", "check", "--focus-regression", focus]), \
              patch.object(release, "development_check") as check:
             self.assertEqual(release.main(), 0)

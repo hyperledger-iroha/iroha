@@ -1,6 +1,6 @@
 //! Test-only exact upstream 56-partial-round Pasta Poseidon circuit candidate.
 //!
-//! Five advice columns constrain every round, the initial length capacity,
+//! Five advice columns constrain every round (paired partial rounds), length capacity,
 //! copied absorption inputs and exact zero padding. Constants come exclusively
 //! from the shared leaf tables. No host hash callback supplies the relation.
 //! Owned input bytes and working field cells clear on drop; Halo2 assignments,
@@ -21,6 +21,7 @@ use zeroize::{DefaultIsZeroes, Zeroize};
 
 const PARAMETER_BYTES: usize = 201 * 32;
 const ROUNDS: usize = 64;
+const ROUND_ROWS: usize = 8 + 56 / 2;
 const MAX_FIELDS: usize = 2054;
 
 trait PastaField: PrimeField<Repr = [u8; 32]> + FromUniformBytes<64> + Ord {
@@ -72,7 +73,7 @@ impl<F: PastaField> Parameters<F> {
 struct PoseidonConfig<F> {
     state: [Column<Advice>; 3],
     input: [Column<Advice>; 2],
-    constants: [Column<Fixed>; 3],
+    constants: [Column<Fixed>; 6],
     full: Selector,
     partial: Selector,
     absorb: Selector,
@@ -100,29 +101,52 @@ impl<F: PastaField> PoseidonConfig<F> {
         let initial = meta.complex_selector();
         let padding = meta.complex_selector();
         let parameters = Parameters::<F>::pinned();
-        for (selector, is_full) in [(full, true), (partial, false)] {
-            meta.create_gate("exact pinned Poseidon round", |meta| {
-                let powered: [_; 3] = std::array::from_fn(|column| {
-                    let value = meta.query_advice(state[column], Rotation::cur())
-                        + meta.query_fixed(constants[column], Rotation::cur());
-                    if is_full || column == 0 {
-                        fifth(value)
-                    } else {
-                        value
-                    }
-                });
-                (0..3)
-                    .map(|row| {
-                        let result = (0..3).fold(Expression::Constant(F::ZERO), |sum, column| {
-                            sum + Expression::Constant(parameters.mds[row][column])
-                                * powered[column].clone()
-                        });
-                        meta.query_selector(selector)
-                            * (meta.query_advice(state[row], Rotation::next()) - result)
-                    })
-                    .collect::<Vec<_>>()
+        meta.create_gate("exact pinned Poseidon full round", |meta| {
+            let powered: [_; 3] = std::array::from_fn(|column| {
+                fifth(
+                    meta.query_advice(state[column], Rotation::cur())
+                        + meta.query_fixed(constants[column], Rotation::cur()),
+                )
             });
-        }
+            (0..3)
+                .map(|row| {
+                    let result = (0..3).fold(Expression::Constant(F::ZERO), |sum, column| {
+                        sum + Expression::Constant(parameters.mds[row][column])
+                            * powered[column].clone()
+                    });
+                    meta.query_selector(full)
+                        * (meta.query_advice(state[row], Rotation::next()) - result)
+                })
+                .collect::<Vec<_>>()
+        });
+        meta.create_gate("two exact pinned Poseidon partial rounds", |meta| {
+            // Absorption and partial selectors occupy disjoint fixed rows. Reuse
+            // its first advice column for the first S-box's constrained output.
+            let y = meta.query_advice(input[0], Rotation::cur());
+            let first: [_; 3] = std::array::from_fn(|column| {
+                meta.query_advice(state[column], Rotation::cur())
+                    + meta.query_fixed(constants[column], Rotation::cur())
+            });
+            let first_powered = [y.clone(), first[1].clone(), first[2].clone()];
+            let second_powered: [_; 3] = std::array::from_fn(|row| {
+                let mixed = (0..3).fold(Expression::Constant(F::ZERO), |sum, column| {
+                    sum + Expression::Constant(parameters.mds[row][column])
+                        * first_powered[column].clone()
+                }) + meta.query_fixed(constants[row + 3], Rotation::cur());
+                if row == 0 { fifth(mixed) } else { mixed }
+            });
+            let mut constraints =
+                vec![meta.query_selector(partial) * (y - fifth(first[0].clone()))];
+            constraints.extend((0..3).map(|row| {
+                let result = (0..3).fold(Expression::Constant(F::ZERO), |sum, column| {
+                    sum + Expression::Constant(parameters.mds[row][column])
+                        * second_powered[column].clone()
+                });
+                meta.query_selector(partial)
+                    * (meta.query_advice(state[row], Rotation::next()) - result)
+            }));
+            constraints
+        });
         meta.create_gate("copy-bound rate-two absorption", |meta| {
             (0..3)
                 .map(|column| {
@@ -209,9 +233,20 @@ impl<F: PastaField> Drop for Working<F> {
 #[derive(Clone, Debug)]
 enum Fault<F> {
     State { row: usize, column: usize, value: F },
+    PartialSbox { row: usize, value: F },
     Input { index: usize, value: F },
     Copy { index: usize, source: usize },
     Padding(F),
+}
+
+#[derive(Clone, Copy, Default)]
+enum Stop {
+    #[default]
+    None,
+    ErrorAfterAbsorb,
+    PanicAfterAbsorb,
+    ErrorAfterPartialSbox,
+    PanicAfterPartialSbox,
 }
 
 fn assign_state<F: PastaField>(
@@ -249,8 +284,7 @@ fn hash<F: PastaField, const L: usize>(
     source: &[Cell; L],
     values: &[[u8; 32]; L],
     faults: &[Fault<F>],
-    fail_after_absorb: bool,
-    panic_after_absorb: bool,
+    stop: Stop,
 ) -> Result<Cell, Error> {
     if L == 0 || L > MAX_FIELDS {
         return Err(Error::Synthesis);
@@ -302,11 +336,15 @@ fn hash<F: PastaField, const L: usize>(
                 }
                 row += 1;
                 cells = assign_state(&mut region, config, row, &mut work, faults);
-                if fail_after_absorb {
+                if matches!(stop, Stop::ErrorAfterAbsorb) {
                     return Err(Error::Synthesis);
                 }
-                assert!(!panic_after_absorb, "test-only Poseidon assignment unwind");
-                for round in 0..ROUNDS {
+                assert!(
+                    !matches!(stop, Stop::PanicAfterAbsorb),
+                    "test-only Poseidon assignment unwind"
+                );
+                let mut round = 0;
+                while round < ROUNDS {
                     let full = matches!(round, 0..=3 | 60..=63);
                     (if full { config.full } else { config.partial }).enable(&mut region, row)?;
                     for column in 0..3 {
@@ -322,11 +360,51 @@ fn hash<F: PastaField, const L: usize>(
                                 work.0.powered[column].square().square() * work.0.powered[column];
                         }
                     }
+                    // For a pair, first bind the nonlinear intermediate in
+                    // reused advice before its mixed state feeds round two.
+                    if !full {
+                        for fault in faults {
+                            if let Fault::PartialSbox { row: at, value } = *fault
+                                && at == row
+                            {
+                                work.0.powered[0] = value;
+                            }
+                        }
+                        region.assign_advice(config.input[0], row, Value::known(work.0.powered[0]));
+                        if matches!(stop, Stop::ErrorAfterPartialSbox) {
+                            return Err(Error::Synthesis);
+                        }
+                        assert!(
+                            !matches!(stop, Stop::PanicAfterPartialSbox),
+                            "test-only paired partial assignment unwind"
+                        );
+                    }
                     for output in 0..3 {
                         work.0.state[output] = (0..3).fold(F::ZERO, |sum, input| {
                             sum + config.parameters.mds[output][input] * work.0.powered[input]
                         });
                     }
+                    if !full {
+                        for column in 0..3 {
+                            region.assign_fixed(
+                                config.constants[column + 3],
+                                row,
+                                config.parameters.rounds[round + 1][column],
+                            );
+                            work.0.powered[column] =
+                                work.0.state[column] + config.parameters.rounds[round + 1][column];
+                            if column == 0 {
+                                work.0.powered[column] = work.0.powered[column].square().square()
+                                    * work.0.powered[column];
+                            }
+                        }
+                        for output in 0..3 {
+                            work.0.state[output] = (0..3).fold(F::ZERO, |sum, input| {
+                                sum + config.parameters.mds[output][input] * work.0.powered[input]
+                            });
+                        }
+                    }
+                    round += if full { 1 } else { 2 };
                     row += 1;
                     cells = assign_state(&mut region, config, row, &mut work, faults);
                 }
@@ -338,7 +416,7 @@ fn hash<F: PastaField, const L: usize>(
 }
 
 const fn hash_rows(length: usize) -> usize {
-    length.div_ceil(2) * (ROUNDS + 1) + 1
+    length.div_ceil(2) * (ROUND_ROWS + 1) + 1
 }
 
 #[path = "ram_lfe_poseidon_tests.rs"]

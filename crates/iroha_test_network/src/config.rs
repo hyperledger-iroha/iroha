@@ -713,8 +713,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    let (block_cadence_ms, sumeragi_context, kagemusha_mint_finality) = consensus_handshake_metadata
-        .map_or_else(
+    let (block_cadence_ms, sumeragi_context, kagemusha_mint_finality) =
+        consensus_handshake_metadata.map_or_else(
             || {
                 (
                     None,
@@ -1447,7 +1447,7 @@ fn resolve_preexec_nexus_config(
     if !has_authoritative_nexus {
         // Direct fixture calls have no resolved runtime config. Keep their
         // account literals unambiguous, but never rewrite an authoritative Nexus
-        // snapshot because the signed v2 commitment must match peer startup.
+        // snapshot because the signed Nexus/AMX context commitment must match peer startup.
         let gas_account = ALICE_ID.to_string();
         nexus.staking.stake_escrow_account_id = gas_account.clone();
         nexus.staking.slash_sink_account_id = gas_account;

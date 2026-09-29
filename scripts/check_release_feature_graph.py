@@ -128,7 +128,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "33d77d17dadfaf648452bc56a06566829a9249ca6752c64b34cd6e74d078dd7a"
+    "84e65e94cbe56b88f6a0d80fe3dedf5a45dc3a72e392e09b422c8da299219219"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -146,6 +146,7 @@ HOSTILE_CARGO_ENVIRONMENT = frozenset(
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
     'iroha_core feature "iroha-core-tests"',
+    'iroha_crypto feature "bfv-test-fixtures"',
     'iroha_data_model feature "test-fixtures"',
     'iroha_p2p feature "test-fixtures"',
     'iroha_sccp feature "test-fixtures"',

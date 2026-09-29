@@ -173,32 +173,25 @@ test("first-release HTTP client declarations omit compatibility escape hatches",
   }
 });
 
-test("Sumeragi V2 declarations use canonical Rust names without draft aliases", () => {
+test("consensus declarations expose only the current Sumeragi surface", () => {
   const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
-  for (const canonical of [
-    "ToriiSumeragiV2HeightContextId",
-    "ToriiSumeragiV2ConsensusRound",
-    "ToriiSumeragiV2QuorumCertificateRef",
-    "ToriiSumeragiV2TimeoutCertificateRef",
+  for (const current of [
+    "ToriiSumeragiStatus",
+    "ToriiSumeragiLaneStatus",
+    "ToriiSumeragiLaneRecord",
+    "ToriiSumeragiParameters",
   ]) {
     assert.match(
       declarations,
-      new RegExp(`export (?:type|interface) ${canonical}\\b`, "u"),
-      `missing canonical ${canonical} declaration`,
+      new RegExp(`export interface ${current}\\b`, "u"),
+      `missing current ${current} declaration`,
     );
   }
-  for (const retired of [
-    "ToriiSumeragiV2ContextId",
-    "ToriiSumeragiV2Round",
-    "ToriiSumeragiV2QcReference",
-    "ToriiSumeragiV2TimeoutReference",
-  ]) {
-    assert.doesNotMatch(
-      declarations,
-      new RegExp(`export (?:type|interface) ${retired}\\b`, "u"),
-      `retired draft alias ${retired} must be absent`,
-    );
-  }
+  assert.doesNotMatch(
+    declarations,
+    /ToriiSumeragiV2/u,
+    "retired consensus declarations must be absent",
+  );
 });
 
 test("every public export has a safe runtime target and an explicit declaration target", () => {
@@ -862,11 +855,21 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "async function checkIdentifierApiTypes(client: ToriiClient, auth: CanonicalRequestAuth, opening: RamLfeOutputOpening): Promise<void> {",
         "  const policies: IdentifierPolicyListResponse = await client.listIdentifierPolicies();",
         "  const policy = policies.items[0]!;",
+        "  // @ts-expect-error Seed overrides are retired from the public encryption API.",
+        "  RootSdk.encryptIdentifierInputForPolicy(policy, 'private input', { seedHex: '00' });",
+        "  // @ts-expect-error Request builders only accept already-encrypted bytes.",
+        "  RootSdk.buildIdentifierRequestForPolicy(policy, { input: 'private input', encrypt: true, outputOpening: opening });",
+        "  const unavailableCode: 'ram_lfe_encryption_unavailable' = new RootSdk.RamLfeEncryptionUnavailableError().code;",
+        "  void unavailableCode;",
         "  const execution: RamLfeExecuteResponse | null = await client.executeRamLfeProgram(policy.program_id, { encryptedInput: 'ABCD', canonicalAuth: auth });",
         "  const claim: IdentifierClaimLookupResponse | null = await client.getIdentifierClaimByReceiptHash('11'.repeat(32));",
         "  if (execution) {",
         "    // @ts-expect-error Execution cannot attest to a plaintext opening.",
         "    void execution.output_opening;",
+        "    // @ts-expect-error Retired backend tags are not current wire values.",
+        "    execution.backend = 'bfv-programmed-sha3-256-v1';",
+        "    // @ts-expect-error Unknown lowercase modes are not current wire values.",
+        "    execution.verification_mode = 'unknown';",
         "    const resolved: IdentifierResolutionReceipt | null = await client.resolveIdentifier({ policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening, canonicalAuth: auth });",
         "    const issued: IdentifierResolutionReceipt | null = await client.issueIdentifierClaimReceipt('account-id', { policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening, canonicalAuth: auth });",
         "    void [resolved, issued, opening.payload.opened_output_hash];",

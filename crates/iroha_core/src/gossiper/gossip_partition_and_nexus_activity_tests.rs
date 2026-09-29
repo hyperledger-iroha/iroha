@@ -350,9 +350,13 @@ fn transaction_gossip_roundtrip_cached_payload_is_context_free() {
 }
 #[test]
 fn gossip_roundtrip_preserves_large_ram_lfe_policy_transaction() {
-    let signed = register_ram_lfe_program_policy_tx();
+    let signed = register_large_hkdf_program_policy_tx();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
     let signed_encoded = signed.encode();
+    assert!(
+        signed_encoded.len() > 64 * 1024,
+        "large gossip payload coverage"
+    );
     let signed_decoded: SignedTransaction =
         Decode::decode(&mut signed_encoded.as_slice()).expect("decode signed transaction");
     assert_eq!(signed_decoded.hash(), signed.hash());

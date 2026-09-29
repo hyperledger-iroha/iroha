@@ -57,11 +57,20 @@ fn fixture(
         ALICE_ID.clone(),
         FeePaymentIntent::authority(vec![], None),
     );
-    builder.set_creation_time(header.creation_time());
+    builder.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
     let signed = builder
         .with_instructions(network)
         .sign(ALICE_KEYPAIR.private_key());
     let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                signed.hash_as_entrypoint(),
+                iroha_model_base::topology::LaneId::SINGLE,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
     builder.push_transaction(signed);
     (
         state,
@@ -934,11 +943,20 @@ mod retry_and_periodic {
             ALICE_ID.clone(),
             FeePaymentIntent::authority(vec![], None),
         );
-        transaction.set_creation_time(header.creation_time());
+        transaction.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
         let signed = transaction
             .with_instructions(plain_network())
             .sign(ALICE_KEYPAIR.private_key());
         let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+                iroha_data_model::block::ExternalExecutionContext::new(
+                    signed.hash_as_entrypoint(),
+                    iroha_model_base::topology::LaneId::SINGLE,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                ),
+            ]),
+        ));
         builder.push_transaction(signed);
         let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
         (state, source, history)
@@ -946,11 +964,11 @@ mod retry_and_periodic {
 
     #[test]
     fn repeated_periodic_matches_bind_distinct_positions_and_use_time_actions() {
-        let _guard = exec_witness::exec_witness_guard();
         let (state, source, history) = periodic_fixture();
         let id: TriggerId = "periodic_repeat".parse().unwrap();
-        exec_witness::start_block();
         let mut block = state.block(source.header());
+        let guard = exec_witness::exec_witness_guard();
+        exec_witness::start_block();
         let initial_use = time_trigger_use_v1(&block.world.triggers, &id, 3).unwrap();
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
@@ -1018,6 +1036,7 @@ mod retry_and_periodic {
         assert_eq!(block.committed_fragment_count(), fragments + 4);
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
+        drop(guard);
         drop(block);
         assert_eq!(
             state

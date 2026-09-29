@@ -3191,7 +3191,6 @@ fn iso_bridge_transition_completed(
 fn reconcile_iso_bridge_transactions(
     runtime: &Iso20022BridgeRuntime,
     state: &CoreState,
-    kura: &Kura,
 ) -> Result<(), Error> {
     for transaction_hash in runtime.queued_transaction_hashes() {
         let hash = parse_signed_transaction_hash(&transaction_hash).map_err(|_| {
@@ -3250,7 +3249,6 @@ fn process_iso_bridge_transaction_event(
 fn process_iso_bridge_pipeline_event(
     runtime: &Iso20022BridgeRuntime,
     state: &CoreState,
-    kura: &Kura,
     event: &PipelineEventBox,
 ) -> Result<(), Error> {
     match event {
@@ -3258,7 +3256,7 @@ fn process_iso_bridge_pipeline_event(
             process_iso_bridge_transaction_event(runtime, event)
         }
         PipelineEventBox::Block(event) if event.status == BlockStatus::Applied => {
-            reconcile_iso_bridge_transactions(runtime, state, kura)
+            reconcile_iso_bridge_transactions(runtime, state)
         }
         _ => Ok(()),
     }
@@ -3266,14 +3264,13 @@ fn process_iso_bridge_pipeline_event(
 fn start_iso_bridge_projection_worker(
     runtime: Arc<Iso20022BridgeRuntime>,
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     events: &EventsSender,
     shutdown_signal: ShutdownSignal,
 ) -> Result<tokio::task::JoinHandle<ToriiCriticalWorkerExit>, Error> {
     // Subscribe before the startup snapshot so any concurrent commit is either
     // visible in State or retained for the worker to observe.
     let mut receiver = events.subscribe();
-    reconcile_iso_bridge_transactions(&runtime, &state, &kura)?;
+    reconcile_iso_bridge_transactions(&runtime, &state)?;
     Ok(tokio::spawn(async move {
         loop {
             let received = tokio::select! {
@@ -3284,8 +3281,7 @@ fn start_iso_bridge_projection_worker(
             };
             match received {
                 Ok(EventBox::Pipeline(event)) => {
-                    if let Err(error) =
-                        process_iso_bridge_pipeline_event(&runtime, &state, &kura, &event)
+                    if let Err(error) = process_iso_bridge_pipeline_event(&runtime, &state, &event)
                     {
                         iroha_logger::error!(
                             ?error,
@@ -3297,7 +3293,7 @@ fn start_iso_bridge_projection_worker(
                 Ok(EventBox::PipelineBatch(events)) => {
                     for event in &events {
                         if let Err(error) =
-                            process_iso_bridge_pipeline_event(&runtime, &state, &kura, event)
+                            process_iso_bridge_pipeline_event(&runtime, &state, event)
                         {
                             iroha_logger::error!(
                                 ?error,
@@ -3312,7 +3308,7 @@ fn start_iso_bridge_projection_worker(
                     // Canonical block outcomes are recoverable, so persist
                     // those before stopping. Queue expiry is not replayable;
                     // continuing would silently strand ISO records.
-                    if let Err(error) = reconcile_iso_bridge_transactions(&runtime, &state, &kura) {
+                    if let Err(error) = reconcile_iso_bridge_transactions(&runtime, &state) {
                         iroha_logger::error!(
                             ?error,
                             skipped,
@@ -10719,6 +10715,30 @@ fn identifier_internal_error(message: impl Into<String>) -> Error {
     ))
 }
 #[cfg(feature = "app_api")]
+fn identifier_execution_error(error: identifier_resolution::IdentifierResolutionError) -> Error {
+    if matches!(
+        &error,
+        identifier_resolution::IdentifierResolutionError::Evaluation(
+            iroha_crypto::RamLfeError::InsecureBfvProfile
+        )
+    ) {
+        return Error::AppServiceUnavailable {
+            code: "ram_lfe_encryption_unavailable",
+            message: error.to_string(),
+        };
+    }
+    if matches!(
+        &error,
+        identifier_resolution::IdentifierResolutionError::UnsupportedBackend(_)
+    ) {
+        return Error::AppServiceUnavailable {
+            code: "ram_lfe_backend_unavailable",
+            message: "This backend does not support encrypted execution.".to_owned(),
+        };
+    }
+    identifier_internal_error(error.to_string())
+}
+#[cfg(feature = "app_api")]
 fn parse_encrypted_identifier_ciphertext(
     raw: &str,
 ) -> Result<iroha_crypto::BfvIdentifierCiphertext, Error> {
@@ -10764,11 +10784,11 @@ fn derive_ram_lfe_request_draft(
     request: &routing::RamLfeExecuteRequestDto,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     resolver
         .execute_encrypted(program_policy, &ciphertext)
-        .map_err(|err| identifier_internal_error(err.to_string()))
+        .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
@@ -10779,7 +10799,7 @@ fn derive_identifier_request_draft(
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     let phone_like = policy.id.kind.as_ref() == "phone"
         || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
@@ -10820,7 +10840,7 @@ fn derive_identifier_request_draft(
                     &ciphertext,
                     request.output_opening.clone(),
                 )
-                .map_err(|err| identifier_internal_error(err.to_string()))
+                .map_err(identifier_execution_error)
         }
         _ => Err(identifier_conversion_error(
             "identifier encrypted input requires a BFV-backed RAM-LFE program",
@@ -15337,7 +15357,7 @@ fn authoritative_lane_peer_statuses(
         .collect();
     authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
 }
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 fn authoritative_lane_peer_statuses_at_height(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -15459,7 +15479,6 @@ impl ToriiProxyUnavailableReason {
 #[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyCandidate {
-    Local(PeerId),
     P2p(PeerId),
     HttpBridge { peer_id: PeerId, torii_url: String },
 }
@@ -15467,12 +15486,11 @@ enum ToriiProxyCandidate {
 impl ToriiProxyCandidate {
     fn peer_id(&self) -> &PeerId {
         match self {
-            Self::Local(peer_id) | Self::P2p(peer_id) | Self::HttpBridge { peer_id, .. } => peer_id,
+            Self::P2p(peer_id) | Self::HttpBridge { peer_id, .. } => peer_id,
         }
     }
     fn transport_label(&self) -> &'static str {
         match self {
-            Self::Local(_) => "local_quorum",
             Self::P2p(_) => "p2p_proxy",
             Self::HttpBridge { .. } => "http_bridge",
         }
@@ -15563,42 +15581,10 @@ fn effective_proxy_routing_decision(
     resolved_route
 }
 #[cfg(feature = "connect")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProxyRoutingPlanMismatch {
-    ingress_digest: Hash,
-    receiver_digest: Hash,
-}
-#[cfg(feature = "connect")]
 fn validate_proxy_routing_plan_hint(
     expected_plan: ToriiRoutingPlanHintV1,
 ) -> Result<RoutingPlan, iroha_core::torii_proxy::ToriiRoutingPlanHintError> {
     expected_plan.try_into_routing_plan()
-}
-#[cfg(feature = "connect")]
-fn validate_proxy_routing_plan(
-    request_kind: &'static str,
-    resolved_plan: RoutingPlan,
-    ingress_hint: RoutingPlan,
-) -> Result<RoutingPlan, ProxyRoutingPlanMismatch> {
-    if resolved_plan != ingress_hint {
-        let receiver_digest = resolved_plan.digest();
-        let ingress_digest = ingress_hint.digest();
-        iroha_logger::warn!(
-            request_kind,
-            resolved_digest = %receiver_digest,
-            ingress_digest = %ingress_digest,
-            resolved_lane = resolved_plan.coordinator_route().lane_id.as_u32(),
-            resolved_dataspace = resolved_plan.coordinator_route().dataspace_id.as_u64(),
-            ingress_lane = ingress_hint.coordinator_route().lane_id.as_u32(),
-            ingress_dataspace = ingress_hint.coordinator_route().dataspace_id.as_u64(),
-            "Torii proxy receiver rejected a different routing plan than the ingress hint"
-        );
-        return Err(ProxyRoutingPlanMismatch {
-            ingress_digest,
-            receiver_digest,
-        });
-    }
-    Ok(resolved_plan)
 }
 #[cfg(feature = "connect")]
 fn effective_proxy_signed_query_routing_decision(
@@ -19648,7 +19634,7 @@ async fn response_to_admitted_torii_proxy_snapshot(
         ordinary_query_memory,
     }
 }
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 async fn response_to_torii_proxy_snapshot(
     response: Response,
     max_body_bytes: usize,
@@ -20159,7 +20145,7 @@ async fn execute_torii_proxy_request_locally(
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     execute_torii_proxy_request_locally_with_proxy_memory(app, local_peer_id, request, None).await
 }
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 async fn execute_torii_proxy_request_locally_with_proxy_memory(
     app: &SharedAppState,
     local_peer_id: PeerId,
@@ -20168,7 +20154,6 @@ async fn execute_torii_proxy_request_locally_with_proxy_memory(
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     let max_body_bytes = torii_proxy_response_body_limit(app.as_ref(), &request.request);
 
-    let request_id = request.request_id.clone();
     // Local delivery may execute a Nexus fanout whose remote legs re-enter the
     // ordinary proxy candidate pipeline. Hop history and candidate filtering
     // bound that recursion at runtime; erase this one recursive future edge so
@@ -20190,18 +20175,6 @@ async fn execute_torii_proxy_request_with_fallback(
     request: ToriiProxyRequestKindV1,
 ) -> Response {
     execute_torii_proxy_request_with_fallback_admitted(app, routing_decision, request, None).await
-}
-#[cfg(feature = "connect")]
-fn take_local_torii_proxy_fast_path(
-    candidate_peers: &mut Vec<ToriiProxyCandidate>,
-) -> Option<PeerId> {
-    let index = candidate_peers
-        .iter()
-        .position(|candidate| matches!(candidate, ToriiProxyCandidate::Local(_)))?;
-    let ToriiProxyCandidate::Local(peer) = candidate_peers.swap_remove(index) else {
-        unreachable!("selected candidate is local")
-    };
-    Some(peer)
 }
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_with_fallback_admitted(
@@ -20260,59 +20233,23 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
             Err(response) => return response,
         },
     };
-    let mut candidate_peers = candidates.peers;
-    if let Some(local_peer_id) = take_local_torii_proxy_fast_path(&mut candidate_peers) {
-        let request_id = request.request_id.clone();
-        let mut response = match execute_torii_proxy_request_locally_with_proxy_memory(
-            app,
-            local_peer_id,
-            request,
-            Some(proxy_memory.clone()),
-        )
-        .await
-        {
-            Ok(snapshot) => admitted_torii_proxy_snapshot_to_response(snapshot),
-            Err(error) => torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "proxy_dispatch_failed",
-                error.to_string(),
-            ),
-        };
-        insert_route_transport_header(&mut response, "local");
-        mark_torii_proxy_request_completed(app, request_id).await;
-        return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
-    }
-    let candidate_proxy_memory = proxy_memory.clone();
     let response = execute_torii_proxy_request_across_candidates(
         tokio::time::Instant::from_std(request_started),
-        candidate_peers,
+        candidates.peers,
         routing_decision,
         request,
         app.torii_proxy_http_ingress_envelope
             .forwarding_transient_bytes,
-        |candidate, request| {
-            let proxy_memory = candidate_proxy_memory.clone();
-            async move {
-                match candidate {
-                    ToriiProxyCandidate::Local(peer_id) => {
-                        execute_torii_proxy_request_locally_with_proxy_memory(
-                            app,
-                            peer_id,
-                            Arc::unwrap_or_clone(request.into_arc()),
-                            Some(proxy_memory),
-                        )
-                        .await
-                        .map(|admitted| admitted.snapshot)
-                    }
-                    ToriiProxyCandidate::P2p(peer_id) => {
-                        execute_torii_proxy_request_via_peer(app, peer_id, request.into_arc()).await
-                    }
-                    ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
-                        execute_torii_proxy_request_via_http_bridge_shared(
-                            app, peer_id, torii_url, request,
-                        )
-                        .await
-                    }
+        |candidate, request| async move {
+            match candidate {
+                ToriiProxyCandidate::P2p(peer_id) => {
+                    execute_torii_proxy_request_via_peer(app, peer_id, request.into_arc()).await
+                }
+                ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
+                    execute_torii_proxy_request_via_http_bridge_shared(
+                        app, peer_id, torii_url, request,
+                    )
+                    .await
                 }
             }
         },
@@ -20445,9 +20382,6 @@ async fn forward_incoming_torii_proxy_request(
             .forwarding_transient_bytes,
         |candidate, request| async move {
             match candidate {
-                ToriiProxyCandidate::Local(_) => {
-                    unreachable!("re-forwarded proxy requests never select the local peer")
-                }
                 ToriiProxyCandidate::P2p(peer_id) => {
                     execute_torii_proxy_request_via_peer(app, peer_id, request.into_arc()).await
                 }
@@ -22880,7 +22814,6 @@ async fn execute_incoming_torii_proxy_request_with_admission(
             immediate_sender_peer_id,
             pre_admitted_fanout,
             proxy_memory,
-            deadline,
         ),
     )
     .await
@@ -22916,7 +22849,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
     immediate_sender_peer_id: Option<PeerId>,
     pre_admitted_fanout: Option<QueryFanoutMemoryReservation>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
-    execution_deadline: tokio::time::Instant,
 ) -> Response {
     if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V1 {
         return torii_proxy_error_response(
@@ -34080,14 +34012,14 @@ async fn handler_ram_lfe_execute(
         return Ok(StatusCode::CONFLICT.into_response());
     }
     identifier_resolution::require_supported_program_policy(&program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     json_ok(ram_lfe_execute_response(&receipt, &draft))
 }
 #[cfg(feature = "app_api")]
@@ -34261,11 +34193,7 @@ async fn handler_identifier_resolve(
     }
     let receipt = resolver
         .sign_receipt(&policy, &program_policy, &draft, &claim)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })?;
+        .map_err(identifier_execution_error)?;
     json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
@@ -34333,11 +34261,7 @@ async fn handler_identifier_claim_receipt(
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })?;
+        .map_err(identifier_execution_error)?;
     json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
@@ -42749,7 +42673,6 @@ impl Torii {
             let task = match start_iso_bridge_projection_worker(
                 runtime,
                 self.state.clone(),
-                self.kura.clone(),
                 &self.events,
                 shutdown_signal.clone(),
             )

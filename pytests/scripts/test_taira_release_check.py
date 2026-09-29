@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1465 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1498 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1468 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1501 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -850,7 +850,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(library), 98)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 152)):
+                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 154)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -1340,7 +1340,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         required = {
             "data-model": "nexus::runtime_catalog::tests::additive_catalog_parameters_roundtrip_without_losing_canonical_identity",
             "core": "state::runtime_catalog_tests::runtime_catalog_final_overlay_rechecks_late_validator_invalidation",
-            "config-unit": "parameters::actual::tests::sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy",
+            "config-unit": "parameters::actual::tests::nexus_consensus_policy_digest_keeps_configured_dataspaces_during_runtime_addition",
             "daemon": "startup_runtime_catalog_tests::startup_catalog_handoff_includes_additions_committed_during_replay",
             "network": EXPECTED_BEACON_NETWORK_TEST,
         }
@@ -1736,13 +1736,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                         if test not in startup_names:
                             self.assertGreater(executed.index((name, test)), first_network)
             cli_start = next(index for index, row in enumerate(executed) if row[0] == "cli")
-            pending_kura = [("core", test) for _, tests in gate.CORE_PENDING_KURA_RECOVERY_STAGES
+            native_archive = [("core", test) for _, tests in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
                             for test in tests]
             after_config = [row for row in executed if row[0] != "config"]
             ownership = [(name, test) for name in gate.MV_OWNERSHIP_HARNESSES
                          for _, tests in selected[name] for test in tests]
-            self.assertEqual(after_config[:len(ownership) + len(pending_kura)],
-                             ownership + pending_kura)
+            self.assertEqual(after_config[:len(ownership) + len(native_archive)],
+                             ownership + native_archive)
             startup = {"core": gate.CORE_STARTUP_STAGES, "torii-unit": gate.TORII_STARTUP_STAGES,
                        "daemon": gate.DAEMON_STARTUP_STAGES}
             for name, stages in startup.items():
@@ -1757,7 +1757,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             self.assertLess(shipping_index, order.index(("cli", deferred_cli)))
             self.assertEqual(order[0], ("config", gate.CONFIG_STAGES))
             for index, (name, stages) in enumerate(order):
-                if name in gate.MV_OWNERSHIP_HARNESSES or stages == gate.CORE_PENDING_KURA_RECOVERY_STAGES or (
+                if name in gate.MV_OWNERSHIP_HARNESSES or stages == gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES or (
                         name in startup and stages and all(stage in startup[name] for stage in stages)):
                     self.assertLess(index, shipping_index)
             self.assertEqual(len(executed), gate.selected_regression_count(scope))
@@ -1785,7 +1785,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         executed = []
         def fail_startup(harness, root, env, stages, locks, **_kwargs):
             executed.append(harness)
-            if harness in {"core", "daemon"} and stages != gate.CORE_PENDING_KURA_RECOVERY_STAGES:
+            if harness in {"core", "daemon"} and stages != gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES:
                 raise gate.SelectedRegressionFailures([harness + " startup failed"])
         for scope in gate.QUALIFICATION_SCOPES:
             executed.clear()
@@ -1809,7 +1809,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             network.assert_not_called()
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
-    def test_pending_kura_failure_stops_before_other_startup_shipping_or_network(self):
+    def test_native_archive_failure_stops_before_other_startup_shipping_or_network(self):
         for scope in gate.QUALIFICATION_SCOPES:
             for error in (gate.SelectedRegressionFailures(["pending Apply publication failed"]),
                           gate.CheckError("required regressions missing from native harness")):
@@ -1822,7 +1822,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     order.append(harness)
                     executed.append((harness, stages))
                     if harness == "core":
-                        self.assertEqual(stages, gate.CORE_PENDING_KURA_RECOVERY_STAGES)
+                        self.assertEqual(stages, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES)
                         raise error
                 with self.subTest(scope=scope, error=type(error).__name__), \
                      patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
@@ -1846,7 +1846,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                             ("mv-map", gate.MV_MAP_STAGES),
                                             ("mv-admitted-map", gate.MV_ADMITTED_MAP_STAGES),
                                             ("concread", gate.CONCREAD_STAGES),
-                                            ("core", gate.CORE_PENDING_KURA_RECOVERY_STAGES)])
+                                            ("core", gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES)])
                 compile.assert_called_once()
                 checkpoint.assert_called_once_with(None)
                 metadata.assert_not_called()
@@ -2029,11 +2029,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         priority_torii, _ = gate.partition_priority_stages(
             selected["torii-unit"], stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
         pending = tuple(stage for stage in selected["core"]
-                        if stage in gate.CORE_PENDING_KURA_RECOVERY_STAGES)
+                        if stage in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES)
         independent = (("cli", selected["cli"]),) + early
         prefix, deferred = gate.pre_network_partition(
             independent, priority_cli=priority_cli, deferred_cli=deferred_cli,
-            priority_torii=priority_torii, pending_kura=pending)
+            priority_torii=priority_torii, native_archive=pending)
         return independent, prefix, deferred
 
     def test_pre_network_partition_places_each_selected_independent_test_once(self):
@@ -2065,7 +2065,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         startup = gate.TORII_STARTUP_STAGES[:1]
         with self.assertRaisesRegex(gate.CheckError, "overlaps mandatory startup"):
             gate.pre_network_partition((("torii-unit", startup),), priority_cli=(), deferred_cli=(),
-                                       priority_torii=startup, pending_kura=())
+                                       priority_torii=startup, native_archive=())
 
     def test_exact_pre_network_checkpoint_skips_prefix_but_reruns_network_and_deferred_groups(self):
         shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
@@ -2218,7 +2218,7 @@ class MutableSourceObservationTests(unittest.TestCase):
         isolate_shipping_fixture(self)
         env = dict(self.env, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR="/warm")
         requests = ("concread=" + gate.CONCREAD_STAGES[0][1][0],
-                    "core=" + gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0])
+                    "core=" + gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES[0][1][0])
         for request in requests:
             with self.subTest(request=request), contextlib.ExitStack() as stack:
                 for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
@@ -2264,7 +2264,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 351)
+            self.assertEqual(len(requested), 353)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2290,7 +2290,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("351 focused regressions", output.getvalue())
+            self.assertIn("353 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
@@ -2300,7 +2300,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             portable = ("mv-admitted-map", "concread")
             names = {name: selected[name][0][1][0] for name in portable}
             config_test = gate.CONFIG_STAGES[0][1][0]
-            recovery = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0]
+            recovery = gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES[0][1][0]
             requested = tuple(name + "=" + names[name] for name in portable) + (
                 "config=" + config_test, "core=" + recovery, "core=" + self.core,
                 "cli=" + self.cli, "network=" + self.network)
@@ -2544,8 +2544,8 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[3], gate.CONFIG_STAGES)
         network.assert_not_called()
 
-    def test_selected_pending_kura_runs_first_once_without_expanding_focus(self):
-        recovery = tuple(test for _, tests in gate.CORE_PENDING_KURA_RECOVERY_STAGES for test in tests)
+    def test_selected_native_archive_runs_first_once_without_expanding_focus(self):
+        recovery = tuple(test for _, tests in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES for test in tests)
         beacon = gate.CORE_BEACON_STAGES[0][1][0]
         daemon = gate.DAEMON_STARTUP_STAGES[0][1][0]
         for scope in gate.QUALIFICATION_SCOPES:
@@ -2579,8 +2579,8 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 self.assertEqual(release.call_args_list.count(unittest.mock.call("core")), 1)
                 self.assertIn(f"{len(requested)} focused regressions", output.getvalue())
 
-    def test_pending_kura_only_focus_releases_core_without_empty_or_duplicate_run(self):
-        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][-1]
+    def test_native_archive_only_focus_releases_core_without_empty_or_duplicate_run(self):
+        selected = gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES[0][1][-1]
         copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
         with patch.object(gate, "compile_test_harnesses", return_value=copies), \
              patch.object(copies, "release") as release, \
@@ -2593,8 +2593,8 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("data-model"), unittest.mock.call("core")])
         network.assert_not_called()
 
-    def test_pending_kura_failure_stops_all_remaining_focused_execution(self):
-        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][2]
+    def test_native_archive_failure_stops_all_remaining_focused_execution(self):
+        selected = gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES[0][1][2]
         for scope in gate.QUALIFICATION_SCOPES:
             for error in (gate.SelectedRegressionFailures(["pending Apply publication failed"]),
                           gate.CheckError("required regressions missing from native harness")):
@@ -2623,7 +2623,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
 
     def test_independent_focused_failures_aggregate_and_prevent_network(self):
         copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
-        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0]
+        selected = gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES[0][1][0]
         def execute(harness, root, env, stages, locks, **_kwargs):
             names = [test for _, tests in stages for test in tests]
             if harness != "/copies/config" and names != [selected]:
@@ -3278,7 +3278,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         priority_torii, _ = gate.partition_priority_stages(
             gate.TORII_UNIT_STAGES, stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_PENDING_KURA_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_PENDING_KURA_RECOVERY_STAGES), gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
+                         [gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES), gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
 
     def test_deferred_transport_or_fixture_failure_stops_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
@@ -3431,9 +3431,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             isolate.assert_not_called()
 
     def test_fixture_codegen_rejects_combined_feature_graphs(self):
-        for options in ({"message_control": True, "focused_fixture": True},
+        for options in ({"settlement_route_control": True, "focused_fixture": True},
                         {"disposable_broker": True, "focused_fixture": True},
-                        {"message_control": True, "disposable_broker": True}):
+                        {"settlement_route_control": True, "disposable_broker": True}):
             with self.subTest(options=options), patch.object(gate.subprocess, "Popen") as spawn:
                 with self.assertRaisesRegex(gate.CheckError, "feature-isolated codegen"):
                     gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),

@@ -28,7 +28,6 @@ use iroha_crypto::{
 use iroha_data_model::{
     block::{
         BlockHeader,
-        builder::BlockBuilder,
         consensus::{ExecKv, ExecWitness},
     },
     governance::types::{BodyInstanceId, BodyInstanceStatusV1},
@@ -385,7 +384,7 @@ fn ballot_commands_parse_their_flags() {
     ));
     assert!(
         parse(&["anchor", "--height", "12"]).is_err(),
-        "the v2 finality-anchor lookup is retired"
+        "the finality-anchor lookup is retired"
     );
 
     let nested = ParliamentFixture::try_parse_from([
@@ -622,8 +621,7 @@ fn checkpoint(height: u64, branch: u8) -> SumeragiFinalityCheckpoint {
     for _ in 2..=height {
         let mut header = fixture.next_header();
         header.creation_time_ms += u64::from(branch);
-        let mut block = BlockBuilder::new(header).build(Default::default());
-        NativeFinalityFixture::install_network_results(&mut block, vec![]);
+        let block = fixture.block_with_submitted_work(header);
         fixture.certify(block);
     }
     fixture.checkpoint()
@@ -1680,8 +1678,7 @@ fn finality_chain(tip_height: u64, tip_witness: &ExecWitness) -> Vec<CertifiedTe
     let mut fixture = native_fixture();
     let mut chain = vec![fixture_decision(&fixture)];
     for height in 2..=tip_height {
-        let mut block = BlockBuilder::new(fixture.next_header()).build(Default::default());
-        NativeFinalityFixture::install_network_results(&mut block, vec![]);
+        let block = fixture.block_with_submitted_work(fixture.next_header());
         if height == tip_height {
             fixture.certify_with_witness(block, tip_witness);
         } else {

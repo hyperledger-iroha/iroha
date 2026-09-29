@@ -18,32 +18,24 @@ use iroha::{
         domain::Domain,
         events::time::{ExecutionTime, TimeEventFilter},
         identifier::{
-            IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
-            IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
+            IdentifierNormalization, IdentifierPolicyId, IdentifierResolutionReceipt,
+            IdentifierResolutionReceiptPayload,
         },
-        isi::{
-            Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer,
-            identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
-            ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
-        },
+        isi::{InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer},
         nexus::UniversalAccountId,
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
-        prelude::{Action, FindAccountById, FindAssetById, Quantity, Repeats},
+        prelude::{Action, FindAssetById, Quantity, Repeats},
         query::block::prelude::FindBlocks,
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
-            RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
+            RamLfeProgramId, RamLfeReceiptAttestation,
         },
         trigger::Trigger,
     },
 };
 use iroha_crypto::{
-    BfvEvaluationKeyBundle, BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature,
-    SignatureOf, bfv_programmed_policy_commitment_with_program,
-    decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
-    derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
-    ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
-    try_bfv_programmed_public_parameters_with_program,
+    Hash, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+    identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
 use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
 use iroha_model_base::domain::DomainId;
@@ -51,10 +43,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
-use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, REAL_GENESIS_ACCOUNT_ID,
-    REAL_GENESIS_ACCOUNT_KEYPAIR,
-};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
 use rand::{RngCore, SeedableRng};
@@ -349,7 +338,6 @@ struct TransferSubmitAccount {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Realistic30TpsLoadKind {
     Transfer,
-    RamLfeEmail,
 }
 impl Realistic30TpsLoadKind {
     fn from_env() -> Result<Self> {
@@ -363,32 +351,25 @@ impl Realistic30TpsLoadKind {
         match raw.as_str() {
             "transfer" | "transfers" => Ok(Self::Transfer),
             "ram-lfe-email" | "ram_lfe_email" | "ram-lfe-emails" | "ram_lfe_emails" | "email"
-            | "emails" => Ok(Self::RamLfeEmail),
-            _ => bail!(
-                "unsupported IROHA_REALISTIC_30TPS_LOAD_KIND={raw}; expected transfer or ram-lfe-email"
+            | "emails" => bail!(
+                "ram_lfe_encryption_unavailable: encrypted RAM-LFE loads require a secure replacement profile"
             ),
+            _ => bail!("unsupported IROHA_REALISTIC_30TPS_LOAD_KIND={raw}; expected transfer"),
         }
     }
     const fn as_str(self) -> &'static str {
         match self {
             Self::Transfer => "transfer",
-            Self::RamLfeEmail => "ram-lfe-email",
         }
     }
 }
 #[derive(Clone)]
-struct RamLfeEmailLoadAccount {
+struct DiagnosticIdentifierAccount {
     id: AccountId,
     uaid: UniversalAccountId,
 }
 #[derive(Clone)]
-struct RamLfeEmailSubmitAccount {
-    id: AccountId,
-    clients: Vec<iroha::blocking::Client>,
-    uaid: UniversalAccountId,
-}
-#[derive(Clone)]
-struct RamLfeEmailPolicyContext {
+struct DiagnosticIdentifierContext {
     policy_id: IdentifierPolicyId,
     program_id: RamLfeProgramId,
     program_id_bytes: Vec<u8>,
@@ -489,89 +470,11 @@ fn realistic_ram_lfe_email_program_id() -> RamLfeProgramId {
         .parse()
         .expect("realistic RAM-LFE email program id")
 }
-fn realistic_ram_lfe_email_bfv_parameters() -> BfvParameters {
-    ram_lfe_bfv_parameters_v1()
-}
-fn realistic_ram_lfe_email_policy_bundle(
-    owner: &AccountId,
-    resolver: &KeyPair,
-) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    let policy_id = realistic_ram_lfe_email_policy_id();
-    let program_id = realistic_ram_lfe_email_program_id();
-    let secret = b"realistic-email-resolver-secret";
-    let hidden_program = default_bfv_programmed_hidden_program();
-    let program_id_bytes = norito::to_bytes(&program_id).expect("encode RAM-LFE program id");
-    let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
-        &realistic_ram_lfe_email_bfv_parameters(),
-        63,
-        secret,
-        &program_id_bytes,
-    )
-    .expect("derive RAM-LFE email public parameters");
-    let evaluation_keys = BfvEvaluationKeyBundle {
-        relinearization_key,
-        rotation_keys: Vec::new(),
-        galois_keys: Vec::new(),
-        bootstrap_key: None,
-    };
-    let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
-        public_parameters,
-        evaluation_keys,
-        &hidden_program,
-        RamLfeVerificationMode::Signed,
-        None,
-    )
-    .expect("build programmed BFV public parameters");
-    let encoded_public_parameters =
-        norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
-    let commitment = bfv_programmed_policy_commitment_with_program(
-        secret,
-        &encoded_public_parameters,
-        &hidden_program,
-    )
-    .expect("build RAM-LFE email policy commitment");
-    let program_policy = RamLfeProgramPolicy::new(
-        program_id.clone(),
-        owner.clone(),
-        RamLfeBackend::BfvProgrammedV1,
-        RamLfeVerificationMode::Signed,
-        commitment,
-        resolver.public_key().clone(),
-    )
-    .with_note("realistic RAM-LFE email identifier resolver");
-    let policy = IdentifierPolicy::new(
-        policy_id,
-        owner.clone(),
-        IdentifierNormalization::EmailAddress,
-        program_id,
-    )
-    .with_note("realistic RAM-LFE email identifier policy");
-    (policy, program_policy)
-}
-fn realistic_ram_lfe_email_policy_context(
-    policy_id: IdentifierPolicyId,
-    program_policy: &RamLfeProgramPolicy,
-) -> Result<RamLfeEmailPolicyContext> {
-    let programmed =
-        decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
-            .wrap_err("decode realistic RAM-LFE email public parameters")?;
-    let program_id_bytes = norito::to_bytes(&program_policy.program_id)
-        .wrap_err("encode realistic RAM-LFE email program id")?;
-    Ok(RamLfeEmailPolicyContext {
-        policy_id,
-        program_id: program_policy.program_id.clone(),
-        program_id_bytes,
-        program_digest: programmed.hidden_program_digest,
-        parameter_digest: programmed.parameter_digest,
-        evaluation_key_digest: programmed.evaluation_key_digest,
-        backend: program_policy.backend,
-        verification_mode: program_policy.verification_mode,
-    })
-}
-fn realistic_ram_lfe_email_accounts(
+
+fn diagnostic_identifier_accounts(
     account_count: usize,
     rng_seed: u64,
-) -> Vec<RamLfeEmailLoadAccount> {
+) -> Vec<DiagnosticIdentifierAccount> {
     (0..account_count)
         .map(|index| {
             let key_pair = checked_localnet_smoke_keypair(
@@ -584,7 +487,7 @@ fn realistic_ram_lfe_email_accounts(
                 format!("integration_tests::realistic-ram-lfe-email-uaid::{rng_seed}::{index}")
                     .as_bytes(),
             ));
-            RamLfeEmailLoadAccount { id, uaid }
+            DiagnosticIdentifierAccount { id, uaid }
         })
         .collect()
 }
@@ -657,8 +560,8 @@ fn realistic_ram_lfe_email_address(index: u64, rng_seed: u64) -> String {
         rng.next_u64() as u32,
     )
 }
-fn realistic_ram_lfe_email_receipt(
-    context: &RamLfeEmailPolicyContext,
+fn diagnostic_identifier_receipt(
+    context: &DiagnosticIdentifierContext,
     resolver: &KeyPair,
     account_id: &AccountId,
     uaid: UniversalAccountId,
@@ -723,7 +626,7 @@ fn realistic_ram_lfe_email_receipt(
         phone_retail_canonicality: None,
     }
 }
-fn expected_realistic_ram_lfe_email_claim_counts(
+fn diagnostic_identifier_route_counts(
     account_count: usize,
     tx_count: u64,
     rng_seed: u64,
@@ -795,94 +698,6 @@ fn submit_prepared_to_accept_quorum(
         "prepared transaction {:?} accepted by {accepts}/{required_accepts} required Torii endpoints; errors={errors:?}",
         payload.hash()
     )
-}
-#[allow(clippy::too_many_arguments)]
-async fn submit_ram_lfe_emails_paced(
-    tx_count: u64,
-    target_tps: u64,
-    submit_accounts: Vec<RamLfeEmailSubmitAccount>,
-    policy_context: RamLfeEmailPolicyContext,
-    resolver: KeyPair,
-    rng_seed: u64,
-    submit_parallelism: usize,
-    submit_accept_quorum: usize,
-    submitted_counter: Arc<AtomicU64>,
-) -> Result<Duration> {
-    ensure!(
-        !submit_accounts.is_empty(),
-        "submit_ram_lfe_emails_paced requires at least one account"
-    );
-    let submit_accounts = Arc::new(submit_accounts);
-    let account_count = submit_accounts.len();
-    let submit_parallelism = submit_parallelism.max(1);
-    let nanos_per_tx = 1_000_000_000_u64 / target_tps.max(1);
-    let submit_start = Instant::now();
-    let mut pending: FuturesUnordered<task::JoinHandle<Result<()>>> = FuturesUnordered::new();
-    for index in 0..tx_count {
-        let target_elapsed = Duration::from_nanos(nanos_per_tx.saturating_mul(index));
-        if let Some(target_instant) = submit_start.checked_add(target_elapsed) {
-            let now = Instant::now();
-            if target_instant > now {
-                sleep(target_instant.duration_since(now)).await;
-            }
-        }
-        let account_index = realistic_ram_lfe_email_account_index(index, account_count, rng_seed);
-        let submit_account = submit_accounts[account_index].clone();
-        let policy_context = policy_context.clone();
-        let resolver = resolver.clone();
-        let submitted_counter = Arc::clone(&submitted_counter);
-        pending.push(task::spawn_blocking(move || {
-            ensure!(
-                !submit_account.clients.is_empty(),
-                "RAM-LFE email submit account has no clients"
-            );
-            let receipt = realistic_ram_lfe_email_receipt(
-                &policy_context,
-                &resolver,
-                &submit_account.id,
-                submit_account.uaid,
-                index,
-                rng_seed,
-            );
-            let instruction: InstructionBox = ClaimIdentifier {
-                account: submit_account.id.clone(),
-                receipt,
-            }
-            .into();
-            let transaction ={
-    let account = submit_account.clients[0]
-                .account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index)))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
-            let payload =
-                iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
-            submit_prepared_to_accept_quorum(
-                &submit_account.clients,
-                &payload,
-                submit_accept_quorum,
-            )
-            .wrap_err_with(|| {
-                format!(
-                    "failed to submit paced RAM-LFE email claim instruction {index} from account index {account_index}"
-                )
-            })?;
-            submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
-            Ok(())
-        }));
-        if pending.len() >= submit_parallelism {
-            let result = pending
-                .next()
-                .await
-                .ok_or_else(|| eyre!("paced RAM-LFE email worker set unexpectedly empty"))?;
-            result.wrap_err("paced RAM-LFE email task join failed")??;
-        }
-    }
-    while let Some(result) = pending.next().await {
-        result.wrap_err("paced RAM-LFE email task join failed")??;
-    }
-    Ok(submit_start.elapsed())
 }
 #[allow(clippy::too_many_arguments)]
 async fn submit_transfers_paced(
@@ -997,33 +812,6 @@ fn verify_realistic_transfer_balances(
             account.id,
             expected_balance,
             asset.value()
-        );
-    }
-    Ok(())
-}
-fn verify_realistic_ram_lfe_email_claim_counts(
-    client: &iroha::blocking::Client,
-    accounts: &[RamLfeEmailLoadAccount],
-    tx_count: u64,
-    rng_seed: u64,
-) -> Result<()> {
-    let expected =
-        expected_realistic_ram_lfe_email_claim_counts(accounts.len(), tx_count, rng_seed);
-    for (account, expected_count) in accounts.iter().zip(expected) {
-        let stored_account = client
-            .client()
-            .query_single(FindAccountById::new(account.id.clone()))?;
-        ensure!(
-            stored_account.uaid() == Some(&account.uaid),
-            "unexpected UAID for RAM-LFE email account {}",
-            account.id
-        );
-        ensure!(
-            stored_account.opaque_ids().len() == expected_count,
-            "unexpected RAM-LFE email claim count for {}: expected {}, got {}",
-            account.id,
-            expected_count,
-            stored_account.opaque_ids().len()
         );
     }
     Ok(())
@@ -2321,11 +2109,12 @@ async fn run_realistic_30tps_localnet(
     test_name: &'static str,
     rotating_fault: Option<Realistic30TpsRotatingFaultConfig>,
 ) -> Result<()> {
-    init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
+    let load_kind = Realistic30TpsLoadKind::from_env()?;
+    init_instruction_registry();
     let duration_secs = env_or_default(
         "IROHA_REALISTIC_30TPS_DURATION_SECS",
         REALISTIC_30TPS_DURATION_SECS,
@@ -2359,11 +2148,6 @@ async fn run_realistic_30tps_localnet(
         REALISTIC_30TPS_TRANSFER_ACCOUNTS,
     );
     let transfer_accounts = configured_transfer_accounts.max(2);
-    let ram_lfe_email_accounts = env_or_default_usize(
-        "IROHA_REALISTIC_30TPS_RAM_LFE_EMAIL_ACCOUNTS",
-        configured_transfer_accounts,
-    )
-    .max(1);
     let transfer_max_amount = env_or_default(
         "IROHA_REALISTIC_30TPS_TRANSFER_MAX_AMOUNT",
         REALISTIC_30TPS_TRANSFER_MAX_AMOUNT,
@@ -2388,7 +2172,6 @@ async fn run_realistic_30tps_localnet(
         "realistic 30 TPS run requires a positive duration and TPS"
     );
     let target_blocks = realistic_target_blocks(configured_target_blocks, total_txs, block_max_txs);
-    let load_kind = Realistic30TpsLoadKind::from_env()?;
     let rotating_fault_snapshots_enabled = rotating_fault.is_some();
     let (snapshot_mode, snapshot_create_every_ms) =
         realistic_30tps_snapshot_settings(rotating_fault_snapshots_enabled);
@@ -2398,27 +2181,7 @@ async fn run_realistic_30tps_localnet(
         600_000
     };
     let transfer_asset_definition_id = realistic_transfer_asset_definition_id();
-    let transfer_load_accounts = if load_kind == Realistic30TpsLoadKind::Transfer {
-        realistic_transfer_accounts(transfer_accounts, rng_seed)
-    } else {
-        Vec::new()
-    };
-    let ram_lfe_email_load_accounts = if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-        realistic_ram_lfe_email_accounts(ram_lfe_email_accounts, rng_seed)
-    } else {
-        Vec::new()
-    };
-    let ram_lfe_email_resolver = checked_localnet_smoke_keypair(
-        format!("integration_tests::realistic-ram-lfe-email-resolver::{rng_seed}").into_bytes(),
-        Algorithm::Ed25519,
-    );
-    let ram_lfe_email_owner = (*REAL_GENESIS_ACCOUNT_ID).clone();
-    let (ram_lfe_email_policy, ram_lfe_email_program_policy) =
-        realistic_ram_lfe_email_policy_bundle(&ram_lfe_email_owner, &ram_lfe_email_resolver);
-    let ram_lfe_email_policy_context = realistic_ram_lfe_email_policy_context(
-        ram_lfe_email_policy.id.clone(),
-        &ram_lfe_email_program_policy,
-    )?;
+    let transfer_load_accounts = realistic_transfer_accounts(transfer_accounts, rng_seed);
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
     set_env_var(
@@ -2503,52 +2266,24 @@ async fn run_realistic_30tps_localnet(
             npos.into_custom_parameter(),
         )));
     }
-    match load_kind {
-        Realistic30TpsLoadKind::Transfer => {
+    {
+        builder = builder
+            .with_genesis_instruction(Register::domain(
+                Domain::new(realistic_transfer_domain_id()),
+            ))
+            .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+                transfer_asset_definition_id.clone(),
+                "Realistic Transfer Coin",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
+        for account in &transfer_load_accounts {
             builder = builder
-                .with_genesis_instruction(Register::domain(Domain::new(
-                    realistic_transfer_domain_id(),
-                )))
-                .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
-                    transfer_asset_definition_id.clone(),
-                    "Realistic Transfer Coin",
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )));
-            for account in &transfer_load_accounts {
-                builder = builder
-                    .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
-                    .with_genesis_instruction(Mint::asset_quantity(
-                        transfer_initial_balance,
-                        AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
-                    ));
-            }
-        }
-        Realistic30TpsLoadKind::RamLfeEmail => {
-            builder = builder
-                .with_genesis_instruction(
-                    Box::new(RegisterRamLfeProgramPolicy {
-                        policy: ram_lfe_email_program_policy.clone(),
-                    })
-                    .into_instruction_box(),
-                )
-                .with_genesis_instruction(
-                    Box::new(ActivateRamLfeProgramPolicy {
-                        program_id: ram_lfe_email_program_policy.program_id.clone(),
-                    })
-                    .into_instruction_box(),
-                )
-                .with_genesis_instruction(RegisterIdentifierPolicy {
-                    policy: ram_lfe_email_policy.clone(),
-                })
-                .with_genesis_instruction(ActivateIdentifierPolicy {
-                    policy_id: ram_lfe_email_policy.id.clone(),
-                });
-            for account in &ram_lfe_email_load_accounts {
-                builder = builder.with_genesis_instruction(Register::account(
-                    Account::new(account.id.clone()).with_uaid(Some(account.uaid)),
+                .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
+                .with_genesis_instruction(Mint::asset_quantity(
+                    transfer_initial_balance,
+                    AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
                 ));
-            }
         }
     }
     let result: Result<()> = async {
@@ -2564,7 +2299,7 @@ async fn run_realistic_30tps_localnet(
         let mut artifacts = ThroughputArtifacts::default();
         let run_result: Result<()> = async {
             wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-            if consensus_mode.is_npos() && load_kind == Realistic30TpsLoadKind::Transfer {
+            if consensus_mode.is_npos() {
                 fund_realistic_npos_transfer_fee_accounts(&network, &transfer_load_accounts)
                     .await
                     .wrap_err("failed to fund realistic NPoS transfer fee accounts")?;
@@ -2595,45 +2330,14 @@ async fn run_realistic_30tps_localnet(
                 submit_batch: target_tps,
                 submit_parallelism: submit_parallelism as u64,
                 queue_soft_limit,
-                payload_bytes: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-                    realistic_ram_lfe_email_address(0, rng_seed).len() as u64
-                } else {
-                    0
-                },
+                payload_bytes: 0,
                 load_kind: load_kind.as_str().to_owned(),
-                transfer_accounts: if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_accounts as u64
-                } else {
-                    0
-                },
-                transfer_initial_balance: if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_initial_balance
-                } else {
-                    0
-                },
-                transfer_max_amount: if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_max_amount
-                } else {
-                    0
-                },
-                ram_lfe_email_accounts: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-                    ram_lfe_email_accounts as u64
-                } else {
-                    0
-                },
-                ram_lfe_email_policy: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-                    ram_lfe_email_policy.id.to_string()
-                } else {
-                    String::new()
-                },
-                ram_lfe_program: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-                    ram_lfe_email_program_policy.program_id.to_string()
-                } else {
-                    String::new()
-                },
-            rng_seed,
-            snapshot_mode: snapshot_mode.to_owned(),
-            snapshot_create_every_ms,
+                transfer_accounts: transfer_accounts as u64,
+                transfer_initial_balance,
+                transfer_max_amount,
+                rng_seed,
+                snapshot_mode: snapshot_mode.to_owned(),
+                snapshot_create_every_ms,
             });
             let mut fault_controller = if let Some(config) = rotating_fault {
                 let mut controller = Realistic30TpsRotatingFaultController::new(
@@ -2660,80 +2364,40 @@ async fn run_realistic_30tps_localnet(
                     0
                 },
             );
-            let submit_handle = match load_kind {
-                Realistic30TpsLoadKind::Transfer => {
-                    let submit_accounts: Vec<_> = transfer_load_accounts
-                        .iter()
-                        .enumerate()
-                        .map(|(index, account)| {
-                            let peer_count = network.peers().len();
-                            TransferSubmitAccount {
-                                id: account.id.clone(),
-                                clients: (0..peer_count)
-                                    .map(|offset| {
-                                        let peer = &network.peers()[(index + offset) % peer_count];
-                                        peer.client_for(
-                                            &account.id,
-                                            account.key_pair.private_key().clone(),
-                                        )
-                                    })
-                                    .collect(),
-                            }
-                        })
-                        .collect();
-                    tokio::spawn(submit_transfers_paced(
-                        total_txs,
-                        target_tps,
-                        submit_accounts,
-                        transfer_asset_definition_id.clone(),
-                        transfer_max_amount,
-                        rng_seed,
-                        submit_parallelism,
-                        submit_accept_quorum,
-                        submitted_for_task,
-                    ))
-                }
-                Realistic30TpsLoadKind::RamLfeEmail => {
-                    // ClaimIdentifier accepts the policy owner as authority; using it here keeps
-                    // the generated UAID-bearing accounts from needing space-directory lane
-                    // bindings in this local soak harness.
-                    let policy_owner_private_key =
-                        REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone();
-                    let submit_accounts: Vec<_> = ram_lfe_email_load_accounts
-                        .iter()
-                        .enumerate()
-                        .map(|(index, account)| {
-                            let peer_count = network.peers().len();
-                            RamLfeEmailSubmitAccount {
-                                id: account.id.clone(),
-                                clients: (0..peer_count)
-                                    .map(|offset| {
-                                        let peer = &network.peers()[(index + offset) % peer_count];
-                                        peer.client_for(
-                                            &ram_lfe_email_owner,
-                                            policy_owner_private_key.clone(),
-                                        )
-                                    })
-                                    .collect(),
-                                uaid: account.uaid,
-                            }
-                        })
-                        .collect();
-                    tokio::spawn(submit_ram_lfe_emails_paced(
-                        total_txs,
-                        target_tps,
-                        submit_accounts,
-                        ram_lfe_email_policy_context.clone(),
-                        ram_lfe_email_resolver.clone(),
-                        rng_seed,
-                        submit_parallelism,
-                        submit_accept_quorum,
-                        submitted_for_task,
-                    ))
-                }
+            let submit_handle = {
+                let submit_accounts: Vec<_> = transfer_load_accounts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, account)| {
+                        let peer_count = network.peers().len();
+                        TransferSubmitAccount {
+                            id: account.id.clone(),
+                            clients: (0..peer_count)
+                                .map(|offset| {
+                                    let peer = &network.peers()[(index + offset) % peer_count];
+                                    peer.client_for(
+                                        &account.id,
+                                        account.key_pair.private_key().clone(),
+                                    )
+                                })
+                                .collect(),
+                        }
+                    })
+                    .collect();
+                tokio::spawn(submit_transfers_paced(
+                    total_txs,
+                    target_tps,
+                    submit_accounts,
+                    transfer_asset_definition_id.clone(),
+                    transfer_max_amount,
+                    rng_seed,
+                    submit_parallelism,
+                    submit_accept_quorum,
+                    submitted_for_task,
+                ))
             };
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, signed_block_cadence_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, signed_block_cadence_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
@@ -2742,28 +2406,9 @@ async fn run_realistic_30tps_localnet(
                 block_cadence_ms,
                 block_max_txs,
                 load_kind.as_str(),
-                if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_accounts
-                } else {
-                    0
-                },
-                if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_initial_balance
-                } else {
-                    0
-                },
-                if load_kind == Realistic30TpsLoadKind::Transfer {
-                    transfer_max_amount
-                } else {
-                    0
-                },
-                if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
-                    ram_lfe_email_accounts
-                } else {
-                    0
-                },
-                ram_lfe_email_policy.id,
-                ram_lfe_email_program_policy.program_id,
+                transfer_accounts,
+                transfer_initial_balance,
+                transfer_max_amount,
                 submit_parallelism,
                 submit_accept_quorum,
                 queue_soft_limit,
@@ -3173,8 +2818,7 @@ async fn run_realistic_30tps_localnet(
                 max_rejected == 0,
                 "transactions were rejected during realistic localnet run: max_rejected={max_rejected}"
             );
-            match load_kind {
-                Realistic30TpsLoadKind::Transfer => {
+            {
                     verify_realistic_transfer_balances(
                         &network.client(),
                         &transfer_asset_definition_id,
@@ -3186,16 +2830,6 @@ async fn run_realistic_30tps_localnet(
                     )
                     .wrap_err("realistic transfer balances did not match submitted random graph")?;
                 }
-                Realistic30TpsLoadKind::RamLfeEmail => {
-                    verify_realistic_ram_lfe_email_claim_counts(
-                        &network.client(),
-                        &ram_lfe_email_load_accounts,
-                        total_txs,
-                        rng_seed,
-                    )
-                    .wrap_err("realistic RAM-LFE email claim counts did not match submitted route")?;
-                }
-            }
             Ok(())
         }
         .await;
@@ -3308,32 +2942,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 Duration::from_secs(45),
             )
             .await?;
-            let routing_deadline = Instant::now() + Duration::from_secs(45);
-            let mut observed_cross_lane_routing = false;
-            while Instant::now() < routing_deadline {
-                let statuses = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-                observed_cross_lane_routing = statuses.iter().any(|status| {
-                    status
-                        .lane_commitments
-                        .iter()
-                        .any(|commitment| commitment.lane_id.as_u32() != 0)
-                        || status
-                            .dataspace_commitments
-                            .iter()
-                            .any(|commitment| commitment.dataspace_id.as_u64() != 0)
-
-                });
-                if observed_cross_lane_routing {
-                    break;
-                }
-                sleep(Duration::from_millis(200)).await;
-            }
-            if !observed_cross_lane_routing {
-                eprintln!(
-                    "cross-lane probes were accepted but no native lane or dataspace commitments appeared within {:?}; continuing with status-endpoint decode coverage only",
-                    Duration::from_secs(45)
-                );
-            }
         } else {
             eprintln!(
                 "cross-lane route bindings stayed unavailable within {:?}; continuing with status-endpoint decode coverage only",
@@ -3345,14 +2953,16 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .await
             .wrap_err("join operator-signed Sumeragi status JSON request")?
             .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
-        let mode_tag = payload
-            .get("mode_tag")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let status: iroha_data_model::sumeragi::SumeragiStatus =
+            norito::json::from_value(payload).wrap_err("decode the current native status DTO")?;
         ensure!(
-            !mode_tag.is_empty(),
-            "decoded sumeragi status JSON payload has empty mode_tag"
+            status.protocol_version == iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            "status must report the first-release native protocol"
         );
+        ensure!(status.committed_height >= 2, "status lost the observed committed height");
+        ensure!(status.applied_height <= status.committed_height,
+            "status reports application beyond native commitment");
+        ensure!(status.instance != [0; 32], "native status has an empty instance identity");
         network.shutdown().await;
         Ok(())
     }
@@ -3936,9 +3546,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             transfer_accounts: 0,
             transfer_initial_balance: 0,
             transfer_max_amount: 0,
-            ram_lfe_email_accounts: 0,
-            ram_lfe_email_policy: String::new(),
-            ram_lfe_program: String::new(),
+
             rng_seed,
             snapshot_mode: "disabled".to_owned(),
             snapshot_create_every_ms: 0,
@@ -4487,9 +4095,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             transfer_accounts: 0,
             transfer_initial_balance: 0,
             transfer_max_amount: 0,
-            ram_lfe_email_accounts: 0,
-            ram_lfe_email_policy: String::new(),
-            ram_lfe_program: String::new(),
+
             rng_seed,
             snapshot_mode: "disabled".to_owned(),
             snapshot_create_every_ms: 0,
@@ -5292,7 +4898,7 @@ async fn fail_on_sandbox_skip_defaults_to_false() {
     remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
 }
 #[tokio::test]
-async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() {
+async fn realistic_30tps_load_kind_rejects_encryption_and_defaults_to_transfer() {
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -5302,16 +4908,29 @@ async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() 
         Realistic30TpsLoadKind::from_env().expect("default load kind"),
         Realistic30TpsLoadKind::Transfer
     );
-    set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "ram-lfe-email");
-    assert_eq!(
-        Realistic30TpsLoadKind::from_env().expect("email load kind"),
-        Realistic30TpsLoadKind::RamLfeEmail
-    );
-    set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "emails");
-    assert_eq!(
-        Realistic30TpsLoadKind::from_env().expect("email alias load kind"),
-        Realistic30TpsLoadKind::RamLfeEmail
-    );
+    for value in ["transfer", "transfers"] {
+        set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", value);
+        assert_eq!(
+            Realistic30TpsLoadKind::from_env().expect("transfer load"),
+            Realistic30TpsLoadKind::Transfer
+        );
+    }
+    for value in [
+        "ram-lfe-email",
+        "ram_lfe_email",
+        "ram-lfe-emails",
+        "ram_lfe_emails",
+        "email",
+        "emails",
+    ] {
+        set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", value);
+        assert!(
+            Realistic30TpsLoadKind::from_env()
+                .expect_err("encrypted load unavailable")
+                .to_string()
+                .starts_with("ram_lfe_encryption_unavailable:")
+        );
+    }
     set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "unsupported");
     assert!(Realistic30TpsLoadKind::from_env().is_err());
     remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
@@ -6002,24 +5621,35 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
     }
 }
 #[test]
-fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
+fn diagnostic_identifier_receipt_preserves_signature_and_account_bindings() {
     let resolver = checked_localnet_smoke_keypair(
         b"integration_tests::realistic-ram-lfe-email-receipt-test".to_vec(),
         Algorithm::Ed25519,
     );
-    let owner = (*ALICE_ID).clone();
-    let (policy, program_policy) = realistic_ram_lfe_email_policy_bundle(&owner, &resolver);
-    let context = realistic_ram_lfe_email_policy_context(policy.id.clone(), &program_policy)
-        .expect("policy context");
-    let account = realistic_ram_lfe_email_accounts(1, 9)
-        .pop()
-        .expect("account");
+    // Synthetic metadata exercises typed signature bindings only; it is never
+    // registered, submitted, or presented as successful encrypted execution.
+    let program_id = realistic_ram_lfe_email_program_id();
+    let context = DiagnosticIdentifierContext {
+        policy_id: realistic_ram_lfe_email_policy_id(),
+        program_id_bytes: norito::to_bytes(&program_id).expect("encode program id"),
+        program_id,
+        program_digest: Hash::new(b"diagnostic program"),
+        parameter_digest: Hash::new(b"diagnostic parameters"),
+        evaluation_key_digest: Hash::new(b"diagnostic evaluation key"),
+        backend: RamLfeBackend::BfvProgrammedV1,
+        verification_mode: RamLfeVerificationMode::Signed,
+    };
+    let account = diagnostic_identifier_accounts(1, 9).pop().expect("account");
     let receipt =
-        realistic_ram_lfe_email_receipt(&context, &resolver, &account.id, account.uaid, 7, 9);
+        diagnostic_identifier_receipt(&context, &resolver, &account.id, account.uaid, 7, 9);
+    assert_ne!(
+        receipt.payload.opening.payload.opened_output_hash,
+        receipt.payload.execution.output_ciphertext_hash
+    );
     receipt
         .verify(resolver.public_key())
         .expect("receipt signature should verify");
-    assert_eq!(receipt.payload.policy_id, policy.id);
+    assert_eq!(receipt.payload.policy_id, context.policy_id);
     assert_eq!(receipt.payload.account_id, account.id);
     assert_eq!(receipt.payload.uaid, account.uaid);
     assert!(receipt.phone_retail_canonicality.is_none());
@@ -6042,14 +5672,11 @@ fn localnet_smoke_fixture_keypairs_use_checked_seed_derivation() {
 }
 #[test]
 fn realistic_ram_lfe_email_claim_counts_are_deterministic() {
-    let first = expected_realistic_ram_lfe_email_claim_counts(4, 25, 123);
-    let second = expected_realistic_ram_lfe_email_claim_counts(4, 25, 123);
+    let first = diagnostic_identifier_route_counts(4, 25, 123);
+    let second = diagnostic_identifier_route_counts(4, 25, 123);
     assert_eq!(first, second);
     assert_eq!(first.iter().sum::<usize>(), 25);
-    assert_ne!(
-        first,
-        expected_realistic_ram_lfe_email_claim_counts(4, 25, 124)
-    );
+    assert_ne!(first, diagnostic_identifier_route_counts(4, 25, 124));
 }
 #[test]
 fn write_throughput_artifacts_writes_error_summary() {
@@ -7778,9 +7405,7 @@ struct ThroughputArtifactRecipe {
     transfer_accounts: u64,
     transfer_initial_balance: u64,
     transfer_max_amount: u64,
-    ram_lfe_email_accounts: u64,
-    ram_lfe_email_policy: String,
-    ram_lfe_program: String,
+
     rng_seed: u64,
     snapshot_mode: String,
     snapshot_create_every_ms: u64,
@@ -8043,18 +7668,6 @@ fn write_throughput_artifacts(
         recipe_map.insert(
             "transfer_max_amount".to_string(),
             Value::from(recipe.transfer_max_amount),
-        );
-        recipe_map.insert(
-            "ram_lfe_email_accounts".to_string(),
-            Value::from(recipe.ram_lfe_email_accounts),
-        );
-        recipe_map.insert(
-            "ram_lfe_email_policy".to_string(),
-            Value::from(recipe.ram_lfe_email_policy.clone()),
-        );
-        recipe_map.insert(
-            "ram_lfe_program".to_string(),
-            Value::from(recipe.ram_lfe_program.clone()),
         );
         recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
         recipe_map.insert(

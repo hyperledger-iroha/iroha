@@ -3990,7 +3990,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
             .contains("operator signing key is required before request dispatch")
     );
     // The shared mock's default also covers the wider Python SDK fixture shape.
-    // This command consumes Torii's exact, fail-closed authoritative V2 schema.
+    // This command consumes Torii's exact, fail-closed authoritative Sumeragi status schema.
     configure_sumeragi(
         mock.base_url(),
         &norito::json!({

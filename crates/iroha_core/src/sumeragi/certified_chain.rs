@@ -255,7 +255,7 @@ impl CommittedBlock {
 
     /// The certified block id `H(CERTIFIED_BLOCK_ID_TAG ‖ core_hash ‖ R)`: what a `CommitQC` of
     /// this height certifies, as one identifier. Signer floors and proofs pin it in their
-    /// `context_id` fields (the data-model type keeps its v2 name until the wire cleanup).
+    /// `context_id` fields (the data-model field keeps that name until the wire cleanup).
     #[must_use]
     pub fn id(&self) -> HeightContextId {
         certified_block_id(&self.core_hash, &self.result)

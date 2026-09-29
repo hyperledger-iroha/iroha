@@ -94,13 +94,17 @@ public sealed partial class ToriiClientTests
     }
 
     [Theory]
-    [InlineData("onboarding_prepared")]
-    [InlineData("faucet_prepared")]
-    public void PreparedProtocolRejectsSignedOrdinaryAdmission(string name)
+    [InlineData("onboarding_prepared", 0U)]
+    [InlineData("onboarding_prepared", 1U)]
+    [InlineData("onboarding_prepared", 2U)]
+    [InlineData("faucet_prepared", 0U)]
+    [InlineData("faucet_prepared", 1U)]
+    [InlineData("faucet_prepared", 2U)]
+    public void PreparedProtocolRejectsSignedRetiredAdmissionLayout(string name, uint retiredIntent)
     {
         var vector = PreparedTransactionSignatureVector(name);
         var original = vector.GetProperty("response");
-        var node = ResignPreparedFixture(name, admissionIntent: TransactionAdmissionIntent.Ordinary);
+        var node = ResignPreparedFixture(name, retiredAdmissionIntent: retiredIntent);
         AssertPreparedFixtureEnvelopeSignature(name, node);
         var network = PreparedTransactionSignatureNetworkId(vector);
         if (name == "onboarding_prepared")
@@ -112,7 +116,7 @@ public sealed partial class ToriiClientTests
                     prepared, receipt.Body.Request, receipt, prepared.Binding,
                     prepared.FeePayment, vector.GetProperty("signer_account_id").GetString()!,
                     network, PreparedOnboardingBodyEncoder));
-            Assert.Contains("QueuePlanSynced admission", error.Message, StringComparison.Ordinal);
+            Assert.Contains("canonical", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         else
         {
@@ -122,7 +126,7 @@ public sealed partial class ToriiClientTests
                 ToriiClient.VerifyAccountFaucetPreparedTransactionV1(
                     prepared, originalFaucet.Claim, prepared.Binding, prepared.FeePayment,
                     FaucetPolicy(vector, originalFaucet), network));
-            Assert.Contains("QueuePlanSynced admission", error.Message, StringComparison.Ordinal);
+            Assert.Contains("canonical", error.Message, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -133,8 +137,8 @@ public sealed partial class ToriiClientTests
     {
         var original = PreparedTransactionSignatureVector(name).GetProperty("response");
         var fields = PreparedFixturePayloadFields(original);
-        var metadata = ReadPreparedFixtureMetadata(fields[8]);
-        Assert.Equal(fields[8], EncodePreparedFixtureMetadata(metadata));
+        var metadata = ReadPreparedFixtureMetadata(fields[7]);
+        Assert.Equal(fields[7], EncodePreparedFixtureMetadata(metadata));
         Assert.Equal(name == "faucet_prepared"
                 ? new[] { "prepared_operation", "prepared_operation_binding", "prepared_semantic_hash", "taira_faucet_claim_marker_version" }
                 : new[] { "prepared_operation", "prepared_operation_binding", "prepared_semantic_hash" },
@@ -304,29 +308,33 @@ public sealed partial class ToriiClientTests
         ToriiPreparedOperationBindingV1? binding = null,
         Action<Dictionary<string, JsonNode?>>? mutateMetadata = null,
         ulong? creation = null, byte[]? ttl = null,
-        TransactionAdmissionIntent? admissionIntent = null)
+        uint? retiredAdmissionIntent = null)
     {
         var vector = PreparedTransactionSignatureVector(name);
         var original = vector.GetProperty("response");
         var result = JsonNode.Parse(original.GetRawText())!.AsObject();
         var fields = PreparedFixturePayloadFields(original);
-        var metadata = ReadPreparedFixtureMetadata(fields[8]);
+        var metadata = ReadPreparedFixtureMetadata(fields[7]);
         if (binding is not null)
         {
             result["binding"] = JsonSerializer.SerializeToNode(binding);
             metadata["prepared_operation_binding"] = JsonSerializer.SerializeToNode(binding);
         }
         mutateMetadata?.Invoke(metadata);
-        fields[8] = EncodePreparedFixtureMetadata(metadata);
+        fields[7] = EncodePreparedFixtureMetadata(metadata);
         if (creation is { } time) fields[2] = PreparedU64(time);
         if (ttl is not null) fields[4] = ttl;
-        if (admissionIntent is { } intent)
-        {
-            fields[7] = new byte[sizeof(uint)];
-            BinaryPrimitives.WriteUInt32LittleEndian(fields[7], (uint)intent);
-        }
         var payloadWriter = new CanonicalNoritoWriter();
-        foreach (var field in fields) payloadWriter.WriteField(field);
+        for (var index = 0; index < fields.Length; index++)
+        {
+            if (index == 7 && retiredAdmissionIntent is { } retiredIntent)
+            {
+                var retiredField = new byte[sizeof(uint)];
+                BinaryPrimitives.WriteUInt32LittleEndian(retiredField, retiredIntent);
+                payloadWriter.WriteField(retiredField);
+            }
+            payloadWriter.WriteField(fields[index]);
+        }
         var payload = payloadWriter.ToArray();
         var seed = PreparedFixtureSeed(name);
         Assert.Equal(PreparedFixturePublicKey(vector), Ed25519Signer.GetPublicKey(seed));
@@ -364,7 +372,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(new byte[] { 0 }, reader.ReadField("multisig").ToArray());
         reader.RequireEnd();
         var payloadReader = new CanonicalNoritoReader(payload, "fixture payload", nameof(response));
-        var fields = new byte[10][];
+        var fields = new byte[9][];
         for (var index = 0; index < fields.Length; index++) fields[index] = payloadReader.ReadField($"field[{index}]").ToArray();
         payloadReader.RequireEnd();
         return fields;

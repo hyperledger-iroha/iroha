@@ -13,12 +13,7 @@ use super::{
         ZkX509FixedAlgebraicAtomV1, ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1,
         ZkX509FixedAlgebraicScheduleBuilderV1, ZkX509FixedAlgebraicScheduleV1,
     },
-    merkle::{
-        ZK_X509_CA_SPKI_DER_BYTES_V1, ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1,
-        crl_commitment_preimage_v1, crl_issuer_spki_preimage_v1,
-    },
     profile::ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
-    rfc5280_stark::ZkX509Rfc5280OutputRoleV1,
     sha_call_bus_stark::{
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, ZK_X509_SHA_CA_CALL_COUNT_V1,
         ZK_X509_SHA_CA_LEAF_CALL_V1, ZK_X509_SHA_CALL_COUNT_V1,
@@ -26,8 +21,9 @@ use super::{
         ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1, ZK_X509_SHA_FIXED_ROLE_V1,
         ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1, ZK_X509_SHA_FIXED_SEGMENT_LAST_V1,
         ZK_X509_SHA_FIXED_SLOT_V1, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1,
-        ZK_X509_SHA_SEGMENT_COUNT_V1, ZK_X509_SHA_SEGMENT_ROWS_V1, ZkX509ShaCallManifestV1,
-        ZkX509ShaCallPublicShapeV1, ZkX509ShaCallRoleV1, ZkX509ShaCallScheduleV1,
+        ZK_X509_SHA_SEGMENT_COUNT_V1, ZK_X509_SHA_SEGMENT_ROWS_V1, ZkX509ShaCallBusStarkErrorV1,
+        ZkX509ShaCallManifestV1, ZkX509ShaCallPublicShapeV1, ZkX509ShaCallRoleV1,
+        ZkX509ShaCallScheduleV1, ZkX509ShaRfcConsumerChannelsV1, sha_rfc_consumer_channels_v1,
     },
     sha_word_stark::{
         SHA_WORD_CAPACITY_BLOCK_CONTINUE_V1, SHA_WORD_CAPACITY_BLOCK_FIRST_V1,
@@ -231,14 +227,6 @@ impl From<ZkX509FixedAlgebraicErrorV1> for ZkX509ShaFixedAlgebraicErrorV1 {
     fn from(_: ZkX509FixedAlgebraicErrorV1) -> Self {
         Self::Algebraic
     }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ShaRfcConsumerV1 {
-    role: ZkX509Rfc5280OutputRoleV1,
-    message_channel: u32,
-    length_channel: Option<u32>,
-    message_prefix_bytes: usize,
-    message_capacity_bytes: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NonzeroPointV1 {
@@ -873,75 +861,13 @@ fn exact_message_length_v1(role: ZkX509ShaCallRoleV1) -> bool {
 fn rfc_consumer_v1(
     manifest: ZkX509ShaCallManifestV1,
     shape: ZkX509ShaCallPublicShapeV1,
-) -> Result<Option<ShaRfcConsumerV1>, ZkX509ShaFixedAlgebraicErrorV1> {
-    if shape.disclosed_attributes > 4 {
-        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
-    }
-    let projection_channels = 5_usize
-        .checked_add(
-            shape
-                .disclosed_attributes
-                .checked_mul(2)
-                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
-        )
-        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-    let channel = |offset: usize| {
-        projection_channels
-            .checked_add(offset)
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)
-    };
-    let consumer = match manifest.role {
-        ZkX509ShaCallRoleV1::CertificateTbs(slot) if slot < 3 => {
-            let pair = usize::from(slot)
-                .checked_mul(2)
-                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-            Some(ShaRfcConsumerV1 {
-                role: ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
-                message_channel: channel(pair)?,
-                length_channel: Some(channel(pair + 1)?),
-                message_prefix_bytes: 0,
-                message_capacity_bytes: 4_096,
-            })
-        }
-        ZkX509ShaCallRoleV1::CrlTbs => Some(ShaRfcConsumerV1 {
-            role: ZkX509Rfc5280OutputRoleV1::CrlTbsP256Message,
-            message_channel: channel(16)?,
-            length_channel: Some(channel(17)?),
-            message_prefix_bytes: 0,
-            message_capacity_bytes: 4_096,
-        }),
-        ZkX509ShaCallRoleV1::CrlCommitment => {
-            let frame = crl_commitment_preimage_v1(&[0])
-                .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
-            Some(ShaRfcConsumerV1 {
-                role: ZkX509Rfc5280OutputRoleV1::CrlCommitment,
-                message_channel: channel(18)?,
-                length_channel: Some(channel(19)?),
-                message_prefix_bytes: frame
-                    .len()
-                    .checked_sub(1)
-                    .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?,
-                message_capacity_bytes: ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1,
-            })
-        }
-        ZkX509ShaCallRoleV1::CrlIssuerSpki => {
-            let frame = crl_issuer_spki_preimage_v1(&[0; ZK_X509_CA_SPKI_DER_BYTES_V1])
-                .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
-            Some(ShaRfcConsumerV1 {
-                role: ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
-                message_channel: channel(22)?,
-                length_channel: None,
-                message_prefix_bytes: frame
-                    .len()
-                    .checked_sub(ZK_X509_CA_SPKI_DER_BYTES_V1)
-                    .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?,
-                message_capacity_bytes: ZK_X509_CA_SPKI_DER_BYTES_V1,
-            })
-        }
-        _ => None,
-    };
-    Ok(consumer)
+) -> Result<Option<ZkX509ShaRfcConsumerChannelsV1>, ZkX509ShaFixedAlgebraicErrorV1> {
+    sha_rfc_consumer_channels_v1(manifest.call, manifest.role, shape.disclosed_attributes).map_err(
+        |error| match error {
+            ZkX509ShaCallBusStarkErrorV1::Resource => ZkX509ShaFixedAlgebraicErrorV1::Resource,
+            _ => ZkX509ShaFixedAlgebraicErrorV1::Topology,
+        },
+    )
 }
 fn emit_common_call_atoms_v1(
     output: &mut StructuralBuilderV1,
@@ -950,7 +876,7 @@ fn emit_common_call_atoms_v1(
     start: usize,
     local_rows: usize,
     memory_rows: usize,
-    consumer: Option<ShaRfcConsumerV1>,
+    consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
 ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
     let logical_rows = local_rows
         .checked_add(memory_rows)
@@ -1134,7 +1060,7 @@ fn emit_rfc_message_event_v1(
     segment: usize,
     row: usize,
     input_word: usize,
-    consumer: ShaRfcConsumerV1,
+    consumer: ZkX509ShaRfcConsumerChannelsV1,
 ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
     let raw_end = consumer
         .message_prefix_bytes
@@ -1177,7 +1103,7 @@ fn emit_word_row_v1(
     circuit: &ZkX509Sha256WordCircuitV1,
     input_indices: &[Option<usize>],
     manifest: ZkX509ShaCallManifestV1,
-    consumer: Option<ShaRfcConsumerV1>,
+    consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
     segment: usize,
     row: usize,
     address: usize,
@@ -2055,7 +1981,7 @@ fn emit_rfc_length_events_v1(
     output: &mut StructuralBuilderV1,
     segment: usize,
     end: usize,
-    consumer: ShaRfcConsumerV1,
+    consumer: ZkX509ShaRfcConsumerChannelsV1,
 ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
     let Some(length_channel) = consumer.length_channel else {
         return Ok(());
@@ -3240,6 +3166,57 @@ mod tests {
         }
         reconstructed
     }
+    #[test]
+    fn rfc_mapping_rejects_call_role_substitution_before_schedule_construction() {
+        let shape = ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        };
+        let calls = ZkX509ShaCallScheduleV1::new(shape).unwrap();
+        let mut issuer = calls.calls()[12];
+        assert!(rfc_consumer_v1(issuer, shape).unwrap().is_some());
+        issuer.call = 3;
+        assert_eq!(
+            rfc_consumer_v1(issuer, shape),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        issuer.call = u8::MAX;
+        assert_eq!(
+            rfc_consumer_v1(issuer, shape),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+    }
+
+    #[test]
+    fn issuer_rfc_event_columns_match_native_schedule_at_every_call_row() {
+        for disclosed_attributes in 0..=4 {
+            let shape = ZkX509ShaCallPublicShapeV1 {
+                disclosed_attributes,
+            };
+            let provider = ZkX509ShaBatchFixedProviderV1::new_v1(shape).unwrap();
+            let schedule = unpinned_schedule(disclosed_attributes);
+            let issuer = provider.schedule().calls()[12];
+            let segment = issuer.first_logical_row / ZK_X509_SHA_SEGMENT_ROWS_V1;
+            let start = issuer.first_logical_row % ZK_X509_SHA_SEGMENT_ROWS_V1;
+            for stream in 0..4 {
+                let first = SHA_FIXED_RFC_STREAMS_V1 + stream * SHA_FIXED_RFC_STREAM_STRIDE_V1;
+                let actual = reconstruct_native_chunk(
+                    &schedule,
+                    segment * ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 + first,
+                    SHA_FIXED_RFC_STREAM_STRIDE_V1,
+                );
+                for row in start..start + issuer.maximum_logical_rows() {
+                    let expected = provider.fixed_row_v1(segment, row).unwrap();
+                    assert_eq!(
+                        &actual[row * SHA_FIXED_RFC_STREAM_STRIDE_V1
+                            ..(row + 1) * SHA_FIXED_RFC_STREAM_STRIDE_V1],
+                        &expected[first..first + SHA_FIXED_RFC_STREAM_STRIDE_V1],
+                        "issuer RFC event mismatch: shape {disclosed_attributes}, stream {stream}, row {row}",
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn structural_rows_match_closed_provider_at_all_boundaries() {
         for disclosed_attributes in 0..=4 {

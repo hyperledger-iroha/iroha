@@ -350,7 +350,7 @@ pub fn validate_prepared_genesis_bundle(
 /// # Errors
 ///
 /// Returns an error for duplicate validators, an invalid BLS proof of possession,
-/// or a committee outside the supported exact Sumeragi v2 geometry.
+/// or a committee outside the supported exact Sumeragi geometry.
 pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
     let mut validator_pops = BTreeMap::new();
     for transaction in block.external_transactions() {
@@ -382,7 +382,7 @@ pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<Pub
     }
     if !is_valid_committee_size(validator_pops.len()) {
         return Err(eyre!(
-            "signed genesis validator roster must be an exact Sumeragi v2 `3f + 1` committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} (saw {})",
+            "signed genesis validator roster must be an exact Sumeragi `3f + 1` committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} (saw {})",
             validator_pops.len()
         ));
     }
@@ -428,7 +428,7 @@ fn validate_signed_manifest_binding(
     }
     if manifest.sumeragi_context_parameters() != signed_metadata.sumeragi_context {
         return Err(eyre!(
-            "genesis manifest Sumeragi v2 context differs from signed body"
+            "genesis manifest Sumeragi context differs from signed body"
         ));
     }
     if manifest.kagemusha_mint_finality_genesis_parameters()
@@ -562,7 +562,7 @@ pub struct RawGenesisTransaction {
     /// instructions, update topology, or configure triggers.
     #[norito(default)]
     transactions: Vec<RawGenesisTx>,
-    /// Consensus mode selected and signed by genesis. Fresh Sumeragi v2 startup consumes the
+    /// Consensus mode selected and signed by genesis. Fresh Sumeragi startup consumes the
     /// corresponding signed handshake metadata and freezes this mode into the height-one context.
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     /// First-release consensus wire protocol version.
@@ -570,7 +570,7 @@ pub struct RawGenesisTransaction {
     /// Optional typed deterministic fingerprint of consensus parameters.
     #[norito(default)]
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    /// Genesis-selected Sumeragi v2 context parameters.
+    /// Genesis-selected Sumeragi context parameters.
     ///
     /// JSON manifests must provide this explicitly. Programmatic builders put their selected
     /// profile here before signing; live nodes never infer it from local configuration.
@@ -1131,7 +1131,7 @@ pub struct NormalizedGenesis {
     pub wire_protocol_version: u32,
     /// Deterministic fingerprint of consensus parameters.
     pub consensus_fingerprint: ConsensusFingerprint,
-    /// Signed Sumeragi v2 height-context transport parameters.
+    /// Signed Sumeragi height-context transport parameters.
     pub sumeragi_context: SumeragiGenesisContextParameters,
     /// Signed networkless KAGEMUSHA mint-finality roster templates.
     pub kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
@@ -1184,7 +1184,7 @@ impl NormalizedGenesis {
         map.insert(
             "sumeragi_context".to_string(),
             norito::json::value::to_value(&self.sumeragi_context)
-                .expect("serialize Sumeragi v2 context parameters"),
+                .expect("serialize Sumeragi context parameters"),
         );
         map.insert(
             "kagemusha_mint_finality".to_string(),
@@ -1782,7 +1782,7 @@ impl RawGenesisTransaction {
         let sumeragi_context = manifest.sumeragi_context.clone();
         sumeragi_context
             .validate()
-            .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
+            .map_err(|error| eyre!("invalid signed Sumeragi context parameters: {error}"))?;
         let kagemusha_mint_finality = manifest.kagemusha_mint_finality.clone();
         kagemusha_mint_finality.validate().map_err(|error| {
             eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
@@ -1855,7 +1855,7 @@ impl RawGenesisTransaction {
             .collect::<Vec<_>>();
         if !is_valid_committee_size(topology.len()) {
             return Err(eyre!(
-                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
+                "genesis signing requires an exact Sumeragi `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
                 topology.len()
             ));
         }
@@ -2035,12 +2035,12 @@ impl RawGenesisTransaction {
             .iter()
             .flat_map(|tx| tx.instructions.iter())
     }
-    /// Return the exact Sumeragi v2 context parameters selected by this manifest.
+    /// Return the exact Sumeragi context parameters selected by this manifest.
     #[must_use]
     pub fn sumeragi_context_parameters(&self) -> SumeragiGenesisContextParameters {
         self.sumeragi_context.clone()
     }
-    /// Replace the Sumeragi v2 context parameters that will be fingerprinted
+    /// Replace the Sumeragi context parameters that will be fingerprinted
     /// and signed with this manifest.
     #[must_use]
     pub fn with_sumeragi_context_parameters(
@@ -2282,7 +2282,7 @@ impl RawGenesisTransaction {
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
         self.validate_mode_specific_consensus_parameters()?;
-        // Always recompute generated fields for the live Sumeragi v2 protocol,
+        // Always recompute generated fields for the live Sumeragi protocol,
         // so stale or externally injected handshake metadata cannot survive
         // into the signed genesis block.
         let manifest = self.with_consensus_meta();
@@ -2639,7 +2639,7 @@ impl GenesisBuilder {
         self.da_proof_policies = Some(policies);
         self
     }
-    /// Select the exact Sumeragi v2 context parameters which will be embedded
+    /// Select the exact Sumeragi context parameters which will be embedded
     /// in and signed by genesis.
     #[must_use]
     pub fn with_sumeragi_context_parameters(
@@ -2804,7 +2804,7 @@ impl GenesisBuilder {
     ///
     /// # Errors
     ///
-    /// Fails unless the signed Sumeragi v2 context parameters and separately
+    /// Fails unless the signed Sumeragi context parameters and separately
     /// provisioned KAGEMUSHA V1 Pasta roster have both been supplied.
     pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
@@ -2829,7 +2829,7 @@ impl GenesisBuilder {
             .expect("genesis builder always contains at least one transaction");
         first.parameters = Some(parameter_snapshot);
         let sumeragi_context = self.sumeragi_context.ok_or_else(|| {
-            eyre!("genesis builder requires explicit signed Sumeragi v2 context parameters")
+            eyre!("genesis builder requires explicit signed Sumeragi context parameters")
         })?;
         let kagemusha_mint_finality = self.kagemusha_mint_finality.ok_or_else(|| {
             eyre!(
@@ -3094,12 +3094,10 @@ mod tests {
             } else {
                 deterministic_test_kagemusha_mint_finality_genesis_parameters()
             };
-            self.with_sumeragi_context_parameters(
-                SumeragiGenesisContextParameters::recommended(),
-            )
-            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
-            .build_raw()
-            .expect("complete deterministic test genesis builder")
+            self.with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+                .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
+                .build_raw()
+                .expect("complete deterministic test genesis builder")
         }
     }
     fn with_test_signing_topology(mut manifest: RawGenesisTransaction) -> RawGenesisTransaction {

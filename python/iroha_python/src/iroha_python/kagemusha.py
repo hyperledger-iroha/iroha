@@ -450,7 +450,8 @@ KagemushaHardwareCredentialV1 = _define_model(
         ("lane_commitment", _FIXED32), ("hardware_epoch_id", _FIXED32),
         ("hardware_epoch_generation", _U64), ("device_public_key", _PUBLIC_KEY),
         ("device_key_reference", _FIXED32), ("issued_at_ms", _U64),
-        ("expires_at_ms", _U64), ("governance_signature", _SIGNATURE),
+        ("expires_at_ms", _U64), ("app_policy_binding_digest", _FIXED32),
+        ("governance_signature", _SIGNATURE),
     ),
     lambda value: _validate_hardware_credential(value),
 )

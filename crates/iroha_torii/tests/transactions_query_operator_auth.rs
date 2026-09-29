@@ -37,6 +37,7 @@ async fn dataspace_transaction_query_accepts_signed_and_anonymous_public_readers
     let body = norito::json::to_vec(&QueryEnvelope::default()).expect("query envelope JSON");
 
     let account_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &ALICE_ID,
         &ALICE_KEYPAIR,
         query_request("/v1/transactions/query", body.clone()),

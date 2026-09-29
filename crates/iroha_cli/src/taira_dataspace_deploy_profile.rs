@@ -13,6 +13,12 @@ pub(crate) struct ExportProfile {
     /// Independently selected canonical checked NetworkId of the retained network.
     #[arg(long, value_parser = parse_network_id)]
     network_id: NetworkId,
+    /// Explicit canonical chain ID selected by the network operator; absent from signed genesis.
+    #[arg(long)]
+    chain: iroha_model_base::chain::ChainId,
+    /// Explicit account address discriminant selected by the network operator.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    chain_discriminant: u16,
     /// Exact public SignedBlockWire genesis file.
     #[arg(long, value_name = "FILE")]
     genesis_signed: PathBuf,
@@ -51,6 +57,8 @@ struct ExportReceipt {
 
 fn derive_profile(
     network: NetworkId,
+    chain: &iroha_model_base::chain::ChainId,
+    account_chain_discriminant: u16,
     wire: &[u8],
     key_bytes: &[u8],
     peer_bytes: &[u8],
@@ -65,6 +73,8 @@ fn derive_profile(
     let peers: Vec<DeploymentPeerV1> =
         json::from_slice(peer_bytes).wrap_err("invalid public deployment peer array")?;
     let profile = DeploymentTrustV1 {
+        chain: chain.clone(),
+        account_chain_discriminant,
         genesis_public_key: key,
         genesis_signed_wire_hex: hex::encode(wire),
         peers,
@@ -74,16 +84,16 @@ fn derive_profile(
 }
 
 #[cfg(unix)]
-struct PublicInput {
+pub(crate) struct PublicInput {
     path: PathBuf,
     file: File,
     snapshot: fs::Metadata,
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[cfg(unix)]
 impl PublicInput {
-    fn read(path: &Path) -> Result<Self> {
+    pub(crate) fn read(path: &Path) -> Result<Self> {
         use rustix::fs::{Mode, OFlags};
         use std::os::unix::fs::MetadataExt as _;
         let mut file = File::from(rustix::fs::open(
@@ -114,7 +124,7 @@ impl PublicInput {
         Ok(input)
     }
 
-    fn revalidate(&self) -> Result<()> {
+    pub(crate) fn revalidate(&self) -> Result<()> {
         require(
             same_file_snapshot(&self.snapshot, &self.file.metadata()?)
                 && same_file_snapshot(&self.snapshot, &fs::symlink_metadata(&self.path)?)
@@ -208,11 +218,18 @@ impl ExportProfile {
         let wire = PublicInput::read(&self.genesis_signed)?;
         let key = PublicInput::read(&self.genesis_public_key)?;
         let peers = PublicInput::read(&self.peers)?;
-        let profile = derive_profile(self.network_id, &wire.bytes, &key.bytes, &peers.bytes)?;
+        let profile = derive_profile(
+            self.network_id,
+            &self.chain,
+            self.chain_discriminant,
+            &wire.bytes,
+            &key.bytes,
+            &peers.bytes,
+        )?;
         let mut bytes = json::to_vec(&profile)?;
         bytes.push(b'\n');
         let receipt = ExportReceipt {
-            schema: "iroha.taira.dataspace-deploy.profile-export.v1",
+            schema: "iroha.dataspace.profile-export.v1",
             network_id: self.network_id,
             profile: self.output.to_string_lossy().into_owned(),
             profile_sha256: hex::encode(Sha256::digest(&bytes)),
@@ -252,6 +269,8 @@ mod tests {
         let trust = finality::test_trust();
         let args = ExportProfile {
             network_id: finality::test_network_id(),
+            chain: trust.chain.clone(),
+            chain_discriminant: trust.account_chain_discriminant,
             genesis_signed: directory.path().join("genesis.signed.nrt"),
             genesis_public_key: directory.path().join("genesis.public_key"),
             peers: directory.path().join("peers.json"),
@@ -275,8 +294,7 @@ mod tests {
         [
             "iroha",
             "--machine",
-            "taira",
-            "dataspace-deploy",
+            "dataspace",
             "export-profile",
             "--network-id",
         ]
@@ -284,6 +302,10 @@ mod tests {
         .map(str::to_owned)
         .chain([
             args.network_id.to_string(),
+            "--chain".into(),
+            args.chain.to_string(),
+            "--chain-discriminant".into(),
+            args.chain_discriminant.to_string(),
             "--genesis-signed".into(),
             args.genesis_signed.display().to_string(),
             "--genesis-public-key".into(),
@@ -345,20 +367,80 @@ mod tests {
         let wrong = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             Hash::new(b"wrong network"),
         ));
-        assert!(derive_profile(wrong, &wire, &key, &peers).is_err());
+        assert!(
+            derive_profile(
+                wrong,
+                &args.chain,
+                args.chain_discriminant,
+                &wire,
+                &key,
+                &peers
+            )
+            .is_err()
+        );
         let wrong_key = KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519)
             .unwrap()
             .public_key()
             .to_string();
-        assert!(derive_profile(args.network_id, &wire, wrong_key.as_bytes(), &peers).is_err());
-        assert!(derive_profile(args.network_id, &[], &key, &peers).is_err());
+        assert!(
+            derive_profile(
+                args.network_id,
+                &args.chain,
+                args.chain_discriminant,
+                &wire,
+                wrong_key.as_bytes(),
+                &peers
+            )
+            .is_err()
+        );
+        assert!(
+            derive_profile(
+                args.network_id,
+                &args.chain,
+                args.chain_discriminant,
+                &[],
+                &key,
+                &peers
+            )
+            .is_err()
+        );
         let mut padded_key = key.clone();
         padded_key.push(b' ');
-        assert!(derive_profile(args.network_id, &wire, &padded_key, &peers).is_err());
+        assert!(
+            derive_profile(
+                args.network_id,
+                &args.chain,
+                args.chain_discriminant,
+                &wire,
+                &padded_key,
+                &peers
+            )
+            .is_err()
+        );
         let mut altered_wire = wire.clone();
         altered_wire.push(0);
-        assert!(derive_profile(args.network_id, &altered_wire, &key, &peers).is_err());
-        assert!(derive_profile(args.network_id, &wire, &key, b"{}").is_err());
+        assert!(
+            derive_profile(
+                args.network_id,
+                &args.chain,
+                args.chain_discriminant,
+                &altered_wire,
+                &key,
+                &peers
+            )
+            .is_err()
+        );
+        assert!(
+            derive_profile(
+                args.network_id,
+                &args.chain,
+                args.chain_discriminant,
+                &wire,
+                &key,
+                b"{}"
+            )
+            .is_err()
+        );
         for defect in 0..5 {
             let mut changed = trust.peers.clone();
             match defect {
@@ -380,6 +462,8 @@ mod tests {
             assert!(
                 derive_profile(
                     args.network_id,
+                    &args.chain,
+                    args.chain_discriminant,
                     &wire,
                     &key,
                     &json::to_vec(&changed).unwrap()
@@ -395,6 +479,8 @@ mod tests {
         assert!(
             derive_profile(
                 args.network_id,
+                &args.chain,
+                args.chain_discriminant,
                 &wire,
                 &key,
                 &json::to_vec(&unknown).unwrap()

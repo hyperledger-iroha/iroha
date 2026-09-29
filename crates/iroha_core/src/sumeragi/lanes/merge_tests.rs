@@ -1,9 +1,12 @@
 //! The lane merge end to end on a certified test chain: a genesis lane policy creates a fixed
 //! lane, certified lane blocks land in the node's lane store, and the chain's blocks merge them.
 
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, OnceLock},
+};
 
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     IntoKeyValue, Level, Registrable,
     account::{Account, AccountId},
@@ -15,17 +18,26 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_sumeragi::{
-    message::{Block, BlockHeader, Qc, VoteKind},
+    api::ExecOutcome,
+    crypto::{Signer, form_qc},
+    message::{Block, BlockHeader, Vote, VoteKind},
     preimage::payload_hash,
-    types::{AggregateSignature, Bitmap, SIGNATURE_LEN},
+    types::{SIGNATURE_LEN, Signature},
 };
 
 use super::*;
 use crate::{
     state::World,
     sumeragi::{
-        crypto::BlsCrypto,
-        driver::{SharedCrypto, traits::BlockStore as _},
+        crypto::{BlsCrypto, KeyPairSigner},
+        driver::{
+            SharedCrypto,
+            traits::{BlockStore as _, Executor as _},
+        },
+        lanes::{
+            executor::{LaneExecutor, LaneTransactions},
+            global::{AppliedWatch, GlobalAnchors, StatelessChecks},
+        },
         payload::{self, Assembly},
         test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators},
     },
@@ -100,8 +112,21 @@ fn policy() -> SumeragiLanePolicy {
     }
 }
 
+struct NoTransactions;
+impl LaneTransactions for NoTransactions {
+    fn candidates(
+        &self,
+        _: u64,
+        _: usize,
+        _: &BTreeSet<HashOf<TransactionEntrypoint>>,
+    ) -> Vec<SignedTransaction> {
+        Vec::new()
+    }
+}
+
 struct Fixture {
     chain: CertifiedTestChain,
+    keys: Vec<KeyPair>,
     stores: Arc<super::super::registry::LaneStores>,
     crypto: SharedCrypto,
     _dir: tempfile::TempDir,
@@ -122,7 +147,9 @@ impl Fixture {
             .genesis_parameters
             .push(Parameter::Custom(policy().into_custom_parameter()));
         config.lane_blocks = deferred.clone();
-        let chain = CertifiedTestChain::start(config).expect("the chain starts");
+        let prepared = CertifiedTestChain::prepare(config).expect("original signed genesis");
+        let keys = prepared.validator_keys.clone();
+        let chain = CertifiedTestChain::from_prepared(prepared).expect("the chain starts");
         let crypto: SharedCrypto = Arc::new(BlsCrypto::new());
         let stores = Arc::new(super::super::registry::LaneStores::new(
             dir.path().to_path_buf(),
@@ -133,6 +160,7 @@ impl Fixture {
         assert!(deferred.0.set(Arc::clone(&stores)).is_ok());
         Self {
             chain,
+            keys,
             stores,
             crypto,
             _dir: dir,
@@ -175,15 +203,36 @@ impl Fixture {
             .store(LANE, &record.incarnation)
             .expect("lane store");
         let instance = self.stores.instance(LANE, &record.incarnation);
-        let parent = if height == 1 {
-            Hash32(record.merged.block_hash)
-        } else {
-            store
-                .entry(height - 1)
-                .expect("the parent lane block")
-                .commit_qc
-                .block_hash
-        };
+        assert_eq!(
+            height,
+            store.height() + 1,
+            "continue the original lane store"
+        );
+        let config = super::super::lane_height_config(&record).unwrap();
+        let parent = store
+            .entry(height - 1)
+            .map(|entry| (entry.commit_qc.block_hash, entry.commit_qc.result))
+            .unwrap_or_else(|| {
+                (
+                    super::super::lane_genesis_hash(&self.chain.network_id(), &record),
+                    super::super::lane_genesis_result(&record),
+                )
+            });
+        let tip = self.chain.height();
+        let anchors = Arc::new(GlobalAnchors::new(
+            Arc::clone(self.chain.state()),
+            Arc::new(AppliedWatch::new(tip, Some(self.anchor(tip)))),
+        ));
+        let mut executor = LaneExecutor::<_, _, NoTransactions>::recover(
+            record.clone(),
+            config.clone(),
+            anchors,
+            StatelessChecks::new(self.chain.network_id()),
+            None,
+            super::super::lane_genesis_hash(&self.chain.network_id(), &record),
+            store.as_ref(),
+        )
+        .unwrap();
         let payload = LaneBatch {
             anchor_height: anchor,
             anchor_hash: self.anchor(anchor),
@@ -193,11 +242,11 @@ impl Fixture {
         let block = Block {
             header: BlockHeader {
                 instance,
-                epoch: super::super::lane_height_config(&record).unwrap().epoch.id,
+                epoch: config.epoch.id,
                 height,
                 origin_view: 0,
-                parent_hash: parent,
-                parent_result: Hash32([0; 32]),
+                parent_hash: parent.0,
+                parent_result: parent.1,
                 payload_hash: payload_hash(&*self.crypto, &payload),
                 payload_len: u32::try_from(payload.len()).expect("small"),
                 proposer: 0,
@@ -208,21 +257,57 @@ impl Fixture {
             payload,
         };
         let block_hash = block.hash(&*self.crypto);
-        let qc = Qc {
-            kind: VoteKind::Commit,
-            instance,
-            epoch: block.header.epoch,
-            height,
-            view: 0,
-            block_hash,
-            result: Hash32([u8::try_from(height).expect("small"); 32]),
-            attest: false,
-            signers: Bitmap::from_indices(4, [0, 1, 2]).expect("bitmap"),
-            agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
-            attestations: Vec::new(),
-            attestation_witness: None,
+        let outcome = executor.execute(&block, &block_hash);
+        let Some(ExecOutcome::Valid(result)) = outcome else {
+            panic!("original lane execution must succeed: {outcome:?}");
         };
-        store.append(&block, &qc).expect("append");
+        let crypto = BlsCrypto::new();
+        crypto
+            .admit_committee(
+                record
+                    .committee
+                    .iter()
+                    .map(|member| (member.peer.public_key(), member.pop.as_slice())),
+            )
+            .unwrap();
+        let votes = self
+            .keys
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(index, key)| {
+                assert_eq!(key.public_key(), record.committee[index].peer.public_key());
+                let mut vote = Vote {
+                    kind: VoteKind::Commit,
+                    instance,
+                    epoch: block.header.epoch,
+                    height,
+                    view: block.header.origin_view,
+                    block_hash,
+                    result,
+                    attest: false,
+                    signer: u32::try_from(index).unwrap(),
+                    sig: Signature([0; SIGNATURE_LEN]),
+                    attestation: None,
+                };
+                vote.sig = KeyPairSigner::new(key).unwrap().sign(&vote.preimage());
+                vote
+            })
+            .collect::<Vec<_>>();
+        let qc = form_qc(&crypto, 4, &votes.iter().collect::<Vec<_>>()).unwrap();
+        iroha_sumeragi::crypto::Verifier::new(
+            &crypto,
+            &instance,
+            &config.epoch.id,
+            &config.committee,
+        )
+        .verify_qc_signatures(&qc)
+        .expect("original exact quorum signatures");
+        assert_eq!(executor.prepare(&block, &qc).unwrap(), Some(result));
+        store
+            .append(&block, &qc)
+            .expect("append original prepared lane block");
+        executor.commit(&block, &qc).unwrap();
         block_hash
     }
 
@@ -269,18 +354,47 @@ fn global_blocks_merge_fresh_lane_blocks_and_drop_what_they_must_not_execute() {
     fixture.chain.commit(Vec::new());
     assert_eq!(fixture.chain.height(), 3);
 
-    // Lane block 1, anchored at global height 3: a transaction routed to the lane, one routed
-    // to lane 0 (misrouted here) and a repeat of the first.
+    // A valid lane block may carry a transaction routed elsewhere. A duplicate across
+    // the global prefix and lane input is dropped during merge; within-lane duplicates
+    // are rejected by actual lane admission before they can be certified.
     let routed = fixture.log(&lane_user(), "lane", GENESIS_MS - 10);
     let misrouted = fixture.log(&other_user(), "misrouted", GENESIS_MS - 9);
+    let direct_duplicate = fixture.log(&lane_user(), "also in global prefix", GENESIS_MS - 11);
     let tip = fixture.certify(
         1,
         3,
-        vec![routed.clone(), misrouted.clone(), routed.clone()],
+        vec![routed.clone(), misrouted.clone(), direct_duplicate.clone()],
     );
-    fixture.chain.commit(Vec::new());
+    fixture.chain.commit(vec![direct_duplicate.clone()]);
     let merged = fixture.chain.committed(4);
     assert_eq!(merged.block().merged_entrypoint_count(), 1);
+    assert_eq!(
+        merged
+            .block()
+            .external_entrypoints_slice()
+            .iter()
+            .filter(|input| input.hash() == direct_duplicate.hash_as_entrypoint())
+            .count(),
+        1,
+        "the same genuine lane input already in the global prefix executes exactly once"
+    );
+    for transaction in [&direct_duplicate, &routed] {
+        let input_index = merged
+            .block()
+            .external_entrypoints_slice()
+            .iter()
+            .position(|input| input.hash() == transaction.hash_as_entrypoint())
+            .expect("the original input is retained exactly once");
+        let (_, output) = merged
+            .block()
+            .network_output_at(u32::try_from(input_index).unwrap())
+            .expect("the original input owns a Network output");
+        assert!(
+            output.result.0.is_ok(),
+            "the original input must execute successfully: {:?}",
+            output.result
+        );
+    }
     let routed_hash = TransactionEntrypoint::External(routed.clone()).hash();
     let execution = merged
         .block()
@@ -369,7 +483,12 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
         from: 1,
         to: 1,
         tip_hash: tip.0,
-        tip_result: [1; 32],
+        tip_result: fixture
+            .stores
+            .block(LANE, &record.incarnation, 1)
+            .unwrap()
+            .result
+            .0,
     };
     let expand_with = |merges: &[SumeragiLaneMerge], floor: u64| {
         expand(
@@ -436,7 +555,10 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
 #[test]
 fn expansion_consumes_only_the_exact_original_proposal() {
     let fixture = Fixture::start();
-    let proposal = fixture.proposal(&[], 0);
+    let proposal = fixture.chain.proposal(
+        None,
+        vec![fixture.log(&other_user(), "original proposal", GENESIS_MS - 1)],
+    );
     let expansion = expand(
         fixture.chain.state(),
         &proposal,
@@ -486,7 +608,10 @@ fn expansion_refuses_equivalent_foreign_state_and_changed_publication() {
     let mut fixture = Fixture::start();
     let foreign = Fixture::start();
     let state = std::sync::Arc::clone(fixture.chain.state());
-    let proposal = fixture.proposal(&[], 0);
+    let proposal = fixture.chain.proposal(
+        None,
+        vec![fixture.log(&other_user(), "original proposal", GENESIS_MS - 1)],
+    );
     let expected = proposal.canonical_proposal_wire_hash().unwrap();
     let expansion = expand(&state, &proposal, &*fixture.stores, Duration::ZERO).unwrap();
     assert_eq!(
@@ -515,4 +640,106 @@ fn expansion_refuses_equivalent_foreign_state_and_changed_publication() {
     let (returned, reason) = expansion.apply(returned, &state, captured).unwrap_err();
     assert!(matches!(reason, MergeError::Pending(_)));
     assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
+}
+
+#[test]
+fn merged_rejection_event_retains_the_original_native_proposal_header() {
+    use crate::{
+        block::{BlockValidationError, ValidBlock},
+        sumeragi::{executor::attestation_required, network_topology::Topology, schedule},
+    };
+    use iroha_data_model::{
+        block::error::BlockRejectionReason,
+        events::pipeline::{BlockStatus, PipelineEventBox},
+        parameter::system::ConsensusMode,
+    };
+
+    let mut fixture = Fixture::start();
+    fixture.chain.commit(Vec::new());
+    fixture.chain.commit(Vec::new());
+    let transaction = fixture.log(&lane_user(), "original merged source", GENESIS_MS - 1);
+    fixture.certify(1, 3, vec![transaction]);
+    let state = fixture.chain.state();
+    let view = state.view();
+    let height = fixture.chain.height() + 1;
+    let scheduled = view.world().consensus_schedule().ready(height).unwrap();
+    let cadence = Duration::from_millis(scheduled.params.block_time_ms);
+    let parent = fixture.chain.committed(height - 1);
+    let merges = propose(&view, &*fixture.stores, height);
+    assert_eq!(merges.transactions, 1);
+    // The source and certified lane are genuine. Only the proposed global cadence is
+    // invalid, so validation must emit a deterministic rejection after expansion.
+    let proposal = payload::assemble_with_merges(
+        state,
+        Assembly {
+            parent: parent.block(),
+            view: 0,
+            cadence: cadence + Duration::from_millis(1),
+        },
+        &[],
+        &merges,
+    )
+    .unwrap();
+    let original_header = proposal.header();
+    let bytes = proposal.encode_wire().unwrap();
+    let header = BlockHeader {
+        instance: fixture.chain.instance(),
+        epoch: schedule::core_epoch(&scheduled.epoch).unwrap().id,
+        height,
+        origin_view: original_header.view_change_index(),
+        parent_hash: parent.core_hash(),
+        parent_result: parent.result(),
+        payload_hash: payload_hash(&*fixture.crypto, &bytes),
+        payload_len: u32::try_from(bytes.len()).unwrap(),
+        proposer: 0,
+        skipped_leaders: Vec::new(),
+        attest: attestation_required(&proposal)
+            || height == scheduled.epoch.authorization.last_height,
+        control_witness: Default::default(),
+    };
+    let topology = Topology::new(
+        fixture
+            .chain
+            .validators()
+            .iter()
+            .map(|(peer, _)| peer.clone()),
+    );
+    drop(view);
+    let expansion = expand(state, &proposal, &*fixture.stores, Duration::ZERO).unwrap();
+    let generation = state.state_view_generation();
+    let mut events = Vec::new();
+    let (rejected, error) = ValidBlock::validate_sumeragi_block(
+        proposal,
+        &topology,
+        fixture.chain.genesis_account(),
+        cadence,
+        ConsensusMode::Permissioned,
+        expansion,
+        &header,
+        &bytes,
+        state,
+    )
+    .unpack(|event| events.push(event))
+    .err()
+    .expect("wrong original cadence must reject");
+    assert!(matches!(
+        *error,
+        BlockValidationError::NonCanonicalBlockTime { .. }
+    ));
+    assert_eq!(rejected.merged_entrypoint_count(), 1);
+    assert_ne!(
+        rejected.header(),
+        original_header,
+        "expanded roots are a different header"
+    );
+    let [PipelineEventBox::Block(event)] = events.as_slice() else {
+        panic!("exactly one authenticated rejection: {events:?}");
+    };
+    assert_eq!(event.header, original_header);
+    assert_eq!(
+        event.status,
+        BlockStatus::Rejected(BlockRejectionReason::BlockInTheFuture)
+    );
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.view().height(), 3);
 }

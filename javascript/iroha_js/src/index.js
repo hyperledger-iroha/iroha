@@ -111,6 +111,7 @@ export {
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
   encryptIdentifierInputForPolicy,
+  RamLfeEncryptionUnavailableError,
   hashIdentifierEncryptedInput,
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,

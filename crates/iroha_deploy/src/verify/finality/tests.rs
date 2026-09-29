@@ -175,9 +175,19 @@ impl Chain {
         let keys = ordered_keys(ranges[0].0.clone());
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let metadata = ConsensusHandshakeMetadata {
-            mode: SumeragiConsensusMode::Npos, block_cadence_ms: nz(1000), wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION), consensus_fingerprint: ConsensusFingerprint::new([0x71;32]),
-            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 { authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 { version:1,generation:0, validators:pasta(&keys,0) } },
-            sumeragi_v2: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            mode: SumeragiConsensusMode::Npos,
+            block_cadence_ms: nz(1000),
+            wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+            consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
+            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
+                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+                    version: 1,
+                    generation: 0,
+                    validators: pasta(&keys, 0),
+                },
+            },
+            sumeragi_context:
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions: Vec<InstructionBox> = validators(&keys)
             .into_iter()
@@ -1206,10 +1216,7 @@ fn invalid_higher_tip_does_not_block_a_valid_lower_quorum() {
                 .attestation_overrides
                 .insert(peer(&keys[0]), fake_claim(&chain, &keys[0], 5));
         }
-        source
-            .proofs
-            .borrow_mut()
-            .insert(4, chain.proof(3).clone());
+        source.proofs.borrow_mut().insert(4, chain.proof(3).clone());
         let mut verifier = chain.verifier();
         let report = verifier.observe(&source, &CHALLENGE).unwrap();
         let (_, outcome) = report
@@ -1625,7 +1632,10 @@ fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
         );
         assert_eq!(*verifier.checkpoint(), checkpoint);
         assert_eq!(
-            verifier.pending.as_ref().map(SumeragiFinalityCheckpoint::height),
+            verifier
+                .pending
+                .as_ref()
+                .map(SumeragiFinalityCheckpoint::height),
             Some(reached)
         );
         assert!(matches!(
@@ -1727,4 +1737,108 @@ fn catch_up_stops_before_the_byte_budget_and_publishes_only_verified_pages() {
     ));
     assert_eq!(*verifier.checkpoint(), paged);
     assert_eq!(verifier.catch_up(&source, nz(5)).unwrap(), 5);
+}
+
+#[test]
+fn fake_tip_member_cannot_starve_an_honest_quorum_behind_a_lagging_checkpoint() {
+    for size in SIZES {
+        // Nine certified blocks exist and the source serves seven, the honest tip. The checkpoint
+        // lags six blocks behind, more than half of an eight-proof observation budget, so
+        // verifying the prefix again for a second claim would exhaust it.
+        let chain = Chain::constant(size, 9);
+        let keys = &chain.epoch(7).keys;
+        let byzantine = &keys[0];
+        // One member claims the honest height, then a height beyond it, with a certificate that
+        // is internally consistent but signed by a foreign committee it names.
+        for claim in [7, 9] {
+            let mut source = Source::new(&chain);
+            source.served = 7;
+            for k in keys {
+                source.tips.insert(peer(k), 7);
+            }
+            source
+                .attestation_overrides
+                .insert(peer(byzantine), fake_claim(&chain, byzantine, claim));
+            let mut verifier = chain.verifier();
+            let report = verifier
+                .observe_with_budget(
+                    &source,
+                    &CHALLENGE,
+                    &mut Budget {
+                        proofs: 8,
+                        bytes: MAX_ADVANCE_BYTES,
+                    },
+                )
+                .unwrap();
+            assert_eq!((report.height.get(), report.verified()), (7, size - 1));
+            assert_eq!(report.block_hash, chain.proof(7).block_header.hash());
+            assert_eq!(verifier.checkpoint().height(), 7);
+            for (member, outcome) in &report.peers {
+                if *member != peer(byzantine) {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Verified(tip) if tip.height.get() == 7
+                    ));
+                } else if claim == 7 {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Rejected(FinalityError::Native(_))
+                    ));
+                } else {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Rejected(FinalityError::AheadOfCheckpoint {
+                            checkpoint: 7,
+                            height: 9
+                        })
+                    ));
+                }
+            }
+            // Each height is requested once; the honest tip comes from a member's own proof,
+            // and the one request above the served range fails without a retry.
+            let expected: Vec<u64> = if claim == 7 {
+                (2..=6).collect()
+            } else {
+                (2..=8).collect()
+            };
+            assert_eq!(*source.proof_calls.borrow(), expected);
+        }
+    }
+}
+
+#[test]
+fn budget_exhaustion_on_one_claim_does_not_abort_the_observation() {
+    for size in [4, 7] {
+        let chain = Chain::constant(size, 9);
+        let keys = &chain.epoch(9).keys;
+        let mut source = Source::new(&chain);
+        for k in keys {
+            source.tips.insert(peer(k), 4);
+        }
+        // One member attests a genuine tip that the proof count covers but the bytes do not.
+        source.tips.insert(peer(&keys[0]), 9);
+        let bytes: usize = (2..=6)
+            .map(|height| chain.proof(height).block_wire.len())
+            .sum();
+        let mut verifier = chain.verifier();
+        let report = verifier
+            .observe_with_budget(&source, &CHALLENGE, &mut Budget { proofs: 16, bytes })
+            .unwrap();
+        assert_eq!(report.verified(), size - 1);
+        // The prefix stops where the bytes ran out, above every honest tip it confirms.
+        assert_eq!(verifier.checkpoint().height(), 6);
+        for (member, outcome) in &report.peers {
+            if *member == peer(&keys[0]) {
+                assert!(matches!(
+                    outcome,
+                    AttestationOutcome::Rejected(FinalityError::ResourceLimit("proof bytes"))
+                ));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    AttestationOutcome::Verified(tip) if tip.height.get() == 4
+                ));
+            }
+        }
+    }
 }

@@ -6187,11 +6187,11 @@ pub struct SumeragiKeys {
     #[config(default = "defaults::sumeragi::key_allowed_algorithms()")]
     pub allowed_algorithms: Vec<Algorithm>,
 }
-/// First-release Sumeragi v2 node configuration.
+/// Node-local configuration for first-release Sumeragi.
 ///
-/// Consensus mode, block cadence, DA layout, leader seed, roster, and quorum
-/// rules come from signed genesis/height context. Unknown v1/adaptive fields
-/// are rejected by the configuration reader rather than silently ignored.
+/// Consensus policy, committee geometry, and payload limits come from signed
+/// genesis and committed state. Retired protocol and queue fields are rejected
+/// by the configuration reader.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Sumeragi {
     /// Node-local participation role.

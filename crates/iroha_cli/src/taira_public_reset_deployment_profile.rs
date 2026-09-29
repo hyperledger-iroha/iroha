@@ -100,6 +100,8 @@ pub(super) fn derive_admitted_profile(
         });
     }
     let profile = DeploymentTrustV1 {
+        chain: CHAIN_ID.into(),
+        account_chain_discriminant: CHAIN_DISCRIMINANT,
         genesis_public_key: public.genesis_public_key.clone(),
         genesis_signed_wire_hex: hex::encode(wire),
         peers,

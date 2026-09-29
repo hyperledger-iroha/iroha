@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from iroha_torii_client.native_sumeragi import SumeragiStatus, SumeragiFootprint, SumeragiBeaconHorizon, SumeragiHaltReason
+from iroha_torii_client.native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters
 
 import base64
 import binascii
@@ -10133,75 +10134,8 @@ def _parse_sumeragi_lane_settlement_receipts(
 
 
 
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
-_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
-_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
 _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
-    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-)
-
-
-def _sumeragi_v2_exact_fields(
-    payload: Mapping[str, Any], allowed: Sequence[str], context: str
-) -> None:
-    unknown = sorted(set(payload) - set(allowed))
-    if unknown:
-        raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
-
-
-def _sumeragi_v2_uint(
-    value: Any,
-    context: str,
-    maximum: int = (1 << 64) - 1,
-    *,
-    positive: bool = False,
-) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{context} must be an unsigned integer")
-    if value < 0 or (positive and value == 0) or value > maximum:
-        raise ValueError(f"{context} is outside its unsigned integer range")
-    return value
-
-
-def _sumeragi_v2_string(value: Any, context: str) -> str:
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise TypeError(f"{context} must be a non-empty string without surrounding whitespace")
-    return value
-
-
-def _sumeragi_v2_tagged_unit(payload: Any, tag: str, admitted: Sequence[str], context: str) -> str:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be an object")
-    _sumeragi_v2_exact_fields(payload, (tag, "details"), context)
-    if set(payload) != {tag, "details"} or payload.get("details") is not None:
-        raise TypeError(f"{context} must contain `{tag}` and null `details`")
-    variant = _sumeragi_v2_string(payload.get(tag), f"{context}.{tag}")
-    if variant not in admitted:
-        raise ValueError(f"{context}.{tag} has unknown variant {variant!r}")
-    return variant
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @dataclass(frozen=True)
@@ -10943,29 +10877,6 @@ class GovernanceStatusSnapshot:
 
 
 @dataclass(frozen=True)
-class ToriiLaneCommitmentSnapshot:
-    block_height: int
-    lane_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash_hex: str
-
-
-@dataclass(frozen=True)
-class ToriiDataspaceCommitmentSnapshot:
-    block_height: int
-    lane_id: int
-    dataspace_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash_hex: str
-
-
-@dataclass(frozen=True)
 class ToriiLaneRuntimeUpgradeHookSnapshot:
     allow: bool
     require_metadata: bool
@@ -11022,8 +10933,6 @@ class ToriiStatusPayload:
     txs_rejected: int
     view_changes: int
     governance: Optional[GovernanceStatusSnapshot]
-    lane_commitments: List[ToriiLaneCommitmentSnapshot]
-    dataspace_commitments: List[ToriiDataspaceCommitmentSnapshot]
     lane_governance: List[ToriiLaneGovernanceSnapshot]
     lane_governance_sealed_total: int
     lane_governance_sealed_aliases: List[str]
@@ -11033,6 +10942,9 @@ class ToriiStatusPayload:
     def from_payload(cls, payload: Mapping[str, Any]) -> "ToriiStatusPayload":
         if not isinstance(payload, Mapping):
             raise TypeError("status payload must be an object")
+        for field_name in ("lane_commitments", "dataspace_commitments", "pipeline_execution"):
+            if field_name in payload:
+                raise ValueError(f"status payload contains retired field `{field_name}`")
 
         def _coerce_int(name: str) -> int:
             value = payload.get(name, 0)
@@ -11241,71 +11153,6 @@ class ToriiStatusPayload:
                 recent_manifest_activations=recent_activations,
             )
 
-        lane_commitments_payload = payload.get("lane_commitments")
-        lane_commitments: List[ToriiLaneCommitmentSnapshot] = []
-        if lane_commitments_payload:
-            if not isinstance(lane_commitments_payload, Sequence):
-                raise TypeError("lane_commitments must be an array")
-            for idx, item in enumerate(lane_commitments_payload):
-                if not isinstance(item, Mapping):
-                    raise TypeError(f"lane_commitments[{idx}] must be an object")
-                lane_commitments.append(
-                    ToriiLaneCommitmentSnapshot(
-                        block_height=_coerce_nested_int(
-                            item, "block_height", f"lane_commitments[{idx}]"
-                        ),
-                        lane_id=_coerce_nested_int(item, "lane_id", f"lane_commitments[{idx}]"),
-                        tx_count=_coerce_nested_int(item, "tx_count", f"lane_commitments[{idx}]"),
-                        total_chunks=_coerce_nested_int(
-                            item, "total_chunks", f"lane_commitments[{idx}]"
-                        ),
-                        rbc_bytes_total=_coerce_nested_int(
-                            item, "rbc_bytes_total", f"lane_commitments[{idx}]"
-                        ),
-                        teu_total=_coerce_nested_int(item, "teu_total", f"lane_commitments[{idx}]"),
-                        block_hash_hex=_coerce_string(
-                            item.get("block_hash"), f"lane_commitments[{idx}].block_hash"
-                        ),
-                    )
-                )
-
-        dataspace_commitments_payload = payload.get("dataspace_commitments")
-        dataspace_commitments: List[ToriiDataspaceCommitmentSnapshot] = []
-        if dataspace_commitments_payload:
-            if not isinstance(dataspace_commitments_payload, Sequence):
-                raise TypeError("dataspace_commitments must be an array")
-            for idx, item in enumerate(dataspace_commitments_payload):
-                if not isinstance(item, Mapping):
-                    raise TypeError(f"dataspace_commitments[{idx}] must be an object")
-                dataspace_commitments.append(
-                    ToriiDataspaceCommitmentSnapshot(
-                        block_height=_coerce_nested_int(
-                            item, "block_height", f"dataspace_commitments[{idx}]"
-                        ),
-                        lane_id=_coerce_nested_int(
-                            item, "lane_id", f"dataspace_commitments[{idx}]"
-                        ),
-                        dataspace_id=_coerce_nested_int(
-                            item, "dataspace_id", f"dataspace_commitments[{idx}]"
-                        ),
-                        tx_count=_coerce_nested_int(
-                            item, "tx_count", f"dataspace_commitments[{idx}]"
-                        ),
-                        total_chunks=_coerce_nested_int(
-                            item, "total_chunks", f"dataspace_commitments[{idx}]"
-                        ),
-                        rbc_bytes_total=_coerce_nested_int(
-                            item, "rbc_bytes_total", f"dataspace_commitments[{idx}]"
-                        ),
-                        teu_total=_coerce_nested_int(
-                            item, "teu_total", f"dataspace_commitments[{idx}]"
-                        ),
-                        block_hash_hex=_coerce_string(
-                            item.get("block_hash"), f"dataspace_commitments[{idx}].block_hash"
-                        ),
-                    )
-                )
-
         lane_governance_payload = payload.get("lane_governance")
         lane_governance: List[ToriiLaneGovernanceSnapshot] = []
         if lane_governance_payload:
@@ -11416,8 +11263,6 @@ class ToriiStatusPayload:
             txs_rejected=_coerce_int("txs_rejected"),
             view_changes=_coerce_int("view_changes"),
             governance=governance_snapshot,
-            lane_commitments=lane_commitments,
-            dataspace_commitments=dataspace_commitments,
             lane_governance=lane_governance,
             lane_governance_sealed_total=lane_governance_sealed_total,
             lane_governance_sealed_aliases=lane_governance_sealed_aliases,
@@ -12120,6 +11965,11 @@ __all__ = [
     "SumeragiFootprint",
     "SumeragiBeaconHorizon",
     "SumeragiHaltReason",
+    "SumeragiLaneStatus",
+    "SumeragiLaneRecord",
+    "SumeragiLaneMember",
+    "SumeragiLaneFrontier",
+    "SumeragiParameters",
     "SumeragiParamsSnapshot",
     "SumeragiLeaderSnapshot",
     "SumeragiEvidenceCount",

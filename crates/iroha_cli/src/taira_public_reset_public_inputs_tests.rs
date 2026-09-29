@@ -130,8 +130,13 @@ impl Fixture {
             .with_chain_discriminant(CHAIN_DISCRIMINANT)
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_consensus_meta();
-        let (_, nexus_hash, execution_hash) =
-            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
+        // Match Kagami's signing boundary: the unpublished draft may have unbound
+        // policy commitments. Only the native validator's typed mismatch may supply
+        // their actual values; the newly signed final fixture must pass unchanged.
+        let (nexus_hash, execution_hash) =
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
+                .map(|(_, nexus, execution)| (nexus, execution))
+                .unwrap_or_else(|derived_policies| derived_policies);
         let mut context = manifest.sumeragi_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
         context.execution_policy_hash = execution_hash.into();
@@ -139,7 +144,8 @@ impl Fixture {
             .with_sumeragi_context_parameters(context)
             .with_consensus_meta();
         let (mut block, final_nexus_hash, final_execution_hash) =
-            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
+                .expect("newly signed fixture must reproduce both exact native policies");
         assert_eq!(nexus_hash, final_nexus_hash);
         assert_eq!(execution_hash, final_execution_hash);
         block
@@ -280,7 +286,7 @@ fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
     citizenship_escrow: Option<&AccountId>,
-) -> (SignedBlock, Hash, Hash) {
+) -> std::result::Result<(SignedBlock, Hash, Hash), (Hash, Hash)> {
     use iroha_config::{
         kura::InitMode,
         parameters::{actual, defaults},
@@ -391,7 +397,7 @@ fn execute_fixture_genesis(
     let topology = Topology::new(
         iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0).unwrap(),
     );
-    let (valid, staged) = ValidBlock::validate_signed_genesis(
+    let validation = ValidBlock::validate_signed_genesis(
         provisional.0,
         &topology,
         &authority,
@@ -399,22 +405,33 @@ fn execute_fixture_genesis(
         &state,
         iroha_data_model::block::consensus::ConsensusMode::Npos,
     )
-    .unpack(|_| {})
-    .unwrap_or_else(|(block, error)| {
-        let output_errors = block
-            .failed_outputs()
-            .map(|(index, reason)| format!("output[{index}]: {reason:?}"))
-            .collect::<Vec<_>>();
-        panic!(
-            "native fixture genesis execution failed: {error}; {}",
-            output_errors.join("; ")
-        )
-    });
+    .unpack(|_| {});
+    let (valid, staged) = match validation {
+        Ok(executed) => executed,
+        Err((block, error)) => {
+            if let iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                actual_execution,
+                actual_nexus,
+                ..
+            } = *error
+            {
+                return Err((actual_nexus, actual_execution));
+            }
+            let output_errors = block
+                .failed_outputs()
+                .map(|(index, reason)| format!("output[{index}]: {reason:?}"))
+                .collect::<Vec<_>>();
+            panic!(
+                "native fixture genesis execution failed: {error}; {}",
+                output_errors.join("; ")
+            )
+        }
+    };
     let nexus_hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
     let execution_hash =
         iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged).unwrap();
     drop(staged);
-    (valid.into(), nexus_hash, execution_hash)
+    Ok((valid.into(), nexus_hash, execution_hash))
 }
 
 pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
@@ -502,6 +519,37 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
         Fixture::build_with_epoch_and_instructions(20, instructions)
     });
     (fixture.block.clone(), fixture.genesis.clone())
+}
+
+#[test]
+fn native_fixture_rejects_changed_signed_policies_after_draft_binding() {
+    let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let fixture = Fixture::new();
+    let bound = fixture.manifest.sumeragi_context_parameters();
+    let expected = (
+        Hash::prehashed(bound.nexus_amx_context_hash),
+        Hash::prehashed(bound.execution_policy_hash),
+    );
+    assert!(execute_fixture_genesis(&fixture.manifest, &fixture.genesis, None).is_ok());
+    for change_execution in [true, false] {
+        let mut changed = bound.clone();
+        let foreign = Hash::new(b"foreign signed fixture policy").into();
+        if change_execution {
+            changed.execution_policy_hash = foreign;
+        } else {
+            changed.nexus_amx_context_hash = foreign;
+        }
+        let manifest = fixture
+            .manifest
+            .clone()
+            .with_sumeragi_context_parameters(changed)
+            .with_consensus_meta();
+        assert_eq!(
+            execute_fixture_genesis(&manifest, &fixture.genesis, None).unwrap_err(),
+            expected,
+            "native execution must reject either changed commitment"
+        );
+    }
 }
 
 #[test]

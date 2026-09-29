@@ -909,6 +909,10 @@ def require_parliament_commit_publication(state: str) -> None:
 
 def require_parliament_beacon_requirement(beacon: str) -> None:
     """One exact indexed requirement survives deferred activation and candidate gating."""
+    # TODO(N1): the previous consensus runtime's `v2_beacon.rs`, `wire::HeightContext`
+    # and the `State::apply_without_execution_inner` section are deleted, so this
+    # check and its callers fail. Rebind the Parliament beacon-pulse requirement and
+    # the other runtime sections to the Sumeragi node driver's beacon owner.
     path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
     def compact(text: str) -> str:
         return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))

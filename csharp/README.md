@@ -195,9 +195,9 @@ The direct V1 instruction contains only the referendum selector, owner, new tota
 bond and requested lock duration. The choice is immutable and read from finalized
 state; a repeated cast is not an update.
 
-Contract-call drafts require the signature-bound `QueuePlanSynced` admission
-intent. `CallContractAsync` checks it with the exact caller-trusted network,
-authority, invocation, metadata and fee before returning a draft for local signing.
+`CallContractAsync` validates the canonical nine-field transaction payload against
+the exact caller-trusted network, authority, invocation, metadata and fee before
+returning a draft for local signing. Retired admission-intent layouts are rejected.
 
 ## Run the sample
 
@@ -341,8 +341,10 @@ This uses Core's default change diversifier; reusing a nondefault input diversif
 would produce another owner. `ConfidentialNotes` supplies native-backed default
 diversifier, owner, commitment, root and path helpers without managed cryptography.
 
-Run the two-proof disposable example with the normal ABI-24 runtime library
-available to the .NET loader:
+Run the two-proof disposable example with the current ABI-25 runtime library
+available to the .NET loader. `ConfidentialProverException.Code == -101` means
+the bridge is missing or lacks the required wallet contract; install the matching
+current native artifact for your runtime identifier before retrying:
 
 ```sh
 dotnet run --project samples/ConfidentialRedemption
@@ -353,3 +355,9 @@ then proves full redemption after disposing the parent prover. These are local
 proof artifacts. Roots must come from authenticated protocol state, and a proof
 does not submit a transaction or establish ledger authorization. Host execution
 does not qualify all five NuGet runtime assets.
+
+`ResolveIdentifierAsync` requires an encrypted input envelope and a typed
+`ToriiRamLfeOutputOpening` supplied by the policy's independent opening authority.
+The request model has no plaintext input or local encryption fallback. DTO
+validation does not authenticate an opening or make a backend available; Torii
+enforces signatures, context and its current encryption availability boundary.

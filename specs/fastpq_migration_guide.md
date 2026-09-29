@@ -69,10 +69,12 @@ execution model).
 ### V1 release checklist
 Keep the FASTPQ release ticket blocked until every item below is complete and attached.
 
-1. **Sub-second proof metrics** — Inspect the freshly captured `fastpq_metal_bench_*.json` and
+1. **LDE primitive timing** — Inspect the freshly captured `fastpq_metal_bench_*.json` and
    confirm the `benchmarks.operations` entry where `operation = "lde"` (and the mirrored
    `report.operations` sample) reports `gpu_mean_ms ≤ 950` for the 20 000-row workload (32 768 padded
-   rows). Captures outside the ceiling require reruns before the checklist can be signed.
+   rows). This measures the LDE primitive, not a complete masked Quantity proof.
+   Complete facade timing, memory and artifact evidence remain separate requirements
+   in the [production readiness record](fastpq_production_readiness.md).
 2. **Signed manifest** — Run
    `cargo xtask fastpq-bench-manifest --bench metal=<json> --bench cuda=<json> --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key <path> --out artifacts/fastpq_bench_manifest.json`
    so the release ticket carries both the manifest and its detached signature
@@ -120,19 +122,39 @@ full proof performance, soundness, admission or deployment qualification.
 
 
 ## Reproducible Builds
-Use the pinned container workflow to produce reproducible V1 artefacts:
+Use the pinned container workflow to produce reproducible V1 artefacts. Install
+the shared Python 3.10+ script requirements and select reviewed immutable image
+references before running it. The variables below must contain actual
+`registry/repository@sha256:<64 lowercase hex digits>` values supplied by the
+operator; tags alone are rejected.
 
 ```bash
-scripts/fastpq/repro_build.sh --mode cpu                     # CPU-only toolchain
-scripts/fastpq/repro_build.sh --mode gpu --output artifacts/fastpq-repro-gpu
-scripts/fastpq/repro_build.sh --container-runtime podman     # Explicit runtime override
+python3 -m pip install -r scripts/requirements.txt
+: "${FASTPQ_RUST_IMAGE:?Set the reviewed digest-pinned Rust base image}"
+scripts/fastpq/repro_build.sh --mode cpu --rust-image "$FASTPQ_RUST_IMAGE"
+
+# GPU builds also require an independently reviewed CUDA base image.
+: "${FASTPQ_CUDA_IMAGE:?Set the reviewed digest-pinned CUDA base image}"
+scripts/fastpq/repro_build.sh --mode gpu \
+  --rust-image "$FASTPQ_RUST_IMAGE" --cuda-image "$FASTPQ_CUDA_IMAGE" \
+  --output artifacts/fastpq-repro-gpu
+
+# Select an installed container runtime explicitly when needed.
+scripts/fastpq/repro_build.sh --container-runtime podman \
+  --rust-image "$FASTPQ_RUST_IMAGE"
 ```
 
-The helper script builds the `rust:1.88.0-slim-bookworm` toolchain image (and `nvidia/cuda:12.2.2-devel-ubuntu22.04` for GPU), runs the build inside the container, and writes `manifest.json`, `sha256s.txt`, and the compiled binaries to the target output directory.【scripts/fastpq/repro_build.sh:1】【scripts/fastpq/run_inside_repro_build.sh:1】【scripts/fastpq/docker/Dockerfile.gpu:1】
+The helper derives the exact Rust channel from `rust-toolchain.toml`, passes it to
+the selected Docker build stage, and runs the build inside the container. It
+writes `manifest.json`, `sha256s.txt`, and the compiled binaries to the target
+output directory. The supplied Rust base must provide the expected rustup layout;
+the CUDA base must support the Dockerfile's Ubuntu/Debian package setup.
+The workflow never substitutes a mutable image tag for a missing digest.
 
 Environment overrides:
-- `FASTPQ_RUST_IMAGE`, `FASTPQ_RUST_TOOLCHAIN` – pin an explicit Rust base/tag.
-- `FASTPQ_CUDA_IMAGE` – swap the CUDA base when producing GPU artefacts.
+- `FASTPQ_RUST_IMAGE`, `FASTPQ_CUDA_IMAGE` – explicit digest-pinned base images.
+- `FASTPQ_RUST_TOOLCHAIN` – optional assertion of the checked-in Rust channel;
+  a mismatch is rejected before container execution.
 - `FASTPQ_CONTAINER_RUNTIME` – force a specific runtime; default `auto` tries `FASTPQ_CONTAINER_RUNTIME_FALLBACKS`.
 - `FASTPQ_CONTAINER_RUNTIME_FALLBACKS` – comma-separated preference order for runtime auto-detection (defaults to `docker,podman,nerdctl`).
 
@@ -214,11 +236,14 @@ rollback, redeploy previously qualified V1 release artefacts and investigate
 before issuing a replacement. Confirm telemetry reports the configured CPU or
 GPU backend; `backend="none"` is a failure signal, not a usable execution path.
 
-## Hardware Baseline
-| Profile | CPU | GPU | Notes |
-| ------- | --- | --- | ----- |
-| Reference (V1) | AMD EPYC 7B12 (32 cores), 256 GiB RAM | NVIDIA A100 40 GB (CUDA 12.2) | 20 000 row execution-captured V1 batches must complete ≤1 000 ms.【specs/fastpq_plan.md:131】 |
-| CPU-only | ≥32 physical cores, AVX2 | – | Expect ~0.9–1.2 s for 20 000 rows; keep `execution_mode = "cpu"` for determinism. |
+## Hardware and complete-proof measurements
+
+FFT/LDE benchmark rows and timings do not size the fixed masked Quantity relation.
+Use the [source-bound readiness evidence](fastpq_production_readiness.md) for
+complete ordinary/AXT artifact timing and memory, and qualify the actual deployment
+hardware separately. CPU is the default; explicit device execution requires its
+own availability, parity and failure checks. No full-proof throughput target is
+established by the primitive benchmark above.
 
 ## Regression Tests
 - `cargo test -p fastpq_prover --release`

@@ -2,8 +2,8 @@
 """NX-7 validator smoke tests for newly provisioned Nexus lanes.
 
 The lane catalog input is a recorded `LaneLifecycleStatusV1` JSON document
-(`--lifecycle-file`). The node no longer serves a lane lifecycle route: Sumeragi
-lane state is the operator route `GET /v1/sumeragi/lanes`
+(`--lifecycle-file`). The smoke check does not fetch the retired lane-lifecycle
+route: Sumeragi lane state is the operator route `GET /v1/sumeragi/lanes`
 (`specs/sumeragi_lanes.md`), whose records are keyed by lane id and carry no
 catalog aliases.
 

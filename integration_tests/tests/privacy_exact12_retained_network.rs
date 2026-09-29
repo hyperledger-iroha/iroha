@@ -663,7 +663,7 @@ async fn wait_for_exact_commit_subject(
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{context}: exact v2 DA/RBC block subject and CommitQC did not converge within \
+                "{context}: exact DA/RBC block subject and CommitQC did not converge within \
                  {PEER_CONVERGENCE_TIMEOUT:?}; {}",
                 last_observed.join("; ")
             ));

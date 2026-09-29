@@ -50,8 +50,8 @@ fn reconcile_committed_topology(
 }
 
 fn event_follows_state_commit(event: &EventBox) -> bool {
-    // `StateBlock` stages `Applied` while building its overlay; v2 Apply
-    // broadcasts that event only after the overlay commits successfully.
+    // `StateBlock` stages `Applied` while building its overlay; the Sumeragi
+    // executor broadcasts that event only after the overlay commits successfully.
     matches!(
         event,
         EventBox::Pipeline(PipelineEventBox::Block(block))

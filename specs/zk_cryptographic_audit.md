@@ -438,7 +438,9 @@ and expected a signed test package to qualify production execution. The producti
 gate correctly rejected all eight dependent BFV tests. Deterministic construction
 now resides only in a crypto unit-test module, which calls crate-private arithmetic
 and asserts that both audited wrappers still reject that local package with
-`MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`. The two generator tests pass.
+`KnownInsecureExactProfile`. The exact plaintext-multiple profile is known
+insecure; adding review evidence cannot activate it. The two generator tests
+remain arithmetic diagnostics, with no encryption qualification.
 Only canonical two-slot arithmetic material is exported; the 807,864-byte fixture
 contains no audit package or reviewer signing key. Core consumes it through strict
 complete-material validation and exact re-encoding, preserving every adversarial

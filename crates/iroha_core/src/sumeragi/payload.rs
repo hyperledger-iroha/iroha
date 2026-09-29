@@ -283,8 +283,11 @@ pub fn select(
         if selected.len() >= max_transactions {
             break;
         }
+        let Some(lane) = inputs.route(&transaction, height) else {
+            continue;
+        };
         if routing.has_lanes()
-            && inputs.route(&transaction, height) != super::lanes::routing::GLOBAL_LANE
+            && lane != super::lanes::routing::GLOBAL_LANE
             && u64::try_from(transaction.as_ref().creation_time().as_millis())
                 .is_ok_and(|created| created >= rescue_before_ms)
         {

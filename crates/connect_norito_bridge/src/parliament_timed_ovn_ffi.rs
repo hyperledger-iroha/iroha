@@ -919,7 +919,6 @@ mod tests {
     use iroha_data_model::{
         block::{
             CommitCertificate,
-            builder::BlockBuilder,
             consensus::{ExecKv, ExecWitness},
             decode_versioned_signed_block,
         },
@@ -939,10 +938,7 @@ mod tests {
         PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofResponseV1,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        sync::OnceLock,
-    };
+    use std::{collections::BTreeMap, sync::OnceLock};
 
     use super::*;
 
@@ -1178,8 +1174,7 @@ mod tests {
         let checkpoint = fixture.checkpoint();
         let mut proofs = vec![fixture.genesis_proof().clone()];
         for height in 2..=tip_height {
-            let mut block = BlockBuilder::new(fixture.next_header()).build(BTreeSet::new());
-            NativeFinalityFixture::install_network_results(&mut block, vec![]);
+            let block = fixture.block_with_submitted_work(fixture.next_header());
             let proof = if height == tip_height {
                 fixture.certify_with_witness(block, tip_writes)
             } else {

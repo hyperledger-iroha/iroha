@@ -657,7 +657,7 @@ impl NexusProfile {
         normalize_lane_metadata(&mut raw_table);
         // The embedded profile predates the first-release reducer and still carries a
         // node-local DA toggle. DA and mode now come exclusively from signed genesis,
-        // so discard the whole legacy Sumeragi table and let the strict v2 defaults
+        // so discard the whole embedded Sumeragi table and let the strict Sumeragi defaults
         // populate the node-local timeout, limits, key policy, and NPoS policy.
         raw_table.remove("sumeragi");
         // The checked-in profile deliberately keeps every private identity file-backed. Verify
@@ -1462,7 +1462,7 @@ mod tests {
             .config_layer
             .get("sumeragi")
             .and_then(Value::as_table)
-            .expect("strict Sumeragi v2 configuration");
+            .expect("strict Sumeragi configuration");
         assert!(!sumeragi.contains_key("round_timeout_ms"));
         assert_eq!(
             sumeragi.get("role").and_then(Value::as_str),

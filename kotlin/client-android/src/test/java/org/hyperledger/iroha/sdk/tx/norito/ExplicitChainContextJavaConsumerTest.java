@@ -155,7 +155,6 @@ class ExplicitChainContextJavaConsumerTest {
                 100_000L,
                 null,
                 expectedFeePayment,
-                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 Collections.emptyMap(),
                 null));
     final TransactionPayload decoded = codec.decodeTransaction(encoded);

@@ -482,9 +482,7 @@ pub(super) fn check_origins(key: &str, origins: &[String], issues: &mut Issues) 
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::block::consensus_v2::{
-        MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
-    };
+    use iroha_data_model::block::consensus::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 
     use super::*;
 

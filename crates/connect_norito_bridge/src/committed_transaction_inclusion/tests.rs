@@ -1,7 +1,7 @@
 //! Actual native execution and independently selected checkpoint tests for selective inclusion.
 use super::*;
 use iroha_core::{
-    state::{StateReadOnly, World},
+    state::World,
     sumeragi::{
         finality::{build_checkpoint, build_proof},
         test_chain::{CertifiedTestChain, TestChainConfig},

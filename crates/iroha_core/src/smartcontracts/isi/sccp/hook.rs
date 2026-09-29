@@ -23,9 +23,7 @@ use iroha_data_model::{block::BlockHeader, sccp::attestation::SccpAttestationSub
 /// Run the SCCP post-execution step of block `header` (§4.5).
 ///
 /// `height_inputs` are the authenticated consensus inputs of the block's height: from the
-/// Sumeragi core's lag-2 schedule on the production path, from the frozen v2 height context
-/// on the v2 path, and for a v2 signed genesis from the height-one context
-/// `build_genesis_height_context` derives from the signed genesis and its staged state. They
+/// Sumeragi core's authenticated schedule on the production and signed-genesis paths. They
 /// are `None` only for component fixtures that execute without consensus and for a height
 /// whose inputs could not be derived; SCCP then commits leaves and history but derives no
 /// roster and writes no subject (fail closed).
@@ -103,14 +101,19 @@ pub fn finalize_block(
     Ok(())
 }
 
-/// Test observation of the inputs [`finalize_block`] received, per executing thread.
-///
-/// Block validation runs the post-execution finalizer on the validating thread, so a test that
-/// validates a block observes exactly the calls of its own blocks.
+/// Test observation of the inputs [`finalize_block`] received on this thread or for one
+/// exact proposal executed by a native worker.
 #[cfg(test)]
 pub(crate) mod observed {
     use super::{BlockHeader, SccpHeightInputsV1};
-    use std::cell::RefCell;
+    use iroha_crypto::HashOf;
+    use parking_lot::Mutex;
+    use std::{cell::RefCell, collections::BTreeMap, sync::LazyLock};
+
+    type Calls = Vec<(u64, Option<SccpHeightInputsV1>)>;
+
+    static HEADERS: LazyLock<Mutex<BTreeMap<HashOf<BlockHeader>, Calls>>> =
+        LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
     std::thread_local! {
         static CALLS: RefCell<Vec<(u64, Option<SccpHeightInputsV1>)>> =
@@ -123,6 +126,43 @@ pub(crate) mod observed {
                 .borrow_mut()
                 .push((header.height().get(), inputs.cloned()));
         });
+        if let Some(calls) = HEADERS.lock().get_mut(&header.hash()) {
+            calls.push((header.height().get(), inputs.cloned()));
+        }
+    }
+
+    /// Retain observations for one exact original proposal across execution threads.
+    pub(crate) struct HeaderCalls {
+        header: HashOf<BlockHeader>,
+    }
+
+    impl HeaderCalls {
+        /// Take only calls matching the proposal selected when this observer was created.
+        pub(crate) fn take(&self) -> Calls {
+            core::mem::take(
+                HEADERS
+                    .lock()
+                    .get_mut(&self.header)
+                    .expect("original observer"),
+            )
+        }
+    }
+
+    impl Drop for HeaderCalls {
+        fn drop(&mut self) {
+            HEADERS.lock().remove(&self.header);
+        }
+    }
+
+    /// Observe a proposal until the returned guard is dropped, including on unwind.
+    pub(crate) fn for_header(header: &BlockHeader) -> HeaderCalls {
+        let header = header.hash();
+        let mut headers = HEADERS.lock();
+        let std::collections::btree_map::Entry::Vacant(entry) = headers.entry(header) else {
+            panic!("proposal already has an SCCP observer");
+        };
+        entry.insert(Vec::new());
+        HeaderCalls { header }
     }
 
     /// Take the `(height, inputs)` of every SCCP finalizer call on this thread so far.
@@ -179,6 +219,31 @@ mod tests {
         test_support::{blank_state, header},
     };
     use iroha_data_model::sccp::params::SccpParametersV1;
+
+    #[test]
+    fn proposal_observer_is_scoped_across_threads_and_releases_on_unwind() {
+        let original = header(9_031);
+        let foreign = header(9_032);
+        let calls = observed::for_header(&original);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                observed::record(&foreign, None);
+                observed::record(&original, None);
+            });
+        });
+        assert_eq!(calls.take(), vec![(9_031, None)]);
+        assert!(calls.take().is_empty());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _calls = calls;
+                panic!("exercise scoped observer retirement");
+            }))
+            .is_err()
+        );
+        observed::record(&original, None);
+        assert!(observed::for_header(&original).take().is_empty());
+        let _ = observed::take();
+    }
 
     #[test]
     fn hooks_are_no_ops_without_sccp() {

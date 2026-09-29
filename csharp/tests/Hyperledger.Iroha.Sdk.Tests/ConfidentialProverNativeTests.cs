@@ -8,11 +8,23 @@ public sealed class ConfidentialProverNativeTests
     private static byte[] Word(byte value) => Enumerable.Repeat(value, 32).ToArray();
     private static ConfidentialAssetId Asset => new("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     [Fact]
+    public void NativeContractUsesCanonicalFirstReleaseRevisions()
+    {
+        Assert.Equal(25U, ConfidentialWalletNative.Abi());
+        Assert.Equal(1U, ConfidentialWalletNative.Revision());
+        Assert.Equal(1U, ConfidentialWalletNative.DerivationRevision());
+        ConfidentialWalletNative.RequireAvailable();
+    }
+
+    [Fact]
     public void NativeDefaultDerivationAndDisposedOpeningsAreExact()
     {
         var key = RandomNumberGenerator.GetBytes(32);
         try
         {
+            Assert.Equal(25u, ConfidentialWalletNative.Abi());
+            Assert.Equal(1u, ConfidentialWalletNative.Revision());
+            Assert.Equal(1u, ConfidentialWalletNative.DerivationRevision());
             var diversifier = ConfidentialNotes.DefaultDiversifier();
             var first = ConfidentialNotes.OwnerTag(key, diversifier);
             using var change = new ConfidentialChangeNote(2, Word(9));

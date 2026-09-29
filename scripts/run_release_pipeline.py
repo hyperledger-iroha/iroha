@@ -48,7 +48,7 @@ _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "cbbec71e82b0a4d9a3915b6af2d405efbe73dcdd7ebeb55fa9892f5dc41afeac",
+    "check_release_feature_graph": "9daa4af704958f81102f68f0b94c8fd7a17fd219bded9820a735a192013727e1",
 }
 
 
@@ -934,11 +934,6 @@ def main() -> int:
         help="Skip ci/check_nexus_lane_smoke.sh + NX-18 evidence bundling.",
     )
     parser.add_argument(
-        "--skip-nexus-cross-dataspace-proof",
-        action="store_true",
-        help="Skip ci/check_nexus_cross_dataspace_localnet.sh cross-dataspace atomic swap proof gate.",
-    )
-    parser.add_argument(
         "--publish-target",
         action="append",
         help=(
@@ -1129,7 +1124,6 @@ def main() -> int:
         (
             not args.skip_privacy_dp,
             not args.skip_nexus_lane_smoke,
-            not args.skip_nexus_cross_dataspace_proof,
             args.publish_android_sdk,
             args.export_fastpq_grafana,
             bool(args.fastpq_bundles),
@@ -1375,19 +1369,6 @@ def main() -> int:
             run(smoke_cmd, env=smoke_env)
         if not args.dry_run and not nx_source.is_dir():
             raise PipelineError("NX-18 evidence directory was not created")
-
-    if args.skip_nexus_cross_dataspace_proof:
-        print("[release-pipeline] skipping Nexus cross-dataspace proof gate")
-    else:
-        cross_ds_cmd = ["bash", str(REPO_ROOT / "ci" / "check_nexus_cross_dataspace_localnet.sh")]
-        cross_ds_env = release_env.copy()
-        cross_ds_env["NEXUS_CROSS_DATASPACE_EVIDENCE_DIR"] = str(
-            evidence_stage / "nexus_cross_dataspace"
-        )
-        if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {render_command(cross_ds_cmd)}")
-        else:
-            run(cross_ds_cmd, env=cross_ds_env)
 
     built_at = format_source_date_epoch(source_date_epoch)
 
@@ -2125,10 +2106,6 @@ def main() -> int:
         lines.append("Privacy DP notebook: skipped (--skip-privacy-dp)")
     else:
         lines.append("Privacy DP notebook: refreshed")
-    if args.skip_nexus_cross_dataspace_proof:
-        lines.append("Nexus cross-dataspace proof gate: skipped (--skip-nexus-cross-dataspace-proof)")
-    else:
-        lines.append("Nexus cross-dataspace proof gate: passed")
     if publish_target_map:
         lines.append("Publish targets:")
         for profile, target in sorted(publish_target_map.items()):

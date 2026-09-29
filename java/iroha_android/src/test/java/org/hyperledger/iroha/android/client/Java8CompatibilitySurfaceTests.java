@@ -70,11 +70,14 @@ public final class Java8CompatibilitySurfaceTests {
     final IdentifierPolicySummary identifierSummary =
         new IdentifierPolicySummary(
             "identifier_policy",
+            "identifier_lookup_retail",
             "owner",
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
             "backend",
+            null,
             null,
             null,
             null,

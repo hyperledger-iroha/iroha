@@ -2,6 +2,155 @@
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
+/// Own pointer-bearing values whose destructors clear their private children.
+///
+/// Drop the live values first, then overwrite the entire allocation. The second
+/// step also erases inline payloads left in vacated `Option` slots after a move.
+/// Capacity is reserved before construction; insertion never reallocates and
+/// mutable access exposes only the initialized slice.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) struct ClearingVecV1<T>(Vec<T>);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<T> core::fmt::Debug for ClearingVecV1<T> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ClearingVecV1 { <private owners redacted> }")
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<T> ClearingVecV1<T> {
+    /// Reserve the full capacity before writing the first private value.
+    pub(super) fn try_with_capacity_v1(
+        capacity: usize,
+    ) -> Result<Self, std::collections::TryReserveError> {
+        let mut values = Vec::new();
+        values.try_reserve_exact(capacity)?;
+        Ok(Self(values))
+    }
+
+    /// Insert without reallocating, returning the untouched value when full.
+    pub(super) fn try_push_v1(&mut self, value: T) -> Result<(), T> {
+        if self.0.len() == self.0.capacity() {
+            return Err(value);
+        }
+        self.0.push(value);
+        Ok(())
+    }
+
+    /// Actual reserved capacity, including spare owner slots.
+    pub(super) fn capacity_v1(&self) -> usize {
+        self.0.capacity()
+    }
+
+    /// Allocation payload without excluding unused capacity or inline data.
+    pub(super) fn allocated_bytes_v1(&self) -> usize {
+        self.capacity_v1().saturating_mul(core::mem::size_of::<T>())
+    }
+
+    /// Borrow all initialized owners without moving their inline payloads.
+    pub(super) fn as_slice_v1(&self) -> &[T] {
+        &self.0
+    }
+
+    /// Adopt a fixture allocation without exposing a production transfer path.
+    #[cfg(test)]
+    pub(super) fn from_vec_for_test_v1(values: Vec<T>) -> Self {
+        Self(values)
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<T> core::ops::Deref for ClearingVecV1<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<T> core::ops::DerefMut for ClearingVecV1<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<T> Drop for ClearingVecV1<T> {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        // Destructors must see valid pointer-bearing values. `clear` drops all
+        // live owners and sets len to zero before the sealed byte eraser runs.
+        self.0.clear();
+        let allocation = self.0.spare_capacity_mut();
+        allocation.zeroize();
+        #[cfg(test)]
+        {
+            // SAFETY: the sealed zeroizer above initialized every allocation
+            // byte, including padding, before this test-only read.
+            #[allow(unsafe_code)]
+            unsafe {
+                allocation_inspection::record_zeroed_v1(allocation)
+            };
+        }
+    }
+}
+
+/// Inspect only initialized bytes after the real allocation-wide erasure.
+#[cfg(test)]
+pub(super) mod allocation_inspection {
+    use std::{cell::RefCell, mem::MaybeUninit};
+
+    /// Counts from the allocation after live destructors and before deallocation.
+    #[derive(Debug)]
+    pub(crate) struct AllocationErasureV1 {
+        pub(crate) bytes: usize,
+        pub(crate) nonzero_after: usize,
+    }
+
+    thread_local! {
+        static OBSERVATIONS: RefCell<Option<Vec<AllocationErasureV1>>> = const { RefCell::new(None) };
+    }
+
+    /// Observe bytes without modifying the allocation or retaining its contents.
+    ///
+    /// # Safety
+    /// The caller must have initialized every byte, including padding, with the
+    /// sealed zeroizer before passing this still-live allocation.
+    #[allow(unsafe_code)]
+    pub(super) unsafe fn record_zeroed_v1<T>(allocation: &[MaybeUninit<T>]) {
+        OBSERVATIONS.with_borrow_mut(|observations| {
+            if let Some(observations) = observations {
+                let bytes = core::mem::size_of_val(allocation);
+                // SAFETY: the caller has just zeroized every byte, including
+                // padding, with [MaybeUninit<T>]::zeroize. The slice remains
+                // allocated and no T is reconstructed from these bytes.
+                let initialized =
+                    unsafe { core::slice::from_raw_parts(allocation.as_ptr().cast::<u8>(), bytes) };
+                observations.push(AllocationErasureV1 {
+                    bytes,
+                    nonzero_after: initialized.iter().filter(|byte| **byte != 0).count(),
+                });
+            }
+        });
+    }
+
+    /// Observe whole-allocation wiping without retaining private values.
+    pub(crate) fn observe_v1<T>(operation: impl FnOnce() -> T) -> (T, Vec<AllocationErasureV1>) {
+        struct Scope;
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                OBSERVATIONS.set(None);
+            }
+        }
+        OBSERVATIONS.set(Some(Vec::new()));
+        let _scope = Scope;
+        let result = operation();
+        (result, OBSERVATIONS.take().unwrap())
+    }
+}
+
 /// Own a table until it is transferred into its final clearing owner.
 ///
 /// The eraser runs on the live cells on ordinary errors and unwinding. It must
@@ -150,6 +299,81 @@ mod tests {
 
     thread_local! {
         static CLEARED_CELLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[test]
+    fn clearing_vector_drops_live_children_before_wiping_all_capacity() {
+        use std::rc::Rc;
+        #[derive(Debug)]
+        struct Child {
+            value: Box<u64>,
+            dropped: Rc<Cell<usize>>,
+        }
+        impl Drop for Child {
+            fn drop(&mut self) {
+                assert_eq!(*self.value, 79);
+                self.dropped.set(self.dropped.get() + 1);
+            }
+        }
+        let dropped = Rc::new(Cell::new(0));
+        let mut values = ClearingVecV1::try_with_capacity_v1(9).unwrap();
+        let expected_bytes = values.capacity_v1() * core::mem::size_of::<Child>();
+        for _ in 0..3 {
+            values
+                .try_push_v1(Child {
+                    value: Box::new(79),
+                    dropped: Rc::clone(&dropped),
+                })
+                .unwrap();
+        }
+        let (_, allocations) = allocation_inspection::observe_v1(|| drop(values));
+        assert_eq!(dropped.get(), 3);
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0].bytes, expected_bytes);
+        assert_eq!(allocations[0].nonzero_after, 0);
+    }
+
+    #[test]
+    fn clearing_vector_wipes_empty_and_zero_sized_allocations() {
+        let (_, allocations) = allocation_inspection::observe_v1(|| {
+            drop(ClearingVecV1::<u8>::from_vec_for_test_v1(Vec::new()));
+            drop(ClearingVecV1::from_vec_for_test_v1(vec![(); 3]));
+        });
+        assert_eq!(allocations.len(), 2);
+        assert!(
+            allocations
+                .iter()
+                .all(|item| item.bytes == 0 && item.nonzero_after == 0)
+        );
+    }
+
+    #[test]
+    fn clearing_vector_rejects_growth_and_retains_exact_allocation() {
+        assert!(ClearingVecV1::<u64>::try_with_capacity_v1(usize::MAX).is_err());
+        let mut values = ClearingVecV1::try_with_capacity_v1(3).unwrap();
+        let allocation = values.as_ptr();
+        let capacity = values.capacity_v1();
+        assert_eq!(
+            values.allocated_bytes_v1(),
+            capacity * core::mem::size_of::<u64>()
+        );
+        for index in 0..capacity {
+            values.try_push_v1(index as u64 + 11).unwrap();
+        }
+        assert_eq!(values.try_push_v1(79), Err(79));
+        assert_eq!(values.as_ptr(), allocation);
+        assert_eq!(values.capacity_v1(), capacity);
+        assert_eq!(values.len(), capacity);
+        values[0] = 97;
+        assert_eq!(values.as_slice_v1()[0], 97);
+        assert_eq!(
+            format!("{values:?}"),
+            "ClearingVecV1 { <private owners redacted> }"
+        );
+        let (_, allocations) = allocation_inspection::observe_v1(|| drop(values));
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0].bytes, capacity * core::mem::size_of::<u64>());
+        assert_eq!(allocations[0].nonzero_after, 0);
     }
 
     fn erase_and_inspect(rows: &mut [Vec<F>]) {

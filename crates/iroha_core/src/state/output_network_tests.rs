@@ -3,10 +3,7 @@
 
 use super::*;
 use crate::exec_witness;
-use crate::{
-    governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
-    state::WorldReadOnly,
-};
+use crate::{governance::manifest::LaneManifestRegistry, state::WorldReadOnly};
 use iroha_data_model::{
     account::Account,
     events::{EventBox, execute_trigger::ExecuteTriggerEventFilter},
@@ -21,31 +18,9 @@ use iroha_model_base::domain::DomainId;
 use std::{sync::Arc, time::Duration};
 
 fn install_routes(state: &State) {
-    let statuses = state
-        .nexus_snapshot()
-        .lane_catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            (
-                lane.id,
-                LaneManifestStatus {
-                    lane: lane.id,
-                    alias: lane.alias.clone(),
-                    dataspace: lane.dataspace_id,
-                    visibility: lane.visibility,
-                    storage: lane.storage,
-                    governance: None,
-                    manifest_path: None,
-                    governance_rules: None,
-                    privacy_commitments: Vec::new(),
-                },
-            )
-        })
-        .collect();
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        statuses,
-    )));
+    let nexus = state.nexus_snapshot();
+    let registry = LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance);
+    state.install_lane_manifests_for_testing(&Arc::new(registry));
 }
 
 fn fixture(row_bytes: u64, callback_bytes: Option<usize>) -> State {
@@ -154,6 +129,20 @@ fn input(
 }
 
 fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
+    // These component fixtures use the singleton route. Bind every original input before
+    // signing so the producer validates the same source identity as native execution.
+    let context = iroha_data_model::block::BlockExecutionContextBundle::new(
+        inputs
+            .iter()
+            .map(|input| {
+                iroha_data_model::block::ExternalExecutionContext::new(
+                    input.hash(),
+                    iroha_model_base::topology::LaneId::SINGLE,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                )
+            })
+            .collect(),
+    );
     let mut builder = BlockBuilder::new(BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         None,
@@ -174,6 +163,7 @@ fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
             }
         }
     }
+    builder.set_execution_context(Some(context));
     builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
 }
 
@@ -494,10 +484,10 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
     let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
-    let asset = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("network-fee", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR fee asset");
     let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
     let missing = DomainId::try_new("missing-network-fee-domain", "universal").unwrap();
     let fee = FeePaymentIntent::authority(
@@ -720,10 +710,10 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
     let _guard = crate::exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
-    let asset = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("network-fee", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR fee asset");
     let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
     let mut parameters = state.world.parameters.block();
     let previous = parameters.get().block().fastpq_source();

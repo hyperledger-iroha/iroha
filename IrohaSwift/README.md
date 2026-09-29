@@ -730,6 +730,11 @@ supply a plaintext opening; identifier resolution requires the caller's independ
 authenticated `outputOpening`. Production rejects the insecure `bfv-affine-v1` and
 `bfv-programmed-v1` profiles. Private identifier execution remains unavailable until
 a secure encryption profile is implemented and qualified.
+The local `encryptInput` and plaintext `encryptedRequest` entry points throw
+`ToriiClientError.ramLfeEncryptionUnavailable` before handling the input. Public
+seed overrides are removed. Requests constructed from existing ciphertext remain
+DTOs; they do not establish encryption support. Exact-lift arithmetic is retained
+only in test fixtures.
 
 ### Sora VPN native lease flow
 
@@ -1920,11 +1925,8 @@ complete canonical uncompressed Norito frame; bare payloads and retired status
 layouts are rejected. JSON and wire parity share the Rust-generated corpus at
 `fixtures/sumeragi/native_status_v1.tsv`.
 
-The obsolete global revision-4 wire codec and inactive grouped AMX diagnostics
-surface are removed. Native operator preparation/readiness models remain open
-until their schema is wired to the actual committee and published lane-state
-owners. Cross-dataspace settlement remains a separate qualification requirement;
-see `docs/source/native_protocol_retirement.md`.
+Lane state is served by the operator route `GET /v1/sumeragi/lanes`
+(`specs/sumeragi_lanes.md` §8); SDK DTOs for it are pending.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated

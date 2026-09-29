@@ -1932,11 +1932,28 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let sumeragi = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)
-        .expect("Taira sumeragi config");
+        .expect("Taira node-local Sumeragi configuration");
     assert_eq!(
         sumeragi.keys().map(String::as_str).collect::<Vec<_>>(),
         ["role"],
         "Taira configures only the node-local Sumeragi role; block limits come from chain parameters"
+    );
+    let parsed = ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(sumeragi.clone()))
+        .read_and_complete::<iroha_config::parameters::user::Sumeragi>()
+        .expect("Taira Sumeragi section must pass the exact current schema");
+    assert!(matches!(
+        parsed.role,
+        iroha_config::parameters::user::NodeRole::Validator
+    ));
+    assert!(
+        sumeragi.get("block").is_none(),
+        "proposal limits belong to committed chain policy"
+    );
+    assert!(
+        sumeragi.get("queues").is_none(),
+        "retired ingress queues have no runtime owner"
     );
     let untrusted = doc
         .get("sorafs")

@@ -7,7 +7,6 @@ import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -29,9 +28,6 @@ public final class TransactionBuilder {
   /**
    * Encodes the payload for public Torii submission and signs it using the given alias. Keys are
    * created on demand by the {@link IrohaKeyManager}.
-   *
-   * <p>Public submission requires the signature-bound QueuePlan admission intent. The caller's
-   * payload remains unchanged so direct codec users continue to produce ordinary transactions.
    */
   public SignedTransaction encodeAndSign(
       final TransactionPayload payload,
@@ -39,22 +35,13 @@ public final class TransactionBuilder {
       final IrohaKeyManager.KeySecurityPreference preference)
       throws NoritoException, KeyManagementException, SigningException {
     final Signer signer = keyManager.signerForAlias(alias, preference);
-    return encodeAndSignInternal(withQueuePlanSyncedAdmission(payload), signer, alias);
+    return encodeAndSignInternal(payload, signer, alias);
   }
 
   /** Encodes a public-submission payload and signs it using the provided signer. */
   public SignedTransaction encodeAndSign(final TransactionPayload payload, final Signer signer)
       throws NoritoException, SigningException {
-    return encodeAndSignInternal(withQueuePlanSyncedAdmission(payload), signer, null);
-  }
-
-  private static TransactionPayload withQueuePlanSyncedAdmission(
-      final TransactionPayload payload) {
-    Objects.requireNonNull(payload, "payload");
-    return payload
-        .toBuilder()
-        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
-        .build();
+    return encodeAndSignInternal(payload, signer, null);
   }
 
   private SignedTransaction encodeAndSignInternal(

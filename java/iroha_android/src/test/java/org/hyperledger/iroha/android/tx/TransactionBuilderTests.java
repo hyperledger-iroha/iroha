@@ -23,7 +23,6 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 import org.hyperledger.iroha.android.client.JsonParser;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -39,7 +38,6 @@ public final class TransactionBuilderTests {
 
   public static void main(final String[] args) throws Exception {
     encodeAndSignWithExplicitSigner();
-    publicBuilderPreservesExplicitQueuePlanIntent();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
     mixedBatchBuilderAndSignerPreserveOrder();
@@ -65,17 +63,6 @@ public final class TransactionBuilderTests {
     final TransactionBuilder builder =
         new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
 
-    final TransactionPayload direct = codec.decodeTransaction(codec.encodeTransaction(payload));
-    assert direct.admissionIntent() == TransactionAdmissionIntent.ORDINARY
-        : "Direct codec payloads must remain ordinary";
-    try {
-      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
-          codec.encodeTransaction(payload), TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
-      throw new AssertionError("QueuePlan validation must reject ordinary payloads");
-    } catch (final org.hyperledger.iroha.android.norito.NoritoException expected) {
-      // Expected.
-    }
-
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
     final byte[] expectedSignature =
         repeatedByte(0x51, SignatureAdmission.ED25519_SIGNATURE_LENGTH);
@@ -87,8 +74,9 @@ public final class TransactionBuilderTests {
         : "Fake signer should return test public key";
 
     final TransactionPayload decoded = codec.decodeTransaction(signed.encodedPayload());
-    NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
-        signed.encodedPayload(), TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
+    NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(signed.encodedPayload());
+    assert Arrays.equals(signed.encodedPayload(), codec.encodeTransaction(payload))
+        : "Public signing must encode the caller payload unchanged";
     assert decoded.networkId().equals(payload.networkId()) : "NetworkId must round-trip";
     assert decoded.authority().equals(payload.authority()) : "Authority must round-trip";
     assert decoded.creationTimeMs() == payload.creationTimeMs() : "Timestamp must round-trip";
@@ -99,33 +87,6 @@ public final class TransactionBuilderTests {
     assert decoded.nonce().equals(payload.nonce()) : "Nonce must round-trip";
     assert decoded.metadata().get("channel").equals(payload.metadata().get("channel"))
         : "Caller metadata must round-trip";
-    assert decoded.admissionIntent() == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED
-        : "Public signing must bind QueuePlan admission";
-    assert payload.admissionIntent() == TransactionAdmissionIntent.ORDINARY
-        : "Public signing must not mutate the caller payload";
-  }
-
-  private static void publicBuilderPreservesExplicitQueuePlanIntent() throws Exception {
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-            .setNetworkId(TestNetworkIds.fromSeed(12L))
-            .setAuthority(TestAccountIds.ed25519Authority(0x32))
-            .setExecutable(Executable.ivm("canonical-marker".getBytes()))
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
-            .build();
-    final NoritoCodecAdapter codec =
-        new NoritoJavaCodecAdapter(
-            org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final SignedTransaction signed =
-        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider())
-            .encodeAndSign(payload, new FakeSigner());
-    final TransactionPayload decoded = codec.decodeTransaction(signed.encodedPayload());
-
-    assert decoded.admissionIntent() == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED
-        : "Public signing must preserve QueuePlan intent";
-    assert payload.admissionIntent() == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED
-        : "Public signing must not mutate the caller payload";
   }
 
   private static void encodeAndSignWithKeyManagerAlias() throws Exception {

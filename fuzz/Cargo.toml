@@ -64,12 +64,5 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "lane_relay_envelope"
-path = "lane_relay_envelope.rs"
-test = false
-doc = false
-bench = false
-
 [profile.release]
 debug = 1
