@@ -3222,6 +3222,22 @@ private_key = "{}"
     fn transaction_status_body(transaction: &SignedTransaction, kind: &str) -> Vec<u8> {
         transaction_status_body_for_hash(&transaction.hash().to_string(), kind)
     }
+    /// Torii's typed HTTP 404 body establishing global status absence for exactly one hash.
+    ///
+    /// A bare 404, for example from a misrouted proxy, never establishes absence.
+    fn transaction_status_absence_body_for_hash(hash: &str) -> Vec<u8> {
+        norito::json::to_vec(&norito::json!({
+            "code": "pipeline_transaction_status_not_found",
+            "message": "Missing status.",
+            "details": {
+                "pipeline_transaction_status_not_found": {
+                    "hash": hash,
+                    "scope": "global",
+                },
+            },
+        }))
+        .expect("transaction status absence JSON")
+    }
     #[test]
     fn signing_client_maps_applied_and_pending_transaction_statuses_over_http() {
         let signer = KeyPair::try_from_seed(vec![92; 32], Algorithm::Ed25519)
@@ -3263,7 +3279,10 @@ private_key = "{}"
             }
         );
         server.join().expect("rejected status server");
-        let (url, server) = serve_http_once("404 Not Found", Vec::new());
+        let (url, server) = serve_http_once(
+            "404 Not Found",
+            transaction_status_absence_body_for_hash(&transaction.hash().to_string()),
+        );
         let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
@@ -3272,6 +3291,24 @@ private_key = "{}"
             RegistryTransactionStateV1::Absent
         );
         server.join().expect("absent status server");
+        let other = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"other"));
+        for body in [
+            Vec::new(),
+            transaction_status_absence_body_for_hash(&other.to_string()),
+        ] {
+            let (url, server) = serve_http_once("404 Not Found", body);
+            let signing = signing_client_at(&url, &signer, test_network_id(0x15));
+            assert_eq!(
+                signing
+                    .transaction_application_state_v1(&transaction)
+                    .expect_err("an unbound 404 never establishes absence"),
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Retryable,
+                    "MUSUBI_REGISTRY_TRANSACTION_STATUS_FAILED",
+                )
+            );
+            server.join().expect("unbound absence server");
+        }
     }
     #[test]
     fn signing_client_requires_state_finality_and_height_for_terminal_statuses() {
@@ -4227,7 +4264,10 @@ private_key = "{}"
             )
         };
         let (url, server) = serve_http_sequence(vec![
-            ("404 Not Found", Vec::new()),
+            (
+                "404 Not Found",
+                transaction_status_absence_body_for_hash(&hex::encode(intent.transaction_hash)),
+            ),
             ("200 OK", resolver_json),
             ("200 OK", exact_json),
         ]);

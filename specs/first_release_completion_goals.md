@@ -3,7 +3,7 @@
 Set: 2026-09-20. Overall goal: **Active**. This record coordinates the accepted
 privacy/ZK, SoraFS V1, and multilane implementation and qualification plan.
 Starting checkout: `f11eed2d6c7113163295e65703d9c206a5ce07d9` (`optimizations`).
-Required working directory: `/Users/takemiyamakoto/devstuff/iroha`.
+Required working directory: `/Users/takemiyamakoto/dev/iroha`.
 Required branch: `optimizations`. Perform all further implementation and
 validation here; do not create or use another checkout, worktree or branch.
 The [September 23 merge transition](../docs/history/2026-09-23/optimizations-merge-transition.md)
@@ -63,16 +63,6 @@ The [C# host record](../docs/history/2026-09-21/csharp-native-runtime.md) record
 native-backed tests and ordinary-stack admission without claiming release closure.
 The [Android consumer record](../docs/history/2026-09-21/android-managed-host-runtime.md)
 records managed and explicit host-JNI execution separately from device qualification.
-The [deferred-handoff record](../docs/history/2026-09-21/deferred-handoff-carrier-validation.md)
-records passing component controls and the remaining failed full liveness run.
-The [18-step Apalache diagnostic](../docs/history/2026-09-23/multilane-apalache-vc-diagnostic.md)
-identifies the timed-out verification conditions; it does not close the formal gate.
-The [original-owner formal source binding](../docs/history/2026-09-24/multilane-original-owner-formal-source-binding.md)
-passes the current structural checker and focused local-refusal mutations; it
-does not close the pending formal or runtime qualification.
-The [runtime VC mapping correction](../docs/history/2026-09-23/multilane-apalache-runtime-vc-mapping-correction.md)
-locates the actual slow predicates, records two unsuccessful exact rewrites and
-leaves the canonical model unchanged.
 The [retained-source and qualification record](../docs/history/2026-09-21/retained-source-and-qualification-integration.md)
 records first-mask ownership tests, fixture migration and published-schema work.
 The [Java-source package producer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md#actual-package-producer-and-bounded-evidence-ownership)
@@ -232,14 +222,14 @@ resolver; it does not provide those missing governance and grant authorities.
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),
 [SoraFS](sorafs/v1_implementation_goals.md), and
-[multilane](sumeragi_v2_multilane_completion_goals.md), including the
-[liveness redesign](sumeragi_liveness_redesign_goals.md). A source change,
+[consensus and multilane](sumeragi_goals.md) with the
+[lane design](sumeragi_lanes.md). A source change,
 compiled profile, historical receipt, or synthetic fixture does not close a
 release goal.
 
 ## Fixed requirements
 
-- Work only in `/Users/takemiyamakoto/devstuff/iroha` on `optimizations`.
+- Work only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
 - First release means **no backward compatibility**: one final V1 implementation
   and wire contract; delete retired aliases, shims, fallback decoders, and
   competing legacy execution paths. Canonical account aliases remain ordinary
@@ -284,7 +274,7 @@ release goal.
 | F10 | Open | Product privacy integration — product/Core owners | Confidential authority/conservation; Kaigi proof/relay/lifecycle; Parliament ballot/deadline/beacon/restart and independent protocol review. The [relay lifecycle guard](../docs/history/2026-09-24/kaigi-relay-route-lifecycle-guard.md), [restore key check](../docs/history/2026-09-24/kaigi-active-relay-restore-key-binding.md), and [feedback source/lifecycle cut](../docs/history/2026-09-24/kaigi-relay-feedback-source-lifecycle.md) pass 13/13 combined focused Core selectors. The [historical reporter source audit](../docs/history/2026-09-24/kaigi-f10-historical-reporter-source-audit.md) shows restore does not authenticate `reported_by` and the rekey record lacks transition height; signed-source and historical host-state replay are needed. The [Parliament private-ballot restart audit](../docs/history/2026-09-24/parliament-f10-private-ballot-restart-source-audit.md) distinguishes existing reducer/finality/restore guards from the missing later-phase four-validator and deployment-custody qualification. Historical reporter authorization across rekeys, relay deployment, multi-validator restart, and independent review remain open. |
 | F11 | Active; private protocol unresolved | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. The [late-dropout aggregate-opening review](../docs/history/2026-09-23/standalone-election-dropout-aggregate-blocker.md), [fault matrix](../docs/history/2026-09-24/standalone-election-dropout-fault-matrix.md), [primary-source functional-opening review](../docs/history/2026-09-24/standalone-election-primary-source-functional-opening-review.md), [NARAD subset-opening review](../docs/history/2026-09-24/standalone-election-narad-subset-opening-review.md), and [final-corpus opening audit](../docs/history/2026-09-24/standalone-election-final-corpus-opening-audit.md) record the scoped completion and leakage gaps without claiming impossibility. The [ODSUM fixed-zero-slot candidate](../docs/history/2026-09-24/standalone-election-odsum-zero-slot-rejection.md) is rejected because public ciphertext ratios reveal the hidden choice and a roster-to-zero-slot dropout blocks completion; the private-election gate remains closed. [Smallest-unit arithmetic](../docs/history/2026-09-24/standalone-conviction-smallest-unit-boundary.md) passes focused public tests. The [exact u128 tally representation](../docs/history/2026-09-24/standalone-election-u128-tally-representation.md) passes DataModel 1/1, Core 8/8 including atomic restore, Torii response 3/3 and HTTP selector 4/4, IVM ABI 11/11 and mock 1/1, isolated JavaScript builder/reader tests 16/16, Kotlin/Java-source consumer tests 5/5, Python source with an existing native wheel 135/135, and C# 5,788/5,788. Swift passes actual-source parser typecheck and scanner smoke; full Swift tests await a same-source native bridge. Full-host IVM, same-source native and complete SDK parity remain open. The [zero-minimum bond custody cut](../docs/history/2026-09-24/standalone-election-zero-minimum-bond-escrow.md) passes Core helper 1/1, adjacent PLAIN 4/4, grouped conviction integration 5/5 and guarded ZK lock rejection 1/1: even a zero minimum now requires escrow for a positive bond, with exact delta movement. The [immutable public cast and typed conviction update](../docs/history/2026-09-24/standalone-election-immutable-plain-cast-update.md) passes same-source Core library selectors, DataModel codec 1/1, grouped Core integration 9/9, and isolated JavaScript checks 7/7; same-source native and full SDK parity remain open. Public conviction arithmetic and real bond conservation are prerequisites, not anonymous-election completion. |
 | F12 | Active; final regeneration after interfaces settle | Canonical APIs and SDK/native packages — SDK/release owners | One typed V1 surface; double regeneration; matching Rust, Kotlin/Java consumers, Swift, JS, Python and C# execution; complete five-target native artifacts and installation checks. The [current Swift attempt](../docs/history/2026-09-23/swift-current-checkout-build-prerequisite.md) stopped at package resolution because the same-source ABI-23 bridge has not yet been built. The [public-ballot update SDK slice](../docs/history/2026-09-24/standalone-election-immutable-plain-cast-update.md) passes isolated JavaScript boundary/declaration checks and compiles Kotlin and Java-source consumers; Kotlin runtime tests require a same-source ABI-23 native bridge, and full SDK parity remains open. The [optional-orderbook lazy cut](../docs/history/2026-09-24/javascript-f12-orderbook-lazy-bundle-boundary.md) passes the complete JavaScript bundle gate under the unchanged production ceilings. The [C# direct conviction update](../docs/history/2026-09-24/csharp-f12-plain-conviction-direct-v1.md) passes a warning-free Release build, 4/4 focused tests, and 5,796/5,796 unfiltered Release tests after repairing the exact KAGEMUSHA credential field. The [Python choice-free update](../docs/history/2026-09-24/python-f12-choice-free-conviction-instruction.md) passes native Rust 1/1 and scoped syntax/lint, but the same-source ABI3 wheel fails macOS dyld `mis-aligned LINKEDIT` before installed-package pytest collection; Python runtime parity remains open. The [canonical conviction fixture inventory](../docs/history/2026-09-24/f12-conviction-fixture-contract-inventory.md) identifies the Rust-authored direct-frame golden and Ordinary/QueuePlanSynced signed-builder mismatch; its repo-local fixture staging passed focused exporter/xtask tests 1/1 each and actual 27-entry, 32-file byte-identical publication. Cross-SDK golden parity and native-backed package qualification remain open. |
-| F13 | Active; final runs after implementation | Formal/runtime/hardware qualification — validation owners | Required formal bounds, all current-Native four-validator scenarios, larger-network resilience/scaling, full-proof hardware parity/fault quarantine and unchanged-candidate resource evidence. The [current script-suite collection boundary](../docs/history/2026-09-24/multilane-script-suite-collection-boundary.md) and [retired-validator assertion map](../docs/history/2026-09-24/multilane-retired-validator-assertion-map.md) record the V1 migration. The [original-owner structural binding](../docs/history/2026-09-24/multilane-original-owner-formal-source-binding.md) passes the canonical checker and 9 focused cases, including 8 mutations, without a completed formal engine run. The canonical descriptor runner, archive schema, control binding and journal owners pass scoped Python suites (31, 35, 143, 326, 527, 333 cases respectively); native-facts and completed-owner modules pass together 135/135, including duplicate-account and equal-valued lag type refusal; runner-result selection passes 168 with one pre-existing stale source-digest assertion deselected. The remaining native proof/receipt consumer and source-pinned candidate inventory prevent release qualification. |
+| F13 | Active; final runs after implementation | Formal/runtime/hardware qualification — validation owners | Required formal bounds, all current-Native four-validator scenarios, larger-network resilience/scaling, full-proof hardware parity/fault quarantine and unchanged-candidate resource evidence. The [current script-suite collection boundary](../docs/history/2026-09-24/multilane-script-suite-collection-boundary.md) and [retired-validator assertion map](../docs/history/2026-09-24/multilane-retired-validator-assertion-map.md) record the V1 migration. The retired multilane scaling-gate scripts and their suites were removed with the previous runtime. |
 | F14 | Queued after F01–F13 | Audit, candidate sealing and promotion — release/operators/reviewers | Resolve required audit findings; exact-source complete validation; genuine signed release and promotion evidence, authenticated publication/readback, and rollback qualification. The [interim source-file budget diagnostic](../docs/history/2026-09-24/source-file-budget-interim-diagnostic.md) reports 239 current-source violations; it is not a frozen-candidate receipt. |
 
 Work on independent owners proceeds concurrently. Shared Core/State/Queue/Kura
@@ -299,9 +289,10 @@ or a proof engine before its complete authoritative production consumer exists.
 - SoraFS: four voting validators, multiple providers, two regional gateways,
   two DAG instances, 1,000 concurrent streams, corruption/load/recovery testing,
   a 24-hour soak, disaster recovery and all 17 fresh signed readiness summaries.
-- Multilane: all six milestones and seven release gates, including the final
-  18-step Apalache obligation, 13 global validators and three four-validator
-  dataspaces, ten deterministic seeds and a two-hour fault soak.
+- Multilane: roadmap N12 on the [lane design](sumeragi_lanes.md): four-validator
+  fixed and elastic lane node tests, simulator coverage of a lane next to the
+  global instance and a four-peer network soak with elastic scale-out/in under
+  load and restarts.
 - Scaling: five fixed-workload one-/four-lane pairs, at least 1.5x throughput
   and at most 1.25x p95 latency, with complete resource maxima through drain.
 - Release: locked workspace builds/tests, strict Clippy, formatting, codec

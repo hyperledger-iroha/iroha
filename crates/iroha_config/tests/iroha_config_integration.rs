@@ -1,6 +1,8 @@
 //! Consolidated integration-test harness for `iroha_config`.
 #[path = "autoscale_config.rs"]
 mod autoscale_config;
+#[path = "checked_in_profiles_parse.rs"]
+mod checked_in_profiles_parse;
 #[path = "compute_economics.rs"]
 mod compute_economics;
 #[path = "connect_relay_strategy_hard_cut.rs"]

@@ -8,6 +8,21 @@
 //!
 //! Height-one outputs have no QC. They require a certified successor or independent committee
 //! attestations; merely constructing a verifier does not authenticate genesis execution.
+//!
+//! Certificates, committees and epoch handoffs are checked by the data model's contiguous
+//! [`SumeragiFinalityVerifier`]: each successor must carry an exact `2f + 1` commit certificate
+//! of the committee that its authenticated predecessor scheduled, and an epoch boundary's
+//! certified result is the only source of the next committee. Work is proportional to new
+//! blocks rather than new epochs: parent-result, schedule and beacon-seed bindings are checked
+//! between adjacent certified blocks, and the canonical checkpoint retains the exact decisions
+//! of the tip's two predecessors.
+//!
+//! An observation verifies one contiguous prefix, each height at most once, and places every
+//! member's claimed tip on it. A claim that fails verification or exceeds the budget is reported
+//! for that member alone, so a Byzantine member cannot abort the observation or spend the budget
+//! that honest tips need. A checkpoint lagging by more than one observation budget is caught up
+//! across observations ([`FinalityError::CatchingUp`]) or explicitly in pages
+//! ([`FinalityVerifier::catch_up`]).
 // TODO(P2): provide the native HTTP transport and concurrent bounded peer reads.
 
 use iroha_crypto::HashOf;
@@ -17,7 +32,7 @@ use iroha_data_model::{
     sumeragi_finality::{
         FinalityError as NativeFinalityError, FinalityValidator, ScheduledSlot,
         SumeragiFinalityAttestation, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
-        SumeragiFinalityVerifier,
+        SumeragiFinalityVerifier, VerifiedSumeragiBlock,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -229,6 +244,16 @@ pub enum FinalityError {
     /// Too few distinct current members supplied valid fresh statements.
     #[error("{} of {} required committee members attested", .0.verified(), .0.required)]
     InsufficientAttestations(Box<AttestationQuorum>),
+    /// Members claim tips beyond what one observation budget verified. The next observation
+    /// continues from the verified successors; the checkpoint is unchanged until a fresh quorum
+    /// confirms a tip.
+    #[error("verified through height {verified}, members claim up to {claimed}; observe again")]
+    CatchingUp {
+        /// Last height this observation verified.
+        verified: u64,
+        /// Highest tip a member claimed beyond the budget.
+        claimed: u64,
+    },
     /// The requested work exceeds a finite observation budget.
     #[error("finality observation exceeds its {0} budget")]
     ResourceLimit(&'static str),
@@ -254,15 +279,22 @@ impl Budget {
             bytes: MAX_ADVANCE_BYTES,
         }
     }
+    /// Why this budget cannot cover `proof`, without spending anything.
+    fn refuses(&self, proof: &SumeragiFinalityProof) -> Option<&'static str> {
+        if self.proofs == 0 {
+            Some("proof count")
+        } else if proof.block_wire.len() > self.bytes {
+            Some("proof bytes")
+        } else {
+            None
+        }
+    }
     fn charge(&mut self, proof: &SumeragiFinalityProof) -> Result<(), FinalityError> {
-        self.proofs = self
-            .proofs
-            .checked_sub(1)
-            .ok_or(FinalityError::ResourceLimit("proof count"))?;
-        self.bytes = self
-            .bytes
-            .checked_sub(proof.block_wire.len())
-            .ok_or(FinalityError::ResourceLimit("proof bytes"))?;
+        if let Some(reason) = self.refuses(proof) {
+            return Err(FinalityError::ResourceLimit(reason));
+        }
+        self.proofs -= 1;
+        self.bytes -= proof.block_wire.len();
         Ok(())
     }
 }
@@ -271,6 +303,9 @@ impl Budget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalityVerifier {
     checkpoint: SumeragiFinalityCheckpoint,
+    /// Successors an observation verified before its budget ran out, awaiting a fresh quorum.
+    /// The next observation continues from here; they never become the checkpoint without one.
+    pending: Option<SumeragiFinalityCheckpoint>,
 }
 
 impl FinalityVerifier {
@@ -308,6 +343,7 @@ impl FinalityVerifier {
         verifier.verify(genesis)?;
         Ok(Self {
             checkpoint: verifier.export_checkpoint(genesis)?,
+            pending: None,
         })
     }
 
@@ -326,7 +362,10 @@ impl FinalityVerifier {
             expected_chain,
         )?;
         CommitteeSize::new(checkpoint.tip().committee.len())?;
-        Ok(Self { checkpoint })
+        Ok(Self {
+            checkpoint,
+            pending: None,
+        })
     }
 
     /// Complete native checkpoint to persist for independently authenticated restart.
@@ -425,6 +464,65 @@ impl FinalityVerifier {
         Ok(fetched)
     }
 
+    /// Verify one bounded page of contiguous successors toward `target` and publish its last
+    /// verified successor as the new checkpoint; returns the resulting checkpoint height.
+    ///
+    /// [`Self::observe`] follows only tips within one observation budget of the checkpoint, so
+    /// a stored checkpoint that lags further moves forward through repeated calls. A page ends
+    /// at `target`, after [`MAX_ADVANCE_PROOFS`] successors, or before the successor that would
+    /// exceed [`MAX_ADVANCE_BYTES`]. Every successor is verified as in [`Self::advance`];
+    /// `target` only bounds the work and never selects trust. A target at or below the
+    /// checkpoint fetches nothing.
+    ///
+    /// # Errors
+    /// A transport failure, a wrong height, an invalid successor, or a first successor that
+    /// alone exceeds the byte budget. The checkpoint is unchanged on error.
+    pub fn catch_up<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        target: NonZeroU64,
+    ) -> Result<u64, FinalityError> {
+        self.catch_up_with_budget(source, target, &mut Budget::new())
+    }
+    fn catch_up_with_budget<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        target: NonZeroU64,
+        budget: &mut Budget,
+    ) -> Result<u64, FinalityError> {
+        let current = self.checkpoint.height();
+        if target.get() <= current {
+            return Ok(current);
+        }
+        let mut native = self.native()?;
+        let mut page_tip = None;
+        for expected in current + 1..=target.get() {
+            if budget.proofs == 0 {
+                break;
+            }
+            let proof = source
+                .finality_proof(NonZeroU64::new(expected).expect("successor is positive"))
+                .map_err(FinalityError::transport)?;
+            if proof.height() != expected {
+                return Err(FinalityError::UnexpectedHeight {
+                    expected,
+                    actual: proof.height(),
+                });
+            }
+            if proof.block_wire.len() > budget.bytes && page_tip.is_some() {
+                break;
+            }
+            budget.charge(&proof)?;
+            CommitteeSize::new(proof.committee.len())?;
+            native.verify(&proof)?;
+            page_tip = Some(proof);
+        }
+        if let Some(tip) = page_tip {
+            self.checkpoint = native.export_checkpoint(&tip)?;
+        }
+        Ok(self.checkpoint.height())
+    }
+
     /// Verify a current member's fresh attestation against the exact retained native prefix.
     /// At most one block of lag is accepted; no arbitrary same-epoch decision is trusted.
     ///
@@ -493,6 +591,7 @@ impl FinalityVerifier {
     /// Responses observed before an advance remain eligible when their exact original native
     /// decisions were authenticated during that advance, including across committee boundaries.
     /// This bounded observation-local custody is separate from the compact restart window.
+    /// Tips beyond one observation budget are not followed; see [`Self::catch_up`].
     ///
     /// # Errors
     /// Zero challenge, peer/proof budget exhaustion, or insufficient valid attestations.
@@ -501,6 +600,14 @@ impl FinalityVerifier {
         source: &S,
         challenge: &[u8; 32],
     ) -> Result<AttestationQuorum, FinalityError> {
+        self.observe_with_budget(source, challenge, &mut Budget::new())
+    }
+    fn observe_with_budget<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        challenge: &[u8; 32],
+        budget: &mut Budget,
+    ) -> Result<AttestationQuorum, FinalityError> {
         require_challenge(challenge)?;
         let mut trial = self.clone();
         let mut reads = BTreeMap::new();
@@ -508,7 +615,6 @@ impl FinalityVerifier {
         // original decision and parent are retained by contiguous native verification. At most
         // MAX_OBSERVATION_PEERS entries live here; no unbounded history is retained on restart.
         let mut observed_prefix = BTreeMap::new();
-        let mut budget = Budget::new();
         loop {
             let count = reads.len();
             trial.read_members(source, challenge, &mut reads)?;
@@ -558,7 +664,7 @@ impl FinalityVerifier {
                 let mut capture = |native: &SumeragiFinalityVerifier, height| {
                     record_observed_prefix(native, height, &candidates, &mut candidate_prefix);
                 };
-                match trial.advance_recording(source, tip, &mut budget, &mut capture) {
+                match trial.advance_recording(source, tip, budget, &mut capture) {
                     Ok(_) => {
                         observed_prefix = candidate_prefix;
                         break;

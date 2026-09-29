@@ -73,7 +73,7 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
     }
 }
 
-fn malformed_context_operations(prefix: f64) -> [napi::Error; 13] {
+fn malformed_context_operations(prefix: f64) -> [napi::Error; 10] {
     [
         norito_encode_instruction("{}".to_owned(), prefix)
             .err()
@@ -143,14 +143,13 @@ fn shared_codec_adapter_restores_context_after_malformed_inputs() {
     let _outer = ChainDiscriminantGuard::enter(753);
     for prefix in [369.0, 42.0] {
         let errors = malformed_context_operations(prefix);
-        assert_eq!(errors.len(), 13);
+        assert_eq!(errors.len(), 10);
         assert_eq!(
             iroha_data_model::account::address::chain_discriminant(),
             753
         );
     }
 }
-
 
 #[test]
 fn contract_argument_record_requires_the_selected_account_prefix() {

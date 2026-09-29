@@ -1,6 +1,21 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
+    crate::captured_schema_tests::Case::bidirectional::<super::ValidatorPower>(
+        "iroha_data_model::block::consensus::ValidatorPower",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::DataAvailabilityLayout>(
+        "iroha_data_model::block::consensus::DataAvailabilityLayout",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::PayloadEncoding>(
+        "iroha_data_model::block::consensus::PayloadEncoding",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::SumeragiGenesisContextParameters>(
+        "iroha_data_model::block::consensus::SumeragiGenesisContextParameters",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::HeightContextId>(
+        "iroha_data_model::block::consensus::HeightContextId",
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::ConsensusGenesisParams>(
         "iroha_data_model::block::consensus::ConsensusGenesisParams",
     ),

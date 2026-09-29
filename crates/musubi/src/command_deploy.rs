@@ -841,7 +841,8 @@ mod tests {
         let (authority, id, address, fee) = authority_paid_identities();
         let mut preflight = authority_paid_preflight(id, &authority, &address, &fee);
         let commit = Hash::new(b"atomic commit");
-        preflight.transaction_hashes = vec![Hash::new(b"self grant").to_string(), commit.to_string()];
+        preflight.transaction_hashes =
+            vec![Hash::new(b"self grant").to_string(), commit.to_string()];
         assert_eq!(
             plan_journal_id(&preflight).expect("journal id"),
             hex::encode(commit.as_ref())
@@ -853,7 +854,10 @@ mod tests {
                 "contains an invalid transaction hash",
             ),
             // Valid hex whose least significant bit is clear is not a transaction hash.
-            (vec!["00".repeat(32)], "contains an invalid transaction hash"),
+            (
+                vec!["00".repeat(32)],
+                "contains an invalid transaction hash",
+            ),
         ] {
             preflight.transaction_hashes = hashes;
             let diagnostic = plan_journal_id(&preflight).expect_err("unusable plan hashes");

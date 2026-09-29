@@ -396,8 +396,8 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     manifest = rust_ci.load_lane_manifest()
     assert manifest.daemon_packages == ("irohad",)
     assert manifest.package_binaries == {
-        "integration_tests": ("iroha", "iroha3d", "iroha3d_message_control"),
-        "iroha_test_network": ("iroha", "iroha3d", "iroha3d_message_control"),
+        "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
+        "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
         "izanami": ("iroha", "iroha3d"),
     }
     assert manifest.consumers["consistency"].binaries == ("iroha", "kagami")
@@ -696,7 +696,6 @@ def test_known_foundation_changes_defer_network_reverse_dependants(tmp_path: Pat
     assert result.deferred_packages == ("integration_tests", "iroha_test_network", "irohad")
     assert set(result.deferred_consumers) == {
         "consistency", "pytests", "sora_parliament_lifecycle",
-        "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs",
     }
     assert result.binaries == () and not any(result.consumers.values())
     assert document["binary_matrix"] == {"include": []}
@@ -721,13 +720,12 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert not result.foundation_only and not result.full
     assert result.deferred_packages == result.deferred_consumers == ()
     assert "irohad" in result.lane_packages["node"]
-    assert result.binaries == ("iroha", "iroha3d", "iroha3d_message_control", "kagami")
+    assert result.binaries == ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami")
     assert result.as_dict()["binary_matrix"]["include"] == [
         {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
         {"lane": "integration", "packages": "integration_tests", "package_count": 1},
     ]
-    for name in ("sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs"):
-        assert result.consumers[name]
+    assert result.consumers["sora_parliament_lifecycle"]
 
 
 def test_foundation_and_direct_python_input_retains_python_network_consumer(tmp_path: Path) -> None:
@@ -770,9 +768,7 @@ def test_full_selection_includes_isolated_and_qualified_daemon_owners(tmp_path: 
     assert result.deferred_packages == result.deferred_consumers == ()
 
 
-@pytest.mark.parametrize("name", (
-    "sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs",
-))
+@pytest.mark.parametrize("name", ("sora_parliament_lifecycle",))
 def test_qualified_runner_has_its_own_explicit_selection_and_binary_owner(tmp_path: Path, name: str) -> None:
     """Runner ownership remains explicit even without the broad shared-CI fallback."""
 
@@ -825,7 +821,7 @@ def test_empty_binary_union_requires_an_explicit_qualified_owner(tmp_path: Path)
         rust_ci.load_lane_manifest(path)
 
 
-def test_message_control_artifact_build_and_staging_preserve_shipping_identity(
+def test_route_control_artifact_build_and_staging_preserve_shipping_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Same-named daemon binaries retain separate feature graphs, directories, and output bytes."""
@@ -836,21 +832,21 @@ def test_message_control_artifact_build_and_staging_preserve_shipping_identity(
         target = Path(command[command.index("--target-dir") + 1]) / "release"
         target.mkdir(parents=True)
         (target / "iroha3d").write_bytes(
-            b"message-control daemon" if "--features" in command else b"shipping daemon"
+            b"route-control daemon" if "--features" in command else b"shipping daemon"
         )
     monkeypatch.setattr(rust_ci, "_run", fake_run)
     output = tmp_path / "artifacts"
-    rust_ci.build_binaries(("iroha3d", "iroha3d_message_control"), output, root=tmp_path)
+    rust_ci.build_binaries(("iroha3d", "iroha3d_private_settlement_routes"), output, root=tmp_path)
     assert calls == [
         ["cargo", "build", "--locked", "--release", "--target-dir",
-         str(tmp_path / "target/ci-binaries/message-control"),
-         "-p", "irohad", "--bin", "iroha3d", "--features", "irohad/test-network-message-control"],
+         str(tmp_path / "target/ci-binaries/private-settlement-route-control"),
+         "-p", "irohad", "--bin", "iroha3d", "--features", "irohad/test-network-private-settlement-route-control"],
         ["cargo", "build", "--locked", "--release", "--target-dir",
          str(tmp_path / "target/ci-binaries/shipping"), "-p", "irohad", "--bin", "iroha3d"],
     ]
-    assert sorted(path.name for path in output.iterdir()) == ["iroha3d", "iroha3d_message_control"]
+    assert sorted(path.name for path in output.iterdir()) == ["iroha3d", "iroha3d_private_settlement_routes"]
     assert (output / "iroha3d").read_bytes() == b"shipping daemon"
-    assert (output / "iroha3d_message_control").read_bytes() == b"message-control daemon"
+    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"route-control daemon"
 
 
 def test_isolated_build_failure_never_publishes_a_partial_binary_bundle(
@@ -863,7 +859,7 @@ def test_isolated_build_failure_never_publishes_a_partial_binary_bundle(
     monkeypatch.setattr(rust_ci, "_run", fail_run)
     output = tmp_path / "artifacts"
     with pytest.raises(rust_ci.ClassificationError, match="isolated compile failed"):
-        rust_ci.build_binaries(("iroha3d", "iroha3d_message_control"), output, root=tmp_path)
+        rust_ci.build_binaries(("iroha3d", "iroha3d_private_settlement_routes"), output, root=tmp_path)
     assert not output.exists()
 
 
@@ -893,9 +889,9 @@ def test_isolated_only_union_does_not_build_shipping_daemon(tmp_path: Path, monk
         (target / "iroha3d").write_bytes(b"control only")
     monkeypatch.setattr(rust_ci, "_run", fake_run)
     output = tmp_path / "artifacts"
-    rust_ci.build_binaries(("iroha3d_message_control",), output, root=tmp_path)
+    rust_ci.build_binaries(("iroha3d_private_settlement_routes",), output, root=tmp_path)
     assert len(calls) == 1
-    assert calls[0][-2:] == ["--features", "irohad/test-network-message-control"]
-    assert sorted(path.name for path in output.iterdir()) == ["iroha3d_message_control"]
-    assert (output / "iroha3d_message_control").read_bytes() == b"control only"
+    assert calls[0][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
+    assert sorted(path.name for path in output.iterdir()) == ["iroha3d_private_settlement_routes"]
+    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"control only"
     assert not (tmp_path / "target/ci-binaries/shipping").exists()

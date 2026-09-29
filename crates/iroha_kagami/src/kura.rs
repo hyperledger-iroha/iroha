@@ -1,6 +1,5 @@
 mod beacon_history;
 mod finality;
-mod scaling_evidence;
 
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
@@ -25,8 +24,6 @@ pub struct Args {
 }
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
-    /// Prepare, export or independently replay canonical scaling evidence
-    ScalingEvidence(Box<scaling_evidence::command::Args>),
     /// Project bounded typed public beacon candidates, with explicit coverage limits.
     BeaconHistory {
         /// Exact lane directory containing the canonical block journals.
@@ -80,7 +77,6 @@ enum Command {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self.command {
-            Command::ScalingEvidence(args) => (*args).run(writer),
             Command::BeaconHistory {
                 path_to_block_store,
                 from,

@@ -22,8 +22,8 @@ pub use ethereum_native::*;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod ton_native;
-// Explicit list: the crate-internal `BoC`/cell helpers of `ton_native` are `pub` inside the
-// private module but stay unexported.
+// Explicit list: the crate-internal `BoC`, cell and block-opening helpers of `ton_native` are
+// `pub` inside this private module but stay unexported.
 pub use ton_native::{
     TonBlockIdExtV1, TonBlockSignaturesV1, TonNativeSourceError, TonOrdinaryBlockSignaturesV1,
     TonSimplexBlockSignaturesV1, TonValidatorConfigV1, TonValidatorSetV1, TonValidatorSignatureV1,

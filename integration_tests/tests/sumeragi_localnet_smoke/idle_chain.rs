@@ -500,7 +500,7 @@ pub(super) async fn run() -> Result<()> {
             );
         }
         eprintln!(
-            "EX-297 idle-chain evidence: cadence={SMOKE_PIPELINE_TIME:?}, retransmit_interval_ms={retransmit_interval_ms}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, baseline_settle_window={baseline_settle_window:?}, idle_window={idle_observation:?}, baseline_height={baseline_height}, external_height={external_height}, trigger_registration_height={registration_height}, internal_trigger_height={internal_height}, final_tip_hash={expected_internal_hash}"
+            "EX-297 idle-chain evidence: cadence={SMOKE_PIPELINE_TIME:?}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, baseline_settle_window={baseline_settle_window:?}, idle_window={idle_observation:?}, baseline_height={baseline_height}, external_height={external_height}, trigger_registration_height={registration_height}, internal_trigger_height={internal_height}, final_tip_hash={expected_internal_hash}"
         );
         Ok(())
     }

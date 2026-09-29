@@ -698,34 +698,17 @@ that conflicts with State-established lane geometry and a stale model identity
 in the production transition-witness constructor. The unchanged-input result
 is retained before repairs; it is not a passing Core qualification.
 The repaired run passes **396 Core and seven Torii tests**, with all 5,090
-selected inputs unchanged. Runtime witnesses, the shared checker and the Verus
-theorem now consume one source identity checked against the actual TLA bytes;
-the fixture preserves State-established incarnation identity. Pinned Verus
-verifies the actual witness theorem with no proof escapes (one selected theorem,
-not the complete mandatory harness). The trace contracts now authenticate the
+selected inputs unchanged. The trace contracts now authenticate the
 strict readers, propagated persistence errors and exact payload/receipt checks;
 action dispatch is counted independently of the shared ActivateKura custody
-condition. One iterative function-body reader handles unparenthesized Verus
-contract branches without changing proof or TLA bytes. The previously
+condition. The previously
 unwitnessed replica Queue observation now uses the canonical node wrapper.
 All 10 Core witness, Queue and restart regressions pass after removing a second
 reservation of an already-held fixture fee and binding the replay source region
 to its function signature. The fee test compares every field of the retained
 nonzero hold. All 19 source tests and 35 subtests pass, including a complete
 snapshot authenticating 28 actions and 29 runtime bindings; all 5,104 selected
-inputs remain unchanged. The mandatory shared reducer harness passes 197 tests
-with zero ignored. Its inventory was compared against the compiled historical
-187-test source: all 187 remain, with ten additions and none removed. The full
-pinned Verus harness then verifies all 221 project obligations and 1,690 vstd
-dependency obligations with zero errors, `--rlimit 60` and `--no-cheating`;
-all 40 selected harness inputs remain unchanged. This completes the scoped
-Verus execution, not whole-candidate release qualification. All eight mandatory
-model-replay cases and eleven fast simulations also pass. The explicit
-100,000-height simulation completes 50,000 permissioned and 50,000 NPoS heights,
-with all 43 selected harness sources and fixtures unchanged. These use
-certificate-supplied reducer fixtures and do not qualify production peer
-networking. The replay run omitted fixture files from its pre-run source
-manifest; its runtime result remains development evidence. Workspace formatting
+inputs remain unchanged. Workspace formatting
 and all four retired-codec guards pass. The source-size check still reports 237
 violations over 10,643 files, with no new violating paths or expanded exceptions.
 The receipt-source contract now follows the shared strict structural reader,

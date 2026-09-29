@@ -235,3 +235,22 @@ fn record_keys_are_not_mistaken_for_unknown_fields() {
         .expect_err("a misspelled key must fail");
     assert!(error.contains("record_dir"), "{error}");
 }
+
+#[test]
+fn retired_block_queue_limit_and_storage_tables_are_rejected() {
+    // Block limits are chain parameters; the retired ingress, limit and storage tables have no
+    // node-local replacement and must fail instead of being ignored.
+    for (table, field) in [
+        ("block", "max_transactions"),
+        ("queues", "body_bytes"),
+        ("limits", "max_lanes"),
+        ("storage", "body_store_max_bytes_per_height"),
+    ] {
+        let error = parse_inline(&format!("[sumeragi.{table}]\n{field} = 1\n"))
+            .expect_err("a retired Sumeragi table must fail");
+        assert!(
+            error.contains("unknown parameter") && error.contains(&format!("sumeragi.{table}")),
+            "retired `sumeragi.{table}` must be named as unknown: {error}"
+        );
+    }
+}

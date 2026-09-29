@@ -3,9 +3,9 @@
 These records describe focused repairs against the current first-release
 contracts. They do not establish full workspace or release qualification.
 
-The `sumeragi-main-loop-tests` feature, the Sumeragi v2 formal scripts and the
-v2 source-compaction tests named in the historical commands below were removed
-with the v2 consensus tooling; rerun those builds without that feature.
+The `sumeragi-main-loop-tests` feature and the previous consensus runtime's formal
+scripts and source-compaction tests named in the historical commands below were
+removed with that runtime; rerun those builds without that feature.
 
 ## September 20 Anonymous-PGC proof decoding stack overflow
 
@@ -57,12 +57,6 @@ Merkle proofs; a regression rejects substitution of another input's successful
 output. The public-input genesis fixture installs its manifest baseline and
 authenticated configured Kura geometry before startup catalog projection.
 
-Carrier warning cleanup retains original resources and their drop order, limits
-inspection helpers to unit tests, and preserves nested failure diagnostics.
-The source bindings and mutation checks track the retained field names. Unused
-CLI wrappers and fulfilled lint expectations are removed without compatibility
-shims or blanket warning suppression.
-
 The combined test build is warning-free:
 
 ```sh
@@ -71,137 +65,9 @@ cargo test -p iroha_cli --bin iroha -p iroha_core --lib --no-run
 
 Focused execution passes 90 Core tests, 51 CLI tests and the four-peer P2P
 crossed-dial/restart regression. The existing expensive end-to-end settlement
-proof test remains ignored. Three focused carrier source-contract checks,
-edited-file formatting and the retired-codec guard also pass. Full workspace
+proof test remains ignored. Edited-file formatting and the retired-codec guard
+also pass. Full workspace
 tests and the broader source-contract mutation matrix were not completed.
-
-## September 16 committed-carrier and recovery regressions
-
-The reported Core run passed 15,335 tests and failed 82. The original executable
-reproduced all 82 failures in a focused run. Fixtures now count actual applied
-fragments, bind certified merge execution to its exact carrier header, keep
-ordinary payloads out of execution-bearing merge carriers, and configure the
-complete startup dataspace baseline. Geometry fixtures admit the primary anchor
-and journal incarnation replacement through the geometry owner. AXT replay
-checks retain the permanent counter across rejected physical reconfiguration
-and explicit policy revocation/recreation.
-
-Native AMX publication can reopen an authenticated committed carrier for repair.
-Its bounded durable locator records that repair explicitly, validates the exact
-selected executed wire, and cannot classify missing or changed committed bytes
-as an uncommitted append. Late body-store completions may settle through an
-exact authenticated publication marker after pipeline ownership transfers;
-missing or conflicting ownership without that proof still fails. The native
-body-loss fixture preserves indexed recovery length and first verifies that
-ordinary eviction cannot discard pending publication work.
-
-All 449 focused tests pass, with no failures or ignored tests: all 82 reported
-test names and 367 additional block, geometry, publication, query,
-autonomous-execution and lifecycle checks. The final run completed in 636.29
-seconds directly from the rebuilt executable with eight libtest workers.
-The build and supporting checks are:
-
-```sh
-scripts/cargo_fast.sh -- test -p iroha_core --lib \
-  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry --no-run
-cargo fmt -p iroha_core --check
-python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
-python3 scripts/tests/sumeragi_v2_lifecycle_launch_source_compaction_test.py
-scripts/check_no_legacy_codec.sh
-```
-
-Both Python suites pass (6 and 11 checks), as do formatting and the codec guard.
-The full Core and workspace test suites are outside this focused validation.
-
-## September 15 certified-fetch registry stack overflow
-
-Both `cold_ready_fetch` regressions aborted independently on the default
-libtest stack. The debugger identified cumulative stack use from large inline
-owners across admission and cold recovery. The B-tree stored 26,000-byte
-`ConcreteLifecycleWork` values inline, amplifying stack use across tree
-operations and nested admission results. The cold-recovery census also held
-every authenticated carrier variant inline, producing a 547,336-byte frame
-above canonical replay-authority decoding in the unoptimized Linux build.
-
-Registry rows, installation failures and publication failures now retain boxed
-work. Keeping error results boxed also removes full-carrier temporaries from
-the nested publication frames while they validate the canonical ledger.
-The shared fixture keeps its production owners on the heap across handoffs.
-Live successor transitions reuse their parent allocation or consume storage
-reserved before durable publication;
-rollback retains the complete move-only incumbent. Cold reconstruction retains
-heap ownership through authenticated Fetch-to-Store-to-Validate conversions and
-the complete census, prepared-work handoff and registry construction, preserving
-all authentication checks and durable schemas.
-The storage regressions check the actual installed B-tree value size,
-error-result size and both recovery entry sizes; a fixture layout guard prevents
-aggregate ownership copies from returning. Source contracts
-require transfer of the existing Validate parent allocation into Sign work.
-The original cold-fetch rejection and replay assertions remain unchanged.
-The terminal ingress drain also passes its configured control-queue capacity
-to the current lane-output interface, fixing a missing-argument build error.
-Its ordinary lane fixture derives the required ingress capacity from the
-frozen roster and explicitly opens the configured ingress before enqueueing.
-
-Comparing stack-frame prologues in the original and repaired unoptimized
-Linux test binaries gives these scoped measurements:
-
-| Frame | Original bytes | Repaired bytes |
-| --- | ---: | ---: |
-| Authenticated body recovery census | 547,336 | 6,744 |
-| Recovered body registry installation | 338,808 | 712 |
-| Exact registry installation | 312,952 | 1,032 |
-| Reported failing test | 362,824 | 28,856 |
-
-Validation passes on the default libtest stack with no stack-size override:
-387 distinct Rust tests covering all 34 certified-body fence cases, registry
-and admission transactions, authenticated replay and ledger recovery, all 55
-source contracts, ingress planning, and lane output ordering/backpressure.
-The existing incident-frame inspection test remains ignored because it needs
-external diagnostic inputs. All six source-contract asset tests and the
-retired-codec dependency guard pass. Full workspace tests were not run.
-
-The focused build used the same test feature graph as the reported binary:
-
-```sh
-scripts/cargo_fast.sh -- test -p iroha_core --lib \
-  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
-  cold_ready_fetch -- --nocapture
-scripts/cargo_fast.sh -- test -p iroha_core --lib \
-  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
-  ordinary_lane_consumer_ -- --test-threads=4
-python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
-scripts/check_no_legacy_codec.sh
-```
-
-The broader focused suites ran directly from the resulting test executable
-with four test threads. Source-contract guards now explicitly require parent
-allocation reuse, exact obsolete-owner retirement, and authenticated CompleteTip
-repair publication ordering.
-
-## September 15 block-construction stack overflow
-
-The default-stack `merge_entrypoints_commit_in_canonical_carrier_membership`
-regression aborted while reserving the stack frame for
-`State::block_with_pristine_stage`, during fixture genesis construction after
-Kura stored height one. The debugger identified a 741,304-byte constructor
-frame, with large state values also retained by its callers.
-
-Four existing lifecycle transaction phases now run in separate, non-inlined
-borrowed helpers. Their execution order and transaction apply/drop boundaries
-are preserved. The measured constructor frame is now 581,496 bytes in the
-same unoptimized Linux build. The original test passes without a stack-size
-override. A new pristine-stage failure regression verifies skipped lifecycle
-work, discarded writes, released locks and rollback when a successful scope
-is dropped.
-
-Validation used `scripts/cargo_fast.sh --stable-local-metadata --incremental --
-test -p iroha_core --lib` with exact test selection. The reported case and 34
-additional checks pass, covering normal/replacement source-context ordering,
-merge membership, privacy schedules and expiry, confidential transitions,
-sponsor activation and governance sweeps. Workspace formatting and diff checks
-pass. The Parliament source-check failures found during this run are repaired
-and validated below. Full workspace tests were not run.
 
 ## September 15 Parliament source/model bindings
 
@@ -245,15 +111,6 @@ classes and exercises admission, drainage and reuse at capacity one. The timeout
 test checks both validator and observer roles; the WAL-consumer worker regression
 uses one consistent frozen validator identity across its runtime layers.
 
-The live ledger fixture consumes its startup publication witness before later
-transactions, matching production owner construction. Its regression checks the
-unchanged live coordinator and exact persisted successor. Source guards now
-cover the authenticated pending-Kura terminal transfer, recovered Decision
-authority at activation and timeout-body retirement. The publication inventory
-retains an exact count and explicitly checks the added retirement path's
-authentication, cancellation, validation, publication and readback order. Ten
-negative source mutations cover these boundaries.
-
 Validation rebuilt Core and P2P with:
 
 ```sh
@@ -267,7 +124,7 @@ and four existing diagnostic ignores (`RAYON_NUM_THREADS=2`, eight test threads)
 The selection covered the complete shared aggregate/transparent/private-note
 STARK modules, ZK-ACE engine, X.509 DER/engine/readiness modules, privacy profiles
 and lifecycle coordinator, plus the four reported X.509 proof/profile cases,
-three reported adapter/worker cases, three reducer role controls and MAIN
+three reported adapter/worker cases and MAIN
 assembly scrubbing. An exact-name audit confirms all eighteen reported failures
 passed. The final P2P admission-class and handle-update selection passes all
 60 tests, including capacity-one actor reuse with canonical BLS identities and
@@ -279,8 +136,7 @@ target/debug/deps/iroha_p2p-9e3318caaa99f24d \
   network::admission_class_tests:: network::handle_update_tests:: --test-threads=8
 ```
 
-The complete 55-case source-contract census and all six Python asset
-tests, including the ten new mutation controls, also pass. Workspace formatting,
+Workspace formatting,
 diff checks, codec-retirement guards and historical archive verification pass.
 The builds retain warnings in unchanged code; full Core/workspace tests were
 not rerun.
@@ -426,185 +282,13 @@ Cargo run and three further executions of the same harness all pass with normal
 parallel test execution (10.62, 10.94, 11.12 and 11.29 seconds). Workspace
 formatting and diff checks pass. Full Core/workspace execution was not rerun.
 
-## Follow-up from the 57-failure Core run
-
-The next reported full Core run passed 14,770 tests and failed 57. This repair
-addresses the current startup, execution and certificate contracts:
-
-- Empty journal replay keeps admission closed until exact State/Kura
-  reconciliation completes. The runner's lane-evidence repair fence now accepts
-  that closed empty replay and rejects an already-open gate. Fresh workload
-  fixtures complete their empty journal receipts before admission; recovery
-  fixtures retain their replay quarantine and exact FIFO assertions.
-- Predecessor fixtures stage their ordinary execution frontier before applying
-  verified finality. The Native AMX receipt binds the actual first coordinator
-  slot and its exact ownership proposal. Finality alone still cannot create an
-  unexecuted frontier.
-- Lane-history retention authenticates exact canonical carrier coordinates
-  against signed finality and the complete merge entry. It can therefore
-  preflight a missing reverse-index repair without requiring that index first.
-  Conflicting retained records and missing or malformed finality still reject
-  the frontier, and authentication performs no repair writes. Regression tests
-  cover both an evicted carrier body and corrupt retained inline bytes.
-- A late validation failure protected by the timeout certificate's Prepare QC
-  retains the exact certified-body report. Applied ordinary lane completion
-  checks historical predecessor evidence and the current applied frontier.
-- Relay status publication stays under the lane lifecycle fence so retirement
-  cannot prune the cache before a delayed publisher reintroduces the envelope.
-  The identity-drift test observes the process-global cache in an isolated
-  subprocess, preserving its state and status assertions under parallel tests.
-
-The reviewed harness rebuilt without warnings in 6 minutes 52 seconds using
-`cargo test --locked -p iroha_core --lib --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run`.
-Its focused selection passed 1,477 tests in 712.26 seconds, including every one
-of the 57 reported failures, all 55 consensus source contracts, the relay
-publication race regression and both new retention regressions. The remaining
-Kura modules passed 261 tests in 127.59 seconds. These disjoint selections cover
-1,738 passing tests, including all 1,208 Kura tests, with no failures or ignored
-tests. The 24 changed Core inputs and copied executable remained byte-identical
-throughout this validation.
-
-An earlier diagnostic build completed a broader block, Queue and consensus
-selection with 1,571 passes and ten failures. All ten were among the reported
-57 and pass on the reviewed build; that earlier run found no additional failing
-cases. Its high-volume Queue barrier case also passed.
-
-Workspace formatting, diff checks, codec-retirement checks, six source-asset
-tests and historical-archive verification pass. The focused Python mutation
-test rejects both empty-replay quarantine bypasses. The optional positive
-autonomous-terminal source-contract check remains blocked by an existing Kura
-include inventory omission (`tests/14_pipeline_and_lane_frame_owners.rs`);
-the starting revision and repaired source have the same 105 include paths.
-Full Core/workspace execution and four-validator qualification were not rerun.
-
-## Follow-up from the 23-failure Core run
-
-The subsequent full Core run reported 14,764 passes and 23 failures. Its retained
-executable predates the source correction that binds each validation fixture's
-service peer and private signer to the same selected validator. That correction
-keeps the signer identity assertion intact and covers ten reported failures.
-
-The remaining repairs address these causes:
-
-- FASTPQ lane startup changes the process-wide digest acceleration state. Every
-  lane test now holds the shared acceleration guard through worker completion,
-  matching the digest tests' exclusion and restoring state on exit. The stale
-  pending-input assertions still require CPU fallback without a GPU fault.
-- Kura's intentional prune panics poison the process-wide consensus transition
-  gate. Clearing poison after catching a panic leaves a race with unrelated
-  tests. All five crash fixtures now run in separate exact-test subprocesses;
-  recovery assertions and production fail-stop behavior remain intact. The
-  duplicate wrapper around the same crash matrix is removed.
-- DER and RFC 5280 descriptor pins still hashed the previous geometry after the
-  descriptor strings were updated. Their SHA-256 pins now bind the current
-  masking, composition and compact-CA geometry. Terminal and capacity assertions
-  remain unchanged; this does not activate ZK-X509.
-- A delayed output belonging to a protected Ready Apply retains Completion
-  priority even when Apply dispatch is blocked. Draining Runtime still requires
-  the exact predecessor proof. The outer ingress regression also checks that
-  Producer work cannot take that priority.
-- Lifecycle recovery tests distinguish a missing inherited Validate owner from
-  a fresh standalone Prepare owner, and require an applied successor to consume
-  its authenticated Validate retry seal. They no longer demand a NoSuccessor
-  tombstone when a real Apply successor exists.
-
-The fresh harness built with the shared feature command below. An exact-name
-rerun of all 23 reported failures passed with 16 test workers in 93.49 seconds.
-The broader selection passed 1,755 tests with no failures in 253.87 seconds;
-one existing retained-ledger diagnostic requires an external incident file and
-remains ignored. The two runs cover 1,757 distinct passing tests. The changed
-Rust sources and copied executable remained unchanged throughout validation.
-
-Using the copied harness as `CORE_TEST_BIN`, the broader command was:
-
-```sh
-RAYON_NUM_THREADS=2 "$CORE_TEST_BIN" \
-  fastpq:: kura:: \
-  sumeragi::v2_effects::tests::certified_body_fence_supersession:: \
-  sumeragi::v2_lifecycle_coordinator::ledger::tests:: \
-  sumeragi::v2_lifecycle_coordinator::work_registry::tests:: \
-  sumeragi::v2_runner:: --test-threads=16
-```
-
-This includes all 184 FASTPQ and 1,197 Kura tests. Workspace formatting,
-diff checks, codec-retirement guards and historical-archive verification pass.
-Full workspace execution and hardware qualification were not rerun.
-
-The optional `python3 scripts/formal/check_sumeragi_v2_multilane_models.py` check
-still reports 233 existing source-binding errors in Kura, QueuePlan, lane
-planning and two test anchors. The affected items were compared with the
-starting revision; none of these errors was introduced by this patch. The
-changed runner binding is current. This is not a full formal qualification.
-
-## Follow-up from the 10-failure Core run
-
-The reported full Core run passed 14,967 tests, failed ten and ignored 32.
-All ten failures reproduce in the retained test executable. Their causes are
-incomplete fixture authority and an incorrectly scoped source assertion:
-
-- Unlocked certified-view retention refreshes merge candidates immediately.
-  Its fixtures now persist the exact canonical parent chain and signed finality
-  in Kura, matching the committed State parent. The shared sidecar-server
-  fixture provides that same durable foundation for rollover and recovery.
-- Candidate-provider fixtures install the runner's exact unlocked reducer view
-  before admission. Multiroute geometry is established before genesis; the
-  single-route QueuePlan fixture freezes its authority before voting journals
-  open. Repeated retries retain all FIFO and autonomous-ownership assertions.
-- A new regression exercises both candidate providers with absent and stale
-  reducer directives. Both defer without closing output or publishing proposal
-  ownership, then resume after the exact view is installed.
-- The Apply ordering assertion is scoped to the Apply-owned recovery branch.
-  The earlier decided Validate-sidecar drain has its own sealed permit. The
-  assertion still requires Decision cleanup, terminal output reconciliation
-  and the open-ingress permit before the Apply drain.
-
-Production frontier, signing, quorum and recovery guards are unchanged. No
-compatibility path or ignored test is introduced.
-
-The fresh Core harness built without warnings in 9 minutes 57 seconds:
-
-```sh
-cargo test --locked -p iroha_core --lib \
-  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
-```
-
-The exact ten reported failures and the new reducer-view regression pass with
-16 test workers in 25.29 seconds. Using that executable as `CORE_TEST_BIN`, the
-broader selection passes all 455 tests, with no failures or ignored tests, in
-221.50 seconds:
-
-```sh
-RAYON_NUM_THREADS=2 "$CORE_TEST_BIN" \
-  sumeragi::v2_lane_work:: \
-  sumeragi::v2_lifecycle_coordinator::launch:: \
-  sumeragi::v2_runner:: \
-  sumeragi::v2_apply::tests::merge_frontier_ \
-  apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers \
-  --test-threads=16
-```
-
-This includes all shared sidecar-fixture callers and the eight State/Kura
-frontier tests for publication races, missing or contradictory parent headers,
-damaged indexes and retained signing authority. The changed Rust inputs and
-executable remain byte-identical throughout the broader run. All nine focused
-lifecycle source tests also pass independently without Core dependencies;
-six temporary source mutations confirm that the Apply assertion still rejects
-missing handoffs, reordered recovery and missing ingress authority. Changed-file
-formatting, diff and historical-archive checks pass. Full Core/workspace and
-four-validator network suites were not rerun.
-
 ## Changes
 
 - Fixtures use registered universal authorities, exact four-validator
-  committees, signed revision-4 DA, committed genesis identity, and complete
+  committees, committed genesis identity, and complete
   asset, contract, audit, and snapshot provenance. Negative cases retain their
   intended validation boundary and state-preservation assertions.
-- Kura recovery reads an authenticated relabelled storage pair and preserves
-  uncertain staged claims until their durability is known. Bounded generic
-  atomic sidecars are discarded before startup repairs reserve capacity;
-  named protocol temporaries retain their authenticated recovery paths.
-  Closed lanes retain their committed, pinned close committee for global
-  drain certification while ordinary proposal authority remains closed. FASTPQ lane
+- FASTPQ lane
   extraction validates both transcript and source-capture inventories before
   removing either.
 - The Initial executor admits the native asset-escrow lifecycle through its
@@ -668,7 +352,6 @@ full-suite command; the scopes overlap where noted.
 | SNS and Musubi | 178 |
 | Query | 512 |
 | Kura, complete fresh run after startup cleanup change | 1,196 |
-| Drain and merge authority regressions | 15 |
 | FASTPQ source context | 12 |
 | DataModel registry and generated-record identity, with governance | 366 |
 | Privacy/FHE Core checks, including CA mutations, release evidence, ISI regressions, and complete proof KATs | 839 |
@@ -699,12 +382,6 @@ evidence; an earlier failing artifact does not qualify a later source correction
 Full workspace execution, strict workspace
 Clippy, hardware qualification, and four-validator network qualification are
 separate gates.
-
-The broader protocol selection finished with 1,009 passes, two failures from
-its earlier artifact, and 12 existing ignored tests. Both failures were the lane
-Commit-vote fixtures that omitted their prerequisite Prepare QC; their corrected
-tests pass on a subsequent rebuilt artifact. No other failure remained in that
-selection.
 
 The broader State selection finished with 1,539 passes and 39 failures from its
 earlier artifact. All 39 corrected cases pass on subsequent rebuilt artifacts.

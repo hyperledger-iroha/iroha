@@ -8,8 +8,8 @@ Rust ownership fails closed to every lane.
 
 Ordinary foundation-only changes retain affected library and local CLI checks;
 network tests and daemon owners require a mixed source change or ``ci/full``.
-Binary staging requires Cargo and uses separate target directories for shipping
-and consensus-message-control feature graphs. Qualified corridor runners own
+Binary staging requires Cargo and uses separate target directories for the
+shipping daemon and each test-feature daemon graph. Qualified corridor runners own
 their source-bound bundles and never consume this downloaded PR artifact set.
 """
 

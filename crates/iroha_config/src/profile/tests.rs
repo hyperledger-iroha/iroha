@@ -128,8 +128,13 @@ fn sora_nexus_v1_carries_the_deployed_taira_shape() {
             .contains_key("registry")
     );
     assert_eq!(
-        integer_at(profile.static_config(), "sumeragi.queues.body_source_bytes"),
-        35_651_584
+        value_at(profile.static_config(), "sumeragi")
+            .as_table()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["keys"],
+        "the profile binds only the consensus key policy; block limits are chain parameters"
     );
     assert_eq!(profile.host().systemd_memory_max, "4G");
     assert_eq!(profile.host().systemd_cpu_quota, "200%");
@@ -553,8 +558,8 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
     let mut changed = sora();
     set(
         &mut changed.static_config,
-        "sumeragi.queues.chunks",
-        toml::Value::Integer(4_097),
+        "sumeragi.keys.overlap_grace_blocks",
+        toml::Value::Integer(9),
     );
     assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "static");
     assert_eq!(
@@ -717,10 +722,10 @@ fn genesis_recipe_rejects_retired_seat_band() {
 #[test]
 fn consensus_keys_cannot_be_reached_by_later_layers() {
     let cases: [(&str, &str); 5] = [
-        ("policy.sumeragi.queues.chunks", "policy"),
+        ("policy.sumeragi.keys.allowed_algorithms", "policy"),
         ("role.observer.nexus.lane_count", "role.observer"),
-        ("policy.sumeragi.queues.body_bytes", "policy"),
-        ("static.sumeragi.queues.commands", "derive(n)"),
+        ("policy.network.max_total_connections", "policy"),
+        ("static.network.max_total_connections", "derive(n)"),
         ("static.genesis.public_key", "node file"),
     ];
     for (key, layer) in cases {
@@ -786,12 +791,7 @@ fn malformed_profiles_are_rejected() {
         Err(ProfileError::Malformed { .. })
     ));
     let mut table = sora_table();
-    table
-        .get_mut("static")
-        .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .remove("sumeragi");
+    table.remove("static");
     assert!(matches!(
         Profile::from_table(ProfileId::SoraNexusV1, table),
         Err(ProfileError::Malformed { .. })
@@ -823,7 +823,7 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
         "torii.kagemusha_v1_commands.redemption_minimum_xor_balance",
         "torii.kagemusha_v1_commands.redemption_private_key_file",
         "soracloud_runtime.inrou.max_cpu_millis",
-        "sumeragi.queues.chunks",
+        "sumeragi.keys.allowed_algorithms",
         "kura.store_dir",
         "private_key_file",
     ] {

@@ -1629,7 +1629,7 @@ mod tests {
     }
     #[test]
     fn prepared_mode_uses_concrete_read_only_genesis_artifacts() {
-        const AUTHORED_BODY_BYTES: usize = 555_555_555;
+        const AUTHORED_SYNC_MAX_BYTES: u32 = 555_555_555;
         let temp = TempDir::new("prepared_artifacts");
         let bundle = temp.path().join("bundle");
         let deployment = temp.path().join("deployment");
@@ -1653,10 +1653,8 @@ mod tests {
                     &runtime_config,
                     format!(
                         "chain = \"prepared\"\n# container projection for peer {index}\n\
-                         [sumeragi.queues]\n\
-                         authenticated_non_validator_sources = 5\n\
-                         body_source_bytes = 35651584\n\
-                         body_bytes = {AUTHORED_BODY_BYTES}\n"
+                         [sumeragi]\n\
+                         sync_max_bytes = {AUTHORED_SYNC_MAX_BYTES}\n"
                     ),
                 )
                 .expect("write projected runtime config fixture");
@@ -1725,14 +1723,10 @@ mod tests {
         assert!(!output.contains("environment:"));
         assert!(!output.contains("PRIVATE_KEY:"));
         assert!(
-            !output.contains("SUMERAGI_QUEUES_BODY_BYTES"),
-            "prepared runtime TOML must retain its admitted queue policy without a Compose environment rewrite"
-        );
-        assert!(
             std::fs::read_to_string(bundle.join("peer0.runtime.toml"))
                 .expect("read authored runtime config")
-                .contains(&format!("body_bytes = {AUTHORED_BODY_BYTES}")),
-            "building Compose must not rewrite the authored prepared runtime capacity"
+                .contains(&format!("sync_max_bytes = {AUTHORED_SYNC_MAX_BYTES}")),
+            "building Compose must not rewrite the authored prepared runtime settings"
         );
         assert!(output.contains("../bundle/peer0.runtime.toml"));
         assert!(!output.contains("container projection for peer 0"));

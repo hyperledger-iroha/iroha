@@ -107,9 +107,10 @@ impl TryRngCore for PartialRng {
 
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         destination.fill(0xa5);
-        if self.unwind {
-            panic!("test-only RNG failure after writing private seed bytes");
-        }
+        assert!(
+            !self.unwind,
+            "test-only RNG failure after writing private seed bytes"
+        );
         Err(PartialRngError)
     }
 }

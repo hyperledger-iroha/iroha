@@ -1127,9 +1127,9 @@ fn top_level_and_nested_command_inventory_is_exact() {
         command_names(&command),
         BTreeSet::from_iter(
             [
-                "add", "alias", "build", "cache", "check", "deploy", "fetch", "info", "init",
-                "metadata", "network", "new", "owner", "package", "publish", "remove", "search",
-                "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
+                "add", "alias", "build", "cache", "call", "check", "deploy", "fetch", "info",
+                "init", "metadata", "network", "new", "owner", "package", "publish", "remove",
+                "search", "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
             ]
             .map(str::to_owned)
         )

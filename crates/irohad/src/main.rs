@@ -11386,17 +11386,14 @@ mod tests {
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
-                Err((
-                    _,
+                Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                         actual_nexus,
                         actual_execution,
                         ..
-                    },
-                )) => (actual_nexus, actual_execution),
-                Err((_, error)) => {
-                    panic!("genesis signing draft failed native validation: {error}")
-                }
+                    } => (actual_nexus, actual_execution),
+                    error => panic!("genesis signing draft failed native validation: {error}"),
+                },
             }
         }
         #[test]
@@ -11993,7 +11990,8 @@ mod tests {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let duplicate_domain =
-                DomainId::try_new("duplicate", "universal").expect("valid domain id");
+                iroha_model_base::domain::DomainId::try_new("duplicate", "universal")
+                    .expect("valid domain id");
             let instructions = [
                 Register::domain(Domain::new(duplicate_domain.clone())).into(),
                 Register::domain(Domain::new(duplicate_domain)).into(),

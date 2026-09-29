@@ -1,6 +1,6 @@
 # Kotodama / IVM first-release completion
 
-All ongoing implementation and validation use only `/Users/takemiyamakoto/soramitsudev/iroha` on `optimizations`, as directed on September 27. The earlier prepared changes are being reconciled with newer branch ownership and layouts. Historical passes below concern their recorded source; this combined checkout requires fresh compilation and qualification. G1–G8 remain active and incomplete. Fresh scoped results and unresolved integration checks are tracked in the [optimizations checkpoint](../docs/history/2026-09-27/kotodama-ivm-optimizations.md).
+All ongoing implementation and validation use only `/Users/takemiyamakoto/dev/iroha` on `optimizations`, as directed on September 27. The earlier prepared changes are being reconciled with newer branch ownership and layouts. Historical passes below concern their recorded source; this combined checkout requires fresh compilation and qualification. G1–G8 remain active and incomplete. Fresh scoped results and unresolved integration checks are tracked in the [optimizations checkpoint](../docs/history/2026-09-27/kotodama-ivm-optimizations.md).
 
 This record tracks implementation of the accepted first-release completion plan.
 It is not release qualification. One final ABI V1 replaces unfinished interfaces;

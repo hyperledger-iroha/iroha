@@ -8,7 +8,7 @@ No live deployment or release readiness is established by this record.
 
 The complete first-release implementation and qualification goal is active.
 Implementation and validation use only the `optimizations` branch in
-`/Users/takemiyamakoto/soramitsudev/iroha`. Results from another checkout do not
+`/Users/takemiyamakoto/dev/iroha`. Results from another checkout do not
 qualify this candidate; all outstanding gates must run against this source.
 The selected design replaces retired layouts and paths; backward-compatible
 decoders, aliases, shims and parallel implementations are prohibited.
@@ -152,7 +152,7 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
 | Dynamic election and mint-finality keys | The native E+2 selector/producer, complete retained epoch graph and immediate next-epoch application barrier are integrated. TODO: finish signed control and Pasta integration and qualify complete preparation and certified retention without fresh incumbent keys on actual networks. Registration alone must never add voting authority. | Core/data model, KAGEMUSHA and deployment |
 | Prepared beacon transition | The signed encrypted all-edge DKG model and reducer bind the frozen exact roster and fail closed before finalization if an edge or acceptance is absent. The deterministic Core fixture still constructs secrets centrally; daemon per-seat custody, authenticated exchange, genesis orchestration, current/pending session restart and atomic activation need qualification. Parliament can require an early pulse independently of the next epoch-end election pulse. Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
 | Staking under an enacted DS-transfer validation-fee policy | Exact signed monetary bindings and native effect checks are implemented. The policy counts every actual signed real-XOR staking transfer leg under `PerQualifyingTransferInstruction`, even when the DS fee asset differs; principal cannot satisfy the fee coordinate. Reward reservations and claim dust with no transfer leg incur no transfer fee. The focused Core fee suite passed 110/110 on 2026-09-23. TODO: qualify bounded claims, multisig/proved overlays, and the canonical native execution owner on an unchanged network candidate. Ordinary Nexus/PipelineGas charging already uses signed `FeePaymentIntent`; staking-specific runtime qualification of those payer bounds remains outstanding. | Core/native execution and fees |
-| Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: close the silent-initial-author counterexample and retirement/restart cuts in `sumeragi_liveness_redesign_goals.md`; a second signer or local retry bypass is not a completion. | Core/Sumeragi, Queue, Kura and formal owners |
+| Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: close the silent-initial-author counterexample and retirement/restart cuts; a second signer or local retry bypass is not a completion. | Core/Sumeragi, Queue, Kura and formal owners |
 | Reward allocation | The selected policy is explicit treasury-funded canonical-XOR distributions. TODO: qualify funding, signed recording and bounded payment together. Automatic participation formulas, commission and issuance programs are outside this implementation. | Treasury/governance and Core |
 | Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, queued Parliament pulse, missing target signer, all-seat restart, replay rejection, rewards, slashing and final withdrawal. Run the maintained fault/DA/formal gates and complete workspace checks. | Integration, release and subsystem owners |
 
@@ -298,10 +298,7 @@ bridge. CLI plan-file signing remains an intermediate workflow; complete SDK
 and operator qualification
 are outstanding. The new Kotlin/Swift source and shared fixture are in both
 maintained SDK source closures; their 25 focused Python closure/OpenAPI-pin
-controls pass. The maintained multilane formal structural/source-binding checker
-passes after rebinding the current Native preparation and State merge owners;
-the focused mutation suite and TLC/Apalache runners remain separate, and the
-checker must be rerun after the production-source cutover.
+controls pass.
 
 The updated bridge successor regression passes on the current data-model source:
 one focused test rejects a self-consistent, re-signed authority, epoch authorization,

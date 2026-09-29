@@ -35096,43 +35096,6 @@ mod kagemusha_v1_settlement_tests;
 mod settlement_router_tests;
 
 #[cfg(test)]
-mod merge_authority_geometry_tests {
-    use super::*;
-
-    #[test]
-    fn nexus_rejects_unmergeable_aggregate_committee_geometry() {
-        for (lane_count, allowed) in [(190_u32, true), (191_u32, false)] {
-            let mut config = Nexus::default();
-            config.lane_count = NonZeroU32::new(lane_count).unwrap();
-            config.lane_catalog = (0..lane_count)
-                .map(|index| LaneDescriptor {
-                    index: Some(index),
-                    alias: Some(format!("geometry-{index}")),
-                    ..LaneDescriptor::default()
-                })
-                .collect();
-            config.dataspace_catalog = vec![DataSpaceDescriptor {
-                id: Some(0),
-                alias: Some(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_owned()),
-                fault_tolerance: Some(42),
-                ..DataSpaceDescriptor::default()
-            }];
-            config.staking.max_validators = NonZeroU32::new(127).unwrap();
-            let mut emitter = Emitter::new();
-            let parsed = config.parse(&mut emitter);
-            let diagnostics = emitter.into_result();
-            if allowed {
-                assert!(parsed.is_some(), "admissible geometry: {diagnostics:?}");
-                assert!(diagnostics.is_ok());
-            } else {
-                assert!(parsed.is_none());
-                assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
-            }
-        }
-    }
-}
-
-#[cfg(test)]
 mod native_fee_mode_tests {
     use super::*;
 

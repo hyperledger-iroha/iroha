@@ -2,10 +2,10 @@
 
 Set: 2026-09-25. Overall goal: **Active**. Fix consensus and freeze it: replace the
 Sumeragi v2 runtime with the rewritten Sumeragi core and retire every v2 artifact.
-Supersedes [the v2 liveness redesign goals](sumeragi_liveness_redesign_goals.md) (L1–L6),
+Supersedes the v2 liveness redesign goals (L1–L6),
 which are retired unfinished: their target was reconciling v2 lifecycle owners, and the
 rewrite removes those owners instead.
-Required working directory: `/Users/takemiyamakoto/soramitsudev/iroha`. Required branch:
+Required working directory: `/Users/takemiyamakoto/dev/iroha`. Required branch:
 `optimizations`.
 
 Protocol contract: [specs/sumeragi.md](sumeragi.md). Implementation:
@@ -115,8 +115,7 @@ Outside the subsystem, 262 `iroha_core` files and a few files in `iroha_torii`, 
 `iroha_kagami`, `iroha_test_network` and `iroha_cli` reference `crate::sumeragi::*`.
 
 Removed so far (2026-09-27): `crates/iroha_sumeragi_core` and the v2 CI, formal and
-release-gate scripts with their tests. `formal/sumeragi_v2/` stays until the v2 runtime goes,
-because runtime tests pin `SumeragiV2InFlightFirstRelease.tla`.
+release-gate scripts with their tests. The v2 formal models were removed with the v2 runtime.
 
 ## Open questions for the owner
 

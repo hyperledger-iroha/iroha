@@ -268,7 +268,7 @@ fn node_file_overrides_policy_and_overlay_but_not_static() {
     assert!(config.lifecycle.exit_on_stdin_close);
 
     for key in [
-        "[sumeragi.queues]\nchunks = 1\n",
+        "[sumeragi.keys]\nallowed_algorithms = [\"bls_normal\"]\n",
         "nexus = { lane_count = 1 }\n",
     ] {
         let path = dir.write("static.toml", &profile_node(&dir, "observer", key));

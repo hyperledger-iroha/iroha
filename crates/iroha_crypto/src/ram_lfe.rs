@@ -774,9 +774,9 @@ pub fn decode_bfv_programmed_public_parameters(
 /// Returns [`RamLfeError`] when the secret or public transcript is invalid.
 pub fn bfv_affine_policy_commitment(
     secret: &[u8],
-    public_parameters: Vec<u8>,
+    public_parameters: &[u8],
 ) -> Result<PolicyCommitment, RamLfeError> {
-    let decoded = decode_bfv_public_parameters(&public_parameters)?;
+    let decoded = decode_bfv_public_parameters(public_parameters)?;
     let canonical_public_parameters = norito::encode_canonical(&decoded)
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     build_policy_commitment(
@@ -1030,7 +1030,7 @@ fn evaluate_bfv_affine(
     commitment: &PolicyCommitment,
     request: &ClientRequest,
 ) -> Result<EvalResponse, RamLfeError> {
-    let expected = bfv_affine_policy_commitment(secret, commitment.public_parameters.clone())?;
+    let expected = bfv_affine_policy_commitment(secret, &commitment.public_parameters)?;
     if expected.policy_hash != commitment.policy_hash {
         return Err(RamLfeError::CommitmentMismatch);
     }
@@ -2069,7 +2069,7 @@ mod tests {
                 .expect("derive BFV public parameters");
         let commitment = bfv_affine_policy_commitment(
             secret,
-            norito::to_bytes(&public_parameters).expect("encode public parameters"),
+            &norito::to_bytes(&public_parameters).expect("encode public parameters"),
         )
         .expect("build BFV policy commitment");
         let ciphertext = encrypt_identifier_from_seed(
@@ -2100,7 +2100,7 @@ mod tests {
                 .expect("derive BFV public parameters");
         let commitment = bfv_affine_policy_commitment(
             secret,
-            norito::to_bytes(&public_parameters).expect("encode public parameters"),
+            &norito::to_bytes(&public_parameters).expect("encode public parameters"),
         )
         .expect("build BFV policy commitment");
         let request = ClientRequest {

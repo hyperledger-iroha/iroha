@@ -131,23 +131,7 @@ expected_hash_file = "genesis.expected_hash"
 ## Consensus keys retired by a rotation (§10.3); list them for good.
 # retired_keys = []
 
-[sumeragi.block]
-# max_transactions = 512
-# max_payload_bytes = 16777216
-# proposal_queue_scan_multiplier = 4
-
-[sumeragi.queues]
-# commands = 1024
-# authenticated_non_validator_sources = 2
-# bodies = 161
-# body_bytes = 1176502272
-# body_source_bytes = 35651584
-# chunks = 2048
-# ready_bodies = 128
-
-## `[sumeragi.limits]` exposes finite lane, merge, recovery, and Native AMX
-## service bounds. Defaults are suitable for the reference profile; consult
-## `specs/references/configuration.md` before overriding one.
+## Block size and transaction limits are chain parameters from genesis, not node settings.
 [sumeragi.keys]
 # activation_lead_blocks = 1
 # overlap_grace_blocks = 8
@@ -217,11 +201,6 @@ expected_hash_file = "genesis.expected_hash"
 # init_mode = "strict"               # "fast" trusts a signed current snapshot plus marker/count/tip, skips deep audits, and quarantines production until a Strict restart
 # store_dir = "./storage"
 # blocks_in_memory = 1024
-# lane_history_retention = 512        # Lane, autonomous-lifecycle, and Native-AMX history retained before GC
-# eviction_required_replicas = 3      # Minimum selected CommitQC keepers required for body eviction
-# replica_advert_evictable_window = 4096  # Historical evictable heights retained beyond the protected tail
-# replica_advert_ttl_ms = 3_600_000       # Authenticated observation lifetime (2 ms through one hour)
-# replica_advert_refresh_interval_ms = 900_000  # At least 1 ms and at most half the configured TTL
 
 [logger]
 # level = "INFO"

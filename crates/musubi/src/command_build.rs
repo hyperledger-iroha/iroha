@@ -524,4 +524,81 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn build_completion_reports_counts_artifacts_interfaces_and_single_target_next_step() {
+        let artifact = CompilerArtifactV1 {
+            package: "demo/coffee-club".parse().expect("package"),
+            target: "coffee-club".to_owned(),
+            source: "contracts/coffee-club.ko".to_owned(),
+            artifact: PathBuf::from("target/coffee-club.to"),
+            manifest: PathBuf::from("target/coffee-club.manifest.json"),
+            interface: PathBuf::from("target/coffee-club.interface.json"),
+            artifact_hash: "code-digest".to_owned(),
+            abi_hash: "abi-digest".to_owned(),
+            entrypoints: vec!["quote".to_owned()],
+            fresh: false,
+        };
+        let mut execution = CompilerExecutionV1 {
+            validated_packages: 2,
+            contract_targets: 1,
+            warnings: 3,
+            artifacts: vec![artifact.clone()],
+            package_interfaces: vec![crate::compiler::CompilerPackageInterfaceV1 {
+                package: "demo/library".parse().expect("library package"),
+                digest: MusubiContentDigestV1::new([7; 32]),
+            }],
+        };
+        let dir = tempfile::tempdir().expect("workspace");
+        let network = network::select_network(dir.path(), None, None, None).expect("network");
+        let manifest = dir.path().join("Musubi.toml");
+        let mut human = String::new();
+        let mut data = Map::new();
+        append_build_completion(
+            &mut human, &mut data, "build", &execution, &manifest, &network,
+        );
+        assert_eq!(
+            human,
+            format!(
+                "build completed: 2 package(s), 1 contract target(s), 3 warning(s)\n{}{}",
+                render_artifact(&artifact),
+                deployment_next_step(&manifest, &network, &artifact)
+            )
+        );
+        let data = Value::Object(data);
+        assert_eq!(
+            data.pointer("/artifacts/0"),
+            Some(&artifact_json(&artifact))
+        );
+        assert_eq!(
+            data.pointer("/interfaces/0/package")
+                .and_then(Value::as_str),
+            Some("demo/library")
+        );
+        assert_eq!(
+            data.pointer("/interfaces/0/digest").and_then(Value::as_str),
+            Some(hex::encode([7; 32]).as_str())
+        );
+        execution.artifacts.push(CompilerArtifactV1 {
+            target: "second".to_owned(),
+            ..artifact
+        });
+        let mut human = String::new();
+        let mut data = Map::new();
+        append_build_completion(
+            &mut human, &mut data, "check", &execution, &manifest, &network,
+        );
+        assert!(human.starts_with("check completed: 2 package(s), 1 contract target(s)"));
+        assert!(
+            !human.contains("Next:"),
+            "several artifacts have no single deployment step: {human}"
+        );
+        assert_eq!(
+            Value::Object(data)
+                .pointer("/artifacts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
 }

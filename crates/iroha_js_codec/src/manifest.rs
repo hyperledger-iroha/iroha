@@ -130,7 +130,10 @@ fn validate_value_schema(
 mod tests {
     use iroha_data_model::{
         isi::{InstructionBox, smart_contract_code::RegisterSmartContractCode},
-        smart_contract::entrypoint::{EntrypointValueKindV1, EntrypointValueTypeNodeV1 as Node},
+        smart_contract::entrypoint::{
+            EntrypointValueKindV1, EntrypointValueTypeNodeV1 as Node,
+            MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
+        },
     };
     use norito::json::{self, Value};
 
@@ -267,6 +270,24 @@ mod tests {
         ] })).expect("canonical QueryPage")
     }
 
+    /// Arity of the widest flat return tuple the model admits.
+    ///
+    /// Each leaf is one return word and one schema node, and the tuple itself takes
+    /// one more node, so whichever of the return-word window and the recursive node
+    /// budget is smaller bounds the widest admissible tuple.
+    fn widest_return_tuple_arity() -> usize {
+        MAX_ENTRYPOINT_RETURN_WORDS.min(MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES - 1)
+    }
+
+    /// Flat `(int, ..)` return schema with `arity` leaves.
+    fn flat_int_tuple(arity: usize) -> EntrypointValueTypeV1 {
+        let mut nodes = vec![Node::Tuple(
+            u16::try_from(arity).expect("tuple arity fits u16"),
+        )];
+        nodes.extend(vec![Node::Leaf(EntrypointValueKindV1::Int); arity]);
+        EntrypointValueTypeV1 { nodes }
+    }
+
     #[test]
     fn native_manifest_preserves_unit_nominal_cursor_struct_and_reserved_layouts() {
         for overlay in [None, Some(NOMINAL_FIXTURE), Some(STRUCT_FIXTURE)] {
@@ -275,14 +296,9 @@ mod tests {
         for schema in [query_view(), query_page()] {
             assert_roundtrip(&with_return_schema(schema));
         }
-        let mut nodes = vec![Node::Tuple(
-            u16::try_from(MAX_ENTRYPOINT_RETURN_WORDS).expect("return window fits u16"),
-        )];
-        nodes.extend(vec![
-            Node::Leaf(EntrypointValueKindV1::Int);
-            MAX_ENTRYPOINT_RETURN_WORDS
-        ]);
-        assert_roundtrip(&with_return_schema(EntrypointValueTypeV1 { nodes }));
+        assert_roundtrip(&with_return_schema(flat_int_tuple(
+            widest_return_tuple_arity(),
+        )));
     }
 
     #[test]
@@ -368,14 +384,9 @@ mod tests {
         let mut wrong_name = fixture_manifest(None);
         wrong_name.entrypoints.as_mut().unwrap()[0].return_type = Some("bool".to_owned());
         assert_rejected_everywhere(&wrong_name);
-        let mut nodes = vec![Node::Tuple(
-            u16::try_from(MAX_ENTRYPOINT_RETURN_WORDS + 1).expect("oversized window fits u16"),
-        )];
-        nodes.extend(vec![
-            Node::Leaf(EntrypointValueKindV1::Int);
-            MAX_ENTRYPOINT_RETURN_WORDS + 1
-        ]);
-        assert_rejected_everywhere(&with_return_schema(EntrypointValueTypeV1 { nodes }));
+        assert_rejected_everywhere(&with_return_schema(flat_int_tuple(
+            widest_return_tuple_arity() + 1,
+        )));
     }
 
     #[test]

@@ -126,9 +126,11 @@ packages = [
 [lanes.hardware]
 description = "Platform-specific acceleration and hardware discovery."
 packages = [
+  "cust_raw",
   "find_cuda_helper",
   "gpuzstd_cuda",
   "gpuzstd_metal",
+  "iroha_accel",
   "jsonstage1_cuda",
   "jsonstage1_metal",
   "sm3-neon",
@@ -141,7 +143,7 @@ packages = ["integration_tests"]
 
 # Only these package tests start external nodes. Sibling executable tests use
 # Cargo's CARGO_BIN_EXE_* paths and do not need downloaded release artifacts.
-# Authenticated message-control tests run under Cargo and cannot build child
+# Private-settlement route-control tests run under Cargo and cannot build child
 # programs. Their explicit artifact is built separately with the test feature;
 # it never replaces the shipping daemon. Qualified corridor bundles below keep
 # their own build and provenance protocols.
@@ -183,18 +185,6 @@ packages = ["integration_tests"]
 paths = ["crates/iroha_crypto/benches/parliament_crypto*", "dashboards/alerts/sora_parliament_rules.yml", "dashboards/alerts/tests/sora_parliament_rules.test.yml"]
 binaries = []
 qualified_runner = "ci/check_sora_parliament_lifecycle.sh"
-
-[consumers.nexus_cross_dataspace_localnet]
-packages = ["integration_tests"]
-paths = []
-binaries = []
-qualified_runner = "ci/check_nexus_cross_dataspace_localnet.sh"
-
-[consumers.nexus_cross_lane_proofs]
-packages = ["integration_tests"]
-paths = []
-binaries = []
-qualified_runner = "ci/check_nexus_cross_lane_proofs.sh"
 
 [paths]
 # Generated work products never seed a compile lane, including when nested in a
