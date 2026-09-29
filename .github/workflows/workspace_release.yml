@@ -102,7 +102,7 @@ jobs:
           -p mv -p iroha_deploy -p iroha_config -p iroha_torii_shared
           -p iroha_wallet -p iroha -p concread -p iroha_data_model
           -p iroha_crypto -p iroha_p2p -p fastpq_prover -p iroha_core
-          -p iroha_torii -p irohad -p iroha_cli -p iroha_kagami
+          -p iroha_core_zk -p iroha_torii -p irohad -p iroha_cli -p iroha_kagami
           -p iroha_test_network
       - name: Build the full workspace
         run: cargo build --locked --offline --workspace

@@ -1,5 +1,6 @@
 //! Ensure scalar state loads from durable storage at function entry.
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{CoreHost, IVM};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn kotodama_state_scalar_reads_durable() {

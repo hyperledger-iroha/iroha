@@ -8,9 +8,10 @@ use iroha_primitives::{
     numeric_abi::{DecimalValueV1, QuantityValueV1},
 };
 use ivm::{
-    IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, kotodama::compiler::Compiler,
-    numeric::NumericFaultV1, pointer_abi::PointerType, syscalls,
+    IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, numeric::NumericFaultV1,
+    pointer_abi::PointerType, syscalls,
 };
+use kotodama_lang::compiler::Compiler;
 use std::collections::BTreeMap;
 mod common;
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";

@@ -98,9 +98,6 @@ pub mod interlane;
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
-/// Qualified-provider encryption for Kagemusha V1 credit openings.
-#[cfg(test)]
-pub mod kagemusha_v1_crypto;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
@@ -176,12 +173,19 @@ pub mod tx;
 pub mod validation_fee;
 /// Independently anchored evidence for pending committee signer custody.
 pub mod validator_committee_evidence;
-/// Zero-knowledge verification helpers (backend dispatch + envelope validation).
-pub mod zk;
-/// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
-#[cfg(feature = "zk-stark")]
-pub mod zk_stark;
+/// Zero-knowledge verification (re-exported from iroha_core_zk).
+// TODO(zk-split): narrow to pub(crate) once
+// integration_tests/tests/sumeragi_npos_committee_transition.rs (user-owned, Sumeragi),
+// crates/iroha_core/tests/zk_ledger_scaffold.rs and crates/iroha_core/tests/zk_verify.rs
+// import iroha_core_zk directly.
+#[doc(hidden)]
+pub use iroha_core_zk as zk;
+/// Node-configuration adapters for zk verification guardrails.
+pub mod zk_guardrails;
 pub use block::InvalidGenesisError;
+/// Native STARK/FRI verifier under `zk-stark`; external crates use `iroha_core_zk::stark`.
+#[cfg(feature = "zk-stark")]
+pub(crate) use iroha_core_zk::stark as zk_stark;
 use iroha_model_base::peer::PeerId;
 /// Encode one schema-bound public contract argument record using the canonical IVM ABI.
 pub use ivm::encode_argument_record_from_json;
@@ -640,12 +644,8 @@ mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
-#[cfg(any(
-    test,
-    feature = "iroha-core-tests",
-    feature = "kagemusha-real-proof-harness"
-))]
-mod kagemusha_v1_test_fixtures;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use iroha_core_zk::kagemusha_v1_test_fixtures;
 #[cfg(test)]
 mod network_payload_tests;
 #[cfg(test)]

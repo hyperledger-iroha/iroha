@@ -42,8 +42,6 @@ mod branch_cycles;
 mod byte_merkle_tree;
 #[path = "../classic_opcode_rejected.rs"]
 mod classic_opcode_rejected;
-#[path = "../cli_smoke.rs"]
-mod cli_smoke;
 #[path = "../code_hash.rs"]
 mod code_hash;
 #[path = "../commit_output.rs"]

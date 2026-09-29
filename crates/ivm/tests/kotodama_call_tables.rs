@@ -1,6 +1,7 @@
 //! Runtime coverage for the single bounded table ABI across wide products and loop calls.
 
-use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
+use ivm::{IVM, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
 fn run_table_function(source: &str) -> IVM {
     let artifact = KotodamaCompiler::new()

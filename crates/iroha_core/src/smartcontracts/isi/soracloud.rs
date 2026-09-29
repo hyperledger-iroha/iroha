@@ -3514,7 +3514,7 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
             &envelope,
             statement_hash,
             Some(public_padding_context),
-            crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+            crate::zk_guardrails::guardrails_from_config(&state_transaction.zk),
             attachment.proof.bytes.len(),
         )?;
         state_transaction

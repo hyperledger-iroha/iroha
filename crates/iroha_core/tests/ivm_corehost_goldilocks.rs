@@ -101,7 +101,7 @@ mod goldilocks {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn core_host_rejects_retired_ivm_ipa_registry_key() {
-        use iroha_core::zk;
+        use iroha_core_zk as zk;
         use iroha_data_model::{
             proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
             zk::BackendTag,

@@ -1,7 +1,8 @@
 //! Runtime coverage for canonical aggregate equality and operand evaluation.
-use ivm::kotodama::compiler::{CompilerMode, CompilerOptions};
-use ivm::{CoreHost, IVM, KotodamaCompiler, ProgramMetadata, encoding};
+use ivm::{CoreHost, IVM, ProgramMetadata, encoding};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
 
 fn run(source: &str, core_host: bool) -> (bool, u64) {
     let program = KotodamaCompiler::new()

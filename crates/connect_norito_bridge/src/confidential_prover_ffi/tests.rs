@@ -1,6 +1,6 @@
 //! Native lifecycle, shape admission and actual canonical-proof controls.
 use super::*;
-use iroha_core::zk::confidential_v2::{
+use iroha_core_zk::confidential_v2::{
     compute_confidential_merkle_path_v3, default_confidential_diversifier_v2,
     derive_confidential_note_v2, derive_confidential_owner_tag_v2_with_diversifier,
 };

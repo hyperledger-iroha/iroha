@@ -5,15 +5,13 @@
 
 #![cfg(feature = "zk-stark")]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use iroha_core::{
-    zk::verify_backend,
-    zk_stark::{
-        StarkCompositionTermV1, StarkFriParamsV1, StarkFriVerifyingKeyV1, StarkVerifierLimits,
-        StarkVerifyEnvelopeV1, prove_stark_fri_air_envelope_bytes,
-        prove_stark_fri_composition_envelope_bytes, verify_stark_fri_envelope,
-        verify_stark_fri_envelope_with_limits,
-    },
+use iroha_core_zk::stark::{
+    StarkCompositionTermV1, StarkFriParamsV1, StarkFriVerifyingKeyV1, StarkVerifierLimits,
+    StarkVerifyEnvelopeV1, prove_stark_fri_air_envelope_bytes,
+    prove_stark_fri_composition_envelope_bytes, verify_stark_fri_envelope,
+    verify_stark_fri_envelope_with_limits,
 };
+use iroha_core_zk::verify_backend;
 fn checked_zk_stark_keypair() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("generate checked ZK STARK keypair")
 }
@@ -35,10 +33,10 @@ fn mutate_digest(digest: &mut iroha_data_model::privacy::GoldilocksDigest384V1) 
     *digest = iroha_data_model::privacy::GoldilocksDigest384V1::new(words)
         .expect("mutated native STARK test digest remains canonical");
 }
-fn mutate_fp4(value: &mut iroha_core::zk_stark::GoldilocksFp4V1) {
+fn mutate_fp4(value: &mut iroha_core_zk::stark::GoldilocksFp4V1) {
     let mut coefficients = value.coefficients();
     coefficients[0] ^= 1;
-    *value = iroha_core::zk_stark::GoldilocksFp4V1::new(coefficients)
+    *value = iroha_core_zk::stark::GoldilocksFp4V1::new(coefficients)
         .expect("mutated native STARK Fp4 value remains canonical");
 }
 fn stark_open_verify_domain_tag_current(
@@ -67,7 +65,7 @@ fn stark_open_verify_domain_tag_current(
         }
     }
     preimage.extend_from_slice(&cell_count.to_le_bytes());
-    let digest = iroha_core::zk_stark::stark_open_verify_domain_digest_v1(&preimage)
+    let digest = iroha_core_zk::stark::stark_open_verify_domain_digest_v1(&preimage)
         .expect("derive six-lane OpenVerify domain digest");
     URL_SAFE_NO_PAD.encode(digest.to_le_bytes())
 }
@@ -82,10 +80,10 @@ fn build_sample_envelope() -> StarkVerifyEnvelopeV1 {
 fn sample_air_params(domain_tag: String) -> StarkFriParamsV1 {
     StarkFriParamsV1 {
         version: 1,
-        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        n_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
         blowup_log2: 3,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
         domain_tag,
     }
@@ -199,10 +197,10 @@ fn sample_stark_vk_box(
     let payload = StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_string(),
-        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        n_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
         blowup_log2: 3,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
     };
     let bytes = norito::to_bytes(&payload).expect("encode STARK verifying key payload");
@@ -212,7 +210,7 @@ fn sample_stark_vk_box(
 fn stark_single_fold_roundtrip_ok_and_fail() {
     let env = build_sample_air_composition_envelope();
     let bytes = norito::to_bytes(&env).expect("encode");
-    let native_ok = iroha_core::zk_stark::verify_stark_fri_envelope(&bytes);
+    let native_ok = iroha_core_zk::stark::verify_stark_fri_envelope(&bytes);
     assert!(native_ok, "native STARK verifier rejected sample envelope");
     // Tamper auxiliary term and expect rejection
     let mut env_bad_comp = env.clone();
@@ -469,7 +467,7 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
     let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:synthetic-rejection-test";
     let vk_box = sample_stark_vk_box(backend, circuit_id);
-    let vk_hash = iroha_core::zk::hash_vk(&vk_box);
+    let vk_hash = iroha_core_zk::hash_vk(&vk_box);
     // Two columns, one row each (matches the instance-column shape used by other backends).
     let public_inputs = vec![vec![[0xAA; 32]], vec![[0xBB; 32]]];
     let env_public_inputs = b"schema:test".to_vec();
@@ -580,7 +578,7 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
         .expect("grant CanManageParliament");
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id);
-    let ballot_vk_hash = iroha_core::zk::hash_vk(&ballot_vk_box);
+    let ballot_vk_hash = iroha_core_zk::hash_vk(&ballot_vk_box);
     let ballot_schema = b"gov:vote:ballot:schema:v1".to_vec();
     let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&ballot_schema).into();
     let mut ballot_vk_record = VerifyingKeyRecord::new(
@@ -604,7 +602,7 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     .expect("register ballot vk");
     let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id);
-    let tally_vk_hash = iroha_core::zk::hash_vk(&tally_vk_box);
+    let tally_vk_hash = iroha_core_zk::hash_vk(&tally_vk_box);
     let tally_schema = b"gov:vote:tally:schema:v1".to_vec();
     let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&tally_schema).into();
     let mut tally_vk_record = VerifyingKeyRecord::new(
@@ -703,7 +701,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
         BackendTag::Stark,
         "goldilocks",
         ballot_schema_hash,
-        iroha_core::zk::hash_vk(&ballot_vk_box),
+        iroha_core_zk::hash_vk(&ballot_vk_box),
     );
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_bad_ballot".to_owned());
@@ -724,7 +722,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
         BackendTag::Stark,
         "goldilocks",
         tally_schema_hash,
-        iroha_core::zk::hash_vk(&tally_vk_box),
+        iroha_core_zk::hash_vk(&tally_vk_box),
     );
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_tally".to_owned());
@@ -813,7 +811,7 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
         BackendTag::Stark,
         "goldilocks",
         ballot_schema_hash,
-        iroha_core::zk::hash_vk(&ballot_vk_box),
+        iroha_core_zk::hash_vk(&ballot_vk_box),
     );
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_ballot".to_owned());
@@ -834,7 +832,7 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
         BackendTag::Stark,
         "goldilocks",
         tally_schema_hash,
-        iroha_core::zk::hash_vk(&tally_vk_box),
+        iroha_core_zk::hash_vk(&tally_vk_box),
     );
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_bad_tally".to_owned());
@@ -877,8 +875,8 @@ fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
             ElectionState, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, State, World, WorldReadOnly,
         },
-        zk::test_utils::halo2_fixture_envelope,
     };
+    use iroha_core_zk::test_utils::halo2_fixture_envelope;
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1007,7 +1005,7 @@ fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
     let stark_tally_circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-tally";
     let stark_ballot_vk_id = VerifyingKeyId::new(stark_backend, "mixed_stark_ballot");
     let stark_ballot_vk_box = sample_stark_vk_box(stark_backend, stark_ballot_circuit_id);
-    let stark_ballot_vk_hash = iroha_core::zk::hash_vk(&stark_ballot_vk_box);
+    let stark_ballot_vk_hash = iroha_core_zk::hash_vk(&stark_ballot_vk_box);
     let stark_ballot_schema = b"gov:vote:ballot:schema:v1".to_vec();
     let stark_ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&stark_ballot_schema).into();
     let mut stark_ballot_vk_record = VerifyingKeyRecord::new(
@@ -1031,7 +1029,7 @@ fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
     .expect("register stark ballot vk");
     let stark_tally_vk_id = VerifyingKeyId::new(stark_backend, "mixed_stark_tally");
     let stark_tally_vk_box = sample_stark_vk_box(stark_backend, stark_tally_circuit_id);
-    let stark_tally_vk_hash = iroha_core::zk::hash_vk(&stark_tally_vk_box);
+    let stark_tally_vk_hash = iroha_core_zk::hash_vk(&stark_tally_vk_box);
     let stark_tally_schema = b"gov:vote:tally:schema:v1".to_vec();
     let stark_tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&stark_tally_schema).into();
     let mut stark_tally_vk_record = VerifyingKeyRecord::new(

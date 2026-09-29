@@ -1,7 +1,7 @@
 //! Native Python wallet ownership, bounded parsing and real proof controls.
 
 use super::*;
-use iroha_core::zk::confidential_v2 as note;
+use iroha_core_zk::confidential_v2 as note;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 

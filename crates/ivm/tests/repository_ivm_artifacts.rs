@@ -137,12 +137,13 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         "generic executor disposition changed"
     );
     let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let compiler = ivm::KotodamaCompiler::new();
-    let zk_compiler =
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+    let compiler = kotodama_lang::compiler::Compiler::new();
+    let zk_compiler = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
             force_zk: true,
-            ..ivm::kotodama::compiler::CompilerOptions::default()
-        });
+            ..kotodama_lang::compiler::CompilerOptions::default()
+        },
+    );
     let predecoder = ivm::predecoder_fixtures::generated_predecoder_mixed_artifacts();
     for artifact in inventory {
         let relative = safe_relative_path(artifact.path, "to");

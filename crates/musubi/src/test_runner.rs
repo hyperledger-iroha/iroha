@@ -22,21 +22,16 @@ use iroha_data_model::musubi::{
     MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1, MusubiDependencyKindV1,
     MusubiPackageSelectorV1, MusubiReleaseIdV1, MusubiVerificationNodeV1, MusubiVersionReqV1,
 };
-use ivm::{
-    SyscallPolicy,
-    koto_test_driver::{
-        KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
-        declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
-        run_tests_structured_source_set_with_modules_v1,
-    },
-    kotodama::{
-        compiler::{CompilerMode, CompilerOptions},
-        driver::discover_source_modules,
-        linker::{
-            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit,
-        },
-    },
-    syscalls::compute_abi_hash,
+use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
+use kotodama_lang::{
+    compiler::{CompilerMode, CompilerOptions},
+    driver::discover_source_modules,
+    linker::{ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit},
+};
+use kotodama_toolchain::koto_test_driver::{
+    KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
+    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+    run_tests_structured_source_set_with_modules_v1,
 };
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -1287,7 +1282,7 @@ mod tests {
         MusubiVerificationNodeV1,
     };
     use iroha_model_base::topology::DataSpaceId;
-    use ivm::kotodama::{
+    use kotodama_lang::{
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,
     };

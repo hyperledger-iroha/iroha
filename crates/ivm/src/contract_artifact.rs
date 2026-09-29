@@ -19,12 +19,39 @@ use std::sync::Arc;
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
 }
+/// A prepared compiler-produced Kotodama test-suite artifact.
+///
+/// This capability is the only value that unlocks the Kotodama test-syscall range: it can only be
+/// obtained from [`prepare_koto_test_contract`], which admits test-harness artifacts exclusively,
+/// and only [`crate::IVM::load_koto_test_harness`] consumes it. Production loaders never enable the
+/// range, and production hosts still reject those syscalls.
+#[derive(Clone)]
+pub struct KotoTestHarnessContract(PreparedContract);
+
+impl KotoTestHarnessContract {
+    /// Borrow the underlying prepared contract (for hashes, entrypoint PCs and artifact bytes).
+    ///
+    /// Loading the borrowed contract through [`crate::IVM::load_prepared`] does not enable the
+    /// Kotodama test-syscall range.
+    #[inline]
+    #[must_use]
+    pub fn prepared(&self) -> &PreparedContract {
+        &self.0
+    }
+}
+
 /// Prepare a compiler-produced Kotodama test-suite artifact for local execution.
-pub(crate) fn prepare_koto_test_contract(
+///
+/// # Errors
+///
+/// Returns [`ContractArtifactError`] when the artifact is not an admissible Kotodama test-harness
+/// image for `contract_interface` (production artifacts are rejected) or native preparation fails.
+pub fn prepare_koto_test_contract(
     artifact: Arc<[u8]>,
     contract_interface: EmbeddedContractInterfaceV1,
-) -> Result<PreparedContract, ContractArtifactError> {
+) -> Result<KotoTestHarnessContract, ContractArtifactError> {
     PreparedContract::prepare_koto_test_harness(artifact, contract_interface)
+        .map(KotoTestHarnessContract)
 }
 impl PreparedContract {
     /// Admit through the shared production verifier, then build native runtime indexes.
@@ -150,7 +177,7 @@ mod preparation_deferral_tests {
 
     #[test]
     fn cold_native_preparation_defers_allocator_refusal_then_retries_same_artifact() {
-        let artifact: Arc<[u8]> = crate::KotodamaCompiler::new()
+        let artifact: Arc<[u8]> = kotodama_lang::compiler::Compiler::new()
             .compile_source(r#"seiyaku PreparationRefusal { kotoage fn main() -> int authorize("Entry") { return 701; } }"#)
             .expect("compile an admitted first-release artifact")
             .into();
@@ -210,5 +237,96 @@ mod preparation_deferral_tests {
         drop(occupied);
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
         assert!(budget.try_reserve_bytes(8).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod koto_test_harness_tests {
+    use super::*;
+    use crate::{IVM, IVMHost, VMError};
+    use kotodama_lang::{
+        compiler::{CompilerMode, CompilerOptions},
+        session::{CompilerSession, TestCompileOutput, TestSourceUnit},
+    };
+    use std::any::Any;
+
+    /// Host that accepts every syscall, so only the VM capability gate can refuse one.
+    struct AcceptAllHost;
+    impl IVMHost for AcceptAllHost {
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            Ok(0)
+        }
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            Ok(0)
+        }
+        fn allows_syscall(&self, _policy: SyscallPolicy, _number: u32) -> bool {
+            true
+        }
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    fn compile_suite() -> TestCompileOutput {
+        let options = CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        };
+        let target = TestSourceUnit {
+            source_name: "harness_demo.ko".to_owned(),
+            source: "seiyaku HarnessDemo { kotoage fn ping() authorize(\"Test\") {} \
+                     #[test] fn smoke() {} }"
+                .to_owned(),
+        };
+        CompilerSession::new(options)
+            .build_test_sources(&target, &[])
+            .unwrap_or_else(|diagnostics| panic!("{}", diagnostics.render_human()))
+    }
+
+    fn koto_test_syscall_result(vm: &mut IVM) -> Result<(), VMError> {
+        vm.execute_syscall(
+            &mut AcceptAllHost,
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+        )
+    }
+
+    #[test]
+    fn only_the_harness_capability_unlocks_koto_test_syscalls() {
+        let outputs = compile_suite();
+        let harness = prepare_koto_test_contract(
+            Arc::from(outputs.suite.artifact.as_slice()),
+            outputs.suite.contract_interface().clone(),
+        )
+        .unwrap_or_else(|error| panic!("test-harness artifact must prepare: {error}"));
+        let unknown = Err(VMError::UnknownSyscall(
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+        ));
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_koto_test_harness(&harness)
+            .expect("harness contract loads with the test capability");
+        assert_ne!(koto_test_syscall_result(&mut vm), unknown);
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_prepared(harness.prepared())
+            .expect("the borrowed prepared contract loads as an ordinary program");
+        assert_eq!(koto_test_syscall_result(&mut vm), unknown);
+
+        let runtime = outputs
+            .runtime
+            .expect("a target with a kotoage entrypoint has a production projection");
+        prepare_contract(Arc::from(runtime.artifact.as_slice()))
+            .unwrap_or_else(|error| panic!("production artifact must deploy: {error}"));
+        assert!(
+            prepare_koto_test_contract(
+                Arc::from(runtime.artifact.as_slice()),
+                runtime.contract_interface().clone(),
+            )
+            .is_err(),
+            "a production artifact must never become a test-harness capability"
+        );
     }
 }

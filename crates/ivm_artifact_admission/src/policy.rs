@@ -351,11 +351,11 @@ fn is_canonical_source_identifier(name: &str) -> bool {
 }
 fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
     is_canonical_source_identifier(name)
-        && !kotodama_lang::semantic::is_reserved_source_declaration(name, is_function)
+        && !kotodama_surface::source_policy::is_reserved_source_declaration(name, is_function)
 }
 fn is_canonical_source_type_declaration_name(name: &str) -> bool {
     is_canonical_source_identifier(name)
-        && !kotodama_lang::semantic::is_reserved_source_type_declaration(name)
+        && !kotodama_surface::source_policy::is_reserved_source_type_declaration(name)
 }
 fn is_canonical_entrypoint_name(name: &str) -> bool {
     matches!(name, "hajimari" | "始まり" | "kaizen" | "改善")

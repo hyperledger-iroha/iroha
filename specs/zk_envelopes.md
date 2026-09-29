@@ -186,7 +186,7 @@ Hashing and transcript
   selector-bearing parameter, verifier-key, proof, and envelope bytes fail
   canonical V1 decoding.
 
-Wire types (as implemented in `iroha_core::zk_stark`)
+Wire types (as implemented in `iroha_core_zk::stark`)
 
 - `StarkFriParamsV1`
   - `version: u16` — format version, currently 1
@@ -251,7 +251,7 @@ Limits and validation
   the fixed profile, blowup, fold arity, query count, typed phases, and roots;
   mismatched headers or roots are rejected.
 - Bad roots, broken Merkle paths, tampered folds, non-canonical field encodings, and
-  query-count/profile mismatches are covered by `iroha_core::zk_stark` regression tests.
+  query-count/profile mismatches are covered by `iroha_core_zk::stark` regression tests.
 
 Verifier behavior (native STARK)
 - For each query, replays all folds:
@@ -293,7 +293,7 @@ Verifier behavior (native STARK)
 
 	Example (Rust)
 	```rust
-		use iroha_core::zk_stark::*;
+		use iroha_core_zk::stark::*;
 		let n_log2 = 3u8; // domain size 8
 		// Build layers 0..L (y0/y1 folds) and Merkle roots/paths externally
 		let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };

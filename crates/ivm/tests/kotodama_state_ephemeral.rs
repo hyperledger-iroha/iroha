@@ -3,7 +3,8 @@ use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
 };
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler, numeric_tlv};
+use ivm::{CoreHost, IVM, numeric_tlv};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 fn execute_int_result(source: &str) -> i64 {
     let program = KotodamaCompiler::new()

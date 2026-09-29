@@ -30,14 +30,10 @@ mod validation_fee_plain_ballot_gates;
 mod zk_backend_tags;
 #[path = "../zk_dedup.rs"]
 mod zk_dedup;
-#[path = "../zk_ipa_native.rs"]
-mod zk_ipa_native;
 #[path = "../zk_lane_warning.rs"]
 mod zk_lane_warning;
 #[path = "../zk_ledger_scaffold.rs"]
 mod zk_ledger_scaffold;
-#[path = "../zk_preverify_budget.rs"]
-mod zk_preverify_budget;
 #[path = "../zk_proof_event_callhash.rs"]
 mod zk_proof_event_callhash;
 #[path = "../zk_proof_retention.rs"]

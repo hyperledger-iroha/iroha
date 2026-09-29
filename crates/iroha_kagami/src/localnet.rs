@@ -17,7 +17,8 @@ use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
 };
-use iroha_core::{state::derive_committee_key_id, zk::confidential_v2};
+use iroha_core::state::derive_committee_key_id;
+use iroha_core_zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
@@ -3317,7 +3318,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     let validators = peers
         .into_iter()
         .map(|peer| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &peer.mint_finality_seed,
                 0,
                 PeerId::new(peer.public_key.clone()),
@@ -3335,7 +3336,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     parameters
         .validate()
         .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;

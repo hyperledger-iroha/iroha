@@ -11,7 +11,7 @@ pub(super) fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_t
     manifest: &RawGenesisTransaction,
     topology: &[iroha_model_base::peer::PeerId],
 ) -> color_eyre::Result<()> {
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         manifest.kagemusha_mint_finality_genesis_parameters(),
     )
     .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality public parameters: {error}"))?;
@@ -77,7 +77,7 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
         .into_iter()
         .enumerate()
         .map(|(index, validator)| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
                 0,
                 validator,

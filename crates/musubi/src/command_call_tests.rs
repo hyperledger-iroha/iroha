@@ -1,7 +1,7 @@
 //! Public call grammar and caller-owned artifact/schema binding.
 use super::*;
 fn fixture() -> (Vec<u8>, ContractAddress) {
-    let artifact = ivm::kotodama::compiler::Compiler::new().compile_source(
+    let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }",
     ).expect("compile current artifact");
     let key = iroha::crypto::KeyPair::random();

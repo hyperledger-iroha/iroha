@@ -727,7 +727,7 @@ fn ensure_verifier_backend_registry_label_v1<'a>(backend: &'a str, field: &str) 
     if backend.is_empty() {
         eyre::bail!("{field} must be non-empty");
     }
-    if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
+    if !iroha_core_zk::is_verifier_backend_registry_label_v1(backend) {
         eyre::bail!("{field} uses unsupported verifier-registry label `{backend}`");
     }
     Ok(backend)
@@ -1150,9 +1150,9 @@ mod tests {
     #[test]
     fn vk_submission_enforces_backend_specific_key_size_limits() {
         use base64::Engine as _;
-        let limit = iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
+        let limit = iroha_core_zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
         let mut inline = sample_vk_submission(None);
-        inline.backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
+        inline.backend = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
         inline.commitment_hex = None;
         inline.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
         inline.vk_bytes = Some(base64::engine::general_purpose::STANDARD.encode(vec![0xA5; limit]));
@@ -1168,7 +1168,7 @@ mod tests {
         assert!(error.to_string().contains("backend limit"), "{error}");
 
         let mut commitment_only = sample_vk_submission(None);
-        commitment_only.backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
+        commitment_only.backend = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
         commitment_only.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
         assert!(
             build_vk_record(&commitment_only, VkSubmissionOperation::Register).is_ok(),
@@ -1359,7 +1359,7 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
     parse_hex32_str(value, "commitment_hex")
 }
 fn vk_backend_tag_from_label(label: &str) -> Result<iroha::data_model::zk::BackendTag> {
-    iroha_core::zk::verifier_backend_registry_tag_v1(label)
+    iroha_core_zk::verifier_backend_registry_tag_v1(label)
         .ok_or_else(|| eyre::eyre!("unsupported generic OpenVerify backend `{label}`"))
 }
 const DEFAULT_VK_NAMESPACE: &str = "core";
@@ -1383,16 +1383,16 @@ fn build_vk_record(
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
     };
-    use iroha_core::zk::hash_vk;
+    use iroha_core_zk::hash_vk;
     let backend =
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
     let backend_tag = vk_backend_tag_from_label(backend)?;
     let max_vk_bytes = match backend_tag {
         iroha::data_model::zk::BackendTag::Halo2IpaPasta => {
-            iroha_core::zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
+            iroha_core_zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
         }
         iroha::data_model::zk::BackendTag::Stark => {
-            iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
+            iroha_core_zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
         }
     };
     let vk_bytes = match payload.vk_bytes.as_deref() {

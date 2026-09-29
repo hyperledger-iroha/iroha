@@ -480,6 +480,17 @@ impl MemoryReservation {
         }
     }
 
+    /// Clear an unmeasured mark on an owner whose footprint never changes.
+    ///
+    /// Fixed-size owners keep their charged byte count while unmeasured, so the
+    /// existing charge is the full measure. Measured or retained owners are
+    /// left untouched.
+    pub(crate) fn remeasure_fixed(&mut self) {
+        if self.unmeasured {
+            self.set_known_bytes(self.bytes);
+        }
+    }
+
     /// Mark a mutable owner's dynamic footprint as unknown during active work.
     ///
     /// Retention remains disabled until `set_known_bytes` supplies a full measure.
@@ -824,6 +835,11 @@ impl<T> OwnedAllocation<T> {
 
     pub(crate) fn mark_unmeasured(&mut self) {
         self.reservation.mark_unmeasured();
+    }
+
+    /// Restore the exact measure of this fixed-size allocation after active work.
+    pub(crate) fn remeasure_fixed(&mut self) {
+        self.reservation.remeasure_fixed();
     }
 }
 

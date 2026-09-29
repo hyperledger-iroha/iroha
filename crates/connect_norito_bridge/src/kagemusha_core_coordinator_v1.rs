@@ -136,7 +136,7 @@ pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 12] = [
 
 // The read-only Core archive export and the pinned testnet observer accept the same public input.
 const _: () = assert!(
-    iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
+    iroha_core_zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
         == crate::kagemusha_testnet_observation_v1::KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1
 );
 
@@ -304,7 +304,7 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
         _handle: u64,
         _operation_id: [u8; 32],
     ) -> Result<
-        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
         KagemushaCoreCoordinatorBackendErrorV1,
     > {
         Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
@@ -881,7 +881,7 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
             require_equal_fields(response.first(), request.first())?;
             require_bounded_nonempty_field(
                 response.get(1),
-                iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
+                iroha_core_zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
             )?;
             require_bounded_nonempty_field(
                 response.get(2),

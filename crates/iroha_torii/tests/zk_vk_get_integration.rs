@@ -35,7 +35,7 @@ async fn zk_vk_get_returns_record_with_key() {
     let name = "vk_add".to_string();
     let vk_bytes = vec![1, 2, 3, 4, 5];
     let vk = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
-    let commitment = iroha_core::zk::hash_vk(&vk);
+    let commitment = iroha_core_zk::hash_vk(&vk);
     let mut rec = VerifyingKeyRecord::new(
         1,
         format!("{backend}:{name}"),

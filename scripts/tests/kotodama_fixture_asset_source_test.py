@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '82794eccde6d14ea18ba5c40f06d559e1ffb1c9fb10882a734e0703a12fe600d',
+        'dc9b7b54d30078f544ba3d25f6e5be91e8e5577f3f6e261b810ed4a356f2af63',
         (
             AssetSpec('001.ko', '0c9adc69818f257e8f29ea98f7dd576fc5afdb801030f3413c11056086d491a2', 228, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        '758a0262ea3a21cb774f731c665a3a2485c99f258e45c3224046101cc36214e6',
+        '876bb610f2f3886b67c39917863b8635add6ce1c0b4072e1a6e12a962385e8ac',
         (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        'df53249b485038a33317acc31e76c6aebce5d5f78ac0867a330e226919838b59',
+        '7c58ebe622cf90afe197276aed0f090d93f2fe9dcdfcbd08ba7778167c20fc44',
         (
             AssetSpec('001.ko', 'b224232a52b7ed477fc6573e7f7c0804a493b104c26f5e61d3232497e13e4950', 316, False),
             AssetSpec('002.ko', '301483b79eb9279a9c84bda840ef3e601bcb283c7c50143922cf28498b4aea2b', 606, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        '974038d6d58408be851e1fd604fddf177d43acd03ba09a35ecfbfbb9a71ef414',
+        '609dd56ab92ec21c71ff644429e2d9d054f1c6f37071cff9c08990de46eafe19',
         (
             AssetSpec('001.ko', 'eefd96e03bd7bd00aaa6da1aefa41385f86bcf702f60e4c949de1e905f3a0fac', 575, True),
             AssetSpec('002.ko', '06544f9c17080965311c0537d02d2d8f97b34b20a14183cc08a476fca66da4b8', 412, True),
@@ -187,8 +187,8 @@ SOURCES = (
         ),
     ),
     SourceSpec(
-        'crates/ivm/src/koto_test_driver_tests.rs',
-        'abc50a2b4752fc6b71f6712f706ea5e9edb1f9f8454cc0e2735e442b613bb388',
+        'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
+        'd43f3d1e661a5fde51bc0841fb8024270a9115be357bc3ff6e1f108979ceeb0a',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -231,7 +231,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs',
-        '37f877c3a0fab35c908b1d31f34a233d442bf2e30e9d563db0a455c1ea57099c',
+        'abf9581873d9f5ceca467610ae2194d0c209d099a03f726fcd903f39fe557c8b',
         (
             AssetSpec('001.ko', 'dee9b111e29ae18bfa974545eda20c3accf2420bfb2596de4dfce17e38d51cd8', 2978, True),
             AssetSpec('002.ko', 'fa16878159bb06bcc92bab63c9b955c4a15cb71f1571e56e5b095b168851d61b', 1454, True),
@@ -246,7 +246,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_scalar.rs',
-        '541f30d4efe9ec2c3911d5e5fcaeafda7717a11dba226ad9e71255c5bd285d6c',
+        'bd30a1fb54c16a4e5086d8ef3a63726f7acc01eacf8fc4af111094868a983b17',
         (
             AssetSpec('001.ko', '378b20a6b02c767716a13c52402a2e60f0755bf6d2d3ae1cc26bef854a24fe41', 198, True),
             AssetSpec('002.ko', '5ab0c326c77dffbec932ee230893a42207f8160499c70455fe198d2b20f19303', 755, True),
@@ -256,7 +256,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/resolved.rs',
-        '8d641cd1b1efc1ab58a59ba8bc7e4187f80965949f10c792586635a7f1f0ba06',
+        '334123cda6864c2fb69f98351bedc02d0db0286c73b406facc1e54472a4296f3',
         (
             AssetSpec('001.ko', 'a15f6256b419624f839af6961586120b08958cb3886b9f7a51671471b7a85e88', 176, False),
             AssetSpec('002.ko', 'fbdce614e48b118614c6817b2ec40eaa3719125c19ec72fe332acd0d5c0e8577', 249, False),
@@ -272,7 +272,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/secret.rs',
-        '7d7d133b50e5da1cee7f846e0e4ff4d9edbb65025251bf053d939d4532987d02',
+        '47118bbecd857f8e0553813beb4173848d1d966435971358950da81f7e05155c',
         (
             AssetSpec('001.ko', '2cabbe93cb0612dc119067e16807af6d72934d1fef6cbf0b193f9fcaea6cc746', 328, True),
             AssetSpec('002.ko', 'cafb2cda4762224b1a8cda1e3eb0c3f7dcb49346185613905a294f9eac69bfe6', 224, True),
@@ -292,6 +292,7 @@ SOURCES = (
 # runtime behavior are qualified by the corresponding Rust integration targets.
 SOURCE_REQUIRED_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
+        b'use kotodama_lang::{',
         b'vm.set_register(10, 0);',
         b'vm.set_register(11, 0);',
         b'vm.set_register(12, result);',
@@ -317,17 +318,35 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);',
     ),
     'crates/ivm/tests/kotodama_lists.rs': (
+        b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'{{"index":"{index}","operation":"{operation}"}}',
     ),
-    'crates/ivm/src/koto_test_driver_tests.rs': (
+    'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
+        b'vm.load_koto_test_harness(',
         b'{{\\"unexpected\\":true,\\"value\\":7}}',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller)',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone())',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'use std::str::FromStr;',
         b'WsvHost::new_with_subject(wsv, subject);',
+    ),
+    # The builtin registry and V1 source policy live in the kotodama_surface leaf.
+    'crates/kotodama_lang/src/resolved.rs': (
+        b'use kotodama_surface::builtins::Builtin;',
+        b'kotodama_surface::source_policy::is_reserved_source_declaration(',
+    ),
+    'crates/kotodama_lang/src/secret.rs': (
+        b'use kotodama_surface::builtins::{Builtin, BuiltinAccess};',
+    ),
+    # K1b: ivm no longer re-exports the Kotodama compiler; tests import kotodama_lang directly.
+    'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs': (
+        b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
+    ),
+    'crates/ivm/tests/kotodama_state_scalar.rs': (
+        b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
     ),
 }
 SOURCE_FORBIDDEN_FRAGMENTS = {
@@ -346,7 +365,8 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
     'crates/ivm/tests/kotodama_lists.rs': (
         b'{{"operation":"{operation}","index":"{index}"}}',
     ),
-    'crates/ivm/src/koto_test_driver_tests.rs': (
+    'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
+        b'load_koto_test_prepared',
         b'{{\\"value\\":7,\\"unexpected\\":true}}',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new())',
         b'caller.clone(),\n            HashMap::new(),',
@@ -480,7 +500,7 @@ def _validate_checkout() -> None:
                 raise GuardFailure(f"{repo_path}: stale noncanonical JSON spelling returned")
             _project_asset(asset, stored)
     actual_assets: set[Path] = set()
-    for crate in ("ivm", "kotodama_lang"):
+    for crate in ("ivm", "kotodama_lang", "kotodama_toolchain"):
         fixture_root = ROOT / "crates" / crate / "fixtures" / "koto_v1"
         if fixture_root.exists():
             actual_assets.update(path.relative_to(ROOT) for path in fixture_root.rglob("*.ko"))

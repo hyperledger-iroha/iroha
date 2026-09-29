@@ -15,7 +15,7 @@ IVM_SOURCE = Path("crates/ivm/tests/kotodama.rs")
 IR_SOURCE = Path("crates/kotodama_lang/src/ir.rs")
 FIXTURE_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
 
-IVM_REGION_SHA256 = "1a3719a8f5cfd189807683adeeeeaeb29337d2ac8209a283f5ff99d8b5ba273a"
+IVM_REGION_SHA256 = "27c39d9fc502a22f13ebce08831547ee1898114f0791cec44892708c75fbca10"
 IR_REGION_SHA256 = "d361b6a6d5bacf917729bee90898e2a17cb23c4d6c4ad0a746bb5c325e11d17f"
 IVM_CASE_IDS_SHA256 = "9c2a8f00d546b43ea86589639998900a540961bdc6b4b4b9b4a6e2b4ce1c92cc"
 

@@ -85,7 +85,11 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
         runtime.set_host(host.clone());
         runtime.run().expect("execute cold benchmark invocation");
         let result = runtime
-            .validate_tlv(runtime.register(10))
+            .validate_tlv(
+                runtime
+                    .public_call_result_word(0)
+                    .expect("benchmark completed with an int result"),
+            )
             .expect("validate benchmark int result");
         assert_eq!(result.type_id, PointerType::Int);
         assert_eq!(

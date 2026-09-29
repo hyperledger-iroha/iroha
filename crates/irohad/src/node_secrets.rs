@@ -57,17 +57,15 @@ use iroha_config::parameters::{
     },
     is_production_runtime_handle,
 };
-use iroha_core::{
-    beacon::{
-        GlobalThresholdBeaconPartialSignerV1,
-        credential::{
-            MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
-            decode_global_beacon_partial_signer_credential_v1,
-            global_beacon_partial_signer_credential_header_v1,
-        },
+use iroha_core::beacon::{
+    GlobalThresholdBeaconPartialSignerV1,
+    credential::{
+        MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
+        decode_global_beacon_partial_signer_credential_v1,
+        global_beacon_partial_signer_credential_header_v1,
     },
-    zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
 };
+use iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,

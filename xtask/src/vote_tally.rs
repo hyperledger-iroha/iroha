@@ -159,7 +159,7 @@ mod vote_tally_backend {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
-    use iroha_core::zk::depth::VoteBoolCommitMerkle;
+    use iroha_core_zk::depth::VoteBoolCommitMerkle;
     use iroha_data_model::{
         proof::{ProofBox, VerifyingKeyBox},
         zk::{BackendTag, OpenVerifyEnvelope},
@@ -276,7 +276,7 @@ mod vote_tally_backend {
         public_inputs.extend_from_slice(root.to_repr().as_ref());
         let public_inputs_hash = iroha_hash(&public_inputs);
         let vk_box = VerifyingKeyBox::new(BACKEND.into(), vk_bytes.clone());
-        let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
+        let vk_commitment = iroha_core_zk::hash_vk(&vk_box);
         // Validate the mathematical fixture above, and independently require that its
         // internally consistent envelope remains outside the closed production registry.
         let envelope = OpenVerifyEnvelope {
@@ -288,7 +288,7 @@ mod vote_tally_backend {
             aux: Vec::new(),
         };
         let boxed = ProofBox::new(BACKEND.into(), norito::to_bytes(&envelope)?);
-        if iroha_core::zk::verify_backend(BACKEND, &boxed, Some(&vk_box)) {
+        if iroha_core_zk::verify_backend(BACKEND, &boxed, Some(&vk_box)) {
             return Err("development fixture unexpectedly admitted by production verifier".into());
         }
         Ok(DevVoteMembershipBundle {

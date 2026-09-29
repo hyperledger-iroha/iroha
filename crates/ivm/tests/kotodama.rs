@@ -1,15 +1,12 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
-use ivm::{
-    ProgramMetadata, encoding, instruction,
-    kotodama::{
-        ast as kd_ast,
-        ast::{BinaryOp, Expr, Function, Item, Statement},
-        compiler::{Compiler, CompilerMode, CompilerOptions},
-        lexer::{TokenKind, lex},
-        parser::parse as parse_source,
-        semantic::{Type, analyze},
-    },
-    syscalls,
+use ivm::{ProgramMetadata, encoding, instruction, syscalls};
+use kotodama_lang::{
+    ast as kd_ast,
+    ast::{BinaryOp, Expr, Function, Item, Statement},
+    compiler::{Compiler, CompilerMode, CompilerOptions},
+    lexer::{TokenKind, lex},
+    parser::parse as parse_source,
+    semantic::{Type, analyze},
 };
 use std::convert::TryInto;
 mod common;
@@ -25,7 +22,7 @@ fn test_compiler() -> Compiler {
 fn select_test_entrypoint(
     vm: &mut ivm::IVM,
     program: &[u8],
-    report: &ivm::kotodama::compiler::CompileReport,
+    report: &kotodama_lang::compiler::CompileReport,
     name: &str,
 ) {
     let parsed = ProgramMetadata::parse(program).expect("parse Kotodama test artifact");
@@ -109,7 +106,7 @@ fn parse_simple_add() {
 }
 #[test]
 fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
-    use ivm::kotodama::lexer::{TokenKind, lex};
+    use kotodama_lang::lexer::{TokenKind, lex};
     let seiyaku = lex("seiyaku Demo { }").expect("lex seiyaku");
     assert!(matches!(seiyaku[0].kind, TokenKind::Seiyaku));
     let hajimari = lex("hajimari() {}").expect("lex");
@@ -133,7 +130,7 @@ fn parse_and_type_tuples_and_types() {
         "module Types { fn t(int x) -> (int, bool) { let (a, b) = (1, true); return (x, true); } }";
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("type");
-    let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
+    let kotodama_lang::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.name, "t");
 }
 #[test]
@@ -141,7 +138,7 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
     let src = "module BytesDemo { fn echo(bytes b) -> bytes { let bytes tmp = b; return tmp; } }";
     let prog = parse(src).expect("parse bytes");
     let typed = analyze(&prog).expect("analyze bytes");
-    let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
+    let kotodama_lang::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.ret_ty, Some(Type::Bytes));
 }
 #[derive(Clone, Copy)]
@@ -592,7 +589,7 @@ fn run_semantic_success_cases(cases: &[SemanticSuccessCase]) {
         let typed = analyze(&program)
             .unwrap_or_else(|error| panic!("{} should type-check: {error}", case.id));
         if case.require_nonempty_first_function {
-            let ivm::kotodama::semantic::TypedItem::Function(function) = &typed.items[0];
+            let kotodama_lang::semantic::TypedItem::Function(function) = &typed.items[0];
             assert!(!function.body.statements.is_empty(), "{} body", case.id);
         }
     }
@@ -1021,8 +1018,8 @@ fn semantic_simple_add() {
     let src = "module Arithmetic { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
-    if let ivm::kotodama::semantic::TypedStatement::Let { name, value } = &func.body.statements[0] {
+    let kotodama_lang::semantic::TypedItem::Function(func) = &typed.items[0];
+    if let kotodama_lang::semantic::TypedStatement::Let { name, value } = &func.body.statements[0] {
         assert_eq!(name, "c");
         assert_eq!(value.ty, Type::Int);
     } else {
@@ -1031,7 +1028,7 @@ fn semantic_simple_add() {
 }
 #[test]
 fn encode_helpers() {
-    use ivm::kotodama::compiler::{encode_add, encode_addi};
+    use kotodama_lang::compiler::{encode_add, encode_addi};
     let add = encode_add(3, 1, 2);
     assert_eq!(add, 0x0103_0102);
     let addi = encode_addi(1, 1, 7).expect("encode addi");
@@ -1082,7 +1079,7 @@ fn non_json_pointer_constructors_accept_string_variables() {
     let src = include_str!("../fixtures/koto_v1/kotodama/032.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = ivm::KotodamaCompiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile pointer from vars");
     // Expect SCALLs present for set detail and transfer domain
@@ -1102,7 +1099,7 @@ fn non_json_pointer_constructors_accept_string_variables() {
 }
 #[test]
 fn semantic_type_enforcement_for_typed_syscalls() {
-    use ivm::kotodama::parser::parse;
+    use kotodama_lang::parser::parse;
     // Wrong types should fail
     let bad = parse(
         "module InvalidMint { fn f() { ledger::asset::mint(account: Name::parse(\"x\"), asset_definition: AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), amount: 1); } }",
@@ -1375,7 +1372,7 @@ fn ternary_parses_and_types() {
     let src = "module Ternary { fn f(int a, int b) -> int { let x = (1 < 2) ? a : b; return x; } }";
     let prog = parse(src).expect("parse ternary");
     let typed = analyze(&prog).expect("type ternary");
-    let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
+    let kotodama_lang::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.name, "f");
 }
 #[test]
@@ -1383,7 +1380,7 @@ fn ternary_min_types() {
     let src = "module Ternary { fn choose_min(int a, int b) -> int { return (a < b) ? a : b; } }";
     let typed = analyze(&parse(src).expect("parse ternary")).expect("type ternary");
     assert!(typed.items.iter().any(|item| {
-        matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "choose_min")
+        matches!(item, kotodama_lang::semantic::TypedItem::Function(function) if function.name == "choose_min")
     }));
 }
 #[test]
@@ -1395,7 +1392,7 @@ fn nested_ternary_types() {
 #[test]
 fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = include_str!("../fixtures/koto_v1/kotodama/057.ko");
-    let code = Compiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+    let code = Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         max_cycles: 1234,
         ..Default::default()
     })
@@ -1510,8 +1507,8 @@ fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
 }
 #[test]
 fn typed_json_access_spills_are_handled() {
-    use ivm::kotodama::ir::Instr;
-    use ivm::kotodama::regalloc;
+    use kotodama_lang::ir::Instr;
+    use kotodama_lang::regalloc;
     std::thread::Builder::new()
         .name("typed_json_access_spills".to_owned())
         .stack_size(8 * 1024 * 1024)
@@ -1537,7 +1534,7 @@ fn typed_json_access_spills_are_handled() {
             let src = build_src(32);
             let prog = parse(&src).expect("parse typed Json spill");
             let typed = analyze(&prog).expect("analyze typed Json spill");
-            let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+            let ir = kotodama_lang::ir::lower(&typed).expect("lower");
             let func = ir
                 .functions
                 .iter()
@@ -1548,7 +1545,7 @@ fn typed_json_access_spills_are_handled() {
                     matches!(
                         instruction,
                         Instr::JsonGetNumeric {
-                            kind: ivm::kotodama::ir::WideNumericKind::Int,
+                            kind: kotodama_lang::ir::WideNumericKind::Int,
                             ..
                         }
                     )
@@ -1586,18 +1583,18 @@ fn parse_control_flow() {
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     assert!(ir.functions[0].blocks.len() > 2);
 }
 #[test]
 fn parse_amm_dex() {
-    use ivm::kotodama::ir::{Instr, WideNumericKind};
+    use kotodama_lang::ir::{Instr, WideNumericKind};
     use std::path::Path;
     let path = Path::new("tests/data/amm.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let mut has_mul = false;
     let mut has_div = false;
     for function in &ir.functions {
@@ -1627,13 +1624,13 @@ fn parse_amm_dex() {
 }
 #[test]
 fn parse_dai_clone() {
-    use ivm::kotodama::ir::{Instr, WideNumericKind};
+    use kotodama_lang::ir::{Instr, WideNumericKind};
     use std::path::Path;
     let path = Path::new("tests/data/dai.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let mut has_add = false;
     let mut has_sub = false;
     for function in &ir.functions {
@@ -1663,21 +1660,21 @@ fn parse_dai_clone() {
 }
 #[test]
 fn parse_mint_asset_builtin() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = "module MintHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::mint(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::MintAsset { .. })));
 }
 #[test]
 fn parse_transfer_asset_builtin() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = "module TransferHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d, DataSpaceId e) { ledger::asset::transfer(source: a, destination: b, asset_definition: c, amount: d, dataspace: e); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -1687,11 +1684,11 @@ fn parse_transfer_asset_builtin() {
 }
 #[test]
 fn parse_transfer_batch_builtin() {
-    use ivm::kotodama::ir::{Instr, Terminator};
+    use kotodama_lang::ir::{Instr, Terminator};
     let src = "module BatchHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d) { ledger::asset::transfer_batch(transfers: [(a, b, c, d), (b, a, c, d)]); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = ir.functions[0]
         .blocks
         .iter()
@@ -1764,23 +1761,23 @@ fn transfer_batch_requires_tuple_entries() {
 }
 #[test]
 fn parse_burn_asset_builtin() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = "module BurnHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::burn(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::BurnAsset { .. })));
 }
 #[test]
 fn parse_register_asset_builtin() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/063.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -1790,13 +1787,13 @@ fn parse_register_asset_builtin() {
 }
 #[test]
 fn parse_create_new_asset_builtin() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/064.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(
         instrs
@@ -1806,13 +1803,13 @@ fn parse_create_new_asset_builtin() {
 }
 #[test]
 fn parse_mfc_example() {
-    use ivm::kotodama::ir::{Instr, Terminator};
+    use kotodama_lang::ir::{Instr, Terminator};
     use std::path::Path;
     let path = Path::new("tests/data/mfc.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let mut has_transfer = false;
     let mut has_branch = false;
     for block in &ir.functions[1].blocks {
@@ -1859,13 +1856,13 @@ fn compile_kotodama_samples_supported() {
 }
 #[test]
 fn ir_lower_contains_method_state_map() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/067.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse contains");
     let typed = analyze(&prog).expect("analyze contains");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_state_get = false;
     let mut saw_ne = false;
@@ -1873,7 +1870,7 @@ fn ir_lower_contains_method_state_map() {
         for ins in &block.instrs {
             match ins {
                 Instr::StateGet { .. } => saw_state_get = true,
-                Instr::Binary { op, .. } if *op == ivm::kotodama::ast::BinaryOp::Ne => {
+                Instr::Binary { op, .. } if *op == kotodama_lang::ast::BinaryOp::Ne => {
                     saw_ne = true;
                 }
                 _ => {}
@@ -1884,13 +1881,13 @@ fn ir_lower_contains_method_state_map() {
 }
 #[test]
 fn ir_tuple_pack_and_get_general() {
-    use ivm::kotodama::ir::Instr;
+    use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/070.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let prog = parse(src).expect("parse tuple pack/get");
     let typed = analyze(&prog).expect("analyze tuple pack/get");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+    let ir = kotodama_lang::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_pack = false;
     let mut saw_get = false;
@@ -1904,11 +1901,11 @@ fn ir_tuple_pack_and_get_general() {
         }
     }
     let flattened = typed.items.iter().any(|item| {
-        let ivm::kotodama::semantic::TypedItem::Function(func) = item;
+        let kotodama_lang::semantic::TypedItem::Function(func) = item;
         func.body.statements.iter().any(|stmt| {
-            if let ivm::kotodama::semantic::TypedStatement::Let { name, value } = stmt {
+            if let kotodama_lang::semantic::TypedStatement::Let { name, value } = stmt {
                 name.contains('#')
-                    && matches!(value.expr, ivm::kotodama::semantic::ExprKind::Ident(_))
+                    && matches!(value.expr, kotodama_lang::semantic::ExprKind::Ident(_))
             } else {
                 false
             }
@@ -1925,7 +1922,7 @@ fn typed_vrf_syscalls_are_present() {
     let src = include_str!("../fixtures/koto_v1/kotodama/071.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = ivm::KotodamaCompiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile vrf intrinsic");
     let (_meta, off) = parse_meta_offset(&code).unwrap();

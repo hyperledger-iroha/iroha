@@ -237,12 +237,16 @@ fn authorization_fixture() -> Result<(
     KagemushaMintFinalityEpochAuthorizationV1,
     InstalledBeaconEpochBindingV1,
 )> {
-    let mut validators = (1_u8..=4).map(|seed| {
-        let key = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal);
-        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-            &[seed; 32], 0, PeerId::new(key.public_key().clone()),
-        )
-    }).collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut validators = (1_u8..=4)
+        .map(|seed| {
+            let key = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal);
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed; 32],
+                0,
+                PeerId::new(key.public_key().clone()),
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     validators.sort_by(|left, right| left.validator.cmp(&right.validator));
     let authority = KagemushaMintFinalityAuthorityGenerationV1 {
         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,

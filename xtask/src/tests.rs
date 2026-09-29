@@ -399,13 +399,13 @@ fn development_vote_fixture_math_identity_and_reproducibility() {
     );
     assert_eq!(
         summary.vk_commit_hex,
-        hex::encode(iroha_core::zk::hash_vk(&key))
+        hex::encode(iroha_core_zk::hash_vk(&key))
     );
     let mut changed_key = key.clone();
     changed_key.bytes[0] ^= 1;
     assert_ne!(
         summary.vk_commit_hex,
-        hex::encode(iroha_core::zk::hash_vk(&changed_key))
+        hex::encode(iroha_core_zk::hash_vk(&changed_key))
     );
     assert!(summary.vk_len > 0);
     assert!(summary.proof_len > 0);

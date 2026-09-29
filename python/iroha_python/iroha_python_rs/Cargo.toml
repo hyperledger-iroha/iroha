@@ -25,6 +25,7 @@ norito = { path = "../../../crates/norito", default-features = false, features =
 ivm = { path = "../../../crates/ivm" }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest", features = ["pqc"] }
 iroha_core = { path = "../../../crates/iroha_core", features = ["node"], default-features = false }
+iroha_core_zk = { path = "../../../crates/iroha_core_zk", default-features = false, features = ["proofs-halo2"] }
 iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 zk_ace_prover = { path = "../../../crates/zk_ace_prover" }
 sorafs_car = { path = "../../../crates/sorafs_car" }

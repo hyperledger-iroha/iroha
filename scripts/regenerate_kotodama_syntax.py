@@ -28,7 +28,7 @@ DEFAULT_POLICY = Path("fixtures/kotodama_v1_policy.json")
 POLICY_FORMAT = "iroha.kotodama.v1.policy"
 POLICY_SCHEMA = 1
 
-SEMANTIC_PATH = Path("crates/kotodama_lang/src/semantic.rs")
+SEMANTIC_PATH = Path("crates/kotodama_surface/src/source_policy.rs")
 DATA_MODEL_ENTRYPOINT_PATH = Path(
     "crates/iroha_data_model/src/smart_contract/entrypoint.rs"
 )
@@ -738,7 +738,6 @@ def render_semantic_policy(policy: Policy) -> str:
             "V1_FORBIDDEN_SOURCE_IDENTIFIERS",
             policy.forbidden_source_identifiers,
             "Exact identifier spellings forbidden in every source position.",
-            visibility="pub(crate)",
         ),
         _rust_array(
             "V1_STATE_MAP_KEY_TYPE_NAMES",

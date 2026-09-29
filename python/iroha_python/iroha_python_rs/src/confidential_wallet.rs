@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use iroha_core::zk::{
+use iroha_core_zk::{
     ProofRelation,
     confidential::{
         ConfidentialProof, ConfidentialProver, ConfidentialProverError, ConfidentialTree,

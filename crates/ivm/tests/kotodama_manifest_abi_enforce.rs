@@ -1,7 +1,8 @@
 //! Kotodama compiler-owned first-release metadata tests.
 #[test]
 fn compiler_emits_fixed_v1_abi_and_inferred_vector_metadata() {
-    use ivm::{ProgramMetadata, kotodama::compiler::Compiler};
+    use ivm::ProgramMetadata;
+    use kotodama_lang::compiler::Compiler;
     let src = "seiyaku FixedHeader { view fn f() -> int { return 3; } }";
     let (artifact, manifest) = Compiler::new()
         .compile_source_with_manifest(src)

@@ -227,14 +227,14 @@ indexed-owner integration.
 The authenticated Core indexed-key owner and encrypted polynomial store are
 present but remain separate from normal production proof entry points: the six
 direct `create_proof` calls and two `create_proof_consuming` calls in
-[generation.rs](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs)
+[generation.rs](../crates/iroha_core_zk/src/kagemusha_v1_recursion/generation.rs)
 use dense `ProvingKey` owners. The stored continuation and Core
 `capture_indexed_proving_key` have only test callers in the inspected source.
 Closed internal proof completion does not supply authenticated Core producer/key
 integration. Sources: [stored owner](../vendor/halo2-axiom/src/plonk/prover/stored.rs),
 [guarded outer continuation](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening.rs),
 [guarded inner IPA](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening/inner_ipa.rs),
-[indexed artifact owner](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifacts/stored_key.rs).
+[indexed artifact owner](../crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key.rs).
 
 Normal native activation remains unavailable. The only in-repository
 `KagemushaCoreCoordinatorBackendV1` implementation and install calls are in its
@@ -267,10 +267,10 @@ latest checkpoint selection and byte-identical recovery. `restore_from_disk_hist
 explicitly remains unwired to the product coordinator's hardware session. A
 signed historical projection or a replayable host WAL alone must not authorize
 restoration. Sources:
-[Guard delegation](../crates/iroha_core/src/zk/kagemusha_v1_recursion/guard_verifier.rs),
-[transaction verification](../crates/iroha_core/src/zk/kagemusha_v1_recursion/hardware_transactions.rs),
-[durable restoration](../crates/iroha_core/src/zk/kagemusha_v1_state/mod.rs),
-[response archive](../crates/iroha_core/src/zk/kagemusha_v1_state/response_evidence_archive.rs).
+[Guard delegation](../crates/iroha_core_zk/src/kagemusha_v1_recursion/guard_verifier.rs),
+[transaction verification](../crates/iroha_core_zk/src/kagemusha_v1_recursion/hardware_transactions.rs),
+[durable restoration](../crates/iroha_core_zk/src/kagemusha_v1_state/mod.rs),
+[response archive](../crates/iroha_core_zk/src/kagemusha_v1_state/response_evidence_archive.rs).
 
 The real 1,024-handoff qualification test remains ignored and explicitly fails
 because the positive-value MintFold → SendSplit → Payment → ReceiveFold generator
@@ -279,9 +279,9 @@ as incomplete. These fixtures do not establish 1,000 funded merchant balances,
 a live four-validator settlement/recovery run, genuine final-artifact proof
 acceptance, or device resource ceilings. The mint-authority reader also retains
 a bootstrap structure fixed-point qualification TODO. Sources:
-[handoff gate](../crates/iroha_core/src/zk/kagemusha_v1_recursion/real_handoff_qualification_tests.rs),
-[payment corridor](../crates/iroha_core/src/zk/kagemusha_v1_recursion/real_payment_corridor.rs),
-[native verifier](../crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs).
+[handoff gate](../crates/iroha_core_zk/src/kagemusha_v1_recursion/real_handoff_qualification_tests.rs),
+[payment corridor](../crates/iroha_core_zk/src/kagemusha_v1_recursion/real_payment_corridor.rs),
+[native verifier](../crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs).
 
 The next completion sequence is: qualify and connect the full stored proof path;
 qualify real funded recursive payments and complete durable native ownership;
@@ -538,8 +538,8 @@ source-sealed monetary XCFramework.
   tests passed on the fresh shared Core harness. This source finding does not establish an
   exported-ABI or monetary exploit, and the fix does not supply hardware
   freshness or qualified speculative-suffix authentication. Sources:
-  [coordinator pairing](../crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store.rs)
-  and [owned journal ancestry](../crates/iroha_core/src/zk/kagemusha_v1_state/private_journal.rs).
+  [coordinator pairing](../crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store.rs)
+  and [owned journal ancestry](../crates/iroha_core_zk/src/kagemusha_v1_state/private_journal.rs).
 - **KGM-01 — High, monetary relation incomplete.** The original MintFold private
   recipient credential and credit opening were retained by Core but not fully
   constrained to the receiving lane and verified authorization in the composite
@@ -547,8 +547,8 @@ source-sealed monetary XCFramework.
   correction now constrains the recipient and opening bytes and routes State SHA
   messages through the mandatory authenticated ordered claim fold. Focused Rust
   checks and actual artifact/resource gates are still required before closure.
-  Sources: [recipient/opening constraint](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L2612)
-  and [claim consumer](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L1705).
+  Sources: [recipient/opening constraint](../crates/iroha_core_zk/src/kagemusha_v1_recursion/composite.rs#L2612)
+  and [claim consumer](../crates/iroha_core_zk/src/kagemusha_v1_recursion/composite.rs#L1705).
 - **KGM-02 — High, operation recovery integration incomplete.** Swift exposed
   operations still allocated retry identities internally while Core had moved to
   caller-owned IDs; some SDK provider calls still used the retired allocator
@@ -557,7 +557,7 @@ source-sealed monetary XCFramework.
   reservation changes now have focused Kotlin/Java/C# coverage, and 22 Swift
   coordinator tests pass against the pinned native host library. C# also now rejects missing-state re-bootstrap, journal rollback
   and recovery equivocation. Current-source native execution is still required.
-  Sources: [Core reservation](../crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store.rs#L274)
+  Sources: [Core reservation](../crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store.rs#L274)
   and [C# ID admission/recovery](../csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaWalletV1.cs#L1014).
 - **KGM-03 — Medium, bridge response substitution.** Outbox release admitted a
   structurally valid response for a different canonical installed envelope.
@@ -783,8 +783,8 @@ source-sealed monetary XCFramework.
   reciprocal audit against the exact four-lane k16 scheduler before allocating
   its consuming Base graph. This rejects impossible jobs early; it does not
   reduce key size or qualify the graph.
-  Sources: [resource inventory](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifact_resource_preflight.rs)
-  and [generation preflight](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs).
+  Sources: [resource inventory](../crates/iroha_core_zk/src/kagemusha_v1_recursion/artifact_resource_preflight.rs)
+  and [generation preflight](../crates/iroha_core_zk/src/kagemusha_v1_recursion/generation.rs).
 - **KGM-20 — Corrected; focused reciprocal-audit validation passes.** Terminal
   reused a State-specific helper that selected audit positions 48/50, which are
   history cells in Terminal's public column. Terminal's Eq circuit must instead
@@ -800,7 +800,7 @@ source-sealed monetary XCFramework.
   Source/binary hashes remain unchanged. This closes the reproduced positional
   defect; final genuine Terminal proofs and release qualification remain blocked
   separately by resource/authority gates.
-  Source: [Terminal reciprocal audits](../crates/iroha_core/src/zk/kagemusha_v1_recursion/terminal_authorization.rs).
+  Source: [Terminal reciprocal audits](../crates/iroha_core_zk/src/kagemusha_v1_recursion/terminal_authorization.rs).
 - **KGM-21 — Release blocker, typed-SHA claim key convergence.** The actual
   supervised State diagnostic fails before State proving while generating its
   reusable typed-SHA claim artifacts. The convergence graph has 264 advice
@@ -965,7 +965,7 @@ source-sealed monetary XCFramework.
   cleanup authentication error and absent child exit code are preserved, and
   subsequent process checks find both owned processes absent. No final key or
   State proof is produced.
-  Source: [typed-SHA key generation](../crates/iroha_core/src/zk/kagemusha_v1_recursion/mint_hash_generation.rs).
+  Source: [typed-SHA key generation](../crates/iroha_core_zk/src/kagemusha_v1_recursion/mint_hash_generation.rs).
 
 The platform credential circuit already constrains its positive hardware epoch
 inside the proof. The shared credential-assignment helper now enforces the same

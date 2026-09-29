@@ -1,5 +1,5 @@
 //! Tests for invalid Kotodama pointer literals.
-use ivm::kotodama::{compiler::Compiler, i18n::Language};
+use kotodama_lang::{compiler::Compiler, i18n::Language};
 fn english_compiler() -> Compiler {
     Compiler::new_with_language(Language::English)
 }

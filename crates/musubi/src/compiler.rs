@@ -18,24 +18,21 @@ use iroha_data_model::musubi::{
     MusubiContentDigestV1, MusubiDependencyKindV1, MusubiPackageSelectorV1,
     MusubiVerificationLockV1, MusubiVerificationNodeV1,
 };
-use ivm::{
-    SyscallPolicy,
-    koto_test_driver::{
-        declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
+use kotodama_lang::{
+    compiler::{CompilerMode, CompilerOptions},
+    driver::{
+        BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
+        discover_source_link_request, discover_source_modules,
     },
-    kotodama::{
-        compiler::{CompilerMode, CompilerOptions},
-        driver::{
-            BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
-            discover_source_link_request, discover_source_modules,
-        },
-        linker::{
-            ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
-            SourcePackageGraphRequest, SourcePackageUnit,
-        },
-        session::CompilerSession,
+    linker::{
+        ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
+        SourcePackageGraphRequest, SourcePackageUnit,
     },
-    syscalls::compute_abi_hash,
+    session::CompilerSession,
+};
+use kotodama_toolchain::koto_test_driver::{
+    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -74,6 +74,7 @@ dispatch2 = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+kotodama_surface = { path = "../kotodama_surface" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 hex-literal = "1.1.0"
 
@@ -112,15 +113,6 @@ metal = [
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.
 ivm_vrf_tests = []
-
-[[bin]]
-name = "koto"
-path = "src/bin/koto.rs"
-
-[[bin]]
-name = "dump_program"
-path = "src/bin/dump_program.rs"
-required-features = ["dev-tools"]
 
 [[bin]]
 name = "gas_probe"

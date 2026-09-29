@@ -188,7 +188,7 @@ kind = "regions"
 outputs = [
   "crates/iroha_data_model/src/smart_contract/entrypoint.rs",
   "crates/ivm_abi/src/access_hints.rs",
-  "crates/kotodama_lang/src/semantic.rs",
+  "crates/kotodama_surface/src/source_policy.rs",
   "specs/kotodama_grammar.md",
   "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json",
   "javascript/iroha_js/src/numericV1.js",

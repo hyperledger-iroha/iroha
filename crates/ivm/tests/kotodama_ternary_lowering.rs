@@ -1,5 +1,6 @@
 //! Kotodama ternary conditional lowering regression tests.
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{CoreHost, IVM};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn kotodama_ternary_executes() {

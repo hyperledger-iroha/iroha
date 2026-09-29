@@ -40,6 +40,7 @@ description = "Data model, IVM, smart-contract, executor, and proof execution."
 packages = [
   "fastpq_isi",
   "fastpq_prover",
+  "iroha_core_zk",
   "iroha_data_model",
   "iroha_data_model_derive",
   "iroha_executor_data_model",

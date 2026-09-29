@@ -44,6 +44,7 @@ norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = fals
 # its JSON/canonical-query surfaces; the production bridge additionally needs the
 # complete Halo2/IPA circuit-parameter and STARK/FRI verifier paths.
 iroha_core = { path = "../iroha_core", default-features = false, features = ["node"] }
+iroha_core_zk = { path = "../iroha_core_zk", default-features = false, features = ["proofs-halo2"] }
 iroha_torii_shared = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "pqc", "sm"] }
 # The bridge ships the exact-12 KAT generator/validator, but must not expose the

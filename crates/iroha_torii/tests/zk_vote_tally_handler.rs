@@ -10,8 +10,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State as CoreState, World, WorldReadOnly as _},
-    zk::{hash_vk, test_utils::halo2_fixture_envelope},
 };
+use iroha_core_zk::{hash_vk, test_utils::halo2_fixture_envelope};
 use iroha_data_model::prelude::*;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
@@ -105,11 +105,8 @@ async fn vote_tally_handler_returns_finalized_tally() {
             )),
         )
         .expect("grant CanEnactGovernance");
-    let report = iroha_core::zk::verify_backend_with_timing(
-        TALLY_FIXTURE_BACKEND,
-        &proof_box,
-        Some(&vk_box),
-    );
+    let report =
+        iroha_core_zk::verify_backend_with_timing(TALLY_FIXTURE_BACKEND, &proof_box, Some(&vk_box));
     assert!(report.ok, "vote tally proof must verify: {report:?}");
     stx.world
         .executor()

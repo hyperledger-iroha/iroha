@@ -581,7 +581,7 @@ fn load_profile_kagemusha_mint_finality_parameters(
     }
     let bytes = fs::read(&path)?;
     let parameters: KagemushaMintFinalityGenesisParametersV1 = json::from_slice(&bytes)?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )?;
     let mut expected_validators = peers
@@ -1587,7 +1587,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, validator)| {
-                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
                         0,
                         validator,

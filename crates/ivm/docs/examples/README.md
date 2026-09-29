@@ -3,13 +3,14 @@
 This directory contains small Kotodama (`.ko`) snippets that demonstrate language features and how they map to IVM bytecode and host syscalls.
 
 How to compile and inspect
-- From Rust: use the Kotodama compiler API
+- From Rust: use the Kotodama compiler API from the `kotodama_lang` crate
 
 ```rust
-use ivm::{KotodamaCompiler, ProgramMetadata};
+use ivm::ProgramMetadata;
+use kotodama_lang::compiler::Compiler;
 
 fn main() {
-    let code = KotodamaCompiler::new()
+    let code = Compiler::new()
         .compile_file("crates/ivm/docs/examples/10_meta_header.ko")
         .expect("compile");
     let parsed = ProgramMetadata::parse(&code).unwrap();
@@ -29,7 +30,7 @@ fn main() {
 - Using the CLI bin (writes `.to`):
 
 ```
-cargo run -p ivm --bin koto -- build crates/ivm/docs/examples/10_meta_header.ko --out /tmp/meta.to --manifest-out /tmp/meta.manifest.json
+cargo run -p kotodama_toolchain --bin koto -- build crates/ivm/docs/examples/10_meta_header.ko --out /tmp/meta.to --manifest-out /tmp/meta.manifest.json
 ```
 
 Build options include `--profile`, `--target-dir`, `--out`,

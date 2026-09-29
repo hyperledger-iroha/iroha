@@ -8,8 +8,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
-    zk::hash_vk,
 };
+use iroha_core_zk::hash_vk;
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
     ValidationFail,
@@ -291,7 +291,7 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
     let proof_id = iroha_data_model::proof::ProofId {
         backend: attachment.backend.clone(),
-        proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
+        proof_hash: iroha_core_zk::hash_proof(&attachment.proof),
     };
     execute_verify_proof(&mut block, attachment, commitment)
         .expect("invalid proof result should be recorded");

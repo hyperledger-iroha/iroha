@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use iroha_core::zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
+use iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
 use iroha_crypto::{Algorithm, Signature, SignatureOf};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_DEVICE_RESPONSE_MAX_BYTES_V1, KagemushaAppAttestationAuthorityPolicyV1,

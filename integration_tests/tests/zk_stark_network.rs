@@ -35,13 +35,13 @@ fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     Ok(())
 }
 fn sample_stark_vk_box(backend: &str, circuit_id: &str) -> VerifyingKeyBox {
-    let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
+    let vk_payload = iroha_core_zk::stark::StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_owned(),
-        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-        blowup_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        n_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        blowup_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
@@ -172,7 +172,7 @@ async fn stark_governance_paths() -> Result<()> {
         BackendTag::Stark,
         "goldilocks",
         iroha_crypto::Hash::new(&ballot_schema).into(),
-        iroha_core::zk::hash_vk(&ballot_vk_box),
+        iroha_core_zk::hash_vk(&ballot_vk_box),
     );
     ballot_vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_ballot".to_owned());
@@ -199,7 +199,7 @@ async fn stark_governance_paths() -> Result<()> {
         BackendTag::Stark,
         "goldilocks",
         iroha_crypto::Hash::new(&tally_schema).into(),
-        iroha_core::zk::hash_vk(&tally_vk_box),
+        iroha_core_zk::hash_vk(&tally_vk_box),
     );
     tally_vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_tally".to_owned());
@@ -237,7 +237,7 @@ async fn stark_governance_paths() -> Result<()> {
     )
     .await?;
     let bad_commit = [0x33; 32];
-    let mismatched_ballot_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+    let mismatched_ballot_proof = iroha_core_zk::prove_stark_fri_open_verify_envelope(
         backend,
         tally_circuit_id,
         &tally_vk_box,
@@ -270,7 +270,7 @@ async fn stark_governance_paths() -> Result<()> {
         "mismatched ballot circuit/backend binding should be rejected"
     );
     let commit = [0x11; 32];
-    let ballot_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+    let ballot_proof = iroha_core_zk::prove_stark_fri_open_verify_envelope(
         backend,
         ballot_circuit_id,
         &ballot_vk_box,
@@ -304,7 +304,7 @@ async fn stark_governance_paths() -> Result<()> {
         .iter()
         .map(|&value| vec![limb_as_instance_bytes(value)])
         .collect::<Vec<_>>();
-    let tally_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+    let tally_proof = iroha_core_zk::prove_stark_fri_open_verify_envelope(
         backend,
         tally_circuit_id,
         &tally_vk_box,

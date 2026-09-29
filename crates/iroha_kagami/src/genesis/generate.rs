@@ -104,7 +104,7 @@ pub(super) fn load_kagemusha_mint_finality_parameters(
     })?;
     let parameters: KagemushaMintFinalityGenesisParametersV1 =
         norito::json::from_slice(&bytes).wrap_err("decode KAGEMUSHA mint-finality parameters")?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| {

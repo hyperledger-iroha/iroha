@@ -423,6 +423,7 @@
       ],
       "node_execution": [
         "iroha_core",
+        "iroha_core_zk",
         "iroha_torii",
         "irohad",
         "ivm",

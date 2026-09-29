@@ -77,7 +77,7 @@ impl Fixture {
         let mut validators: Vec<_> = (110..114)
             .map(|seed| {
                 let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[seed; 32], 0, peer,
                 ).expect("native public mint-finality fixture keys")
             })

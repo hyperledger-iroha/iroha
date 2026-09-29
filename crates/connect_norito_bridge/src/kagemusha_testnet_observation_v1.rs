@@ -15,16 +15,16 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use iroha_core::zk::kagemusha_v1_recursion::{
+use iroha_core_zk::kagemusha_v1_recursion::{
     KagemushaAuthenticatedArtifactSetV1, KagemushaAuthenticatedRecursiveVerifierV1,
     KagemushaDirectoryArtifactResolverV1, KagemushaOperationV1,
     KagemushaRecursiveVerifierProfileV1, KagemushaStateRelationPublicInputsV1,
     KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
     KagemushaTestnetValueAdmissionV1, KagemushaVerifiedFinalityChainV1,
 };
-use iroha_core::zk::kagemusha_v1_state::KagemushaStateProofReleaseV1;
+use iroha_core_zk::kagemusha_v1_state::KagemushaStateProofReleaseV1;
 #[cfg(unix)]
-use iroha_core::zk::kagemusha_v1_state::MintInboxReservationV1;
+use iroha_core_zk::kagemusha_v1_state::MintInboxReservationV1;
 #[cfg(unix)]
 use iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1;
 use iroha_data_model::kagemusha::{

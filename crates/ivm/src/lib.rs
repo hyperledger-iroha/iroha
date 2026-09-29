@@ -64,8 +64,7 @@ pub mod iso20022;
 mod ivm;
 pub mod ivm_cache;
 pub mod json;
-/// VM-backed Kotodama test runner shared by developer tools.
-pub mod koto_test_driver;
+pub mod koto_test_return;
 pub mod kotodama;
 pub mod limits;
 pub mod list;
@@ -133,7 +132,8 @@ pub use crate::gas::{cost_of, cost_of_with_vector_len};
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
-    ContractArtifactError, VerifiedContractArtifact, prepare_contract, verify_contract_artifact,
+    ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
+    prepare_koto_test_contract, verify_contract_artifact,
 };
 pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,

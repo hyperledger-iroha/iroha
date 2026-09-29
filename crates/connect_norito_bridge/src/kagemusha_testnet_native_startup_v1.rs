@@ -11,7 +11,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use iroha_core::zk::kagemusha_v1_recursion::{
+use iroha_core_zk::kagemusha_v1_recursion::{
     KagemushaRecursiveVerifierProfileV1, KagemushaVerifiedFinalityChainV1,
 };
 use iroha_data_model::{

@@ -6,7 +6,7 @@ use super::{Error, privacy_error};
 pub(super) mod authorization_v1;
 #[cfg(test)]
 pub(super) mod proof_fixture_v1;
-use crate::{state::StateTransaction, zk};
+use crate::{state::StateTransaction, zk, zk_guardrails::guardrails_from_config};
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -271,7 +271,7 @@ fn verify_with_config(
         required_relation,
         &proof_box,
         key,
-        zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+        guardrails_from_config(&state_transaction.zk),
     );
     #[cfg(feature = "telemetry")]
     {

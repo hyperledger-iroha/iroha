@@ -7,8 +7,9 @@
 //! - Halo2 curve mismatch is rejected at VK admission.
 use iroha_core::{
     executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
-    state::State, zk::test_utils::halo2_fixture_envelope,
+    state::State,
 };
+use iroha_core_zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
@@ -35,7 +36,7 @@ fn vk_record(
         backend_tag,
         curve,
         schema_hash,
-        iroha_core::zk::hash_vk(&vk_box),
+        iroha_core_zk::hash_vk(&vk_box),
     );
     record.vk_len = vk_box.bytes.len() as u32;
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;

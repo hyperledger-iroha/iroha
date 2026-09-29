@@ -6,7 +6,7 @@ pub use ivm_abi::error::*;
 /// The complete original error carries its finite pool/release observation.
 /// Converting it to malformed input would make transaction validity depend on
 /// local resource pressure. Semantic failures retain the caller's existing map.
-pub(crate) fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
+pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
     if error.execution_deferral().is_some() {
         error
     } else {

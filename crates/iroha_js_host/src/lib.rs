@@ -42,7 +42,7 @@ use blake3::hash as blake3_hash;
 use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
-use iroha_core::zk::confidential_v2::{
+use iroha_core_zk::confidential_v2::{
     self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
     ConfidentialUnshieldOutputV3,
 };

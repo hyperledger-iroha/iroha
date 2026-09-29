@@ -885,7 +885,7 @@ impl<'a> CstAstLowerer<'a> {
             if let Some(parameters) = self.declared_function_parameters.get(name) {
                 return parameters.clone();
             }
-            if let Some(builtin) = crate::builtins::Builtin::from_source_name(name) {
+            if let Some(builtin) = kotodama_surface::builtins::Builtin::from_source_name(name) {
                 return Some(
                     builtin
                         .signature()

@@ -21,7 +21,7 @@ fn bridge_proof_id(proof: &BridgeProof) -> ProofId {
     let proof = ProofBox::new(backend.clone(), encoded);
     ProofId {
         backend,
-        proof_hash: iroha_core::zk::hash_proof(&proof),
+        proof_hash: iroha_core_zk::hash_proof(&proof),
     }
 }
 fn make_ics_proof(leaf_fill: u8, range: (u64, u64)) -> BridgeProof {
