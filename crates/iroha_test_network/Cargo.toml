@@ -26,6 +26,7 @@ iroha_data_model = { workspace = true, features = ["application-model", "transpa
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_version = { workspace = true }
 iroha_test_samples.workspace = true
 iroha_torii_shared.workspace = true
@@ -47,5 +48,6 @@ nonzero_ext = { workspace = true }
 zeroize.workspace = true
 
 [dev-dependencies]
+iroha_sumeragi = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
-irohad = { path = "../irohad", default-features = false, features = ["daemon"] }
+irohad = { package = "irohad_lib", path = "../irohad", default-features = false, features = ["daemon"] }

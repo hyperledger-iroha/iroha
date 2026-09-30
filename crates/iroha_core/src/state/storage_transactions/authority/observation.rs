@@ -15,7 +15,7 @@ use super::{TransactionMembershipAuthorityError, TransactionMembershipCut};
 pub(in crate::state) struct CommittedMembershipObservation<'storage> {
     block: TransactionsBlock<'storage>,
     // Last: payloads and writer notices retire before original reader callbacks.
-    _reader_releases: concread::release::DeferredReleaseBatch,
+    _reader_releases: iroha_allocation::release::DeferredReleaseBatch,
 }
 
 impl<'storage> CommittedMembershipObservation<'storage> {

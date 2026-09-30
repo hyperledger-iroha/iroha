@@ -5,7 +5,7 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPublicInputPreimageV1, SenderWalletContextV1, canonical_command_body_for_tests,
     canonical_hardware_authorization_for_tests, terminal_envelope_digest_v1,
 };
-use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
+use iroha_core_zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::kagemusha::{
     KagemushaAcknowledgementV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,

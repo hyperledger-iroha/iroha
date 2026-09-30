@@ -7,9 +7,9 @@ driver it relies on. The daemon runs this core through the `iroha_core::sumeragi
 Remaining implementation and qualification work is tracked in
 [`specs/sumeragi_goals.md`](sumeragi_goals.md).
 
-Wire and storage formats are fresh (Taira is reset); nothing here is compatible with the v2
-runtime. Revisions 2, 3, 4 and 4.1 applied adversarial reviews and the decisions taken on them
-(review logs: Appendices A–D). Appendix E reconciles the text with the implementation: the rules
+Wire and storage formats have one first-release definition. Retired layouts, raw-body transport
+constructors and alternate decoders are not supported. Appendix E reconciles the text with
+the implementation: the rules
 the simulator and code review showed to be incomplete are amended in place, and every other
 code-level choice is listed.
 
@@ -30,7 +30,10 @@ enforce this boundary. Candidate and observer pools may have other sizes but
 cannot become a voting roster directly. The first-release epoch preparation,
 authority-generation, fresh-randomness and signed RS16 requirements are tracked
 in [the integration goals](sumeragi_goals.md#validator-staking-integration-requirements);
-the native implementation does not yet satisfy that complete production contract.
+the native implementation does not yet satisfy that complete production contract. Signed RS16
+payload availability has a Core/worker integration candidate (§12.8); whole-node and network
+qualification remain open. The interface
+and wire definitions below describe that candidate, not a claim of release or live qualification.
 
 1. **Validators.** Height `h` of instance `I` has a committee `C_h`: an ordered list of `n_h ≥ 1`
    distinct consensus public keys in *canonical order* (ascending by `kb(pk)`, §3.1). `C_h` is a
@@ -74,7 +77,7 @@ the native implementation does not yet satisfy that complete production contract
    (`E_max`, enforced by gas/size limits). `R` is a 32-byte execution commitment (§4.1). A local
    executor *failure* (panic, I/O error, resource exhaustion) is not an outcome of `exec`: it is
    reported as `Failed` and never treated as invalidity (§4.2).
-8. **Instances.** One core instance per chain: the global (Nexus) chain and every dataspace /
+8. **Instances.** One core instance per chain: the global (SORA Nexus) chain and every dataspace /
    lane chain run the *same* core with their own committee and instance id
    `I = H("sumeragi/instance" ‖ genesis_hash ‖ chain_id_bytes ‖ kind:u8 ‖ be32(index))`
    (kind 0 = global, 1 = dataspace, 2 = lane; derivation is the application's; the core only sees
@@ -224,7 +227,7 @@ TAG_PAY       = ASCII "sumeragi/payload"      TAG_ATT      = ASCII "sumeragi/att
 TAG_QC        = ASCII "sumeragi/qc"           TAG_TC       = ASCII "sumeragi/tc"
 TAG_COMMITTEE = ASCII "sumeragi/committee"    TAG_TOPOLOGY = ASCII "sumeragi/topology"
 KIND_PROPOSAL = 0x01, KIND_PREPARE = 0x02, KIND_COMMIT = 0x03, KIND_TIMEOUT = 0x04, KIND_ECHO = 0x05,
-KIND_ATTEST = 0x06
+KIND_ATTEST = 0x06; availability signatures use the separate domain of §12.8
 Hash32 = [u8; 32]; ValidatorIndex = u32 (canonical index into C_h)
 
 kb(pk)    = be16(len(raw)) ‖ raw    // raw: 48-byte compressed G1 point (production); 32 bytes (simulator)
@@ -247,6 +250,7 @@ struct BlockHeader {
     parent_hash: Hash32,              // block_hash of the committed block at h−1
     parent_result: Hash32,            // R certified by the CommitQC of h−1
     payload_hash: Hash32,             // H(TAG_PAY ‖ payload)
+    availability_digest: Hash32,      // complete ordered original RS16 row table (§12.8)
     payload_len: u32,                 // 0 < len(payload) ≤ max_block_bytes(h)
     proposer: ValidatorIndex,         // == idx(L(h, origin_view))
     skipped_leaders: Vec<PublicKey>,  // [L(h, x) for x in 0..min(origin_view, a_h)]
@@ -254,30 +258,38 @@ struct BlockHeader {
     attest: bool,                     // payload/control flag, mandatory at epoch boundary;
                                       // checked by deterministic execution at every view
 }
-struct Block { header: BlockHeader, payload: Vec<u8> }   // payload opaque to the core
+// AvailableBody is an opaque local custody owner (§12.8), not a wire-decoded struct.
+// Its read-only accessors expose source(), header(), availability(), payload().
 ```
 
 ```text
 block_hash = H(TAG_BLOCK ‖ I ‖ E ‖ be64(h) ‖ be64(origin_view) ‖ parent_hash ‖ parent_result ‖
-               payload_hash ‖ be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ be32(control_len) ‖ control_witness ‖ bit(attest))
-body_ok(b) := len(b.payload) == b.header.payload_len ∧ H(TAG_PAY ‖ b.payload) == b.header.payload_hash
+               payload_hash ‖ availability_digest ‖ be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ be32(control_len) ‖ control_witness ‖ bit(attest))
+body_ok(b) := len(b.payload()) == b.header().payload_len ∧
+              H(TAG_PAY ‖ b.payload()) == b.header().payload_hash ∧
+              complete original signatures and every canonical RS16 row match (§12.8)
 ```
 
 Keys (not indices) are used in headers so that demotion (§2.1) is computable from headers alone,
 even across committee changes. At `h = g + 1`: `parent_hash`/`parent_result` are the genesis block
 hash and result.
 
-**Body intake rule.** Every block body the core takes from anywhere — a proposal's payload, a
-`BlockResponse`, a `SyncResponse` entry, a `BodyAvailable` event — MUST satisfy `body_ok` before
-it is stored, executed, committed, served or put into evidence. A failing body is discarded with
-no state change, no execution verdict and no evidence; any fetch for it stays outstanding. A body
-already held for a block hash is never replaced. Votes and certificates bind `block_hash`, which
-binds `payload_hash` and `payload_len`, so a certified block hash determines the payload bytes; `R`
-need not commit to them again.
+**Body intake rule.** Proposals and sync entries carry mandatory original availability evidence,
+never application payload bytes. Only `AvailableBody` from actual authoring, reconstruction or
+source-bound stored-body restoration enters execution, storage or publication. Its immutable
+`AvailabilitySource` binds the expected instance, height, hash and complete authenticated
+`HeightConfig`; Core and each consuming store compare that source with their independently
+selected authority, and check admission to the original State allocation pool. Matching only an
+epoch number, header hash or filename is insufficient. Manifest possession authenticates the
+original authorizations but proves no received rows, reconstructed body or durable storage.
+A failed body/row is discarded without an execution verdict or fabricated evidence, and a local
+resource refusal retains the same job for retry. A held body is never replaced. Votes and QCs
+bind the header hash, including payload and availability commitments; `R` need not repeat them.
 
 The block's *own* result `R` is **not** in its header; it is bound by the votes and certificates
-of that block (§4). The next block binds it again via `parent_result`. The zero-length builder result
-`EMPTY = []` means that no work is available; it is never a valid block. Every proposal and
+of that block (§4). The next block binds it again via `parent_result`. The builder result
+`None` (called `EMPTY` in the work-driven rules) means no work is available; it is never a block.
+`Some(PayloadBytes)` is nonempty and funded by the original State allocation pool. Every proposal and
 stored body must have a nonzero payload, and the application must reject a decoded payload
 with no transaction entrypoints. Genesis is applied through its separate startup path. The flag `attest` belongs to the application (§3.7): the leader combines the payload builder flag with the mandatory epoch-boundary
 flag, and execution checks that exact rule (§4.2).
@@ -290,7 +302,6 @@ authorization, immutable authority generation, complete ordered BLS roster with 
 of possession, and fresh authenticated leader randomness (§10). It contains no local certificate
 or signer subset. Every header, vote, QC, timeout, TC and probe echo carries this identity;
 verification requires equality with the authenticated context installed for that height.
-
 
 ```text
 prop_preimage(h, v, bh, ad)      = TAG_SIG ‖ 0x01 ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ ad
@@ -309,17 +320,18 @@ tc_digest(t) = H(TAG_TC ‖ I ‖ E ‖ be64(t.height) ‖ be64(t.view) ‖ be32
 ```
 
 Domain separation: tag, kind, instance, scheduling epoch/context, height and view are in every consensus preimage; block
-hash, result and the block's `attest` flag in every vote. There is no other signed consensus
-object. The only other signed object is the probe echo (kind `0x05`): it binds the prober's nonce
+hash, result and the block's `attest` flag in every vote. There is no other consensus voting
+object. The probe echo (kind `0x05`) binds the prober's nonce
 and the replier's reported height, carries no sign-once obligation (a node signs one per probe it
 answers), is never recorded, and cannot verify as a vote, proposal or timeout because of its kind
 byte. The commit statement `att_preimage` (kind `0x06`) is not signed by consensus keys: the
 application's attestor signs it (§3.7); its kind byte keeps it apart from every consensus object.
-
-The leader's signature covers **everything in a proposal except the payload bytes**, which are
-bound through `payload_hash`/`payload_len` in the signed header. A relay can therefore only drop a
-proposal, or strip or corrupt its payload. The latter is caught by `body_ok`, cannot be attributed
-to anyone, and never causes evidence or an early timeout (§6.2).
+The original author's manifest and per-row authorizations use separate availability domains
+(§12.8), signed by the original header proposer under the complete authenticated height source.
+They are retained unchanged across re-proposals, publication and serving; later leaders do not
+re-sign them. A proposal signature binds its complete header and QC/TC attachments. A
+`ProposalMessage` additionally carries the mandatory original availability table. Corrupting
+that carrier or an actual row cannot frame the leader for a different signed proposal.
 
 ```rust
 struct Proposal {
@@ -327,9 +339,9 @@ struct Proposal {
     header: BlockHeader,
     justify: Option<TimeoutCert>,  // Some iff view > 0: a TC for (height, view − 1)
     parent_qc: Option<Qc>,         // a CommitQC of height − 1; None iff height == g + 1
-    payload: Option<Vec<u8>>,      // unsigned; the leader always includes it; relays may strip it
     sig: Signature,                // by L(height, view) over prop_preimage(height, view, bh, ad)
 }
+struct ProposalMessage { proposal: Proposal, availability: AvailabilityFrame }
 struct Vote {
     epoch: EpochId, // authenticated scheduling epoch and complete context
     kind: VoteKind,                // Prepare | Commit
@@ -407,17 +419,46 @@ cheap-reject rules and the verified-certificate cache (§6.1 rule 5).
 ### 3.5 Unsigned messages
 
 ```rust
-enum WireMessage {
-    // round messages (height-filtered, §6.1)
-    Proposal(Proposal), Vote(Vote), Qc(Qc), Timeout(TimeoutVote), Tc(TimeoutCert),
-    // service messages (never height-filtered, §6.1)
-    Status(Status),
-    SyncRequest  { instance: Hash32, from_height: u64, max_count: u16, max_bytes: u32 },
-    SyncResponse { instance: Hash32, blocks: Vec<(Block, Qc /*CommitQC*/)> },
-                 // consecutive heights starting at from_height, total ≤ max_bytes unless 1 entry;
-                 // empty = "I hold nothing at from_height"
-    BlockRequest  { instance: Hash32, height: u64, block_hash: Hash32 },
-    BlockResponse { instance: Hash32, block: Block },
+pub enum WireMessage {
+    Proposal(Box<ProposalMessage>),
+    Vote(Vote),
+    Qc(Qc),
+    Timeout(Box<TimeoutVote>),
+    Tc(Box<TimeoutCert>),
+    Status(Box<Status>),
+    SyncRequest(SyncRequest),
+    SyncResponse(SyncResponse),
+    PayloadRequest(PayloadRequest),
+    PayloadManifest(PayloadManifest),
+    ApplicationControl(ApplicationControl),
+    PayloadChunk(PayloadChunk),
+}
+pub struct SyncRequest {
+    pub instance: Hash32,
+    pub from_height: u64,
+    pub max_count: u16,
+    pub max_bytes: u32,
+}
+pub struct SyncResponse { pub instance: Hash32, pub blocks: Vec<SyncEntry> }
+pub struct SyncEntry {
+    pub manifest: PayloadManifest,
+    pub commit_qc: Qc,
+}
+pub struct PayloadManifest {
+    pub header: BlockHeader,
+    pub availability: crate::availability::AvailabilityFrame,
+}
+pub struct PayloadRequest {
+    pub instance: Hash32,
+    pub height: u64,
+    pub block_hash: Hash32,
+}
+pub struct PayloadChunk {
+    pub instance: Hash32,
+    pub height: u64,
+    pub block_hash: Hash32,
+    pub index: u32,
+    pub bytes: crate::availability::RowBytes,
 }
 struct Status {                // periodic "state, not custody" summary (§6.11)
     instance: Hash32,
@@ -444,17 +485,17 @@ While `awaiting` (§6.8) a node's `Status` has `height = tip.height + 1`, `view 
 
 **Wire tags, version and traffic classes.** A `WireMessage` travels as one canonical Norito frame
 (`WireMessage::encode` / `decode`). Its enum tag (a `u32`) is the variant's position in the list
-above, 0 to 10. `PROTOCOL_VERSION = 1` names the sole wire format in the P2P handshake;
+above, 0 to 11. `PROTOCOL_VERSION = 1` names the sole wire format in the P2P handshake;
 every incompatible change replaces the layout directly. No earlier decoder is accepted. The traffic class of a message
-(§12.3 O8) is a function of its tag and, for a proposal, of whether it carries its payload:
+(§12.3 O8) depends only on the canonical enum tag:
 
 | Tag | Message | Class |
 |---|---|---|
-| 0 | `Proposal` | Proposal with a payload, Control without one |
+| 0 | `Proposal(ProposalMessage)` | Proposal |
 | 1, 2, 3, 4 | `Vote`, `Qc`, `Timeout`, `Tc` | Control |
-| 5, 6, 8 | `Status`, `SyncRequest`, `BlockRequest` | Control |
-| 7 | `SyncResponse` | Bulk |
-| 9 | `BlockResponse` | Proposal (every one; the current height is not known before decoding, Appendix E, E44) |
+| 5, 6, 8 | `Status`, `SyncRequest`, `PayloadRequest` | Control |
+| 7, 11 | `SyncResponse`, `PayloadChunk` | Bulk |
+| 9 | `PayloadManifest` | Proposal |
 | 10 | `ApplicationControl { context, bytes }` | Control; bytes are bounded to 2048 and nonempty |
 
 `ApplicationControlContext = { instance, epoch: EpochId, height, parent_hash, parent_result }`.
@@ -465,10 +506,11 @@ The core retains at most one timestamp per sender, and admits at most one such i
 per rebroadcast interval. The driver retains at most one pending input per sender, hard capped
 by `MAX_COMMITTEE_SIZE`; the production committee bound remains enforced by application admission.
 
-`traffic_class_of_frame(bytes)` computes the same class from the encoded frame without decoding it
-(the frame header, the tag and, for tag 0, the `Option` tag of `Proposal.payload`), so the transport
-can queue a frame by class before the driver decodes it. For every frame that decodes, the two
-agree.
+`traffic_class_of_frame(bytes)` computes the same class from the declared canonical Norito
+frame header and enum tag before decoding. For every accepted frame it agrees with
+`WireMessage::traffic_class`. Availability messages use this same `WireMessage` owner and codec;
+there is no second schema-dispatched availability protocol. A proposal always carries signed
+metadata and its original availability table; actual row bytes travel only in `PayloadChunk`.
 
 ### 3.6 Evidence
 
@@ -493,8 +535,10 @@ executes to `Invalid` produces none: the leader does not execute before proposin
 honest leader can propose a poison transaction without knowing it, and a single divergent executor
 would otherwise accuse honest leaders. Penalties are the application's.
 
-Typical sizes (BLS): Vote ≈ 215 B; Qc ≈ 215 B; TimeoutVote ≤ 440 B; TC ≈ 330 B + 13 B × signers;
-Proposal without payload ≤ 2 KB at n = 31; Status ≤ 1.4 KB at n = 22 (an `Echo` adds ≈ 160 B). A
+Message sizes include complete authenticated epoch context and the declared Norito framing.
+A proposal or manifest additionally carries the exact availability table of §12.8
+(`4 + 96 + N·(32 + 96)` inner bytes, before its Norito envelope). Earlier estimates excluding
+this mandatory table do not describe the wire size. A
 Commit vote of a flagged block adds its attestation, and a CommitQC of one (also inside a
 `Status`, a proposal's `parent_qc` or a sync entry) adds `q` attestations (§3.7); each is at most
 `MAX_ATTESTATION_SIGNATURE_BYTES = 256` occupied bytes. Each vote carries its bounded
@@ -504,6 +548,16 @@ state is explicitly untrusted; admission copies or shares it into the original S
 pool before native ingress retains it. Immutable clones retain the same actual backing/control
 charges. The frame allowance includes the witness, compact signatures and bounded header/TC
 metadata through the generic core committee bound.
+
+The canonical execution-result witness carries each complete authorized epoch context once:
+the current context, the optional boundary's next context, and its optional frozen preparation.
+Each ready successor slot carries only its exact height and lag-two parameters, deriving its
+epoch from the boundary's next context when present and otherwise from the current context.
+Pending-boundary slots retain their explicit predecessor identity and boundary height. Encoding
+rejects an owned ready slot that differs from its derivable context; decoding reconstructs and
+validates the complete graph while charging the additional owned credentials to the inherited
+decode allocation budget. This keeps supported 31-member boundary/preparation graphs within
+the same 64 KiB witness limit, with no alternate or repeated-context result decoder.
 
 ### 3.7 Commit attestation (application extension)
 
@@ -853,8 +907,9 @@ Failure coverage:
 | Late entry or lost proposal copy: `Status{want_proposal}` + one proposal re-push | 2 | 2 | 2 |
 
 For comparison, all-to-all two-phase voting costs `(n−1) + 2n(n−1)` = 27 / 945 per height.
-Retransmissions happen only on loss. Bytes are dominated by the proposal payload, sent `n−1` times
-by the leader (set A first); every other message is ≤ 2 KB.
+These counts cover consensus metadata messages, excluding signed RS16 rows, manifests and
+repair traffic (§12.8). Actual byte and message costs require those additional frames; no
+end-to-end bandwidth result follows from this table.
 
 ---
 ## 6. Handlers
@@ -894,7 +949,7 @@ struct Core {
     stage: u8, t_ready: Option<Millis>, t_pqc: Option<Millis>, t_lastvote: Option<Millis>, // §5.2
     mine: Mine,                          // exact signed messages of this round: proposal, prepare, commit, timeout,
                                          //   each with its t_vote (time of its latest send by route) for §6.11
-    blocks: BTreeMap<Hash32, Block>,     // bodies in memory (≤ 6, §8.4); all are also in the driver's body store
+    blocks: BTreeMap<Hash32, AvailableBody>,     // bodies in memory (≤ 6, §8.4); all are also in the driver's body store
     exec: BTreeMap<Hash32, ExecState>,   // blocks of height h: Pending{since, req} | Valid(R) | Invalid | RetryAt{t, attempt}
     next_req: u64,                       // request counter for Execute and BuildPayload (§6.3, §6.10); never reused
     wants: BTreeMap<Hash32, Want>,       // {height, reason, sources, attempt, next_retry}: sole owner of body fetches
@@ -943,15 +998,17 @@ the vote-pool window are pruned with the pools; all are cleared on height entry.
 (§6.11), `on_status` (§6.11), `on_block_applied` (§6.13), `restore` (the Init procedure, §7.4).
 Helpers: `request_exec`, `discard_exec`, `try_prepare`, `pool_insert`, `try_commit`,
 `sign_timeout`, `timeout_insert`, `form_tc`, `propose`, `advance_to`, `persist`, `route`,
-`request_proposal` (§6.11), `initial_stage`, `quorum`, `verify_qc`, `verify_tc`, `body_ok`,
-`demoted_set`, `leader`, `level`, `anchor`. An implementation may structure code differently but MUST keep one function per name so
-that each mutation has exactly one site.
+`request_proposal` (§6.11), `initial_stage`, `quorum`, `verify_qc`, `verify_tc`, custody/source acceptance,
+`demoted_set`, `leader`, `level`, `anchor`. An implementation may structure code differently but MUST keep each safety predicate identifiable so
+that a mutation targets the actual current validation site.
 
 ### 6.1 Intake filter (all messages)
 
 1. Drop if `msg.instance ≠ I`.
-2. **Service messages** (`Status`, `SyncRequest`, `SyncResponse`, `BlockRequest`, `BlockResponse`)
-   are never height-filtered; they go to §6.9 / §6.11.
+2. **Service messages** (`Status`, `SyncRequest`, `SyncResponse`, `PayloadRequest`, `PayloadManifest`, `PayloadChunk`)
+   bypass the round-height filter; they go to §6.9 / §6.11. Actual rows reach a worker only
+   for an outstanding exact-height/hash want, with the authenticated transport sender preserved.
+   Every message also passes structural limits and original-pool byte admission before dispatch.
 3. **Round messages** with `height < h`: a `Vote` or `Timeout` from a member of the current
    committee proves the sender is behind → `Send` it our `Status` (at most once per peer per
    `rebroadcast_interval`). A `Qc(Commit)` with `height ≤ tip.height` → safety monitor (§7.6).
@@ -977,7 +1034,7 @@ that each mutation has exactly one site.
    signature under `C_h[signer]`. Every signature is verified before its object enters any pool
    or changes any state; there is no deferred or optimistic verification.
 
-### 6.2 On `Proposal p` (round `(h, w)`, `w = p.view`)
+### 6.2 On `ProposalMessage { proposal: p, availability }` (round `(h, w)`, `w = p.view`)
 
 0. **Height.** If `p.height == h + 1`: if `h` is not yet committed and `p.parent_qc` is a
    CommitQC for `h`, run §6.8 on it (verification included); continue only if the node is now in
@@ -988,7 +1045,7 @@ that each mutation has exactly one site.
    Verify `p.sig` under `C_h[L(h, w)]` over `prop_preimage(h, w, bh, ad)`. Failure → drop silently
    (a relay may have tampered; nothing is attributable).
 2. **Duplicates and equivocation.** If a proposal for `(h, w)` is already held: same `(bh, ad)` →
-   if the held one has no body and `p.payload` passes `body_ok`, take the body (step 8); stop.
+   pass the carrier to the wanted acquisition (step 8); this grants no body custody; stop.
    Different `(bh, ad)` → `ReportEvidence(ProposalEquivocation(held, p))` (deduplicated, §6.0);
    keep the held one; if `w == view`, `sign_timeout(view)` (early timeout, §6.6: the leader of
    the current view is proven faulty, whether or not this node already Prepared the held
@@ -996,12 +1053,12 @@ that each mutation has exactly one site.
    (`advance_to` drops it), so twins of a view the node already left are never compared.
    Both proposals passed step 1, so the evidence carries two different preimages of `(h, w)`
    signed by `L(h, w)`: an honest leader never signs two (S1), and bytes a relay can change (the
-   payload) do not change `(bh, ad)` (§3.3), so an honest leader cannot be framed (§7.5).
+   availability carrier or actual rows) do not change `(bh, ad)` (§3.3), so an honest leader cannot be framed (§7.5).
 3. **Justify.** `w == 0`: `p.justify` MUST be `None`. `w > 0`: `p.justify` MUST be a valid TC
    (§3.4) for `(h, w − 1)`; run the TC handler (§6.7) on it (it may advance `view` to `w`).
    A violation is a signed defect → step 7.
-4. **View.** If `w < view`: if `bh` is wanted (§6.9) and `p.payload` passes `body_ok`, take the
-   body; stop. If `w > view`: drop.
+4. **View.** If `w < view`: if `bh` is wanted (§6.9), pass the original manifest to
+   acquisition under the independently selected historical source; stop. If `w > view`: drop.
 5. **Parent.** `p.parent_qc` is `None` iff `h == g + 1`; otherwise it MUST be a valid CommitQC
    (under `C_{h−1}`, cached) for `(tip.block_hash, tip.result)`. A violation is a signed defect →
    step 7.
@@ -1017,10 +1074,12 @@ that each mutation has exactly one site.
 7. **Signed defect.** A failure in step 3, 5 or 6 is attributable to `L(h, w)`:
    `ReportEvidence(InvalidProposal{p, defect})` (deduplicated, §6.0), and if `w == view`,
    `sign_timeout(view)` (early timeout, §6.6). Stop.
-8. **Accept.** `proposal = p`; `t_prop = now` (recompute `anchor` and deadlines, §9.1). If
-   `p.payload` passes `body_ok`: `blocks[bh] = block`; `StoreBody{block}` unless already stored.
-   Otherwise (payload absent or corrupt — never a defect): create `want(bh, Proposal)` with sources
-   `L(h, w)`, `Q`'s signers for a re-proposal, and members whose `Status` reported `bh`.
+8. **Accept.** `proposal = p`; `t_prop = now` (recompute `anchor` and deadlines, §9.1).
+   Unless exact custody is held, create `want(bh, Proposal)` with sources `L(h, w)`, `Q`'s
+   signers for a re-proposal, and members whose `Status` reported `bh`. Supply the mandatory
+   manifest to `AcquirePayload` with the independent `AvailabilitySource`. Missing or corrupt
+   rows never supply a body or a deterministic execution defect. Only a matching opaque
+   `BodyAvailable` completion can satisfy the want (§6.9).
 9. **Execute.** If the body is held and `t_body` is unset, `t_body = now` (the committing view's
    duration is measured from here, §9.2; this step runs again when the body arrives). If the
    body is held, the parent state is available (`applied ≥ h − 1`, or
@@ -1280,41 +1339,40 @@ two heights (§10.2).
    that request's `from_height` (an empty response answers the source's latest request); other
    responses are dropped. Before it is checked, buffered entries above a gap in the heights from
    `h` on are dropped (rule 2). Entries below `h` are skipped; every
-   other entry must satisfy `c.kind == Commit`, `c.height == block.header.height`,
-   `block_hash(block.header) == c.block_hash`, `c.attest == block.header.attest` (§3.7 A4),
-   `body_ok(block)`, consecutive heights. The entry
+   other entry must satisfy `c.kind == Commit`, `c.height == manifest.header.height`,
+   `block_hash(manifest.header) == c.block_hash`, `c.attest == manifest.header.attest` (§3.7 A4),
+   mandatory structurally valid availability table, consecutive heights. The entry
    for the current `h` additionally needs `C_h` known, `verify_qc(c, C_h)`,
-   `header.parent_hash == tip.block_hash` and `header.parent_result == tip.result`; it then runs
-   §6.8 (commit, enter the next height), and buffered entries are processed in the same way in
+   `header.parent_hash == tip.block_hash`, `header.parent_result == tip.result`, the exact
+   scheduled epoch and its mandatory boundary attestation flag. Without body custody the entry
+   remains buffered, creates a want and starts source-bound acquisition; it cannot advance sync
+   merely from the signature table. Once custody is held it runs §6.8 (commit, enter the next
+   height), and buffered entries are processed in the same way in
    height order. Entries for heights `> h` are buffered (≤ `2·sync_batch`) until their turn. The
    first failing entry is dropped together with the rest of that response. A prefix shorter than
    requested is normal; an empty response counts as empty for rule 1.
-4. **Serving** (service messages, any height; per-peer rate limits are the driver's). On
-   `SyncRequest` → `ServeBlocks{to, from_height, max_count ≤ sync_batch, max_bytes ≤
-   sync_max_bytes}`; the driver answers from its block store with consecutive `(block, CommitQC)`
-   pairs, total ≤ `max_bytes` unless a single block, or with an empty response if it holds no
-   block at `from_height`. On `BlockRequest{height, bh}`: if `blocks[bh]` is held →
-   `Send(BlockResponse{block})`; else `ServeBody{to, height, bh}` (the driver answers with a
-   `BlockResponse` from its body store or block store, or not at all).
-5. **Wants** are the only owner of body-fetch retries. A want exists for: the current proposal's
-   body (including this node's own recorded proposal after a restart, §6.10 rule 0); the block of
-   `high_pqc`; the block of `high_tc.high_pqc` (while this node is the leader waiting to
-   re-propose); each `pending_apply` entry whose body is not held. At creation and at every
-   `fetch_retry`: `FetchBody{height, bh, peers}` with the next `min(2^(attempt+1), |sources|)`
-   sources, cycling through the source list (wrapping around), so an honest holder among `f + 1`
-   or more sources is reached within `⌈log2(f+1)⌉` attempts; the driver first looks in its local
-   body store and block store (answering `BodyAvailable`) and otherwise sends `BlockRequest` to
-   `peers`. A want is dropped when satisfied or no longer needed (view or height change).
-6. **On `BlockResponse{block}` or `BodyAvailable{block}`:** `bh = block_hash(block.header)`; accept
-   only if `bh ∈ wants`, `block.header.height == wants[bh].height` and `body_ok(block)`. A body
-   already held is never replaced. Accept → `blocks[bh] = block`; `StoreBody{block}` unless it came
-   from the local store; remove the want; then flush `pending_apply`: while its front entry's body
-   is held, check `header.parent_hash == entry.parent_hash` and
-   `header.parent_result == entry.parent_result` (failure → `Halt(SafetyRecordInconsistent)`: with
-   at most `f` faults a certified block always extends the committed parent, so this can fail
-   only after local storage corruption, e.g. of the block-store tip used by R5), emit
-   `CommitBlock{block, commit_qc}` and pop it. If the body is the current proposal's, continue at
-   §6.2 step 9; if `repropose`, propose (§6.10).
+4. **Serving** (service messages at any height; driver per-peer quotas apply). A
+   `SyncRequest` emits bounded `ServeBlocks`. The reply carries consecutive
+   `SyncEntry { manifest, commit_qc }`, total ≤ `max_bytes` unless one entry, or an empty
+   response when absent. A `PayloadRequest { height, block_hash }` emits `ServePayload`.
+   The driver independently resolves the historical source, restores exact original custody,
+   and serves its original manifest and derived rows. It never substitutes raw full bodies.
+5. **Wants** own fetch retries for the current proposal, recorded proposal, highest PrepareQC,
+   TC-selected re-proposal and each body missing from `pending_apply`. At creation and each
+   `fetch_retry`, emit `FetchPayload { source, peers }`, where `source` binds the independently
+   selected instance, height, hash and complete authenticated height config. Select the next
+   `min(2^(attempt+1), |sources|)` peers cyclically. The driver first starts or resumes a typed
+   local read/restoration job. Actual absence permits `PayloadRequest`; temporary admission/I/O
+   refusal retains the same read, and corruption is an error rather than absence. A source
+   change cannot silently replace an in-flight owner.
+6. **Custody completion.** `BodyAvailable { block }` is accepted only for an exact-height/hash
+   outstanding want, with `block.source()` equal to the independently selected full source and
+   `block.admitted_to(original_pool)`. A held body is never replaced. Core emits `StoreBody`,
+   retains the immutable body and removes the want. It flushes `pending_apply` in order, checking
+   parent hash/result against each committed entry before `CommitBlock`; mismatch halts as
+   `SafetyRecordInconsistent`. Current-proposal custody resumes §6.2 step 9; retained certified
+   custody resumes re-proposing. A worker's semantic `ManifestRejected` removes only the exact
+   matching buffered sync carrier. Resource refusal must not emit that event.
 7. While `sync.target > h + 1` the node still runs the round rules for `h`; nothing waits for sync
    to finish.
 
@@ -1346,8 +1404,12 @@ key, `timeout_view < v`, and no proposal recorded at `(h, v)`.
    is ignored. View timers continue while local resource retries use bounded backoff.
 5. **Construct and send.** A fresh header binds the current height, view, committed parent,
    nonempty payload, exact control witness, proposer, skipped leaders and the combined
-   payload/control-or-boundary attestation flag from §3.7 A1. A re-proposal
-   keeps `Q`'s header unchanged. Store the body, persist the exact proposal record, sign and
+   payload/control-or-boundary attestation flag from §3.7 A1. Core emits `AuthorPayload` with
+   that template, the exact config and original funded payload. The worker completes canonical
+   encoding and original signatures; Core accepts `PayloadAuthored` only for that request,
+   header (apart from its computed availability digest), complete source and original pool.
+   It then stores the body and signs the round proposal behind the existing durability barrier.
+   A re-proposal keeps `Q`'s header unchanged. Store the body, persist the exact proposal record, sign and
    broadcast it under the existing persist-before-send barrier, then accept it locally.
 
 The leader does not wait for its own execution or parent apply to request work. A builder that
@@ -1368,7 +1430,7 @@ retry.
   stage-entry re-send, whichever is later.
 - **Rebroadcast** (every `rebroadcast_interval`):
   1. Re-send `mine.timeout` by broadcast if `timeout_view == Some(view)`.
-  2. Leader of `(h, view)` holding its proposal: re-send it (with payload) once per member per
+  2. Leader of `(h, view)` holding its proposal: re-send it (with its original availability table) once per member per
      view, to each member whose latest `Status` is for `(h, view)`, was received at least
      `rebroadcast_interval` after the proposal was first sent, and does not report
      `proposal_hash == bh`. Members that learn `bh` otherwise (PrepareQC, Status) pull the body
@@ -1376,10 +1438,10 @@ retry.
 - **Late-entrant re-push** (on receipt, not on `Tick`; exempt from the `Status` rate limit, below).
   A leader of `(h, view)` holding its proposal that receives, from a peer among its `recipients`
   (§6.0), a `Status` for `(h, view)` with `want_proposal` set and without `proposal_hash == bh`
-  re-sends the proposal (with payload) to that member at once — no interval gate — at most once
+  re-sends the proposal (with its original availability table) to that member at once — no interval gate — at most once
   per member per view (independently of rule 2 above). Only members that lack the proposal and
   entered late or hold evidence of it set the flag (proposal request, below), and the cap holds
-  however many flagged `Status` messages arrive, so this cannot amplify: at most one extra payload
+  however many flagged `Status` messages arrive, so this cannot amplify: at most one extra proposal carrier
   copy per member per view.
 - **Proposal request** (`request_proposal`, at the end of every `handle` call and of
   `Core::new`). If the node is not `awaiting`, `L(h, view) ≠ me`, no proposal for `(h, view)` is
@@ -1925,8 +1987,8 @@ At least `q_h` members of `C_h` are honest and running, where a member with an u
 (§7.4 R2) counts as faulty until it anchors, a member whose key abstains at `h` (R2, R6)
 counts as faulty at `h`, and a member that cannot attest at `h` counts as faulty at `h` for a
 flagged block (§3.7 A5); honest-to-honest delay `≤ Δ` for every
-message up to `max_block_bytes`, including the last of the `n − 1` payload copies a leader sends
-in sequence (the driver's traffic classes, §12.3 O8, keep control traffic independent of bulk
+required proposal/manifest and sufficient authenticated rows to reconstruct a bounded payload,
+including the complete sequential egress to the destination peers (the driver's traffic classes, §12.3 O8, keep control traffic independent of bulk
 load); local signing/verification/persist per message `≤ δ`; parent apply `≤ A_max`; execution
 `≤ E_max`; the driver delivers `Tick` within `δ` of `next_wakeup()` ahead of every other event
 (O5); `σ = rebroadcast_interval + Δ`; `F = ⌈log2(f+1)⌉ · fetch_retry` (body fetch, §6.9 rule 5).
@@ -1986,7 +2048,8 @@ simulator's post-heal delays respect this, and §9.4 validates the nominal case.
   `f + 1` consecutive entries of `nd_h`, hence distinct (§2.1, slot substitution rotates views
   over non-demoted members only), so one is correct.
 - **L6 Committed bodies are obtainable.** A node that commits without the body fetches it with
-  `BlockRequest`, which any holder answers at any height (§6.9); ≥ `f + 1` honest members hold it
+  `PayloadRequest`, which any holder answers with the original manifest and actual rows at
+  any height (§6.9); ≥ `f + 1` honest members hold it
   durably (§7.4). So `pending_apply` drains, `applied` advances, and the next configuration becomes
   known.
 
@@ -2172,8 +2235,9 @@ view succeeds, so that leader is never skipped or demoted and leaves no evidence
 the anchor (or from `t_prop`), such leaders raised every honest node to `start_cap` in the
 simulator (F36), and every crashed leader then cost `P(0) + T(4)` — 15.3 s at `n = 4`, 20.4 s at
 `n = 22` — instead of `P(0) + T(0)`. From `t_body` the leader controls neither: an honest
-proposal carries its payload, so `t_body = t_prop` for an honest leader. The wait for a body that
-a relay stripped is not counted either (the start level is not the remedy for lost payloads).
+proposal supplies metadata and a separate row stream; `t_body` is when both verified proposal
+and actual body custody are held. Acquisition wait is excluded from this execution-based
+adaptation metric; it is still part of end-to-end latency and the liveness delivery assumptions.
 
 *Why this resists Byzantine members.* (1) A failed view never raises by itself. A faulty leader
 that equivocates (early timeout, §6.2 step 2), sends a valid proposal to too few members
@@ -2247,10 +2311,11 @@ chain's `a_max`, `e_max`. Defaults: n = 4 → 16.1 s; n = 22 → 19.6 s; both �
 `sync_max_bytes < max_block_bytes + FRAME_OVERHEAD`, `fetch_retry > rebroadcast_interval`, or
 `demotion_window < 1`. The application MUST reject chain parameters with
 `block_time > payload_retry_interval`, `payload_retry_interval == 0`, or `max_block_bytes` above the
-transport limit (§12.3 O10). `Δ_nom` presumes that a leader sends its `n − 1` payload copies of
-`max_block_bytes` within about `Δ_nom` (at `n = 22` and 4 MiB: ≈ 1.4 Gbit/s of uplink); the
-application SHOULD choose `max_block_bytes ≤ Δ_nom · uplink / (n − 1)` for the validators' real
-uplink, or operators raise `T_max`. When a
+transport limit (§12.3 O10). `Δ_nom` must cover manifest and complete encoded-row delivery for
+each maximum payload to the intended peer list, including RS16 expansion, table/signature
+bytes, worker time and framing. The earlier raw-payload-only uplink estimate does not apply.
+The application SHOULD choose limits using measured complete delivery cost or operators raise
+`T_max`. When a
 later committed configuration raises `T_req`, the core uses `T_max_eff = max(T_max, T_req(nominal))`
 and reports `LocalFault(ConfigTooTight)` instead of halting.
 
@@ -2402,6 +2467,39 @@ proofs are built; (c) pure functions `block_hash(&BlockHeader)`, `committee_dige
 foreign-instance light verification (the attestation verifier and the certified header, when the
 caller holds it, serve §3.7 A4).
 
+**As built.** The global chain's side runs in the node; the dataspace side is a tested component
+that no node hosts yet (§14, item 3). Choices beyond the rules above are Appendix E, E58 (node)
+and E59 (simulator).
+
+- *Transaction and records* (`iroha_data_model::sumeragi_amx`): `X` is `AmxTransactionV1`, 2–16
+  legs in strictly increasing dataspace order (an opaque payload per participant), the deadline
+  `d` and a client nonce; `x = H("iroha/sumeragi/amx/transaction/v1" ‖ norito(X))`. The records
+  are `AmxBeginV1`, `AmxPreparedV1` and `AmxDecisionV1`.
+- *Record proofs*: the instance that creates a record writes it into the block's execution
+  witness under the reserved key `0xD9 ‖ kind ‖ x`, so the ordinary-write root of `R` commits it
+  and `R`'s layout is unchanged. `AmxRecordProofV1` is the block's canonical core header, its
+  `CommitQC`, the canonical result preimage and the sparse-Merkle path of the write in that root.
+- *Tracker* (`AmxForeignInstanceV1`, item 7): the complete authenticated contexts `C_{J,e}` and
+  `C_{J,e−1}`. A certified block verifies only if its header's epoch is one of them and contains
+  its height, exactly `q` members of that epoch's committee signed the `CommitQC` (the core's
+  `verify_qc_signatures`), and the result preimage hashes to the certified `R` and names that
+  height and context. A handoff proof is the certified last block of `e`: the boundary decision in
+  its result preimage, validated against `C_{J,e}`, names `C_{J,e+1}`.
+- *`G`* (`iroha_core::sumeragi::amx`): the World cell `sumeragi_amx` holds the registered
+  participant dataspaces with their trackers and the transactions whose deadline has not passed.
+  `RegisterAmxDataspaceV1` (in genesis, or by an authority holding `CanSetParameters`) anchors a
+  tracker at an authenticated epoch context of the dataspace's instance; `BeginAmxV1` (item 2),
+  `RelayAmxPreparedV1` (items 4–5) and `RelayAmxHandoffV1` (item 7) are its transactions. After
+  every block's transactions the deadline step aborts each undecided transaction with `d < h` and
+  drops each transaction with `d < h` from the state; its `Decision` stays provable from the
+  block that recorded it.
+- *Participant* (`AmxParticipantStateV1` over the `AmxEscrow` interface that a dataspace's
+  executor implements): prepare (item 3), settle (item 6) and `G`'s handoffs. A `Prepare` is also
+  rejected once the participant has verified a `G` block above `d`: `G` has then decided `x`, and
+  without this vote only `Abort`.
+- *Simulator* (`sim::amx`, F31): the same protocol as a toy application on every instance's
+  committed blocks, checked by O-AMX (§13.2) and the `MX` mutations (§13.4).
+
 ---
 
 ## 12. Sans-IO node interface
@@ -2411,8 +2509,8 @@ caller holds it, serve §3.7 A4).
 ```rust
 pub struct Core { /* §6.0 */ }
 impl Core {
-    pub fn new(local: LocalParams, init: Init, signers: Vec<Box<dyn Signer>>, crypto: Box<dyn Crypto>,
-               attestation: Attestation, now: Millis)
+    pub fn new(local: LocalParams, init: Init, signers: Vec<Arc<dyn Signer>>, crypto: Box<dyn Crypto>,
+               attestation: Attestation, body_budget: AllocationBudget, now: Millis)
                -> Result<(Core, Vec<Action>), ConfigError>;  // applies R1–R6 (§7.4)
     pub fn handle(&mut self, now: Millis, event: Event) -> Vec<Action>;
     pub fn next_wakeup(&self) -> Millis;                   // earliest deadline; driver sends Tick
@@ -2430,8 +2528,8 @@ pub struct Init {
     recent_headers: Vec<BlockHeader>,         // last W + 2 committed headers (≤ t)
 }
 pub struct EpochId { epoch: u64, context: Hash32 }
-pub struct EpochConfig { id: EpochId, authority_generation: Hash32, first_height: u64, last_height: u64, leader_seed: Hash32 }
-pub struct HeightConfig { epoch: EpochConfig, committee: Committee, params: ChainParams }
+pub struct EpochConfig { id: EpochId, authority_generation: Hash32, first_height: u64, last_height: u64, leader_seed: Hash32, da_layout: DataAvailabilityLayout }
+pub struct HeightConfig { epoch: Box<EpochConfig>, committee: Committee, params: ChainParams }
 pub enum ConfigSlot { Ready(HeightConfig), PendingBoundary { boundary_height: u64, predecessor: EpochId } }
 pub enum AppliedConfig {
     Continuation { after_next: ConfigSlot },
@@ -2441,40 +2539,146 @@ pub struct ApplicationControlContext { instance: Hash32, epoch: EpochId, height:
 pub struct ControlWitnessContext { height: u64, view: u64, epoch: EpochId, parent_hash: Hash32, parent_result: Hash32 }
 pub enum Event {
     Tick,
-    ControlWitnessBuilt { req: u64, context: ControlWitnessContext, witness: ControlWitness, attest: bool },
-    ApplicationControlBuilt { message: ApplicationControl },
-    Message { from: PublicKey, msg: WireMessage },           // `from`: authenticated sender (§1.4)
-    PayloadBuilt { req: u64, payload: Vec<u8>, attest: bool }, // answer to BuildPayload{req}; attest: §3.7 A1
-    PayloadReady { req: u64 },                               // after answering BuildPayload{req}: with EMPTY, once an includable transaction arrived (also one arriving during the build); with a payload, at once (the core may have timed req out to EMPTY) (at most once per req; E55)
-    Executed { block_hash: Hash32, req: u64, outcome: ExecOutcome }, // Valid(R) | Invalid | Failed(reason) | Cancelled; exactly one per Execute
-    BodyAvailable { block: Block },                          // FetchBody satisfied from local storage
-    BlockApplied { height: u64, block_hash: Hash32, header: BlockHeader, config: AppliedConfig },
-    ApplyDiverged { height: u64, block_hash: Hash32, local_result: Hash32 },
-    PublicationRecoveryRequired { height: u64 },
+    Message {
+        from: PublicKey,
+        msg: WireMessage,
+    },
+    PayloadBuilt {
+        req: u64,
+        payload: Option<PayloadBytes>,
+        attest: bool,
+    },
+    PayloadAuthored {
+        req: u64,
+        body: AvailableBody,
+    },
+    ControlWitnessBuilt {
+        req: u64,
+        context: ControlWitnessContext,
+        witness: crate::types::ControlWitness,
+        attest: bool,
+    },
+    ApplicationControlBuilt {
+        message: crate::message::ApplicationControl,
+    },
+    PayloadReady {
+        req: u64,
+    },
+    Executed {
+        block_hash: Hash32,
+        req: u64,
+        outcome: ExecOutcome,
+    },
+    BodyAvailable {
+        block: AvailableBody,
+    },
+    ManifestRejected {
+        manifest: crate::message::PayloadManifest,
+    },
+    BlockApplied {
+        height: u64,
+        block_hash: Hash32,
+        header: Box<BlockHeader>,
+        config: crate::types::AppliedConfig,
+    },
+    PublicationRecoveryRequired {
+        height: u64,
+    },
+    ApplyDiverged {
+        height: u64,
+        block_hash: Hash32,
+        local_result: Hash32,
+    },
 }
 pub enum Action {
-    PersistSafety(SafetyRecord),                    // durability barrier (O2)
-    StoreBody { block: Block },                     // durable body store keyed by (height, block_hash) (O2)
-    Send { to: PublicKey, msg: WireMessage },
-    Broadcast { to: Vec<PublicKey>, msg: WireMessage }, // recipients resolved by the core, sent in list order
-    BuildControlWitness { req: u64, context: ControlWitnessContext },
-    DriveApplicationControl { context: ApplicationControlContext },
-    ReceiveApplicationControl { from: PublicKey, message: ApplicationControl },
-    BuildPayload { req: u64, height: u64, view: u64, max_bytes: u32, exec_budget_ms: u32 }, // the builder peeks; it never removes transactions
-    Execute { block: Block, req: u64 },             // against the applied state or the (re)computed post-state of block.parent_hash (O4)
-    DiscardExecution { height: u64, keep: Vec<Hash32> }, // cancel (answer `Cancelled`) and drop post-states of other blocks at `height`
-    CommitBlock { block: Block, commit_qc: Qc },
-    FetchBody { height: u64, block_hash: Hash32, peers: Vec<PublicKey> }, // local stores first, then BlockRequest
-    ServeBody { to: PublicKey, height: u64, block_hash: Hash32 },        // answer with BlockResponse if held
-    ServeBlocks { to: PublicKey, from_height: u64, max_count: u16, max_bytes: u32 },
-    PayloadRejected { height: u64, view: u64, block_hash: Hash32 },     // builder quarantines those transactions
-    ReportEvidence(Evidence),
-    LocalFault(LocalFault),                         // ExecutionMismatch, ExecutorFailed, RecordMissing, AttestationUnavailable, ... (telemetry)
+    PersistSafety(Box<SafetyRecord>),
+    StoreBody {
+        block: AvailableBody,
+    },
+    Send {
+        to: PublicKey,
+        msg: WireMessage,
+    },
+    Broadcast {
+        to: Vec<PublicKey>,
+        msg: WireMessage,
+    },
+    BuildControlWitness {
+        req: u64,
+        context: ControlWitnessContext,
+    },
+    DriveApplicationControl {
+        context: ApplicationControlContext,
+    },
+    ReceiveApplicationControl {
+        from: PublicKey,
+        message: crate::message::ApplicationControl,
+    },
+    BuildPayload {
+        req: u64,
+        height: u64,
+        view: u64,
+        max_bytes: u32,
+        exec_budget_ms: u32,
+    },
+    AuthorPayload {
+        req: u64,
+        config: HeightConfig,
+        header: BlockHeader,
+        payload: PayloadBytes,
+    },
+    AcquirePayload {
+        source: AvailabilitySource,
+        manifest: crate::message::PayloadManifest,
+    },
+    ReceivePayloadChunk {
+        from: PublicKey,
+        chunk: crate::message::PayloadChunk,
+    },
+    DisseminatePayload {
+        peers: Vec<PublicKey>,
+        body: AvailableBody,
+    },
+    Execute {
+        block: AvailableBody,
+        req: u64,
+    },
+    DiscardExecution {
+        height: u64,
+        keep: Vec<Hash32>,
+    },
+    CommitBlock {
+        block: AvailableBody,
+        commit_qc: Qc,
+    },
+    FetchPayload {
+        source: AvailabilitySource,
+        peers: Vec<PublicKey>,
+    },
+    ServePayload {
+        to: PublicKey,
+        height: u64,
+        block_hash: Hash32,
+    },
+    ServeBlocks {
+        to: PublicKey,
+        from_height: u64,
+        max_count: u16,
+        max_bytes: u32,
+    },
+    PayloadRejected {
+        height: u64,
+        view: u64,
+        block_hash: Hash32,
+    },
+    ReportEvidence(Box<Evidence>),
+    LocalFault(LocalFault),
     Halt(HaltReason),
 }
-pub trait Signer { fn public_key(&self) -> &PublicKey; fn sign(&self, preimage: &[u8]) -> Signature; } // deterministic
+pub trait Signer: Send + Sync { fn public_key(&self) -> &PublicKey; fn sign(&self, preimage: &[u8]) -> Signature; } // deterministic
 pub trait Crypto {                                  // pure; BLS in production, fake in the simulator
-    fn hash(&self, bytes: &[u8]) -> Hash32;
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32; // required; exact concatenation without bulk copy
+    fn hash(&self, bytes: &[u8]) -> Hash32 { self.hash_chunks(&[bytes]) }
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool;
     fn aggregate(&self, sigs: &[Signature]) -> AggregateSignature;
     fn verify_aggregate(&self, pks: &[&PublicKey], msg: &[u8], agg: &AggregateSignature) -> bool;
@@ -2486,10 +2690,12 @@ pub trait Crypto {                                  // pure; BLS in production, 
 local device with bounded latency); a remote signer would block the core and its timers. It MUST
 be deterministic (same key and preimage → same bytes; BLS signatures are): the core re-creates
 recorded messages after a restart by signing their recorded preimages again (§6.10 rule 0, §7.4).
-The enums above are written unboxed for readability; to satisfy the workspace lint
-`variant_size_differences = deny`, variants carrying a `Block`, `Proposal`, `TimeoutCert`, `Qc`,
-`Status`, `SafetyRecord`, `HeightConfig`, `BlockHeader` or `Evidence` are boxed (`Box<…>`) in
-code; the wire and record encodings are unchanged by boxing.
+Signers are shared as immutable `Arc<dyn Signer>` between Core and the bounded author worker.
+Availability signatures are made outside `handle` after exact request/config validation; ordinary
+consensus signatures retain the local bounded-latency requirement above. Payload hashing uses
+`hash_chunks(&[TAG_PAY, payload])`; implementations preserve exact concatenation semantics
+without allocating a full-prefix-plus-payload copy. `AvailableBody` is not serializable or
+publicly constructible. `BodyRestoration` is the sole stored-body custody issuance path.
 
 ### 12.2 Driver responsibilities
 
@@ -2501,21 +2707,25 @@ durable body store, block store (Kura), executor with a speculative-state cache 
 hash (chained on certified parents), payload builder (queue; `BuildPayload` only peeks,
 transactions leave the queue when a block containing them is applied; `PayloadReady{req}` at most
 once after an `EMPTY` answer to `req`; on `PayloadRejected` it quarantines only transactions that
-make a block `Invalid` on their own, §4.2), serving `ServeBlocks`/`ServeBody`/`FetchBody`
+make a block `Invalid` on their own, §4.2), serving `ServeBlocks`/`ServePayload`/`FetchPayload`
 (`ServeBlocks` may answer with an empty `SyncResponse`), reporting executor panics and I/O errors
-as `Failed`, the applied header in `BlockApplied`, and the application side of commit attestation
+as `Failed`, the applied header in `BlockApplied`, the application side of commit attestation
 (§3.7): the builder's flag, the executor's flag check, the node's `Attestor` and the
-`AttestationVerifier`. One core instance per consensus instance; instances share nothing inside the core and
+`AttestationVerifier`, and signed RS16 payload availability (§12.8): proposals include mandatory original availability metadata, actual bytes travel as signed
+rows, and Core receives only opaque `BodyAvailable`/`PayloadAuthored` custody. Core emits
+`StoreBody`; O2 makes durability a prerequisite for later signature effects, not an attribute
+asserted by a decoded manifest. One core instance per consensus instance; instances share nothing inside the core and
 are isolated by the driver (O9).
 
 ### 12.3 Ordering and scheduling guarantees the driver MUST honour
 
 - **O1** Actions of one `handle` call are executed in order.
 - **O2 Persist before effect.** After a `PersistSafety`, every later action (this or any later
-  call) except `Execute`, `DiscardExecution`, `BuildPayload`, `BuildControlWitness`, `DriveApplicationControl`, `ReceiveApplicationControl`, `PayloadRejected`, `LocalFault` and
+  call) except `Execute`, `DiscardExecution`, `BuildPayload`, `AuthorPayload`, `AcquirePayload`, `ReceivePayloadChunk`,
+  `BuildControlWitness`, `DriveApplicationControl`, `ReceiveApplicationControl`, `PayloadRejected`, `LocalFault` and
   `StoreBody` takes effect only after that record is durable. In particular `Send`, `Broadcast`,
-  `CommitBlock` (and anything later served from the block store), `ServeBlocks`, `ServeBody`,
-  `FetchBody` and `ReportEvidence` wait. A `PersistSafety` counts as durable only after every
+  `CommitBlock` (and anything later served from the block store), `ServeBlocks`, `ServePayload`,
+  `FetchPayload`, `DisseminatePayload` and `ReportEvidence` wait. A `PersistSafety` counts as durable only after every
   `StoreBody` emitted before it is durable. Records replace each other atomically; a failed write
   is retried (the instance is silent meanwhile), never skipped.
 - **O3 Commit order.** `CommitBlock` actions are applied strictly in height order. The block and
@@ -2542,20 +2752,41 @@ are isolated by the driver (O9).
   for the parent's apply (bounded by `A_max`, which §8.2 L3 already budgets); for `CommitBlock`,
   as in O3. A missing cache entry is never answered `Failed` or `Invalid`.
 - **O5 Event priority.** The driver delivers events to `handle` in this priority: `Tick`, then
-  `Executed`/`BlockApplied`/`ApplyDiverged`/`PayloadBuilt`/`PayloadReady`/`BodyAvailable`, then
+  `Executed`/`BlockApplied`/`ApplyDiverged`/`PayloadBuilt`/`PayloadAuthored`/`PayloadReady`/
+  `BodyAvailable`/`ManifestRejected` and typed publication failures, then
   control-class messages, then other messages. `Tick` is delivered within ε of `next_wakeup()`
   regardless of execution, storage or network load; the core never waits for I/O.
-- **O6** Network messages may be dropped under load (lowest class first). Events other than
+- **O6** Local transport admission is explicit: `Admitted` transfers one exact frame to the
+  transport, while `Backpressured` returns its original message and admission ticket. The
+  serving worker retains one encoded frame and original retry owner per recipient stream,
+  and gives independent streams bounded turns over one shared funded codeword. A refused
+  recipient cannot prevent the others from receiving later rows. Admission of a manifest
+  precedes its rows for each recipient. Only admitted frames count toward
+  serving charges. Closed or permanently rejected streams stop the worker. Retry handles
+  obey the original node-wide gate, including closure after the first attempt. Protocol
+  messages with Core retransmission timers may explicitly cancel an unadmitted occurrence.
+  Proactive dissemination and requested historical responses have independent bounded job
+  quotas, as do local fetches and historical reads; all use the same charged byte budget.
+  Metadata replies retain at most one response per requesting peer. A newer response request
+  supersedes only that peer's previous occurrence. Completed responses may be requested again.
+  The Core's `DiscardExecution { height, keep }` lifetime also releases obsolete proactive
+  codewords and tickets through a non-droppable `Retain` worker command before new authoring;
+  application completion retires obsolete proactive streams. Retained bodies remain available
+  through the authenticated serving path. Fetch retries may change their selected peer set:
+  retained occurrences for peers still selected survive, removed peers are cancelled, and newly
+  selected peers receive the exact source-bound request. A refused peer cannot block another
+  metadata recipient, fetch source or outgoing row stream.
+  Network messages may be dropped under load (lowest class first). Events other than
   `Message` MUST NOT be dropped. Ingress is bounded per `(peer, class)`, keeping the latest
   `Status` per peer and dropping the oldest message otherwise. Within a class the driver SHOULD
   serve peers round-robin, so one flooding peer cannot starve the others' control traffic.
 - **O7** The driver never delivers the node's own messages back to it.
 - **O8 Traffic classes.** *Control*: `Vote`, `Qc`, `Timeout`, `Tc`, `Status`, `SyncRequest`,
-  `BlockRequest`, and `Proposal` without payload. *Proposal*: `Proposal` with payload, and
-  every `BlockResponse`. *Bulk*: `SyncResponse`. The core exports the table
-  (`WireMessage::traffic_class`, and `traffic_class_of_frame` for an encoded frame, §3.5).
-  Egress and ingress use strict priority control > proposal > bulk, with a guaranteed minimum
-  share (e.g. 10 %) for bulk so sync always progresses.
+  `PayloadRequest`, `ApplicationControl`. *Proposal*: `Proposal`, `PayloadManifest`.
+  *Bulk*: `SyncResponse`, `PayloadChunk`. The single first-release `WireMessage` table serves
+  decoded objects and canonical frame classification (§3.5); no payload-presence sniffing or
+  second availability frame schema is used. Egress/ingress prioritize control > proposal >
+  bulk, with a guaranteed minimum share for bulk so acquisition and sync can progress.
 - **O9 Instance isolation.** Each instance has its own event loop, its own record files and O2
   barrier, its own ingress queues and network quotas. A stalled or flooding instance never delays
   another instance's events, persistence or messages.
@@ -2600,25 +2831,13 @@ driver with backoff (the node is merely slow); overload drops network messages (
 recovers). The core never panics on any input (the decoder and every handler are fuzzed); other
 instances keep running when one halts.
 
-### 12.6 Size budget
+### 12.6 Verification discipline
 
-The core crate (everything except `sim/` and tests) MUST stay at or below 8 000 lines of Rust
-(non-blank, non-comment); CI prints the count per module and fails above the budget. Planned
-split (a budget, not an estimate):
-
-| Module | Content | Budget |
-|---|---|---|
-| `types` | ids, keys, committee, `HeightConfig`, Norito derives | 600 |
-| `topology` | `perm`, `D_h`, slot substitution, roles, stage hint | 300 |
-| `message` | preimages, digests, `verify_qc`/`verify_tc`, formation, evidence types | 800 |
-| `safety` | record, `persist()`, restart R1–R6 and composition, probe/anchoring, key selection | 700 |
-| `pacemaker` | levels, anchor, deadlines, start adaptation, EWMAs | 400 |
-| `core` | handlers §6.1–§6.8, §6.10–§6.13 | 3 000 |
-| `sync` | sync, wants, serving (§6.9) | 700 |
-| `api` | `Event`, `Action`, traits, config validation, `status()` | 600 |
-| total | | 7 100 |
-
-A new mechanism that would exceed the budget replaces something or goes to §14.
+The core remains one sans-IO state machine with explicit protocol and custody owners.
+Changes preserve authenticated source binding, exact quorums, persist-before-effect ordering,
+deterministic execution and bounded resources. Specification traceability and quorum checks
+run with the crate tests; deterministic simulator scenarios and the §13.4 mutation gate
+exercise safety and liveness. Whole-node and network qualification remains required for release.
 
 ### 12.7 Reading the committed chain (application layer)
 
@@ -2678,6 +2897,114 @@ NPoS staking derives its scheduling epochs from the committed, immutable epoch l
 incumbent mint-finality authority from the signed genesis metadata in World
 (`specs/staking_validator_completion.md`). None of them reads a certificate.
 
+### 12.8 Payload availability (mandatory signed RS16 custody)
+
+Sumeragi owns the signed layout, author/source rules, canonical availability evidence and
+custody transitions. Its core includes those protocol rules; the existing
+`iroha_primitives::erasure::rs16::compact` owner implements only checked codec geometry,
+encoding and reconstruction. The native driver's bounded worker performs expensive jobs
+outside the Core event loop. This integrated candidate still needs whole-node/network
+qualification before release.
+
+**Authenticated layout.** `EpochConfig.da_layout` is mandatory and comes from authenticated
+application state, never from received evidence or local defaults. Global epoch contexts bind
+it. A native lane's signed creation policy pins it into the record/incarnation and genesis
+result. Successor configs retain the exact layout in the absence of an authorized protocol
+change. `DataAvailabilityLayout` and its validation have one owner in `iroha_sumeragi`.
+The config rejects a block maximum above its signed payload maximum and validates every
+`MAX_DA_*` cap. A shape is defined only for nonempty payloads within those caps.
+
+**Canonical compact geometry.** Let maximum even row size be `c`, data count `d`, parity count
+`p`, nonempty payload length `L`, and `s = ceil(L/(c·d))`. The first `s−1` stripes have row
+length `c`. The last has `r = L−(s−1)c·d` bytes and row length
+`ell = 2·ceil(r/(2·d)) ≤ c`. Each stripe contains `d` consecutive data rows then `p` parity
+rows; flat indices are stripe-major. Only the terminal data padding is zero-filled. Thus
+`N = s·(d+p)` and encoded bytes are `(s−1)c(d+p) + ell(d+p)`. All products are checked.
+RS16 operates on little-endian GF(2^16) symbols with bit-identical scalar/SIMD outputs.
+Small payloads use the compact terminal stripe, not a full maximum-size stripe.
+
+**One canonical evidence format.** `AvailabilityFrame` is the existing semantic Norito
+ByteSequence with a declared frame identity, carrying this exact opaque signed table:
+
+```text
+row_hash_i = H(ASCII "sumeragi/availability/row" ‖ row_i)
+content    = be32(N) ‖ row_hash_0 ‖ … ‖ row_hash_(N−1)
+availability_digest = H(ASCII "sumeragi/availability/content" ‖ content)
+frame_inner = content ‖ manifest_sig ‖ row_sig_0 ‖ … ‖ row_sig_(N−1)
+statement(kind) = ASCII "sumeragi/availability/sign" ‖ kind:u8 ‖ I ‖ E ‖
+                  be64(h) ‖ be64(origin_view) ‖ bh ‖ availability_digest
+manifest_sig = Sign(original_author, statement(0))
+row_sig_i    = Sign(original_author, statement(1) ‖ be32(i) ‖ be32(row_len_i) ‖ row_hash_i)
+```
+
+Every signature is 96 bytes; the exact inner length is `4 + 96 + N·(32+96)`, with
+`N ≤ MAX_DA_CHUNK_COUNT`. The content digest excludes signatures and the resulting `bh`, so
+header hashing has no circular dependency. The complete header hash then binds that digest,
+and every signature binds the resulting hash. Ordered indices and lengths are derived from
+the authenticated layout, not a caller-supplied second geometry. This opaque signed table is
+not a second transport codec: outer messages, certificates and the byte-domain envelope are
+canonical Norito with declared layouts. A non-genesis missing table is invalid. The only empty
+certificate availability field is the independently verified result-only genesis exception.
+
+**Authority and custody.** The original author is the header's canonical proposer index under
+the independently authenticated full `HeightConfig`. Core separately verifies fresh leader,
+parent, epoch, TC and finality predicates; author-signature verification alone does not prove
+those conditions. Re-proposals preserve the original header/table/signatures. A manifest or
+row from another epoch, authority, instance, height, hash, index or exact length is rejected.
+`AvailabilitySource` immutably binds the independently requested `(I,h,bh,HeightConfig)`;
+`AvailableBody` retains it alongside the exact header, frame and payload. Core acceptance,
+execution and publication compare it against their own independently selected source.
+
+The complete signature table authenticates authorizations, **not received or durable body
+custody**. `PayloadAcquisition` counts only distinct actual row bodies that pass the table's
+signature/hash/length checks and original-pool admission. Any `d` rows per stripe reconstruct;
+all received rows, terminal zero padding, payload hash/length, and every derived data/parity
+row commitment must match. Only that exact verified reconstruction can become immutable
+`AvailableBody`. A portable proof reader may use `verify_availability` and `verify_payload`
+with caller-owned scratch; those borrowed checks cannot manufacture native custody.
+
+**Worker and persistence contract.**
+
+1. `AuthorPayload` retains the original funded nonempty builder payload and exact header/config.
+   `PayloadAuthoring` computes the codeword and all original signatures once. A local allocation
+   refusal retains completed phases and the same owners; no refusal becomes `EMPTY` or invalid
+   execution. `PayloadAuthored` returns exact custody for the original request. Core rechecks
+   source, header and original pool before using it.
+2. `AcquirePayload` supplies the independently selected source and mandatory manifest.
+   `ReceivePayloadChunk { from, chunk }` preserves the authenticated relay identity across a
+   refused row. The relay identity is not original-author authority. Only successful distinct
+   row admission counts as received custody. Rejected rows leave the acquisition outstanding;
+   a proven manifest semantic error is distinct from resource refusal.
+3. `BodyAvailable` and `PayloadAuthored` are custody completions, not durability receipts. Core
+   emits `StoreBody`. The existing ordered body/safety barrier makes all required body writes
+   durable before later signatures, external dissemination and commit effects (O2).
+4. `BodyReader::begin_read(source)` and its retained `BodyReadJob` distinguish absence, pending
+   allocation/I/O, corruption and complete `BodyRestoration`. Storage supplies untrusted bytes,
+   never a trusted-local body. Restoration checks the exact independent source, complete
+   original signatures, actual payload and every canonical codeword row under the original pool.
+   `BodyRestoration` is the sole stored-body issuance path; no filename/existence shortcut or
+   alternate trusted constructor is accepted.
+5. Append/publication consumes opaque admitted custody together with the independently checked
+   QC/source. Payload, frame and QC stay under the original publication owner through reversible
+   refusal. Retry preserves exact original bytes; a different signature table or QC cannot
+   replace an in-flight original. Once publication may be visible, owner loss requires typed
+   recovery, never a new execution or fabricated successful apply.
+6. `DisseminatePayload` and `ServePayload` derive rows from the original retained codeword or
+   exact restored payload and reuse all original authorizations. No post-commit signing occurs.
+   The current worker sends the manifest and each row to its requested peer list, with bounded
+   queues, original-pool backing and serving quotas. It does not claim the retired holder-based
+   forwarding bandwidth reduction. `PayloadRequest` triggers original-manifest/row repair at
+   any needed height; sync carries manifests plus QCs and separately obtains actual row custody.
+
+**Bounds and liveness scope.** Complete signed layout caps constrain row count, payload,
+codeword and scratch. The State allocation pool funds retained payload/frame/row/codeword
+backing and shared controls across asynchronous retries; bounded existing header hashing is a
+separate metadata allocation. Worker slots and ingress/per-peer quotas bound pending work.
+After GST, liveness still requires enough honest original row holders and fair worker/network
+service to deliver sufficient rows. RS16 encoding, signature-table verification, acquisition,
+storage and full-prefix proof costs must be included in native performance measurements;
+consensus metadata counts alone are not evidence of those costs or of live settlement success.
+
 ---
 ## 13. Verification plan (deterministic simulator, scripted tests, driver conformance)
 
@@ -2728,7 +3055,7 @@ incumbent mint-finality authority from the signed genesis metadata in World
 | O-PBS | Persist-before-effect: whenever an honest signature other than a probe echo leaves a node in any form (message, certificate, block served from the block store, evidence), the node's *durable* record covers it (§7.4). |
 | O-CERT | Certificate integrity: every QC/TC an honest core accepts is ground-truth valid: exactly `q_h` distinct members of `C_h`, every signature genuinely produced for exactly that preimage and instance, TC `high_pqc` equal to the true maximum. |
 | O-LIVE | After heal time `t_g` (partitions healed, loss at the scenario's post-heal level, `≥ q` honest running, where a node with an unanchored key counts as faulty until it anchors and a node whose key abstains at a height counts as faulty at that height, §7.4 R2, R6), every honest running node commits a new height by `t_g + B_live` (§8.2) and again within every later window of `B_live`. |
-| O-PERF | The scenario's performance bounds P1–P6 (§8.2) hold after `t_g`. |
+| O-PERF | The scenario's performance bounds P1–P6 (§8.2) hold after `t_g`; F35 checks the leader-turn bound of sparse local work (E62). |
 | O-CQ | Chain quality: in scenarios without crashes, over every window of `4n` committed heights that starts at least `W` heights after both `t_g` and the last height whose `skipped_leaders` names an honest member (honest demotions pass slots to successors, which may be Byzantine), the share of blocks proposed by honest members is ≥ `(n − f)/n − 0.05`. |
 | O-TXP | Transaction progress: with a poison transaction present, every non-poison transaction submitted after `t_g` commits within `B_live`. |
 | O-MEM | Bounded memory and storage: after every event, `status().footprint` of each core and each fake body store is within the §8.4 bounds computed from `n` and the config; for a host that owns its scheduling (§13.5), its queues (`Host::backlog`: held effects, queued records and bodies, executor operations other than `Execute`s, serving requests) are within bounds that do not grow with time. |
@@ -2736,7 +3063,7 @@ incumbent mint-finality authority from the signed genesis metadata in World
 | O-EVID | Evidence soundness: honest nodes never report evidence against honest nodes. |
 | O-FAULT | Local-fault soundness: an honest node emits `LocalFault(ExecutorFailed)` or `LocalFault(ExecutionMismatch)` only where the scenario injected executor failures or divergence; cancelled, discarded or evicted executions never surface as faults, `Failed` or `ApplyDiverged`. |
 | O-ATT | (F37) Commit attestation (§3.7): every CommitQC with which an honest node commits a flagged block carries the flag, exactly `q` signers and one attestation per signer, each produced by that signer's authority (ground truth) over `att_preimage(h, bh, R)`; no honest node sends a Commit vote for a flagged block without its attestation. |
-| O-AMX | (F31) Atomicity: a toy AMX transaction is applied by all participants or by none; an escrow is released only with a `G` decision proof; settlement follows within `B_live` of `G` and the DSes being live. |
+| O-AMX | (F31) Over every instance's committed reference chain: at most one `Begin`, one `Decision` and, per participant, one `Prepared` and one settlement per transaction (idempotence); `G` records `Commit` only at a height `≤ d` with a committed `Yes` from every participant, `Abort` before `d + 1` only on a committed `No`, and decides every transaction by `d + 1`; a participant applies a `Yes` escrow only on `G`'s `Commit` and releases it only on `G`'s `Abort` (an escrow leaves only through a settlement), and its ledger moves only by its escrows and settlements (atomicity); every transaction `G` decided at least the settle window (20 s) before the end is settled by every participant by the end. Non-blocking is O-LIVE, which exempts only the stalled instance. |
 
 ### 13.3 Fault scenarios (each over `n ∈ {1, 4, 5, 7, 22}` where meaningful)
 
@@ -2756,7 +3083,10 @@ executor that aborts discarded work at once — non-empty blocks must commit)
 · F16 validator-set change at an epoch
 boundary (add, remove, replace a majority) under load and crashes, including joiners that must
 fetch their parent's body · F17 node joining 10 000 heights behind; Byzantine sync responders
-(forged blocks, invalid QCs, withholding) · F18 floods of votes/timeouts for huge views and
+(forged blocks, invalid QCs, withholding). The run budgets each height's certified-metadata and
+signed-payload round trips, execution, body/block persistence and application, plus 60 s for
+source rotation and live progress; the joiner must pass the complete prebuilt prefix.
+· F18 floods of votes/timeouts for huge views and
 heights, oversize messages · F19 poison payload (executor rejects every block holding a given tx)
 → early timeout, quarantine and a later nonempty retry · F20 cross-instance replay with shared keys · F21
 nondeterministic executor at one honest node (only that node may halt) · F22 idle chain for 10⁵
@@ -2772,16 +3102,19 @@ the existing records of other instances stay `Present`); probe echoes forged, re
 relayed by Byzantine peers. A node whose record was deleted counts as one of the `f` faults until
 it anchors: no F24 script pairs a deletion with `f` other members that ignore probes (Byzantine,
 crashed or partitioned from the prober; the Byzantine members of the F8 / MS10a adversary answer
-probes), and O-LIVE counts that node as faulty until it anchors · F25 relay tampering: payload stripped or corrupted, copies from
+probes), and O-LIVE counts that node as faulty until it anchors · F25 relay tampering: availability carrier or actual rows withheld or corrupted, copies from
 non-members, duplicates with the same `bh`, delivered before and after the genuine proposal · F26
-Byzantine body responders: forged payloads under genuine headers in `BlockResponse` (solicited and
+Byzantine body responders: corrupted actual `PayloadChunk` rows under a genuine original manifest (solicited and
 unsolicited) and `SyncResponse`, answering re-proposal fetches, `pending_apply` fetches and R5 ·
 F27 benign storage faults: ENOSPC/EIO on records, bodies and Kura (retried), Kura tail loss, Kura
 restore from backup (records are never restored) · F28 key rotation across `h_new` with restarts on
 both sides of the change, including one key at R4 and the other at R5 · F29
 CPU flood: `Status` with maximal-group TCs, votes for huge views, all at the per-peer rate limit ·
 F30 maximum-size blocks with the transport frame limit and sync byte caps · F31 toy AMX
-application with `G` and a DS stalled in turn · F32 whole-cluster restart after a PrepareQC was
+application (§11): `G` and two or three dataspaces with their own committees under loss and
+reordering, `G` and a dataspace stalled in turn, both relayers down for a while, a forging
+relayer, one machine crash, short deadlines and legs that cannot be escrowed, and two epoch
+changes per instance (a member replaced on odd seeds) → O-AMX, O-LIVE · F32 whole-cluster restart after a PrepareQC was
 locked everywhere but before any CommitQC formed, and after a CommitQC formed but before any block
 store made it durable · F33 hidden PrepareQC: a Byzantine proxy tail forms PQC(B, v) and delivers
 it to one honest node only; the others time out with `hq < v`, discard B's execution on entering
@@ -2789,7 +3122,10 @@ it to one honest node only; the others time out with `hq < v`, discard B's execu
 F34 apply-bound late entrants: one member's `BlockApplied` delayed by up to `A_max` at every
 height, with `f` members crashed; joiners and just-synced nodes entering at the frontier;
 executions still pending at commit · F35 local-queue asymmetry: transactions submitted only to
-`f + 1` non-leaders of an idle chain, with and without one crashed member (no timer may move) ·
+`f + 1` random members (the holders) of an idle chain, with and without one crashed non-holder;
+no timer moves on a local queue, so workless leaders time out → every height commits by the first
+view `v ≥ 1` led by a running holder, within the leader-turn bound of entering it, and every
+transaction by the second height first committed after its submission (E62) ·
 F36 late leaders: up to `f` members send their view-0 proposal `T(start)/2 + 100 ms` after the
 honest anchor `t_enter + P(0)`, or the proposal at once without its payload and the body that much
 later (never served on request), so that every such view still commits; later one honest member
@@ -2845,7 +3181,7 @@ Detection needs targeted adversaries: random faults alone did not kill the TC-ru
 | MS17 | `vote_preimage` omits `R` | `det_s17_result_bound`: a genuine PQC(B, R) with `result` rewritten to R′ → rejected | Byzantine P rewrites `result` in its QCs | O-VAL, O-HALT |
 | MS18 | `on_proposal` step 1 — verifies `p.sig` under any member of `C_h` instead of `C_h[L(h, w)]` | `det_s18_non_leader_proposal_dropped`: proposal signed by non-leader W with `proposer = idx(L(h, w))`, otherwise valid → dropped silently: no Prepare, no evidence, no timeout | Byzantine non-leaders race proposals every view | O-VAL, O-LIVE |
 | MS19 | `on_proposal` steps 5–6 — `parent_qc`, `parent_hash` and `parent_result` checks deleted | `det_s19_wrong_parent_rejected`: signed proposal on a stale parent → evidence, early timeout, no Prepare | Byzantine leader builds on a stale parent | O-VAL, O-AGR |
-| MS20 | `body_ok` always returns `true` | `det_s20_forged_body_under_real_header`: n=4, PQC(B,m) exists, Z lacks B, re-proposal without payload, Byzantine W answers Z's fetch with a forged payload → rejected, no execution verdict, no `LocalFault`; genuine body later → Z Prepares | F26 | O-VAL, O-HALT, O-LIVE |
+| MS20 | Target invariant: body/source validation cannot be bypassed | The raw-body constructor was retired. Current source-bound restoration and acquisition controls must reject wrong source, actual row/payload corruption and inconsistent full codewords; the SOURCE20 compiled skip-source and skip-codeword controls are separate evidence, not a claim that the retired MS20 hook executes. | F26 | O-VAL, O-HALT, O-LIVE |
 | MS21 | `commit_height` step 1 — no verification when the CommitQC came from a `Status` or a proposal's `parent_qc` | `det_s21_forged_commitqc_via_status`, `det_s21_forged_commitqc_via_parent_qc`: forged CommitQC for h → no commit | Byzantine Status/proposal with a forged CommitQC | O-CERT, O-AGR |
 | MS22 | `on_sync_response` — `block_hash(header) == c.block_hash` and the parent checks deleted | `det_s22_sync_forged_block`: a genuine CommitQC paired with a forged block → rejected, no commit | F17 Byzantine responder | O-VAL, O-AGR |
 | MS23 | `try_prepare` — `route(vote)` emitted before `persist()` | `det_s23_crash_between_persist_and_durable`: equivocating leader (twins B, B′); X Prepares B; crash before the record is durable; restart; B′ delivered → the network never carries Prepares of X for both B and B′ | F13 targeted | O-PBS, O-SIGN |
@@ -2868,7 +3204,7 @@ Detection needs targeted adversaries: random faults alone did not kill the TC-ru
 | MS33c | `restore` — keys processed one by one in configuration order, each R4/R5 overwriting the round (no composition) | `det_s33_key_rotation_restart` (b): store tip t, K2 (listed first) with a record at t+2, K1 with a record at t+1 → start in round t+2 from K2's record, exactly one `CommitBlock` for t+1, the tip never moves back | F28 with R4/R5 splits | O-AGR, O-SIGN |
 | MS33d | fake driver record store — the store-id comparison deleted (a rolled-back log is trusted: a key it lists as generated on this node gets an initial record for every instance the log lacks) | `det_s33d_installation_log_rollback`: key K generated on X; dataspace instance I created later (initial record, `(I, K)` entry, new store id); X Prepares B at (t+1, 0) for I, block store at t; X's key store is restored from a snapshot taken before I existed and X's record for I is deleted; restart → the driver marks K imported, `Init` carries `Absent` for (I, K), and X does not Prepare the twin B′ at (t+1, 0); variant: the same old key store onto a new, empty record store → `Absent` likewise | F24 (key store restored from an older backup) | O-SIGN, O-AGR, direct assertion on `Init` |
 | MS34 | fake driver apply — the commitment comparison skipped | `det_s34_apply_divergence_halts`: X's executor diverges deterministically (cached and re-executed commitments differ from `commit_qc.result`) → `ApplyDiverged` → `Halt` | F21 | O-VAL, O-HALT |
-| MS35 | `on_proposal` step 8 — a payload failing `body_ok` is treated as a signed defect (evidence + early timeout) | `det_s35_relay_tamper_no_evidence`: tampered copy before and after the genuine one → no evidence, no timeout, Prepare on the genuine body | F25 | O-EVID, O-PERF |
+| MS35 | Target invariant: relay-corrupted bytes cannot frame the author | Signed metadata evidence stays separate from invalid carrier/row handling. The raw optional-payload hook is retired; the current relay/carrier fault controls must be used when qualifying this invariant. | F25 | O-EVID, O-PERF |
 | MS36a | `on_executed` step 3 — the certified branch (`Invalid` for a certified block, or `Valid(R ≠ expected_R)`) handled like uncertified `Invalid` | `det_s36_certified_mismatch_is_local` (a): re-proposal of certified B; X's executor returns `Invalid` → `LocalFault(ExecutionMismatch)`, no early timeout, no `PayloadRejected`; X still Commit-votes on PQC | F21 | O-FAULT, O-LIVE |
 | MS36b | `on_executed` step 2 — `Failed` handled like `Invalid` | `det_s36_certified_mismatch_is_local` (b): uncertified block, executor returns `Failed` → `LocalFault(ExecutorFailed)`, retry, no early timeout, no `PayloadRejected` | F15 with injected `Failed` | O-FAULT, O-LIVE |
 | MS37 | `on_qc` step 1 — the §7.6 monitor branch deleted | `det_s37_conflicting_commitqc_halts` (harness keys): conflicting CommitQC for `tip.height` → `Halt(SafetyViolation)` | — | expects `Halt` |
@@ -2901,7 +3237,7 @@ and MS30.
 | ML8 | `timeout_insert` — join rule deleted | `det_l8_join_f_plus_1`: `f + 1` other members' timeouts at w ≥ view → X signs a timeout at w | F11 | O-LIVE |
 | ML9 | `persist` — `high_tc` not copied | `det_l9_restart_after_tc_entry`: n=4, D silent, X alone forms TC(6), enters 7, times out, restarts → all reach 7 and commit | F13 + F11 | O-LIVE |
 | ML10 | `on_proposal` step 8 — `StoreBody` omitted | `det_l10_cluster_restart_lock_no_cqc`: PQC(B) locked everywhere, no CQC, whole-cluster restart → B is re-proposed and commits | F32 | O-LIVE |
-| ML11 | `on_block_request` — ignores requests for heights ≤ `tip.height` | `det_l11_pending_apply_after_peers_moved_on`: X committed h without the body while peers moved on → X's `BlockRequest` is answered, `pending_apply` drains | F16 joiners; equivocating leader | O-LIVE |
+| ML11 | `on_block_request` — ignores requests for heights ≤ `tip.height` | `det_l11_pending_apply_after_peers_moved_on`: X committed h without the body while peers moved on → X's `PayloadRequest` is answered, `pending_apply` drains | F16 joiners; equivocating leader | O-LIVE |
 | ML12 | fake driver scheduler — FIFO ingress without the O5 priority lanes | `det_l12_tick_ahead_of_flood`: a flood of `Status` at the rate limit → every `Tick` handled within `ε_tick` | F29 | O-PERF P6, O-LIVE |
 | ML13 | Suppress fresh payload building after view 0 | `det_l13_late_views_build_nonempty_work` | F19 | O-VAL, O-TXP |
 | ML14 | fake builder — ignores `PayloadRejected` | `det_l14_poison_quarantined`: poison transaction proposed once, then never again by that builder; other transactions commit | F19 | O-TXP |
@@ -2920,9 +3256,9 @@ and MS30.
 | ML25 | `sign_timeout` / `on_commit` — the revision-4.1 raise restored: a timeout signed while the view's proposal is held raises the start level at the next commit | `det_l26_raise_only_on_slow_commit_or_exec`: n=4 (the join case n=7), X in set A; (a) the leader's twin reaches X after X executed and Prepared the first → early timeout, TC, view 1 commits at once → `start = 0`; (b) the valid proposal reaches X but no quorum (2f members) → X times out on its deadline holding it → `start = 0`; (c) as (b) ending by the `f + 1` join → `start = 0`; (d) CommitQC of view 0 arrives after X left it → `start = 0`; (e) view-0 commit exactly `T(0)/2` after the proposal → 0, then `T(0)/2 + 1` → 1; (f) the same at view 1 → 1; (g) real-work proposal after `payload_retry_interval` of idle time, committed 100 ms later → 0; (h) execution `T(0)/2 + 1` in a failed view, view 1's block executed at once and committed at once → 1 | F5 | direct assertion (start level), O-LIVE |
 | ML27 | `discard_exec` / `commit_height` — a `Pending` execution that is discarded, or still pending at the commit, records nothing | `det_l27_pending_execution_counts`: n=4, X in set A; (a) views 0 and 1 time out with their executions pending, view 2 commits valid retry work executed in 0 ms → `start = 1`; (b) X enters view 1 through a TC carrying PQC(A) with A's execution still pending (kept), CommitQC(0, A) arrives `T(0)/2 + 1` after the request → `start = 1`; (c) control: the execution finished at once, the view failed, view 1 commits → 0 | F15 variant 5 | direct assertion (start level, non-empty blocks) |
 | ML28 | `record_exec` — keeps the last execution of the height, not the maximum | `det_l28_exec_duration_is_the_height_maximum` (3.3 s, then 10 ms → raised), `det_l26_raise_only_on_slow_commit_or_exec` (h), `det_l27_pending_execution_counts` (a) | F15 variant 5 | direct assertion (start level, non-empty blocks) |
-| ML29 | `commit_height` — `d_c` measured from the anchor `min(t_enter + P(v), t_prop)` (the E40 rule) | `det_l29_late_leader_does_not_raise`: n=4, X in set B; (a) the view-0 proposal arrives `T(0)/2 + 100` after `t_enter + P(0)`, commit 50 ms later → `start = 0`; (b) the same at view 1 → 0; (c) a payload-less proposal at once, its body `T(0)/2 + 100` later → 0; (d) X holds A from the start, CommitQC of its twin B `T(0)/2 + 100` later → 0; (e) control: body at once, commit `T(0)/2 + 1` later → 1 | F36 | direct assertion (start level), O-PERF P4 per gap |
+| ML29 | `commit_height` — `d_c` measured from the anchor `min(t_enter + P(v), t_prop)` (the E40 rule) | `det_l29_late_leader_does_not_raise`: n=4, X in set B; (a) the view-0 proposal arrives `T(0)/2 + 100` after `t_enter + P(0)`, commit 50 ms later → `start = 0`; (b) the same at view 1 → 0; (c) a proposal whose authenticated rows are delayed at once, its body `T(0)/2 + 100` later → 0; (d) X holds A from the start, CommitQC of its twin B `T(0)/2 + 100` later → 0; (e) control: body at once, commit `T(0)/2 + 1` later → 1 | F36 | direct assertion (start level), O-PERF P4 per gap |
 | ML30 | `commit_height` — `d_c` measured from `t_prop` of any held proposal (a late body or a twin counts) | `det_l29_late_leader_does_not_raise` (c), (d) | F36 (body variant) | direct assertion (start level) |
-| ML26 | `on_proposal` step 2 — no early timeout on proven leader equivocation (evidence only) | `det_l25_equivocating_leader_early_timeout`: n=4, X in set A; twin B of the held A (both signed by `L(h, 0)`), with and without X's Prepare of A first → `ProposalEquivocation` evidence and exactly one timeout at view 0 (`hq = None`); no further vote at view 0, even with PQC(A); the twin again → nothing; `q − 1` other timeouts → view 1 at once; not equivocation (no evidence, no timeout): a payload-stripped copy of A, B signed by another member, B carrying A's signature, twins of view 0 after X entered view 1 | F5 | direct assertion, O-LIVE |
+| ML26 | `on_proposal` step 2 — no early timeout on proven leader equivocation (evidence only) | `det_l25_equivocating_leader_early_timeout`: n=4, X in set A; twin B of the held A (both signed by `L(h, 0)`), with and without X's Prepare of A first → `ProposalEquivocation` evidence and exactly one timeout at view 0 (`hq = None`); no further vote at view 0, even with PQC(A); the twin again → nothing; `q − 1` other timeouts → view 1 at once; not equivocation (no evidence, no timeout): a same signed proposal with a damaged availability carrier of A, B signed by another member, B carrying A's signature, twins of view 0 after X entered view 1 | F5 | direct assertion, O-LIVE |
 
 Shared tests: `det_s2_s27_prepare_once_across_restart` kills MS2 and MS27;
 `det_s33_key_rotation_restart` (a) kills MS33a and MS33b, (b) kills MS33c;
@@ -2965,6 +3301,38 @@ node has not executed, as the simulator's authorities do).
 | MA12 | `on_outcome` — no `try_commit()` after the execution of the current proposal's block (a `Pending` attestor is asked again only at a stage raise) | `det_a9_pending_attestor_commits_after_execution`: n=4, X in set A with an execution-gated authority, flagged B executing; PQC(B) arrives first → no Commit vote, no `PersistSafety`, no `AttestationUnavailable`; `Executed{Valid(R)}` → X Commit-votes at once with a verifying attestation; `Valid(R′ ≠ R)` → `ExecutionMismatch`, still no Commit | — (F37's slow executors then commit later, at stage raises: start levels rise, no oracle fails) | — |
 | MA13 | QC aggregation accepts different shared result witnesses | `form_qc_carries_attestations` | — | O-ATT |
 
+**AMX application rules (§11).** The simulator's toy AMX application (`sim::amx`); the named
+tests drive a state transition or a tracker over harness-signed certificates of synthetic
+blocks.
+
+| Id | Site — change | Named deterministic test (setup → expected) | Randomized scenario | Oracle |
+|---|---|---|---|---|
+| MX1 | `GlobalState::vote` — one `Yes` decides `Commit` | `det_amx_commit_needs_every_yes`: three participants; `Yes` from two → no decision; the third → `Commit` | F31 | O-AMX |
+| MX2 | `GlobalState::vote` — the `h ≤ d` condition of `Commit` deleted | `det_amx_no_commit_after_deadline`: the completing `Yes` is relayed at `d + 1` → no `Commit`; the deadline step aborts | F31 | O-AMX |
+| MX3 | `GlobalState::expire` — the deadline abort deleted | `det_amx_deadline_aborts_at_d_plus_1`: no votes → undecided at `d`, `Abort` at `d + 1`, nothing later | F31 | O-AMX |
+| MX4 | `GlobalState::begin` — a second `Begin` for `x` replaces its entry | `det_amx_second_begin_rejected`: `Begin`, a `Yes`, the same `Begin` → no record, the vote stays | F31 | O-AMX |
+| MX5 | `GlobalState::vote` — the vote's proof is not verified | `det_amx_forged_vote_rejected`: a `No` certified by another dataspace's committee, relabelled to the voter's instance, or signed by `q − 1` → no decision | F31 (forging relayer) | O-AMX |
+| MX6 | `DataspaceState::prepare` — `x ∉ prepared` not checked | `det_amx_prepare_once`: a second inclusion of `x` → no record, escrowed once | F31 | O-AMX |
+| MX7 | `DataspaceState::prepare` — a held decision is ignored | `det_amx_held_decision_votes_no`: `G`'s `Abort` held before the prepare → `No`, nothing escrowed | F31 | O-AMX |
+| MX8 | `DataspaceState::settle` — a `Yes` escrow is applied whatever the decision | `det_amx_settle_follows_decision`: `Commit` applies the leg, `Abort` restores it, a replay changes nothing | F31 | O-AMX |
+| MX9 | `DataspaceState::observe` — a local timeout releases a `Yes` escrow once a verified `G` block is above `d` | `det_amx_no_release_without_abort_proof`: a verified `G` block above `d` and a forged `Abort` → the escrow stays until `G`'s `Abort` | F31 | O-AMX |
+| MX10 | `Tracker::context` — the tracked epoch need not contain the certified height | `det_amx_tracker_epoch_window`: epoch 0's committee certifies a height of epoch 1 under epoch 0's id → rejected; epoch 1 verifies only after its handoff, and a removed committee cannot certify it | — | direct assertion |
+| MX11 | `Tracker::handoff` — `C_{J,e−1}` is not kept | `det_amx_handoff_keeps_previous_epoch`: a record of epoch 0 relayed after the handoff into 1 still verifies; handoffs only in sequence and from the last block; a replay is stale | — | direct assertion |
+| MX12 | `Tracker::verify` — the result-preimage check deleted | `det_amx_record_bound_to_result`: a genuine `Yes` whose disclosed record is rewritten to `No` → rejected | F31 (forging relayer) | O-AMX |
+
+The node's AMX rules live outside the crate the gate mutates; their deterministic tests are
+`iroha_data_model::sumeragi_amx::tests` (`sumeragi_amx_commit_needs_every_yes_by_the_deadline`,
+`sumeragi_amx_first_no_or_the_deadline_aborts`,
+`sumeragi_amx_begin_rejects_duplicates_unregistered_participants_and_bad_deadlines`,
+`sumeragi_amx_tracker_verifies_records_under_the_tracked_committee_only`,
+`sumeragi_amx_tracker_hands_off_epoch_by_epoch`, `sumeragi_amx_write_proof_matches_the_certified_write_root`
+and the `sumeragi_amx_participant_*` tests: escrow once and apply on `Commit`, release only with
+the `Abort` proof, `No` without escrow, a held decision votes `No`, late prepares and pruning,
+`G`'s handoffs) and `iroha_core::sumeragi::amx::tests`
+(`sumeragi_amx_begin_and_decisions_are_witness_writes_of_the_block`,
+`sumeragi_amx_deadline_step_aborts_in_the_first_block_after_the_deadline`,
+`sumeragi_amx_registration_needs_genesis_or_permission`).
+
 Also required: golden vectors for every preimage (including `echo_preimage` and `att_preimage`, §3.3), `block_hash`, `att_digest`, `committee_digest`,
 the permutation, `D_h`, slot substitution (order and leaders for `|D| ∈ {0, 1, f}`, with demoted
 slots at the anchor, between views and adjacent to each other) at views 0, 1, 2, and the stage
@@ -3006,13 +3374,21 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
   The world holds the host's prepared post-state as a single live overlay: any other executor
   operation between a prepare and its commit drops it, and a commit without it fails the run.
   A replica whose disk fails every write for 20 s runs under the O-MEM bounds of its queues.
+  Its proposal/manifest/row messages use the canonical wire owner (§12.8) under the world's
+  network faults. Actual author/acquisition jobs issue opaque bodies; receiving metadata alone
+  cannot substitute for reconstruction. Component conformance must keep this same custody path.
   O3 in-flight reuse, O4 exactly-once answers and parking are also tested on the kernel's
   scheduler with the fake executor, and O9 with two threaded driver instances in one process.
   `Init` assembly and serving stay with the world in the simulator; the driver's versions are
   tested over in-memory backends.
-- Before the Taira cutover: a multi-process soak test (n = 4 and n = 22; netem loss 10–30 %,
-  delay spikes, random `kill -9`, disk-full injection; 24 h) with O-AGR, O-SIGN, O-LIVE and O-PERF
-  computed from node logs. It is a release gate.
+- Deployment policy is owned by on-chain governance for Taira and production. Multi-process
+  fault runs, including loss/delay, crashes, restarts and disk exhaustion, are optional
+  engineering diagnostics; their duration, topology and verdict do not authorize or block a
+  cutover. There is no mandatory 24-hour fault test for any network, and elapsed off-chain
+  runtime or a missing soak verdict is not a Sumeragi protocol or node-admission rule.
+  Operators still enforce signed native control authority, authenticated genesis and committee,
+  safety-record provenance and custody, and live readiness/write/restart checks. Optional
+  diagnostics compute O-AGR, O-SIGN, O-LIVE and O-PERF from node logs.
 
 ---
 
@@ -3025,8 +3401,11 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
 2. Deleting the v2 runtime, its specs, formal models, configs and tests; no "v2" naming remains.
 3. Hosting dataspace/lane instances (several cores per node, instance-id derivation, committees,
    O9 isolation).
-4. AMX 2PC in executor/Nexus (Begin, prepare/escrow, relay, decision, settle, foreign-committee
-   tracker and handoff relaying).
+4. AMX 2PC (§11): the global chain's side (Begin, relay, decision by the deadline, trackers with
+   handoffs) runs in the node's executor and the participant side is a component over an escrow
+   interface; hosting a dataspace instance with its own state (item 3), retaining each block's
+   write set so that relayers can build record proofs, and payload builders that relay pending
+   proofs remain (Appendix E, E58).
 5. Taira reset: fresh genesis with the new parameters and an operator runbook: key generation
    on the node, the installation log, store id and initial records (§7.4 record provenance), the
    per-instance "never signed" assertion for imported keys at genesis, backups that exclude record
@@ -3034,15 +3413,16 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    good, and single-height key rotation (§10.3).
 6. Evidence → penalties; NPoS election and epoch scheduling of committees; forensics for
    conflicting certificates (cross-view, and same-view ones at an uncommitted height).
-7. Payload dissemination optimisations (relay through set A, erasure coding) if blocks outgrow the
-   leader's uplink.
+7. Payload dissemination beyond §12.8: the current candidate sends all original rows to its
+   requested peers. Holder forwarding, per-committee-size parity tuning and relay ordering
+   remain possible optimisations; none is claimed implemented or measured here.
 8. Weak-subjectivity checkpoints for long-range sync.
 9. Push delivery of committed blocks to observers (RPC/indexer nodes) by subscription; `Status`
    pull stays the backstop.
 10. Governance-certified committee handover for an instance that lost its quorum (§10.8).
 11. **Future optimisations** removed from the first release by the revision-3 simplicity pass
     (Appendix B). None is needed for safety or for P1–P6; each may come back only with its own
-    mutation test and within the §12.6 budget:
+    mutation test and independent qualification:
     a. optimistic (batch) vote verification at the aggregator;
     b. re-chaining of silent set-A members and proxy tails (absence records in headers, with
        attribution to `f + 1` distinct proxy tails), which would remove the recurring P3 cost of a
@@ -3073,16 +3453,11 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    The application must define time monotonicity without local-clock comparisons.
 6. **Divergence recovery.** `ApplyDiverged` halts the instance; recovery needs a state-snapshot
    path (not in scope here).
-7. **Payload size.** The leader sends the full payload to `n − 1` peers (set A first); at n = 22
-   this caps block size by leader bandwidth. Enough for launch?
+7. **Payload size and layout.** The current worker sends each canonical row to its requested
+   peers (§12.8). Measure complete egress, acquisition and verification before choosing any
+   holder-forwarding strategy or larger-committee parity tuning. The recommended `d = 4, p = 2`
+   describes erasure geometry; it alone is not a validator-fault bandwidth guarantee.
 8. **Epoch length** of AMX-participating instances (handoff cadence for light clients, §11.7).
-
----
-
-## Appendices A–D. Review logs
-
-The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbatim in
-[`docs/history/2026-09-25/sumeragi-spec-review.md`](../docs/history/2026-09-25/sumeragi-spec-review.md).
 
 ---
 
@@ -3090,12 +3465,11 @@ The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbati
 
 This appendix reconciles revision 4.1 with the implementation in `crates/iroha_sumeragi` and its
 simulator. Every `// SPEC:` marker in the crate refers to one row below. Rows E1–E8, E36, E40,
-E41, E43, E44, E47 and E53 changed the normative text above (minimal edits, marked by their section;
-E43, E44, E47 and E53 are the node-integration additions); rows E9–E30, E37, E38, E45, E49, E51, E52,
-E54 and E57 record code-level choices where the text leaves room or adds a defensive check, without changing
-the protocol (E51, E52, E54 and E57 record the node's application and backend choices; E51 is a deviation
-from §4.1);
-E31–E35, E39, E42 and E46 record simulator and verification deviations. This file,
+E41, E43, E44, E47, E53 and E60 changed the normative text above (minimal edits, marked by their section;
+E43, E44, E47, E53 and E60 are the node-integration additions); rows E9–E30, E37, E38, E45, E49, E51, E52,
+E54, E57 and E58 record code-level choices where the text leaves room or adds a defensive check, without changing
+the protocol (E51, E52, E54, E57 and E58 record the node's application and backend choices);
+E31–E35, E39, E42, E46, E59, E61, E62 and E63 record simulator and verification deviations. This file,
 `specs/sumeragi.md`, is the normative specification that the crate's `§`
 references and `// SPEC:` markers resolve against (checked by `crates/iroha_sumeragi/tests/spec.rs`).
 
@@ -3115,9 +3489,10 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E40 | simulator, final 500-seed sweep: F5 seed 279 (`n = 22`, churn; successive equivocating leaders held every honest node at start levels 3–4 and one height took 26.4 s, failing the post-heal progress check) | (a) §9.2 raise: the start level rises iff `pm.last_exec_ms > T(start)/2` (unchanged) or the committing view was slow here, `t_commit(h) − anchor(h, v_c) > T(start)/2` with `v_c` the committing CommitQC's view, measured only when this node is in `v_c`; the rule "a view timed out on its deadline or by a join while this node held its proposal" (`failed_with_proposal`) and the timeout causes that existed only for it are deleted. That rule let every faulty leader raise the level at each of its turns (equivocate, or send a valid proposal to only `2f` honest members); now a failed view never raises. The rule as first drafted measured from `t_enter(h, v_c)`; the anchor is used instead because at view 0 the entry is followed by the pace or heartbeat wait (`payload_retry_interval` = 5 s > `T(0)/2`): measured from the entry, a healthy idle chain in the simulator sat at `start_cap` = 4 and a loaded `n = 4` chain at level 1 (both stay at 0 from the anchor); for `v_c > 0` the two differ by at most `build_timeout`. (b) Early timeout on proven leader equivocation: two different proposals for the current `(h, view)`, both validly signed by `L(h, view)`, make the node sign its timeout at once (not only report evidence), so the view ends one join and one TC later instead of at its deadline. Safe (timeouts are always safe under the fence) and unframeable (the evidence needs two signatures of the leader over different preimages). Tests `det_l25`, `det_l26`; mutations ML25, ML26. | §6.2 step 2, §6.6, §6.8 step 4, §7.1 SR35, §7.5, §8.2 L2–L3, §8.3, §9.2, §13.4 | `pacemaker::Pacemaker::on_commit`, `machine::round::commit_height`, `machine::proposal::check_held`, `machine::timeout::sign_timeout` |
 | E41 | adversarial review of E40: (1) every executor 3.0–3.9 s for non-empty blocks at `n = 4` defaults, with an executor that aborts discarded work (O4) — every height committed `EMPTY` at view 2 and the start level stayed 0; (2) a leader whose valid proposal arrives `T(start)/2 + ε` after `t_enter + P(0)` — the view commits, the leader is never demoted, and every honest node rose to `start_cap`, because faulty members lead every `n/f` heights and `decay_after` = 8 never catches up | (a) `pm.last_exec_ms` is the maximum over the height (it was the last value), and an execution still `Pending` when `discard_exec` removes it, or when its block commits, counts with `now − since`, a lower bound that never exceeds what the execution clause counts once the execution finishes. With the failed-view raise gone (E40), nothing else saw an execution that outlasted every payload view; the simulator's non-preemptive executor had hidden it (the next view's execution queued behind the cancelled job, so the committing view looked slow). (b) `d_c = t_commit − t_body`, where `t_body` is when this node first held the committing view's proposal together with its body; `d_c` is defined only if this node holds that view's proposal of the committed block. E40 measured from the anchor, which a late proposal stretches; measuring from `t_prop`, as the review proposed, would still count a body served late and the other twin's commit. §9.2 item (2) corrected: faulty members stretch `d_c` only through certificate delays that the stage ladder bounds, and decay cannot outpace a lever used at every faulty turn. Tests `det_l27`, `det_l28`, `det_l29` and `det_l26` (h), which now executes view 1's block before the commit; mutations ML27–ML30; scenarios F15 variant 5 and F36. | §6.0, §6.2 steps 8–9 and `discard_exec`, §6.3 step 1, §6.8 steps 4–5, §6.12, §8.3, §9.2, §13.3, §13.4 | `pacemaker::Pacemaker::record_exec`, `machine::proposal::{discard_exec, record_pending_exec, maybe_execute}`, `machine::round::commit_height` |
 | E43 | owner decision (node integration, KAGEMUSHA mint finality) | Commit attestation, a generic application extension (§3.7): a header flag `attest` bound in `block_hash`; every vote signs its block's flag (one byte appended to `vote_preimage`); a Commit vote on a flagged block carries an attestation of `att_preimage(h, bh, R)` (new kind `0x06`) from a driver-supplied `Attestor`, and a node that cannot attest does not Commit-vote there (`LocalFault(AttestationUnavailable)`); aggregators pool only Commit votes whose attestation verifies under a driver-supplied `AttestationVerifier`; a flagged CommitQC carries the attestations of exactly its signers and `verify_qc` checks them on every path (`qc_digest` covers them); the recorded Prepare keeps its flag; epoch boundaries require attestation; the current no-empty-block rule never proposes `EMPTY`. The v2 runtime sealed KAGEMUSHA top-ups inside Commit votes; this keeps that model without making the core aware of Pasta keys. Safety argument §7.7; liveness condition §3.7 A5, §8.1. Tests `det_a1`–`det_a8`, `golden_attestation_preimage`; mutations MA1–MA10; scenario F37 and oracle O-ATT. Amended by E47. | §3.1–§3.7, §4.2–§4.4, §6.2–§6.5, §6.9, §6.10, §7.1, §7.4, §7.6, §7.7, §8.1, §12.1, §13.2–§13.4 | `crypto::{Attestor, AttestationVerifier, verify_qc, verify_attestations}`, `preimage::{att_preimage, vote_preimage}`, `machine::votes::{attested, try_commit}`, `machine::propose::propose_fresh`, `machine::proposal::check_header`, `machine::sync::on_sync_response` |
-| E44 | cutover plan (transport) | Traffic classes (O8): every `BlockResponse` is Proposal class. "`BlockResponse` for the current height" needs the decoded block and the receiver's height, but the transport queues a frame by class before the driver decodes it. The core exports one table for decoded and raw frames (`TrafficClass`, `WireMessage::traffic_class`, `traffic_class_of_frame`) and the wire version `PROTOCOL_VERSION = 1`; the simulator's NIC and ingress lanes use the same table (they had used the height rule). | §3.5, §12.3 O8 | `message::{TrafficClass, traffic_class_of_frame, PROTOCOL_VERSION}`, `sim::net::class_of` |
+| E44 | first-release transport | One canonical wire tag table classifies both decoded and raw Norito frames: Proposal and PayloadManifest are Proposal class; PayloadChunk and SyncResponse are Bulk; the remaining tags are Control. Classification never depends on node height or optional payload presence. | §3.5, §12.3 O8 | `message::{TrafficClass, traffic_class_of_frame, PROTOCOL_VERSION}`, `sim::net::class_of` |
 | E47 | adversarial review of E43 (KAGEMUSHA mapping) | (a) A KAGEMUSHA seal message binds the top-up root and count and the execution-commitment digest, i.e. `R`'s preimage, which the core carries as an opaque bounded witness and which a node that Commit-votes on the lock alone may not have executed yet. `Attestor::attest` now answers `AttestOutcome::{Attested, Pending, NoAuthority}`: `Pending` (the authority still needs its own execution) is no fault, and `try_commit()` runs again after every `Valid` execution of the current proposal's block with a flagged lock (§6.3 step 4) as well as at stage raises; before, a slow executor's authority could only answer "no authority" and its Commit waited for a stage raise. (b) The verifier contract gains the unique-message rule: whatever an attestation binds beyond the statement is determined by the statement and committed state and checked by `verify`, so an attestation carries the preimages it needs (KAGEMUSHA: `R`'s preimage, re-hashed to `R`) and never depends on local execution (sync, `Status`, `parent_qc`); a Byzantine seal over another top-up root under the same `R` is not counted. (c) A flagged CommitQC has exactly `q` signers (formation always uses `q`): a Byzantine aggregator's over-aggregated certificate would otherwise commit a block whose attestations are not an exact-quorum KAGEMUSHA bundle, leaving its top-ups unmintable. Tests `det_a4_flagged_commitqc_has_exactly_q_signers`, `det_a4_commitqc_attestations_checked_core` (over-aggregated case), `det_a9_pending_attestor_commits_after_execution`, `execution_gated_attestor_waits_for_execution`, `o_att_requires_exactly_q_attested_signers`; mutations MA11, MA12; F37 gains execution-gated authorities, slow executors and an over-aggregating proxy tail (`Strategy::OverAggregate`), and O-ATT counts exactly `q`. | §3.4, §3.7 A2, A4, A5, §6.3, §6.5, §7.1, §7.7, §8.2, §8.3, §12.1, §13.2–§13.4 | `crypto::{AttestOutcome, Attestor, AttestationVerifier, verify_attestations}`, `machine::votes::try_commit`, `machine::proposal::on_outcome` |
 | E53 | crash matrix of the file record store (node integration) | Store-id check: the "every key imported" marks of a mismatch are one event — all appended with one fresh id, the id file written and synced after them. Written one by one, each with its own id written first, a crash after the first mark left a matching id and the other keys' stale "generated" entries, so a later instance start (records lost with a replaced record store, key store rolled back) could write an initial record for a key that had signed there. | §7.4 rule 3 | `iroha_core::sumeragi::driver::persist::reconcile_store_id` |
+| E60 | mandatory first-release signed RS16 integration | Sumeragi owns signed layout, complete original signature table and source-bound custody. ProposalMessage and SyncEntry require availability evidence; actual rows use the same Norito WireMessage owner. Typed author/acquisition/restoration jobs retain original funded owners through refusal. AvailableBody binds full independent authority; metadata alone grants no custody. Reconstruction/restoration checks complete codeword and padding. Publication retains original frame and never re-signs or falls back to raw bodies. Current all-row dissemination has no holder-bandwidth claim; live qualification remains open. | §12.8, §3.2, §3.3, §3.5, §12.1–§12.3 | `iroha_sumeragi::{availability, message, api}`, `iroha_core::sumeragi::driver::{payload_worker, payload_jobs, acquisition}` |
 
 ### E.2 Code-level choices (no protocol change)
 
@@ -3148,13 +3523,14 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E37 | `Init.configs` | Only the heights `t` to `t + 2` are accepted, each at most once (a `ConfigError::InvalidInit` otherwise). A configuration above `t + 2` let commits run more than two heights ahead of apply (§10.2), and the next in-order `BlockApplied` then halted the core as a driver anomaly. | `machine::restart::check_init` |
 | E38 | Chain parameters | Historical rule, superseded by the no-empty-block design: `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ payload_retry_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
 | E45 | `CoreStatus` | Also reports the leader and the proxy tail of `(h, view)` (`None` while awaiting: the next round's committee is not known yet) and the view of the lock (`high_pqc`), for the node's status endpoint, which replaces the v2 leader and QC endpoints. | `machine::Core::status` |
-| E49 | Driver bounds and failure handling (§12.2, §12.3, §12.5) | The `iroha_core` driver bounds every queue the core's peers or a failing device can grow. Serving: the node's own `FetchBody`s go first (one per body), then peers round-robin with at most one pending `ServeBlocks` and one `ServeBody` each (a newer one replaces it) within a per-peer token bucket of response bytes; the rest is dropped (O6). The O2 barrier holds at most 1 024 effects and 32 MiB of block payload, dropping the oldest `Send`, `Broadcast`, `ServeBlocks` or `ServeBody` beyond (the core rebroadcasts; `CommitBlock`, evidence and `Halt` are never dropped; a newer `FetchBody` of a body replaces a held one); a record still queued is superseded by a newer one of the same key, and what waited for it waits for the newer; queued bodies of applied heights are dropped. Released effects leave in batches of 64 with a due `Tick` in between (O5). A prepared commit runs alone on the executor (nothing between its prepare and its commit, also while a step backs off), and a retryable refusal re-prepares the same original owner without a second append. Consuming publication failure or prepare/commit unwind halts for recovery; ordinary idempotent write failures and missing reads remain retryable; a thread that stops anyway, or an unreachable worker, stops the instance and is reported. Frames are decoded within the transport limit (O10). | `driver::{serve::ServeSched, barrier::Barrier, persist::PersistQueue, exec::ExecSched, Kernel, Driver}` |
-| E51 | Application `R` (node integration, §4.1) — **deviation** | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{execution, next_committee, next_params}`: `execution` is the v2 execution commitment without its native-AMX, lane-finality and merge-carrier fields (witnessed pre- and post-state roots, ordinary-write root, KAGEMUSHA top-up root and count, length and hash of the result-bearing block wire, network-input and typed-output Merkle commitments); `next_committee` retains all ordered `C_{h+2}` keys and verified BLS proofs of possession and `next_params = ChainParams_{h+2}` from the lag-2 schedule. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. Deviations from §4.1: the post-state root is a sparse Merkle root over the **witnessed write set only**, not the full state, so divergence in unwitnessed state (roles, permissions, peers, parameters, triggers, …) is detected only once it changes a witnessed value, an output or the scheduled configuration; there is no separate event root: events are bound only as far as the result-bearing block carries them (transaction results and outputs). A full state root is a follow-up goal (`specs/sumeragi_goals.md` S9). Each sparse Merkle tree is built once per block. | `iroha_core::sumeragi::commitment::{execution_result, ExecutionResultCommitment}` |
+| E49 | Driver bounds and failure handling (§12.2, §12.3, §12.5) | The `iroha_core` driver bounds every queue the core's peers or a failing device can grow. Serving: the node's own `FetchPayload`s go first (one per body), then peers round-robin with at most one pending `ServeBlocks` and one `ServePayload` each (a newer one replaces it) within a per-peer token bucket of response bytes; the rest is dropped (O6). The O2 barrier holds at most 1 024 effects and 32 MiB of block payload, dropping the oldest `Send`, `Broadcast`, `ServeBlocks` or `ServePayload` beyond (the core rebroadcasts; `CommitBlock`, evidence and `Halt` are never dropped; a newer `FetchPayload` of a body replaces a held one); a record still queued is superseded by a newer one of the same key, and what waited for it waits for the newer; queued bodies of applied heights are dropped. Released effects leave in batches of 64 with a due `Tick` in between (O5). A prepared commit runs alone on the executor (nothing between its prepare and its commit, also while a step backs off), and a retryable refusal re-prepares the same original owner without a second append. Consuming publication failure or prepare/commit unwind halts for recovery; ordinary idempotent write failures and missing reads remain retryable; a thread that stops anyway, or an unreachable worker, stops the instance and is reported. Frames are decoded within the transport limit (O10). | `driver::{serve::ServeSched, barrier::Barrier, persist::PersistQueue, exec::ExecSched, Kernel, Driver}` |
+| E51 | Application `R` (node integration, §4.1) | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{height, execution, schedule, beacon, native_lanes}`. `execution` (`ExecutionCommitment`) binds: (1) the **complete World state**: `parent_world_state_root`, the World the block executed on (every canonical World entry after the parent block's publication, including the parent's apply-time deterministic writes; for genesis the empty World, so genesis absorbs everything the World holds, including state seeded before it executes), and `world_state_root`, the World after the execution; (2) the **event root** `event_commitment`: the Merkle root (`iroha_crypto::MerkleTree`, leaves the hashes of the canonical Norito events) and count of the events the execution emitted, in emission order, `None` without events (pipeline status notifications are delivery, not results); (3) the witnessed pre- and post-state roots and the ordinary-write root (sparse Merkle roots over the execution witness; the ordinary-write root carries the per-key write proofs of §11 records and KAGEMUSHA receipts) and the KAGEMUSHA top-up root and count; (4) the length and hash of the result-bearing block wire (every transaction result and output) and the network-input and typed-output Merkle commitments. `schedule` retains the complete current epoch context and the lag-2 successor schedule with every ordered key and verified BLS proof of possession, `beacon` the finalized pulse the execution consumed and `native_lanes` the complete lane-context proof against the ordinary-write root. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. **World state root.** The root of an incremental homomorphic multiset hash (LtHash16). Each canonical World entry, a table row `(k, v)` or the value `v` of a cell `f` that the exhaustive World authority registry declares canonical (derived indexes and local buffers excluded; the trigger owner's authoritative stores included), expands to `e = BLAKE3-XOF(derive_key("iroha 2026-09-30 world-state lthash16 element v1"), P_f ‖ presence ‖ H(k) ‖ H(v))` read as 1 024 little-endian `u16` lanes, where `P_f` binds the field identity and kind and `H` is the bare-Norito value hash or the registry's declared semantic projection. The accumulator is the lane-wise sum of all elements modulo 2^16 with the entry count modulo 2^64 (order independent; removal is the exact inverse of addition), and the root is `H("iroha:world-state:root:v1\0" ‖ S ‖ entries ‖ lanes)` (little-endian count and lanes) with `S` the digest of the registry's canonical field identities, kinds and key/value schemas. A block subtracts `e(before)` and adds `e(after)` for every entry of every canonical World storage and cell that its overlay touched, read from the overlay's own undo journal, so the per-block cost is proportional to the change set and never to the World; every pass must visit exactly the registry's canonical fields (the registry destructures `WorldData` without `..`). The accumulator is the derived World cell `state_accumulator`: the node stores it after the block's last deterministic World write at publication, and it is the next block's parent root, so the apply-time writes of block `h` enter `R_{h+1}`. Chosen over a persistent sparse Merkle tree over the World: no consumer needs per-key membership proofs against the complete state (§11 and the §12.7 readers prove writes against the ordinary-write root), and the accumulator needs 2 KiB of state and no per-entry tree nodes. Replay re-executes every certified block and so recomputes and checks both World roots and the event root; after replay, startup also requires the accumulator to equal a cold capture of the rebuilt World. Each sparse Merkle tree is built once per block. | `iroha_core::sumeragi::commitment::{execution_result, WorldStateTransition}`, `iroha_core::state::world_projection::WorldStateAccumulator` |
 | E52 | Application schedule (node integration, §10.1, §9.4) | World retains the authenticated current native epoch and bounded three-slot schedule. Parameters retain lag two; membership beyond a boundary is Pending until original certified boundary application atomically installs its exact next epoch. Genesis uses its signed context. Parameter validation consumes the exported `FRAME_OVERHEAD`, including source-complete Pasta witnesses and control bytes, against the protocol transport bound. | `iroha_core::sumeragi::schedule` |
-| E54 | Production driver backends (§7.4, §12.2, §12.3 O2, O8, O10) | `iroha_core::sumeragi`: `crypto` — `H = iroha_crypto::Hash`; BLS-normal signatures (48-byte keys, 96-byte signatures); a committee key's proof of possession is verified once when the height schedule admits it and every aggregate naming a key not admitted fails (fail closed); a TC verifies with one multi-pairing over its `hq` groups (`iroha_crypto::bls_normal_verify_preaggregated_multi_message`); the signer is the node's key pair (BLS signatures are unique, so deterministic). `records` — one file per `(I, K)` under `records_dir/<I hex>/<H(K) hex>.record` and the store id beside them, each replaced by temp file, fsync, rename and directory fsync; the installation log is an append-only file of length-prefixed Norito entries outside `records_dir`, fsynced per entry; a torn or corrupt tail ends the log (cut before the next append), which the store-id check then sees as a mismatch (safe). The operator's assertion is a one-shot boot flag, never a configuration key. `bodies` — `<root>/bodies/<I hex>/<h>/<bh hex>`, written like records, never replaced, verified against `(h, bh)` when read, pruned through the applied height, and bounded by a byte cap that fails a write like a full disk (retried; never an eviction). `net` — `NetworkMessage::Sumeragi` carries the exact frame and `I`; one classifier (`traffic_class_of_frame`) serves the raw and the decoded P2P paths; Control → `ConsensusSafety` (the reserved safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync`; one `post_recoverable` per recipient, dropped on backpressure; the driver owns its three FIFOs on `SubscriberRoute::Sumeragi`; relayed frames (origin ≠ authenticated connection) are not accepted, so ingress stays keyed by authenticated peers. | `sumeragi::{crypto, records, bodies, net}` |
+| E54 | Production driver backends (§7.4, §12.2, §12.3 O2, O8, O10) | `iroha_core::sumeragi`: `crypto` — `H = iroha_crypto::Hash`; BLS-normal signatures (48-byte keys, 96-byte signatures); a committee key's proof of possession is verified once when the height schedule admits it and every aggregate naming a key not admitted fails (fail closed); a TC verifies with one multi-pairing over its `hq` groups (`iroha_crypto::bls_normal_verify_preaggregated_multi_message`); the signer is the node's key pair (BLS signatures are unique, so deterministic). `records` — one file per `(I, K)` under `records_dir/<I hex>/<H(K) hex>.record` and the store id beside them, each replaced by temp file, fsync, rename and directory fsync; the installation log is an append-only file of length-prefixed Norito entries outside `records_dir`, fsynced per entry; a torn or corrupt tail ends the log (cut before the next append), which the store-id check then sees as a mismatch (safe). The operator's assertion is a one-shot boot flag, never a configuration key. `bodies` — `<root>/bodies/<I hex>/<h>/<bh hex>`, written like records, never replaced, verified against `(h, bh)` when read, pruned through the applied height, and bounded by a byte cap that fails a write like a full disk (retried; never an eviction). `net` — `NetworkMessage::Sumeragi` carries the exact frame and `I`; one classifier (`traffic_class_of_frame`) serves the raw and the decoded P2P paths; Control → `ConsensusSafety` (the reserved safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync`; one `post_recoverable` per recipient; payload streams retain the exact returned post and admission ticket under backpressure until admission succeeds; the driver owns its three FIFOs on `SubscriberRoute::Sumeragi`; relayed frames (origin ≠ authenticated connection) are not accepted, so ingress stays keyed by authenticated peers. | `sumeragi::{crypto, records, bodies, net}` |
 | E55 | Driver builds (§6.10 rule 1, §12.1 `PayloadReady`); found by the node's n = 4 in-process test with `payload_retry_interval` = 600 s | Two lost wakeups at a view-0 leader. (a) A transaction arriving while `BuildPayload{req}` runs (the builder may have read the queue before it) is remembered, and an `EMPTY` answer to `req` is followed by `PayloadReady{req}` at once. (b) A builder that first waits for the parent's apply can answer after `t_propose + build_timeout`: the core has then used `EMPTY` and waits for the heartbeat, and ignores the late answer (its `req` is no longer in `build`). The driver sends `PayloadReady{req}` after every non-empty answer too; in `Requested{req}` the answer is proposed first and the readiness is ignored, in `IdleWait{req}` it requests again at once. Without either, a transaction waited up to `payload_retry_interval`. The core is unchanged. | `driver::exec::ExecSched::{transactions_available, done}` |
-| E56 | Node cutover (§12.1, §12.3, §7.4; node integration) | `irohad` starts only Sumeragi. Startup order: Kura; a new empty State (nonempty local snapshot exports are not restored: native `R` commits witnessed writes, so complete-World provenance remains S9) with the node's runtime configuration installed; `node::prepare` applies (fresh chain) or re-executes (restart) the signed genesis and replays every Kura block against its certificate, before the queue, the handshake and the network are built from the rebuilt state; then `Prepared::start_on_network` installs the records of the node's key, subscribes the driver's three FIFOs and spawns the driver over `P2pNet`. The handshake binds `proto = PROTOCOL_VERSION` and `consensus_fingerprint = I`. The operator's assertion is the one-shot CLI flag `--sumeragi-assert-fresh-key` (test-network peers pass it only on their original launch, with both the configured records directory and installation log absent; a restart never reasserts it after history loss. `kagami localnet` currently selects it when the peer's records directory is absent). The v2 relay is replaced by one subscriber per semantic class for gossip, streaming and time only. Signed local snapshot export and budget maintenance start only after original replay and successful driver startup. The gate is revoked on halt, worker failure or unwind; normal shutdown retains readiness for the final write. A local signature authenticates export bytes and never substitutes for full-World execution provenance. Emergency Fast starts no driver. Until their captures are ported, a node with a SoraFS provider-ingest or reputation finalized archive refuses to start (they would silently stop at the startup height). | `iroha_core::sumeragi::node::{prepare, Prepared, NetworkedNode, NodeHandle}`, `irohad::{network_relay, supervise_sumeragi, sumeragi_node_config}` |
+| E56 | Node cutover (§12.1, §12.3, §7.4; node integration) | `irohad` starts only Sumeragi. Startup order: Kura; a new empty State (nonempty local snapshot exports are not restored: `R` commits the complete World state (E51), but restoring a snapshot against the certified parent World root of its successor block is not implemented yet, goal S9) with the node's runtime configuration installed; `node::prepare` applies (fresh chain) or re-executes (restart) the signed genesis, replays every Kura block against its certificate and requires the World state accumulator to equal a cold capture of the rebuilt World, before the queue, the handshake and the network are built from the rebuilt state; then `Prepared::start_on_network` installs the records of the node's key, subscribes the driver's three FIFOs and spawns the driver over `P2pNet`. The handshake binds `proto = PROTOCOL_VERSION` and `consensus_fingerprint = I`. The operator's assertion is the one-shot CLI flag `--sumeragi-assert-fresh-key` (test-network peers pass it only on their original launch, with both the configured records directory and installation log absent; a restart never reasserts it after history loss. `kagami localnet` currently selects it when the peer's records directory is absent). The v2 relay is replaced by one subscriber per semantic class for gossip, streaming and time only. Signed local snapshot export and budget maintenance start only after original replay and successful driver startup. The gate is revoked on halt, worker failure or unwind; normal shutdown retains readiness for the final write. A local signature authenticates export bytes and never substitutes for full-World execution provenance. Emergency Fast starts no driver. The configured SoraFS provider-ingest and reputation finalized archives are bound to the native executor (`sumeragi::executor::FinalizedArchives`), which captures each committed height from the exact committed State before apply completes; a failed capture keeps the commit pending. | `iroha_core::sumeragi::node::{prepare, Prepared, NetworkedNode, NodeHandle}`, `irohad::{network_relay, supervise_sumeragi, sumeragi_node_config}` |
 | E57 | Certified-chain reader (§12.7; node integration) | `iroha_core::sumeragi::certified_chain` replaces the v2 finality sidecar for application readers. `committed_block` derives a per-height receipt from the Kura frame's header and result preimage only (certified block id `H("iroha/sumeragi/certified-block/v1" ‖ block_hash ‖ R)`, which signer floors pin as `context_id`); `CertifiedChain` adds the local `CommitQC` check under the committee authenticated by `R_{height−2}` (full native Pasta by default, or an explicit application `AttestationVerifier`) and iteratively authenticates the complete historical prefix with a lag-2 authority ring; rotated-away committees remain independently verifiable and missing authority fails closed. The role-11 Check instruction uses only the committed read (certificates are per node); signer finality, native Check histories and provider-admission readers use the certified read. | `iroha_core::sumeragi::certified_chain` |
+| E58 | AMX on the global chain (§11; node application) | (a) A record is a World write of the block that creates it under the reserved execution-witness key `0xD9 ‖ kind ‖ x` (one key per kind and transaction on an instance), proven by the sparse-Merkle path in `R`'s ordinary-write root; E51's layout is unchanged, and building a path needs the block's complete write set (the mandatory lane-state write included). (b) `G` admits a `Begin` only if every participant is registered and `b < d ≤ b + 7 200`, so escrow is bounded in global heights; it keeps at most 4 096 pending transactions and 256 registered dataspaces. Relayed proofs of unknown or decided transactions are ignored without touching the state. The deadline step runs after the block's transactions, so a `Yes` relayed in block `d + 1` is recorded but cannot commit; a transaction leaves the state in the first block above `d`, and since `x` binds `d` it can never begin again. (c) A participant rejects a `Prepare` once it has verified a `G` block above `d`, and on that condition drops its prepared entries except an unsettled `Yes` escrow (which only its decision proof closes); it drops held decisions 7 200 heights after their decision height. No valid `Prepare` of a dropped transaction can follow, and its decision proof is then only held. (d) The tracker checks a certificate with `Verifier::verify_qc_signatures` under the tracked epoch's proof-of-possession-verified BLS keys, as the portable finality proofs do, and a flagged certificate's attestations only for shape (they are application evidence, §3.7); its epoch window also requires the header's epoch to contain the height, so a committee never certifies a height of a later epoch. (e) `RegisterAmxDataspaceV1` is accepted in genesis or from an authority holding `CanSetParameters`, anchored at a canonical `ValidatorEpochContextV1` within the result-preimage bounds. Remaining S6 work (`TODO(S6)` in `iroha_core::sumeragi::amx`): a node hosting a dataspace instance with its own World (an `AmxParticipantStateV1` cell anchored at `G`'s genesis context, native prepare, settle and handoff instructions that record their `Prepared` records as witness writes, an `AmxEscrow` over that World), per-height retention of execution write sets so relayers can build record proofs, and payload builders that include pending proofs (§11 item 4). | `iroha_data_model::sumeragi_amx`, `iroha_data_model::isi::sumeragi_amx`, `iroha_core::sumeragi::amx` |
 
 ### E.3 Simulator and verification
 
@@ -3164,13 +3540,16 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E32 | F4, F34 slow executors | A slow executor delays only its Prepare (a Commit needs no execution), so P2's "one gap per `n` heights" is not claimed for it; F4 and F34's pending-execution variant check progress, not P2. At a flagged height an attestor that needs `R`'s preimage (§3.7 A2, E47) delays the slow executor's Commit too; F37's slow-executor seeds check progress and O-ATT. | `sim::scenarios::f34` |
 | E33 | O3 in-flight reuse | The fake driver reuses a cached post-state whose commitment equals the certified result and otherwise re-executes at once; reusing an execution still in flight is a performance property checked only by the §13.5 production-driver conformance (`iroha_core` driver tests `commit_during_execution_executes_once`, `commit_answers_a_queued_execution`). | `sim::world::apply_block` |
 | E34 | O-LIVE accounting | The precondition "`≥ q` honest, running members able to sign" (an unanchored member counts as faulty until it anchors, an abstaining one at its heights) is evaluated every 50 virtual ms; O-LIVE windows restart when it holds again. | `sim::oracle::check_live` |
-| E35 | §13.4 meta-check | Every MS/ML row is a `cfg(sumeragi_mutation = "<ID>")` switch, which `build.rs` sets only with the crate feature `mutation-testing` (a production build can never be mutated). The meta-check is `scripts/sumeragi_mutation_gate.py` (named tests, then the scenario at 200 seeds, plus the unmutated build); no CI job runs it yet. It also covers MA1–MA13 (the commit-attestation rules of §3.7, E43, E47), ME1–ME7 (rules E1–E7 with their regression tests) and 18 `MR-*` mutations of revision-4 rules with `det_r4_*` tests (`MR-early-cause`, "an early timeout raises the start level", was removed with the rule it guarded, E40). MS33a is switched in both fake drivers (the simulator's record store and the deterministic-test harness's), and `try_prepare` (and `on_outcome`, before an early timeout) checks `proposal.view == view` explicitly, so MS3 removes these guards together with the proposal reset in `advance_to`. First run: 95 of 100 mutations are killed by their named tests. MS24 and ML14 are killed only by F13 and F19: their named tests run on the test harness, which has no O2 barrier and no builder. MS34, ML5a and ML10 survive; their named tests must be strengthened. O-AMX and the toy AMX application (F31) are not modelled. | `build.rs`, `scripts/sumeragi_mutation_gate.py` |
+| E35 | §13.4 meta-check | Every MS/ML row is a `cfg(sumeragi_mutation = "<ID>")` switch, which `build.rs` sets only with the crate feature `mutation-testing` (a production build can never be mutated). The meta-check is `scripts/sumeragi_mutation_gate.py` (named tests, then the scenario at 200 seeds, plus the unmutated build); no CI job runs it yet. It also covers MA1–MA13 (the commit-attestation rules of §3.7, E43, E47), ME1–ME7 (rules E1–E7 with their regression tests) and 18 `MR-*` mutations of revision-4 rules with `det_r4_*` tests (`MR-early-cause`, "an early timeout raises the start level", was removed with the rule it guarded, E40). MS33a is switched in both fake drivers (the simulator's record store and the deterministic-test harness's), and `try_prepare` (and `on_outcome`, before an early timeout) checks `proposal.view == view` explicitly, so MS3 removes these guards together with the proposal reset in `advance_to`. First run: 95 of 100 mutations are killed by their named tests. MS24 and ML14 are killed only by F13 and F19: their named tests run on the test harness, which has no O2 barrier and no builder. MS34, ML5a and ML10 survive; their named tests must be strengthened. The MX rows (the simulator's toy AMX application, §11) are switches in `sim::amx` under the same gate (E59). | `build.rs`, `scripts/sumeragi_mutation_gate.py` |
 | E42 | Executor and adversary models of E41 | The fake executor optionally aborts a discarded running job and answers `Cancelled` at once (`Profile::abort_discarded`; O4 allows either), and non-empty payloads may carry extra latency that the builder's `exec_budget` estimate does not foresee (`Profile::exec_nonempty`), both used by F15 variant 5 (F15 seeds now cycle over six variants). `Strategy::LateLeader` delivers view-0 proposals, or their bodies, as late as the view still commits, timed from the attacker's `t_enter` (a simulator-only observation, `Core::round_entered_at`) and the lowest honest start level (F36). | `sim::driver::Executor::discard`, `sim::scenarios::{f15, f36}`, `sim::byz::Strategy::LateLeader` |
-| E39 | §12.6 gate, traceability | `tests/spec.rs` counts the non-blank, non-comment lines of the core (everything under `src/` except `sim/`, `machine/tests/`, `evidence/tests.rs`, `testing.rs` and inline `#[cfg(test)] mod tests`, mutation alternates included), prints them per §12.6 module and fails above the 8 000-line MUST; the planned split is reported, not enforced. The inventory includes native evidence verification, Commit attestations, signed control witnesses and their shared bounded-byte codec (`bytes.rs`). The same test checks that every `§` reference and every `// SPEC:` marker resolves in this file. Historical counts do not qualify the current source. | `tests/spec.rs` |
+| E39 | specification traceability and quorum consistency | `tests/spec.rs` checks that every `§` reference, Appendix E citation and `// SPEC:` marker in the crate resolves in this file, and that the specification's quorum examples match the implementation. Protocol behavior remains covered by deterministic simulator scenarios and the §13.4 mutation gate. | `tests/spec.rs` |
 | E46 | Host seam (§13.5) | The world drives each replica through `sim::host::Host` (ingress lanes, core, O2 barrier); `FakeHost` is the former in-world fake driver, moved behind the trait without behavioural change (the `Io` write device lost its barrier to `sim::driver::Barrier`). A scenario chooses its host with `Scenario::host`; `sim::tests::host_seam_runs_a_wrapped_host` runs a delegating wrapper through F9 and F13 (crash churn) and checks identical results. | `sim::host`, `sim::world::World::process` |
 | E48 | Hosts that own their scheduling (§13.5) | `Host::owns_io`, `poll` and `complete` let a host run its own persistence queue, barrier, execution scheduler and apply sequencing over the world's devices (`sim::host::{Op, Done}`); a write of such a host fails with probability `Profile::write_fail_ppm` and is reported failed (the fake driver instead absorbs failures as retry latency), apply is split into prepare, durable append and commit (the `InsideApply` crash point lies between append and commit), and churn crash points apply to its device operations. Byzantine machines run the fake driver whatever the scenario's host. `Scenario::io_kill` kills one machine at its `n`-th write completion, before or after durability (`sim::tests::io_kill_at_each_write_completion` with the fake driver; the production driver in `iroha_core`). Tick lateness and the "Tick did not consume its deadline" check use the core's deadline (`Core::next_wakeup`), not the host's own timers. | `sim::host`, `sim::world::{perform_op, poll_host, io_kill_at}` |
 | E50 | Driver queues and apply sequencing in the simulator (§13.5) | O-MEM also bounds the queues of a host that owns its scheduling (`Host::backlog`, `sim::host::BacklogBound`: 4 096 held effects and 64 MiB of their payload, one queued record per key, queued bodies only at unapplied heights and within the §8.4 per-height payload, 128 executor operations other than `Execute`s, two serving requests per peer plus eight). The world keeps the post-state a `Prepare` made ready (`sim::driver::Executor::prepared`) as a single live overlay: any other executor operation drops it and a `Commit` without it fails the run, so a driver that interleaves work between prepare and commit is caught. The `iroha_core` conformance adds a replica whose writes all fail for 20 s. | `sim::host::{Backlog, BacklogBound}`, `sim::oracle::observe_core`, `sim::world::perform_op` |
-
+| E59 | Toy AMX application (F31, O-AMX, §11) | Instance 0 is `G`, every other instance a dataspace. The application runs inside each block's execution over the parent's application state (memoised by `(instance, R)`), and an AMX world certifies `R = H(TAG ‖ R_base ‖ H(records))` with `R_base` the plain simulator result, so a record proof is the header, the `CommitQC` and `(R_base, records)`; worlds without the application keep `R = R_base`. The last block of each epoch (a committee-schedule entry) records the next epoch's context, which is the handoff proof; trackers are anchored at each instance's genesis context. Inputs are workload-format transactions naming an entry of an input registry (proofs are not serialized). Relayers run on chosen machines, resubmit every second until the effect is committed at their own replica of the target, lose their jobs when down or crashed and rebuild them from the committed chain, and delay each prepare relay by up to 4 s and each settlement relay by up to 6 s (per transaction, from its id: `G` sometimes decides before a participant prepares, which then holds the decision, and a participant sometimes verifies `G` blocks above `d` while its `Yes` escrow still waits for the decision); a forging relayer also submits every vote and decision with the record flipped. O-AMX runs every 100 virtual ms over the reference chains and once at the end. | `sim::amx`, `sim::scenarios::f31` |
+| E61 | Host frames (§13.5, §12.8) | A host that owns its scheduling sends opaque frames (`sim::host::Op::Frame` with a `HostFrame`, received through `Host::receive_frame`); the world carries them like messages of their class (NIC bandwidth, delay, loss, duplication, partitions) without reading them, and the network adversary does not rewrite them. The production kernel's availability frames travel so in the §13.5 conformance runs; the fake driver sends none. | `sim::host::{Op, HostFrame}`, `sim::world` |
+| E62 | F35 sparse local work (§8.1, §13.3) | The 100-seed sweep failed F35 seeds 6, 31, 78 and 87 (all `n = 22`): the progress check kept from the heartbeat era (8 heights in 120 s) and O-TXP's sanity check (half of the transactions older than 20 s committed) are not implied once leaders propose only nonempty work (§6.10). With the `f + 1` holders placed at random, up to `2f` workless leaders precede the first holder in a height's rotation and each failed view's timer grows ×1.5 up to `T_max` (§9.1): at `n = 22` one height may take 310 s (seed 6: views 0–7 of height 1, 129 s, had no holder leader; the other seeds lost views the same way, and no view `≥ 1` led by a holder failed). F35 checks the leader-turn bound (`Perf::LeaderTurns`) instead, from §6.10, §8.2 L1, L2, L4 and §9.1: with `v*(h)` the first view `≥ 1` whose leader (ground-truth topology) is a running holder, no honest replica passes `v*(h)` at an uncommitted height, and each commits `h` within `Σ_{v ≤ v*(h)} (P(v) + T(min(level_cap, s + v)) + σ + Δ)` of entering it (+3 % for drift), `s` the highest start level reported at `h`. A holder has work in any view `≥ 1`: the next transaction reaches it within the workload interval (`≤ 9 s`) of the parent's build, before view 1 ends (`P(0) + T(0) + P(1) + T(1) ≥ 10.4 s`, asserted by the scenario). O-TXP then requires each transaction in a block of the second height first committed after its submission (that block is built after the submission by a holder from its whole queue) instead of the 20-s check. The run lasts until heights 1 and 2 are due by the bound (no demotions yet, §2.1; start levels 0 and at most 1), at least 120 s, and requires both. `sim::tests::leader_turns_flags_holders_without_work` shows that the bound catches holders whose builders never return work. | `sim::scenarios::f35`, `sim::oracle::check_turns` |
+| E63 | F4 slow executors (§9.1, E32) | The 1000-seed sweep failed F4 seeds 163, 455, 675 and 799 (all `n = 22`, 6–7 heights in 40 s against 8): the fake builder prices a payload at its own machine's execution cost, so F4's slow executor (`exec_base` 1.5 s, above `exec_budget` = 750 ms at `n = 22` and 500 ms at `n ≤ 7`) fitted no transaction and, since leaders propose only nonempty work (§6.10), led like a silent member besides F4's silent ones (seed 163: views 0 and 1 of height 6, 12.9 s, led by its two slow executors). `exec_budget` is a calibrated estimate (§9.1) and E32 models F4's slow members as delaying only their Prepare, so their builders no longer price that slowness into payloads (`exec_per_kib: 0`, as for F15's and F34's slow executors). | `sim::scenarios::f04` |
 
 ### Native control-witness qualification boundary
 

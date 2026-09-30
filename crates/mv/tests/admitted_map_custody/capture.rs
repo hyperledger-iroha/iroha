@@ -27,7 +27,7 @@ fn capture(
 
 fn prepare<'scope, 'target>(
     journal: Journal,
-    scope: &'scope mv::allocation::AllocationScope<'scope>,
+    scope: &'scope iroha_allocation::AllocationScope<'scope>,
     target: &'target NativeStorage,
 ) -> mv::storage::AdmittedPreparedPublication<
     'scope,
@@ -301,7 +301,8 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
         reclaimed_since(0);
         assert_eq!(
             budget.reserved_bytes(),
-            concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size(),
+            iroha_allocation::release::ReleaseNotification::allocation_layout::<AllocationCharge>()
+                .size(),
             "the completed wait future still retains the original release source",
         );
     }

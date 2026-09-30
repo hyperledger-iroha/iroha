@@ -29,6 +29,7 @@ fn header() -> BlockHeader {
 
 fn native_lane() -> SumeragiLaneRecord {
     SumeragiLaneRecord {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         lane: LaneId::new(1),
         dataspace: DataSpaceId::UNIVERSAL,
         incarnation: Hash::new(b"committed native lane incarnation").into(),
@@ -123,6 +124,7 @@ fn native_lane_source_uses_its_committed_incarnation_without_a_physical_catalog_
 
     let lane = LaneId::new(2);
     let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         anchor_freshness: 16,
         max_merge_blocks: 8,
         stall_window: 100,
@@ -222,6 +224,7 @@ fn native_source_freezes_original_activation_closing_and_incarnation() {
     let lane = LaneId::new(7);
     let original = Hash::new(b"original native incarnation");
     let record = SumeragiLaneRecord {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         lane,
         dataspace: DataSpaceId::UNIVERSAL,
         incarnation: original.into(),

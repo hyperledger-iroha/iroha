@@ -183,7 +183,7 @@ pub fn build_kaigi_authorization_proof_v1(
 mod tests {
     use super::*;
     use crate::kaigi_proof_v1::{VK_BACKEND, encode_verified_envelope, take_witness};
-    use iroha_core::zk::hash_vk;
+    use iroha_core_zk::hash_vk;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(envelope.vk_hash, hash_vk(&key));
         assert!(envelope.aux.is_empty());
         let proof = ProofBox::new(VK_BACKEND.to_owned(), artifacts.proof.as_ref().to_vec());
-        assert!(iroha_core::zk::verify_backend(
+        assert!(iroha_core_zk::verify_backend(
             VK_BACKEND,
             &proof,
             Some(&key)
@@ -440,7 +440,7 @@ mod tests {
                 norito::encode_canonical(&changed).unwrap(),
             );
             assert!(
-                !iroha_core::zk::verify_backend(VK_BACKEND, &proof, Some(&key)),
+                !iroha_core_zk::verify_backend(VK_BACKEND, &proof, Some(&key)),
                 "modified row {row}"
             );
         }

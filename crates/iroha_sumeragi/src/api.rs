@@ -4,15 +4,18 @@
 
 use core::fmt;
 
+use iroha_schema::IntoSchema;
+
 use crate::{
-    message::{Block, BlockHeader, Evidence, Qc, WireMessage},
+    availability::{AvailabilitySource, AvailableBody, PayloadBytes},
+    message::{BlockHeader, Evidence, Qc, WireMessage},
     safety::{RecordState, SafetyRecord},
-    types::{Hash32, Millis, PublicKey},
+    types::{Hash32, HeightConfig, Millis, PublicKey},
 };
 
 /// Complete view-independent application-control source for the next proposal height.
 /// Every field must be revalidated against the same applied parent by the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode, IntoSchema)]
 pub struct ApplicationControlContext {
     /// Exact consensus instance.
     pub instance: Hash32,
@@ -113,6 +116,10 @@ impl Default for LocalParams {
 /// Invalid local configuration or chain parameters (§9.4), or unusable startup input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigError {
+    /// Signed availability layout violates the protocol dimensions or capacity.
+    AvailabilityLayout(crate::availability::LayoutError),
+    /// The admitted chain payload maximum exceeds its authenticated RS16 limit.
+    PayloadAboveAvailabilityLimit,
     /// `T_max < T_req(nominal)` for an initial configuration.
     TMaxBelowRequirement {
         /// Configured `T_max`.
@@ -224,12 +231,19 @@ pub enum Event {
     PayloadBuilt {
         /// Request id of the `BuildPayload`.
         req: u64,
-        /// Payload bytes.
-        payload: Vec<u8>,
+        /// Original funded nonempty payload, or no includable work.
+        payload: Option<PayloadBytes>,
         /// The application flag of a block with this payload (§3.7 A1): its Commit votes need
         /// attestations. The core additionally requires attestation at every epoch boundary.
         /// Empty builder responses are never proposed.
         attest: bool,
+    },
+    /// Exact original-author worker completion; stale request/source completions are ignored.
+    PayloadAuthored {
+        /// Original request id whose work and application control produced this header.
+        req: u64,
+        /// Opaque authenticated original-pool body; no raw substitute is accepted.
+        body: AvailableBody,
     },
     /// Exact answer to application control requested after selecting nonempty work.
     ControlWitnessBuilt {
@@ -262,10 +276,15 @@ pub enum Event {
         /// Outcome.
         outcome: ExecOutcome,
     },
-    /// `FetchBody` satisfied from local storage.
+    /// Actual authenticated custody from reconstruction or exact stored-body restoration.
     BodyAvailable {
         /// The block.
-        block: Block,
+        block: AvailableBody,
+    },
+    /// A worker rejected this exact manifest's semantics; never a local resource refusal.
+    ManifestRejected {
+        /// Original rejected carrier, compared exactly before clearing a buffered sync entry.
+        manifest: crate::message::PayloadManifest,
     },
     /// A committed block is durably applied (in height order, one per height, O3).
     BlockApplied {
@@ -304,7 +323,7 @@ pub enum Action {
     /// Durably store a block body keyed by `(height, block_hash)`.
     StoreBody {
         /// The block.
-        block: Block,
+        block: AvailableBody,
     },
     /// Send to one peer.
     Send {
@@ -352,10 +371,42 @@ pub enum Action {
         /// Execution budget hint `min(e_max, φ·T_base/2)` (§9.1).
         exec_budget_ms: u32,
     },
+    /// Encode/sign the retained nonempty work outside the Core event loop.
+    AuthorPayload {
+        /// Original build request id.
+        req: u64,
+        /// Independently authenticated height configuration for original author/geometry.
+        config: HeightConfig,
+        /// Exact header template; the worker replaces only its availability digest.
+        header: BlockHeader,
+        /// Original funded application work, retained by the move-only worker job.
+        payload: PayloadBytes,
+    },
+    /// Start or resume source-bound acquisition using mandatory original availability evidence.
+    AcquirePayload {
+        /// Independent expected source and authenticated historical configuration.
+        source: AvailabilitySource,
+        /// Original evidence; it grants no custody before real reconstruction.
+        manifest: crate::message::PayloadManifest,
+    },
+    /// Supply actual received row bytes only to an already-wanted acquisition job.
+    ReceivePayloadChunk {
+        /// Authenticated transport sender; this is relay provenance, not the original author.
+        from: PublicKey,
+        /// Exact row; the counted Sumeragi worker authenticates it before retaining/counting it.
+        chunk: crate::message::PayloadChunk,
+    },
+    /// Disseminate exact original rows after the existing durable-body barrier.
+    DisseminatePayload {
+        /// Recipients, in canonical order.
+        peers: Vec<PublicKey>,
+        /// Opaque body from which exact rows are derived without any re-signing.
+        body: AvailableBody,
+    },
     /// Execute a block against its parent's state.
     Execute {
         /// The block.
-        block: Block,
+        block: AvailableBody,
         /// Request id (never reused).
         req: u64,
     },
@@ -371,21 +422,19 @@ pub enum Action {
     /// in flight, and otherwise executes it (O3).
     CommitBlock {
         /// The block.
-        block: Block,
+        block: AvailableBody,
         /// Its `CommitQC`.
         commit_qc: Qc,
     },
-    /// Obtain a body: local stores first, then `BlockRequest` to `peers`.
-    FetchBody {
-        /// Height.
-        height: u64,
-        /// Block hash.
-        block_hash: Hash32,
+    /// Obtain exact source-bound custody from a retained storage job or actual signed rows.
+    FetchPayload {
+        /// Independent source and authenticated historical configuration.
+        source: AvailabilitySource,
         /// Peers to ask.
         peers: Vec<PublicKey>,
     },
-    /// Answer a `BlockRequest` from the local stores, if held.
-    ServeBody {
+    /// Serve requested original rows only after resolving the authenticated historical source.
+    ServePayload {
         /// Requester.
         to: PublicKey,
         /// Height.

@@ -943,15 +943,15 @@ async fn assert_exact_first_post_deadline_anchor(
 }
 
 #[test]
-fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable() -> Result<()> {
+fn four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable() -> Result<()> {
     super::sorafs_network::run(
-        stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable),
-        four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable_impl,
+        stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable),
+        four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable_impl,
     )
 }
 
-async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable_impl()
--> Result<()> {
+async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable_impl() -> Result<()>
+{
     init_instruction_registry();
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -975,7 +975,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
             BOB_ID.clone(),
         ));
     let context =
-        stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_stable);
+        stringify!(four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable);
     let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {

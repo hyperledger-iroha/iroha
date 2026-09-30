@@ -361,12 +361,63 @@ public struct ToriiSumeragiLaneFrontier: Decodable, Sendable, Equatable {
     }
 }
 
+/// Mandatory signed RS16 geometry pinned into one lane incarnation.
+public struct ToriiSumeragiDataAvailabilityLayout: Decodable, Sendable, Equatable {
+    public let encoding: String
+    public let chunkSizeBytes: UInt32
+    public let dataShards: UInt16
+    public let parityShards: UInt16
+    public let maxPayloadSizeBytes: UInt64
+    public let maxChunkCount: UInt32
+    private enum CodingKeys: String, CodingKey {
+        case encoding
+        case chunkSizeBytes = "chunk_size_bytes"
+        case dataShards = "data_shards"
+        case parityShards = "parity_shards"
+        case maxPayloadSizeBytes = "max_payload_size_bytes"
+        case maxChunkCount = "max_chunk_count"
+    }
+    private enum EncodingKeys: String, CodingKey { case encoding, details }
+    public init(from decoder: Decoder) throws {
+        try requireNativeStatusFields(decoder, ["encoding", "chunk_size_bytes", "data_shards", "parity_shards", "max_payload_size_bytes", "max_chunk_count"])
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let encodingDecoder = try c.superDecoder(forKey: .encoding)
+        try requireNativeStatusFields(encodingDecoder, ["encoding", "details"])
+        let e = try encodingDecoder.container(keyedBy: EncodingKeys.self)
+        encoding = try e.decode(String.self, forKey: .encoding)
+        guard encoding == "reed_solomon16", try e.decodeNil(forKey: .details) else {
+            throw nativeLaneFailure(decoder, "lane payload encoding must be Reed-Solomon16")
+        }
+        chunkSizeBytes = try c.decode(UInt32.self, forKey: .chunkSizeBytes)
+        dataShards = try c.decode(UInt16.self, forKey: .dataShards)
+        parityShards = try c.decode(UInt16.self, forKey: .parityShards)
+        maxPayloadSizeBytes = try c.decode(UInt64.self, forKey: .maxPayloadSizeBytes)
+        maxChunkCount = try c.decode(UInt32.self, forKey: .maxChunkCount)
+        guard (2...262_144).contains(chunkSizeBytes), chunkSizeBytes % 2 == 0,
+              (1...16).contains(dataShards), (1...16).contains(parityShards),
+              (1...16_777_216).contains(maxPayloadSizeBytes), (1...1024).contains(maxChunkCount) else {
+            throw nativeLaneFailure(decoder, "lane data-availability layout exceeds protocol bounds")
+        }
+        let stripeBytes = UInt64(dataShards) * UInt64(chunkSizeBytes)
+        let full = maxPayloadSizeBytes / stripeBytes
+        let remainder = maxPayloadSizeBytes % stripeBytes
+        let stripes = full + (remainder > 0 ? 1 : 0)
+        let terminalRow = 2 * ((remainder + 2 * UInt64(dataShards) - 1) / (2 * UInt64(dataShards)))
+        let width = UInt64(dataShards) + UInt64(parityShards)
+        guard stripes * width <= UInt64(maxChunkCount),
+              (full * UInt64(chunkSizeBytes) + terminalRow) * width <= 33_554_432 else {
+            throw nativeLaneFailure(decoder, "lane data-availability geometry exceeds protocol bounds")
+        }
+    }
+}
+
 /// The committed lifecycle record of one lane incarnation (`specs/sumeragi_lanes.md` §2.1).
 public struct ToriiSumeragiLaneRecord: Decodable, Sendable, Equatable {
     public let lane: UInt32
     public let dataspace: UInt64
     public let incarnation: String
     public let params: ToriiSumeragiParameters
+    public let daLayout: ToriiSumeragiDataAvailabilityLayout
     public let committee: [ToriiSumeragiLaneMember]
     public let createdAt: UInt64
     public let activeFrom: UInt64
@@ -381,6 +432,7 @@ public struct ToriiSumeragiLaneRecord: Decodable, Sendable, Equatable {
         case dataspace
         case incarnation
         case params
+        case daLayout = "da_layout"
         case committee
         case createdAt = "created_at"
         case activeFrom = "active_from"
@@ -391,12 +443,16 @@ public struct ToriiSumeragiLaneRecord: Decodable, Sendable, Equatable {
         case rescued
     }
     public init(from decoder: Decoder) throws {
-        try requireNativeStatusFields(decoder, ["lane", "dataspace", "incarnation", "params", "committee", "created_at", "active_from", "closing", "anchor_freshness", "merged", "merged_at", "rescued"])
+        try requireNativeStatusFields(decoder, ["lane", "dataspace", "incarnation", "params", "da_layout", "committee", "created_at", "active_from", "closing", "anchor_freshness", "merged", "merged_at", "rescued"])
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lane = try c.decode(UInt32.self, forKey: .lane)
         dataspace = try c.decode(UInt64.self, forKey: .dataspace)
         incarnation = try nativeLaneByte32(c.decode(String.self, forKey: .incarnation), decoder, "incarnation")
         params = try c.decode(ToriiSumeragiParameters.self, forKey: .params)
+        daLayout = try c.decode(ToriiSumeragiDataAvailabilityLayout.self, forKey: .daLayout)
+        guard UInt64(params.maxBlockBytes) <= daLayout.maxPayloadSizeBytes else {
+            throw nativeLaneFailure(decoder, "lane block limit exceeds its data-availability payload limit")
+        }
         committee = try c.decode([ToriiSumeragiLaneMember].self, forKey: .committee)
         createdAt = try c.decode(UInt64.self, forKey: .createdAt)
         activeFrom = try c.decode(UInt64.self, forKey: .activeFrom)

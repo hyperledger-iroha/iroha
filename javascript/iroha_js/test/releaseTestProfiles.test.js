@@ -63,6 +63,7 @@ test("release-scoped JavaScript tests contain no capability skip declarations", 
 
     "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/nativeBuildProvenance.test.js",
+    "javascript/iroha_js/test/retailDailyLimitInstructions.test.js",
     "javascript/iroha_js/test/sorafsChunker.oneGib.test.js",
   ]) {
     const source = readRepositoryFile(relativePath);

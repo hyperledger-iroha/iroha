@@ -148,8 +148,8 @@ def _spawn_fixed(executable: Path, script: Path, input_sha256: str, input_fd: in
     This private primitive is separately exercised with an inert Python script;
     only OriginalJavascriptChildProcess selects the production arguments.
     """
-    _require(os.name == "posix" and hasattr(os, "posix_spawn")
-             and hasattr(os, "pipe2"), "fixed child needs POSIX descriptor custody")
+    _require(os.name == "posix" and hasattr(os, "posix_spawn"),
+             "fixed child needs POSIX descriptor custody")
     absolute(executable)
     absolute(script)
     _require(type(input_sha256) is str and len(input_sha256) == 64
@@ -174,7 +174,12 @@ def _spawn_fixed(executable: Path, script: Path, input_sha256: str, input_fd: in
     stdout, stderr = bytearray(), bytearray()
     try:
         for _ in range(2):
-            pipes.extend(os.pipe2(os.O_CLOEXEC))
+            # Python's pipe owner creates non-inheritable descriptors on every
+            # supported POSIX host, including Darwin where pipe2 is absent.
+            # Keep each end in the cleanup set before checking that contract.
+            pipes.extend(os.pipe())
+        _require(all(not os.get_inheritable(fd) for fd in pipes),
+                 "fixed child pipe descriptors must be non-inheritable")
         out_read, out_write, err_read, err_write = pipes
         _require(all(fd >= 3 for fd in pipes),
                  "fixed child needs reserved standard parent descriptors")

@@ -347,7 +347,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn vm(gas: u64) -> IVM {
-        let code = crate::kotodama::compiler::Compiler::new().compile_source(
+        let code = kotodama_lang::compiler::Compiler::new().compile_source(
             "seiyaku Scan { state StateMap<string, int> orders; state StateMap<string, int> other; view fn main() { () } }",
         ).expect("compile scan contract");
         let mut vm = IVM::new(gas);

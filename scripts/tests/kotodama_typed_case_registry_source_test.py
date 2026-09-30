@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on the typed Kotodama test-registry compaction contract."""
+"""Check the typed Kotodama registry fixtures, case inventories and semantics."""
 
 from __future__ import annotations
 
@@ -9,14 +9,19 @@ import re
 import unittest
 from pathlib import Path
 
+from zk_source_tokens import token_hash
+
 
 ROOT = Path(__file__).resolve().parents[2]
 IVM_SOURCE = Path("crates/ivm/tests/kotodama.rs")
 IR_SOURCE = Path("crates/kotodama_lang/src/ir.rs")
 FIXTURE_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
 
-IVM_REGION_SHA256 = "1a3719a8f5cfd189807683adeeeeaeb29337d2ac8209a283f5ff99d8b5ba273a"
+IVM_REGION_SHA256 = "27c39d9fc502a22f13ebce08831547ee1898114f0791cec44892708c75fbca10"
 IR_REGION_SHA256 = "d361b6a6d5bacf917729bee90898e2a17cb23c4d6c4ad0a746bb5c325e11d17f"
+IVM_CODE_SHA256 = "75a857b41d94d0b890bd7aa3f79c04d50fb7b6027c1ec8c97d32738e5502c3f7"
+IR_CODE_SHA256 = "f1669b72eb08c6e27e2e7ae5c61235d630ace8a773e8cf595b81fa5fe67a3685"
+REGISTRY_FIXTURES = ROOT / "fixtures/documentation/kotodama-registry"
 IVM_CASE_IDS_SHA256 = "9c2a8f00d546b43ea86589639998900a540961bdc6b4b4b9b4a6e2b4ce1c92cc"
 
 IVM_MACROS = (
@@ -69,11 +74,9 @@ def _sha256(text: str) -> str:
 
 
 class KotodamaTypedCaseRegistrySourceTest(unittest.TestCase):
-    """Authenticate the data-only registries and their charged line ceiling."""
+    """Authenticate the data-only registries, case inventories and assertions."""
 
-    def test_typed_case_registry_contract(self) -> None:
-        ivm_source = _read_source(IVM_SOURCE)
-        ir_source = _read_source(IR_SOURCE)
+    def _assert_registry_contract(self, ivm_source: str, ir_source: str) -> None:
         ivm_region = _region(
             ivm_source,
             "#[derive(Clone, Copy)]\nenum CaseSource",
@@ -85,14 +88,8 @@ class KotodamaTypedCaseRegistrySourceTest(unittest.TestCase):
             "    #[test]\n    fn lower_get_quantity_builtin",
         )
 
-        self.assertEqual(_sha256(ivm_region), IVM_REGION_SHA256)
-        self.assertEqual(_sha256(ir_region), IR_REGION_SHA256)
-        self.assertLessEqual(len(ivm_region.splitlines()), 500)
-        self.assertLessEqual(len(ir_region.splitlines()), 217)
-        self.assertGreaterEqual(
-            1_217 - len(ivm_region.splitlines()) - len(ir_region.splitlines()),
-            500,
-        )
+        self.assertEqual(token_hash(ivm_region), IVM_CODE_SHA256)
+        self.assertEqual(token_hash(ir_region), IR_CODE_SHA256)
 
         forbidden = (
             "rustfmt::skip",
@@ -148,6 +145,39 @@ class KotodamaTypedCaseRegistrySourceTest(unittest.TestCase):
         manifest_names = tuple(source_entry["test_names"])
         first = manifest_names.index(IR_TEST_NAMES[0])
         self.assertEqual(manifest_names[first : first + len(IR_TEST_NAMES)], IR_TEST_NAMES)
+
+    def test_typed_case_registry_contract(self) -> None:
+        self._assert_registry_contract(_read_source(IVM_SOURCE), _read_source(IR_SOURCE))
+
+    def test_registry_fixture_bytes_authenticate_current_semantic_seals(self) -> None:
+        for name, byte_digest, code_digest in (
+            ("kotodama-ivm-registry-region.txt", IVM_REGION_SHA256, IVM_CODE_SHA256),
+            ("kotodama-ir-registry-region.txt", IR_REGION_SHA256, IR_CODE_SHA256),
+        ):
+            with self.subTest(name=name):
+                region = (REGISTRY_FIXTURES / name).read_text(encoding="utf-8")
+                self.assertEqual(_sha256(region), byte_digest)
+                self.assertEqual(token_hash(region), code_digest)
+
+    def test_registry_whitespace_growth_preserves_semantic_contract(self) -> None:
+        ivm_source = _read_source(IVM_SOURCE)
+        ir_source = _read_source(IR_SOURCE)
+        ivm_end = "#[test]\nfn assert_builtin_obeys_truthiness"
+        ir_end = "    #[test]\n    fn lower_get_quantity_builtin"
+        self.assertEqual(ivm_source.count(ivm_end), 1)
+        self.assertEqual(ir_source.count(ir_end), 1)
+        self._assert_registry_contract(
+            ivm_source.replace(ivm_end, "\n" * 20_000 + ivm_end, 1),
+            ir_source.replace(ir_end, "\n" * 20_000 + ir_end, 1),
+        )
+
+    def test_registry_semantic_mutation_is_rejected(self) -> None:
+        ivm_source = _read_source(IVM_SOURCE)
+        ir_source = _read_source(IR_SOURCE)
+        self.assertIn("Self::Exact(source) => source,", ivm_source)
+        changed = ivm_source.replace("Self::Exact(source) => source,", 'Self::Exact(source) => "",', 1)
+        with self.assertRaises(AssertionError):
+            self._assert_registry_contract(changed, ir_source)
 
 
 if __name__ == "__main__":

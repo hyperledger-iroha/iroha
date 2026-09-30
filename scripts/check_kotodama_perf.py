@@ -219,7 +219,7 @@ BASELINE_TIMED_BODY_SHA256: Mapping[str, str] = {
     "kotodama_runtime_phase_prepare_validate_predecode": "3b5096d7b272453fcf8b4bf902c9f7f6516dc0bdb2cdbf9fb4bf57acbb77c903",
     "kotodama_runtime_phase_argument_decode": "a6c94994ede14bd3a5163e5740a51aefef43aeb282335b02a0a721a5cca27ef5",
     "kotodama_runtime_phase_load_prepared": "fd31c6a28d828a5d854793c9b7d56f571d39f33aac88735d359957b6b5c07fef",
-    "kotodama_runtime_phase_dirty_reset": "eeac94120c46d1bfc846470f5e1d4ed3f94e2105cc5ecc07051e4ddd8311fd79",
+    "kotodama_runtime_phase_dirty_reset": "1e6472e2a84d0c08990d3e1d3a2f3e599d164c9f0df0b2f33c7049d5e6705503",
     "kotodama_runtime_phase_execute_prepared": "d7cdaf57b514b5d2012878cfec365a2ceccf0cb0364981112ce7f696f3775030",
     "kotodama_runtime_cold_add": "effde7658da204115d374e68fa2e445962920ee412b56fcb37f97a64ba3ee365",
     "kotodama_runtime_warm_add": "ef0b880de04e2d9bf0ffa528688e2721aab6791f7b776b2f943787f28f212776",

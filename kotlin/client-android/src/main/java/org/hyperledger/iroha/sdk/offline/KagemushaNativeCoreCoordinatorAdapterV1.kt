@@ -58,6 +58,39 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
             KagemushaDeviceOperationCodecV1.decodeControlCommand(operation, it, canonicalCommand)
         }
 
+    /**
+     * Admit the original signed op-1 report under the live phase-one native owner. This supplies
+     * enrollment evidence and does not create a monetary hardware wallet or bypass its readiness.
+     */
+    fun prepareInitialEnrollmentQualification(selection: KagemushaNativeEnrollmentPhasesV1.Selection,
+        device: KagemushaDeviceLifecycleBridgeV1, guard: () -> Unit): KagemushaPreEnrollmentDeviceQualificationV1 {
+        guard()
+        check(enrollmentPhases.recoverExactSelection(selection.accountI105) === selection) {
+            "The original enrollment selection is no longer live"
+        }
+        val transport = KagemushaAndroidAuthenticatedDeviceTransportV1(device)
+        val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential)
+        val nonce = beginObservation(1, command)
+        guard()
+        val response = transport.executeAndVerify(1, nonce, command, null)
+        guard()
+        val report = KagemushaPreEnrollmentDeviceQualificationV1.decodeAfterDeviceAuthentication(response,
+            transport.hardwarePolicyId(), transport.qualificationReportDigest())
+        same(report.releaseId(), selection.releaseId(), "enrollment release")
+        same(report.profile.hardwareProfileId(), selection.profileId(), "enrollment profile")
+        val fields = listOf(u32(KagemushaWireV1.WIRE_VERSION), report.releaseId(),
+            KagemushaNoritoV1.encodeHardwareProfileShape(report.profile),
+            KagemushaNoritoV1.encodeHardwareCredentialShape(report.credential), u32(0xffff))
+        guard()
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.ACCEPT_QUALIFICATION,
+            fields + listOf(report.hardwarePolicyDigest()))
+        guard()
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY,
+            listOf(u32(1), nonce, command, report.canonicalControlReply(), report.authenticator()) + fields)
+        guard()
+        return report
+    }
+
     /** Copy the original retained outgoing proof into an unqualified testnet observer input. */
     fun exportOutgoingStateProof(operationId: ByteArray): KagemushaOutgoingStateProofArchivesV1 {
         val id = operationId.copyOf()

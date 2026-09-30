@@ -13,7 +13,7 @@ during perf/profiling runs.
 
 Options:
   --mode <MODE>              permissioned, npos, or both (default: both)
-  --peers <N>                exact revision-4 committee: 4, 7, ..., 31 (default: 7)
+  --peers <N>                exact Sumeragi committee: 4, 7, ..., 31 (default: 7)
   --tps <N>                  target TPS across the whole network (default: 100)
   --duration <SEC>           load duration seconds (default: 120)
   --parallel <N>             total ping parallelism across peers (default: 140)
@@ -408,8 +408,7 @@ run_mode() {
     --peers "$PEERS"
     --seed "$seed"
     --consensus-mode "$consensus_mode"
-    --block-time-ms 1000
-    --commit-time-ms 1000
+    --block-cadence-ms 1000
     --queue-capacity "$QUEUE_CAPACITY"
     --queue-ttl-ms "$QUEUE_TTL_MS"
     --base-api-port "$base_api_port"

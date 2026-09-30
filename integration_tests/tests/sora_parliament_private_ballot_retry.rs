@@ -7,6 +7,7 @@
 use super::*;
 use iroha::data_model::isi::governance::ParliamentFailBallotNoResultV1;
 use iroha_core::governance::parliament::{ParliamentReducerEntityV1, ParliamentReducerErrorV1};
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 
 #[test]
 fn four_validator_private_ballot_deadline_retry_exhaustion_and_restore() -> Result<()> {

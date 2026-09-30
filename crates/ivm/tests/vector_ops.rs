@@ -324,7 +324,7 @@ fn test_auto_vector_helpers() {
     let a: Vec<u32> = (0..lanes as u32).collect();
     let b: Vec<u32> = vec![1; lanes];
     let plan = ivm::execution_memory::ExecutionMemoryPlan::array::<u32>(lanes).unwrap();
-    let budget = mv::allocation::AllocationBudget::new(plan.requested_bytes());
+    let budget = iroha_allocation::AllocationBudget::new(plan.requested_bytes());
     let mut lease = ivm::execution_memory::ExecutionMemoryLease::reserve(&budget, plan).unwrap();
     let mut output = ivm::zero_vector(lanes, &mut lease).unwrap();
     drop(lease);
@@ -356,7 +356,7 @@ fn funded_auto_vector_destinations_preserve_all_operations_and_final_owner_charg
     use ivm::execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan};
     let lanes = 10;
     let plan = ExecutionMemoryPlan::array::<u32>(lanes).unwrap();
-    let budget = mv::allocation::AllocationBudget::new(plan.requested_bytes());
+    let budget = iroha_allocation::AllocationBudget::new(plan.requested_bytes());
     let mut lease = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
     let mut output = ivm::zero_vector(lanes, &mut lease).unwrap();
     drop(lease);
@@ -402,7 +402,7 @@ fn funded_auto_vector_destinations_preserve_all_operations_and_final_owner_charg
 fn zero_vector_cannot_readmit_or_grow_a_parent_with_insufficient_credit() {
     use ivm::execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan};
     let required = ExecutionMemoryPlan::array::<u32>(ivm::simd_lanes()).unwrap();
-    let budget = mv::allocation::AllocationBudget::new(required.requested_bytes());
+    let budget = iroha_allocation::AllocationBudget::new(required.requested_bytes());
     let mut empty = ExecutionMemoryLease::reserve(&budget, ExecutionMemoryPlan::default()).unwrap();
     assert!(ivm::zero_vector(ivm::simd_lanes(), &mut empty).is_err());
     assert_eq!(empty.remaining_bytes(), 0);

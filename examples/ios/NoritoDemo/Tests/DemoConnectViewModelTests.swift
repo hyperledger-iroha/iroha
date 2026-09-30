@@ -1,4 +1,5 @@
 import XCTest
+import IrohaSwift
 import Darwin
 @testable import NoritoDemo
 
@@ -87,4 +88,54 @@ final class DemoConnectViewModelTests: XCTestCase {
     XCTFail("IrohaSwift framework is required for the address preview release test")
 #endif
   }
+
+  func testHistoryRejectsInvalidInputsBeforeStartingARequest() {
+    let history = TransferHistoryViewModel()
+    history.load(baseURL: "https://unit.test", accountId: "  ")
+    XCTAssertNotNil(history.errorMessage)
+    XCTAssertFalse(history.isLoading)
+    XCTAssertTrue(history.summaries.isEmpty)
+    history.clear()
+    history.load(baseURL: "http://[", accountId: "sorauﾛ1QG1ｼﾀ3vN7ﾋzﾄﾍcﾐLKDCAｲ5ｸｴjﾔﾘ2uﾄﾕmｷﾕﾙeJBJW7X2N7")
+    XCTAssertNotNil(history.errorMessage)
+    XCTAssertFalse(history.isLoading)
+    XCTAssertTrue(history.summaries.isEmpty)
+  }
+
+  func testCurrentBridgeOpenBindsExactLaunchInputs() throws {
+    let network = try NetworkId(literal: "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+    let appKey = Data(repeating: 0x31, count: 32)
+    let nonce = Data(repeating: 0x42, count: 16)
+    let sid = try ConnectCrypto.deriveSessionID(networkID: network, appPublicKey: appKey, nonce: nonce)
+    let bridge = NoritoBridgeKit()
+    let frame = try bridge.encodeControlOpenExt(
+      sid: sid, dir: 0, seq: 1, appPub: appKey, nonce: nonce,
+      appMetaJson: nil, networkId: network.bytes, permissionsJson: nil
+    )
+    let kind = try bridge.decodeControlKind(frame)
+    XCTAssertEqual(kind.sid, sid)
+    XCTAssertEqual(kind.dir, 0)
+    XCTAssertEqual(kind.seq, 1)
+    XCTAssertEqual(kind.kind, 1)
+    XCTAssertEqual(try bridge.decodeControlOpenPub(frame), appKey)
+
+    var otherNetwork = network.bytes
+    otherNetwork[0] ^= 1
+    var otherNonce = nonce
+    otherNonce[0] ^= 1
+    for (candidateNetwork, candidateNonce, direction, sequence) in [
+      (otherNetwork, nonce, UInt8(0), UInt64(1)),
+      (network.bytes, otherNonce, UInt8(0), UInt64(1)),
+      (network.bytes, Data(nonce.dropLast()), UInt8(0), UInt64(1)),
+      (network.bytes, nonce, UInt8(1), UInt64(1)),
+      (network.bytes, nonce, UInt8(0), UInt64(2)),
+    ] {
+      XCTAssertThrowsError(try bridge.encodeControlOpenExt(
+        sid: sid, dir: direction, seq: sequence, appPub: appKey,
+        nonce: candidateNonce, appMetaJson: nil, networkId: candidateNetwork,
+        permissionsJson: nil
+      ))
+    }
+  }
+
 }

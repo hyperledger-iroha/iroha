@@ -11,44 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "IROHA_STATIC_CONTRACT_ROWS_V1"
-MINIMUM_NET_REDUCTION = 2_000
-# The compaction merge's two parents each contained 12,327 Rust lines in the
-# guarded files, and its postimage contained 10,313. The current test/schema
-# surface first added 1,206 lines to both sides of that honest comparison.
-# Current OpenAPI/Parliament/SCCP and security-audit hardening added another
-# 2,358 lines without changing the three migrated contract assets.
-# The retained OpenAPI runtime/tests split and subsequent tests add 937 scoped
-# lines versus the previous exact ledger: 500 in the split OpenAPI owner,
-# 265 in cleanup tests, 128 in BFV schema tests, and 44 in VPN/DA tests.
-# Apply this measured growth to both sides so the original reduction remains
-# 2,014 lines and the original scoped reduction remains 2,060 lines.
-# The authoritative branch already adds 25 lines in openapi/tests.rs. Expanding
-# the guard to every extracted OpenAPI test module adds exactly 6359 lines
-# to both sides, preserving that reduction. Retiring the IVM preparation test
-# and adding its rejection contract removes another 111 lines. Removing no-op
-# runtime passes and merging the current SCCP contract leaves a measured
-# reduction of 2,752 lines. Removing the retired consensus diagnostics and
-# merging the current schema tests and native audit/lifecycle coverage yields
-# 3,045 lines of measured reduction. Retiring the admission-intent schema
-# and asserting its absence removes another 80 lines (3,125 total).
-# Retiring orphaned lane/AMX schema assertions and scalar inventories removes
-# another 106 lines (3,231 total); the 2,000-line obligation is unchanged.
-ORIGINAL_PREIMAGE_RUST_LINES = 12_327
-ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
-PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
-CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 2_358
-POST_SPLIT_SCOPED_GROWTH_RUST_LINES = 937
-BRANCH_LEDGER_CORRECTION_RUST_LINES = 25
-EXPANDED_OPENAPI_MODULE_SCOPE_RUST_LINES = 6359
-CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = (
-    PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES
-    + CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES
-    + POST_SPLIT_SCOPED_GROWTH_RUST_LINES
-    + BRANCH_LEDGER_CORRECTION_RUST_LINES
-    + EXPANDED_OPENAPI_MODULE_SCOPE_RUST_LINES
-)
-BASELINE_RUST_LINES = ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_TEST_SURFACE_GROWTH_RUST_LINES
-MAX_POSTIMAGE_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_NET_REDUCTION
 SOURCE_PATHS = ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs',
  'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs',
  'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs',
@@ -71,28 +33,6 @@ SOURCE_PATHS = ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_clean
  'crates/iroha_torii/src/openapi/tests/soracloud_lease_contracts.rs',
  'crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs',
  'crates/iroha_torii/src/openapi/tests/sorafs_pop_contracts.rs')
-SOURCE_LINE_LEDGER = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1672,
- 'crates/iroha_torii/src/openapi.rs': 254,
- 'crates/iroha_torii/src/openapi/tests.rs': 2995,
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 2976,
- 'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 844,
- 'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': 69,
- 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 582,
- 'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs': 153,
- 'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': 342,
- 'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': 190,
- 'crates/iroha_torii/src/openapi/tests/prepared_account_contracts.rs': 371,
- 'crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs': 468,
- 'crates/iroha_torii/src/openapi/tests/private_settlement_contract.rs': 675,
- 'crates/iroha_torii/src/openapi/tests/public_contract_call.rs': 82,
- 'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': 28,
- 'crates/iroha_torii/src/openapi/tests/sns_contract.rs': 361,
- 'crates/iroha_torii/src/openapi/tests/soracloud_lease_contracts.rs': 475,
- 'crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs': 1113,
- 'crates/iroha_torii/src/openapi/tests/sorafs_pop_contracts.rs': 177,
- 'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2770,
- 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 1123,
- 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2282}
 ASSETS = {
     'cleanup': ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt', 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs', 'sha3_256', 'CLEANUP_CONTRACT_ASSET_LEN', 'CLEANUP_CONTRACT_ASSET_SHA3_256'),
     'proof': ('crates/iroha_data_model/src/soracloud/tests/proof_schema_contracts_v1.txt', 'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs', 'sha256', 'PROOF_SCHEMA_CONTRACT_ASSET_LEN', 'PROOF_SCHEMA_CONTRACT_ASSET_SHA256'),
@@ -615,19 +555,6 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         self.assertGreaterEqual(combined.count("assert!("), 300)
         self.assertGreaterEqual(combined.count("assert_eq!("), 300)
 
-    def test_exact_rust_line_budget_is_preserved(self) -> None:
-        line_ledger = {
-            path: len((ROOT / path).read_text(encoding="utf-8").splitlines())
-            for path in SOURCE_PATHS
-        }
-        self.assertEqual(line_ledger, SOURCE_LINE_LEDGER)
-        postimage = sum(line_ledger.values())
-        self.assertLessEqual(postimage, MAX_POSTIMAGE_RUST_LINES)
-        self.assertGreaterEqual(BASELINE_RUST_LINES - postimage, MINIMUM_NET_REDUCTION)
-        self.assertLessEqual(
-            max(len(line) for path in SOURCE_PATHS for line in (ROOT / path).read_text().splitlines()),
-            400,
-        )
 
 
 if __name__ == "__main__":

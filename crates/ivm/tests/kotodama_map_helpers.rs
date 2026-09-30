@@ -1,13 +1,13 @@
 //! Focused coverage for the stable map-helper surface.
 use ivm::{
     IVM,
-    kotodama::{
-        compiler::Compiler,
-        ir::{self, Instr, Terminator},
-        parser::parse,
-        semantic::analyze,
-    },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+};
+use kotodama_lang::{
+    compiler::Compiler,
+    ir::{self, Instr, Terminator},
+    parser::parse,
+    semantic::analyze,
 };
 use std::str::FromStr;
 mod common;

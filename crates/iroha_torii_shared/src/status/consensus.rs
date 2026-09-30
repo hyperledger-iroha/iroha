@@ -2,7 +2,8 @@
 use iroha_schema::IntoSchema;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
-/// Snapshot of core consensus state exposed via `/status`.
+/// Live node-wide consensus observations exposed via `/status`.
+/// Per-instance round, leader, certificate and progress state lives at `/v1/sumeragi/status`.
 #[derive(
     Clone,
     Debug,
@@ -18,45 +19,11 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
     reason = "first-release consensus telemetry exposes independent status flags without compatibility aliases"
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
-    frame = "iroha_telemetry::metrics::SumeragiConsensusStatus"
-)]
+#[norito_schema(name = "iroha_torii_shared::status::consensus::SumeragiConsensusStatus")]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiConsensusStatus {
     /// Current runtime consensus mode tag.
     pub mode_tag: String,
-    /// Current leader index (topology position).
-    pub leader_index: u64,
-    /// `HighestQC` height.
-    pub highest_qc_height: u64,
-    /// `LockedQC` height.
-    pub locked_qc_height: u64,
-    /// `LockedQC` view.
-    pub locked_qc_view: u64,
-    /// Signatures present on the most recently committed block.
-    pub commit_signatures_present: u64,
-    /// Signatures counted toward the commit quorum.
-    pub commit_signatures_counted: u64,
-    /// Signatures contributed by set-B validators.
-    pub commit_signatures_set_b: u64,
-    /// Required commit quorum size for the active topology.
-    pub commit_signatures_required: u64,
-    /// Latest commit certificate height (best-effort).
-    pub commit_qc_height: u64,
-    /// Latest commit certificate view (best-effort).
-    pub commit_qc_view: u64,
-    /// Latest commit certificate epoch (best-effort).
-    pub commit_qc_epoch: u64,
-    /// Signatures attached to the latest commit certificate.
-    pub commit_qc_signatures_total: u64,
-    /// Validator-set size for the latest commit certificate.
-    pub commit_qc_validator_set_len: u64,
-    /// Total `BlockCreated` drops due to locked QC gate.
-    pub block_created_dropped_by_lock_total: u64,
-    /// Total `BlockCreated` drops due to hint mismatches.
-    pub block_created_hint_mismatch_total: u64,
-    /// Total `BlockCreated` drops due to proposal mismatches.
-    pub block_created_proposal_mismatch_total: u64,
     /// Current number of transactions observed in the local queue.
     pub tx_queue_depth: u64,
     /// Configured queue capacity on this peer.
@@ -75,30 +42,6 @@ pub struct SumeragiConsensusStatus {
     pub tx_queue_saturated_by_age: bool,
     /// Oldest queued transaction age in milliseconds.
     pub tx_queue_oldest_queued_age_ms: u64,
-    /// Epoch length in blocks (`NPoS` mode; zero when not applicable).
-    pub epoch_length_blocks: u64,
-    /// Commit window deadline offset from epoch start (blocks; zero when not applicable).
-    pub epoch_commit_deadline_offset: u64,
-    /// Reveal window deadline offset from epoch start (blocks; zero when not applicable).
-    pub epoch_reveal_deadline_offset: u64,
-    /// PRF epoch seed (hex) used for deterministic leader/collector selection (`NPoS` mode).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub prf_epoch_seed: Option<String>,
-    /// Height associated with the recorded PRF context.
-    pub prf_height: u64,
-    /// View associated with the recorded PRF context.
-    pub prf_view: u64,
-    /// Total view-change proofs accepted (advanced the proof chain).
-    pub view_change_proof_accepted_total: u64,
-    /// Total view-change proofs ignored as stale/outdated.
-    pub view_change_proof_stale_total: u64,
-    /// Total view-change proofs rejected as invalid.
-    pub view_change_proof_rejected_total: u64,
-    /// Total view-change suggestions emitted locally.
-    pub view_change_suggest_total: u64,
-    /// Total installed view changes (proof advanced locally).
-    pub view_change_install_total: u64,
     /// Total lanes that remain sealed awaiting governance manifests.
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed awaiting governance manifests.
@@ -112,5 +55,70 @@ mod captured_frame_identity_tests {
         crate::captured_identity_tests::assert_bidirectional::<super::SumeragiConsensusStatus>(
             "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
         );
+    }
+}
+
+#[cfg(test)]
+mod live_status_contract_tests {
+    use super::SumeragiConsensusStatus;
+    use norito::json::{self, Value};
+
+    #[test]
+    fn retired_consensus_fields_are_rejected_instead_of_silently_discarded() {
+        let current = json::to_value(&SumeragiConsensusStatus::default()).unwrap();
+        for name in [
+            "leader_index",
+            "highest_qc_height",
+            "locked_qc_height",
+            "locked_qc_view",
+            "commit_signatures_present",
+            "commit_signatures_counted",
+            "commit_signatures_set_b",
+            "commit_signatures_required",
+            "commit_qc_height",
+            "commit_qc_view",
+            "commit_qc_epoch",
+            "commit_qc_signatures_total",
+            "commit_qc_validator_set_len",
+            "block_created_dropped_by_lock_total",
+            "block_created_hint_mismatch_total",
+            "block_created_proposal_mismatch_total",
+            "epoch_length_blocks",
+            "epoch_commit_deadline_offset",
+            "epoch_reveal_deadline_offset",
+            "prf_epoch_seed",
+            "prf_height",
+            "prf_view",
+            "view_change_proof_accepted_total",
+            "view_change_proof_stale_total",
+            "view_change_proof_rejected_total",
+            "view_change_suggest_total",
+            "view_change_install_total",
+        ] {
+            let mut stale = current.clone();
+            stale
+                .as_object_mut()
+                .unwrap()
+                .insert(name.to_owned(), Value::from(0_u64));
+            assert!(
+                json::from_value::<SumeragiConsensusStatus>(stale).is_err(),
+                "accepted {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_live_observation_is_required_on_the_wire() {
+        let current = json::to_value(&SumeragiConsensusStatus::default()).unwrap();
+        let fields = current.as_object().unwrap();
+        assert_eq!(fields.len(), 12);
+        for name in fields.keys() {
+            let mut incomplete = current.clone();
+            incomplete.as_object_mut().unwrap().remove(name);
+            assert!(
+                json::from_value::<SumeragiConsensusStatus>(incomplete).is_err(),
+                "defaulted {name}"
+            );
+        }
     }
 }

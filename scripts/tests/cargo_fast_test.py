@@ -216,6 +216,10 @@ def test_node_set_checks_node_leaves_in_one_invocation(tmp_path: Path) -> None:
     assert cargo_arguments == [
         "check",
         "-p",
+        "irohad_lib",
+        "-p",
+        "iroha_cli_lib",
+        "-p",
         "irohad",
         "-p",
         "iroha_cli",
@@ -234,8 +238,12 @@ def test_node_set_appends_forwarded_cargo_arguments(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert cargo_arguments[:11] == [
+    assert cargo_arguments[:15] == [
         "check",
+        "-p",
+        "irohad_lib",
+        "-p",
+        "iroha_cli_lib",
         "-p",
         "irohad",
         "-p",
@@ -247,7 +255,7 @@ def test_node_set_appends_forwarded_cargo_arguments(tmp_path: Path) -> None:
         "--lib",
         "--bins",
     ]
-    assert cargo_arguments[11:] == ["--message-format", "short"]
+    assert cargo_arguments[15:] == ["--message-format", "short"]
 
 
 def test_cargo_replaces_wrapper_process_and_preserves_its_exit(tmp_path: Path) -> None:

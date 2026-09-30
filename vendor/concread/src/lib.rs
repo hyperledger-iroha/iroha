@@ -48,9 +48,6 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 #[macro_use]
 extern crate smallvec;
 
-/// Native physical release observations shared by storage and publication owners.
-pub mod release;
-
 pub mod cowcell;
 pub use cowcell::CowCell;
 
@@ -67,8 +64,6 @@ pub mod threadcache;
 // This is where the scary rust lives.
 #[cfg(feature = "maps")]
 pub mod internals;
-#[cfg(feature = "maps")]
-pub mod shared;
 // This is where the good rust lives.
 #[cfg(feature = "maps")]
 mod utils;

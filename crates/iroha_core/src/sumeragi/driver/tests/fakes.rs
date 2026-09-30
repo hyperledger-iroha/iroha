@@ -15,7 +15,8 @@ use std::{
 
 use iroha_sumeragi::{
     api::ExecOutcome,
-    message::{Block, Qc, SyncEntry, WireMessage},
+    availability::AvailableBody,
+    message::{Qc, SyncEntry, WireMessage},
     safety::RecordState,
     sim::driver::{block_exec, encode_tx, payload_mints},
     types::{Hash32, HeightConfig, Millis, PublicKey},
@@ -26,7 +27,7 @@ use super::super::{
     DriverHandle, FrameLimitExceeded, Worker,
     traits::{
         BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, Observer, PublicationError,
-        RecordStore,
+        RecordStore, SendOutcome,
     },
 };
 
@@ -52,8 +53,9 @@ impl FakeNet {
 }
 
 impl Net for FakeNet {
-    fn send(&self, to: &PublicKey, frame: &Frame) {
+    fn send(&self, to: &PublicKey, frame: &Frame) -> SendOutcome {
         self.sent.lock().push((to.clone(), frame.clone()));
+        SendOutcome::Admitted
     }
 }
 
@@ -164,10 +166,10 @@ impl RecordStore for FakeRecords {
     }
 }
 
-/// Block bodies by `(height, hash)`; the next writes can be made to fail.
+/// AvailableBody bodies by `(height, hash)`; the next writes can be made to fail.
 #[derive(Default)]
 pub struct FakeBodies {
-    bodies: Mutex<BTreeMap<(u64, Hash32), Block>>,
+    bodies: Mutex<BTreeMap<(u64, Hash32), AvailableBody>>,
     fail: Mutex<u32>,
 }
 
@@ -184,7 +186,7 @@ impl FakeBodies {
 }
 
 impl BodyStore for FakeBodies {
-    fn put(&self, block_hash: &Hash32, block: &Block) -> io::Result<()> {
+    fn put(&self, block_hash: &Hash32, block: &AvailableBody) -> io::Result<()> {
         let mut fail = self.fail.lock();
         if *fail > 0 {
             *fail -= 1;
@@ -192,12 +194,8 @@ impl BodyStore for FakeBodies {
         }
         self.bodies
             .lock()
-            .insert((block.header.height, *block_hash), block.clone());
+            .insert((block.header().height, *block_hash), block.clone());
         Ok(())
-    }
-
-    fn get(&self, height: u64, block_hash: &Hash32) -> Option<Block> {
-        self.bodies.lock().get(&(height, *block_hash)).cloned()
     }
 
     fn prune_through(&self, height: u64) -> io::Result<()> {
@@ -210,7 +208,7 @@ impl BodyStore for FakeBodies {
 /// the next reads to panic, and every read to take time.
 #[derive(Default)]
 pub struct FakeBlocks {
-    entries: Mutex<Vec<SyncEntry>>,
+    entries: Mutex<Vec<(AvailableBody, Qc)>>,
     fail: Mutex<u32>,
     panic_appends: Mutex<u32>,
     panic_reads: Mutex<u32>,
@@ -258,18 +256,41 @@ impl BlockStore for FakeBlocks {
         u64::try_from(self.entries.lock().len()).unwrap_or(u64::MAX)
     }
 
-    fn entry(&self, height: u64) -> Option<SyncEntry> {
+    fn entry(&self, height: u64) -> io::Result<Option<SyncEntry>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let delay = self.read_delay_ms.load(Ordering::SeqCst);
         if delay > 0 {
             std::thread::sleep(std::time::Duration::from_millis(delay));
         }
         assert!(!take(&self.panic_reads), "injected block store read panic");
-        let index = usize::try_from(height.checked_sub(1)?).ok()?;
-        self.entries.lock().get(index).cloned()
+        let Some(index) = height
+            .checked_sub(1)
+            .and_then(|height| usize::try_from(height).ok())
+        else {
+            return Ok(None);
+        };
+        Ok(self.entries.lock().get(index).map(|(body, qc)| SyncEntry {
+            manifest: iroha_sumeragi::message::PayloadManifest {
+                header: body.header().clone(),
+                availability: body.availability().clone(),
+            },
+            commit_qc: qc.clone(),
+        }))
+    }
+    fn availability_source(
+        &self,
+        height: u64,
+        block_hash: Hash32,
+    ) -> io::Result<Option<iroha_sumeragi::availability::AvailabilitySource>> {
+        Ok(self
+            .entries
+            .lock()
+            .iter()
+            .find(|(body, _)| body.header().height == height && super::hash(body) == block_hash)
+            .map(|(body, _)| body.source().clone()))
     }
 
-    fn append(&self, block: &Block, commit_qc: &Qc) -> io::Result<()> {
+    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> io::Result<()> {
         assert!(
             !take(&self.panic_appends),
             "injected block store append panic"
@@ -281,13 +302,10 @@ impl BlockStore for FakeBlocks {
         }
         let mut entries = self.entries.lock();
         let next = u64::try_from(entries.len()).unwrap_or(u64::MAX) + 1;
-        if block.header.height != next {
+        if block.header().height != next {
             return Err(io::Error::other("append out of order"));
         }
-        entries.push(SyncEntry {
-            block: block.clone(),
-            commit_qc: commit_qc.clone(),
-        });
+        entries.push((block.clone(), commit_qc.clone()));
         Ok(())
     }
 }
@@ -333,6 +351,7 @@ pub struct ExecState {
 pub struct FakeExecutor {
     /// The shared state.
     pub state: Arc<Mutex<ExecState>>,
+    pub budget: iroha_allocation::AllocationBudget,
     gate: Arc<(std::sync::Mutex<bool>, Condvar)>,
     waiting: Arc<AtomicUsize>,
 }
@@ -341,6 +360,7 @@ impl FakeExecutor {
     /// An executor whose applied state is the genesis `(0, genesis_hash, genesis_result)`.
     pub fn new(genesis_hash: Hash32, genesis_result: Hash32, config: HeightConfig) -> Self {
         Self {
+            budget: super::test_budget(),
             state: Arc::new(Mutex::new(ExecState {
                 applied: (0, genesis_hash, genesis_result),
                 cache: BTreeMap::new(),
@@ -425,7 +445,12 @@ impl FakeExecutor {
             .unwrap_or(0)
     }
 
-    fn run(state: &mut ExecState, parent: &Hash32, block: &Block, bh: &Hash32) -> ExecOutcome {
+    fn run(
+        state: &mut ExecState,
+        parent: &Hash32,
+        block: &AvailableBody,
+        bh: &Hash32,
+    ) -> ExecOutcome {
         *state.executions.entry(*bh).or_default() += 1;
         block_exec(parent, block, &state.config.epoch)
     }
@@ -452,19 +477,19 @@ impl Executor for FakeExecutor {
         Ok(())
     }
 
-    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
+    fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome> {
         self.wait_open();
         let mut state = self.state.lock();
-        let parent = if block.header.parent_hash == state.applied.1 {
+        let parent = if block.header().parent_hash == state.applied.1 {
             state.applied.2
         } else {
-            state.cache.get(&block.header.parent_hash)?.1
+            state.cache.get(&block.header().parent_hash)?.1
         };
         let outcome = Self::run(&mut state, &parent, block, block_hash);
         if let ExecOutcome::Valid(result) = outcome {
             state
                 .cache
-                .insert(*block_hash, (block.header.height, result));
+                .insert(*block_hash, (block.header().height, result));
         }
         Some(outcome)
     }
@@ -478,7 +503,7 @@ impl Executor for FakeExecutor {
 
     fn prepare(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
         let mut state = self.state.lock();
@@ -495,7 +520,7 @@ impl Executor for FakeExecutor {
             ExecOutcome::Valid(result) => {
                 state
                     .cache
-                    .insert(commit_qc.block_hash, (block.header.height, result));
+                    .insert(commit_qc.block_hash, (block.header().height, result));
                 Ok(Some(result))
             }
             _ => Ok(None),
@@ -504,7 +529,7 @@ impl Executor for FakeExecutor {
 
     fn commit(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         let mut state = self.state.lock();
@@ -512,13 +537,14 @@ impl Executor for FakeExecutor {
             state.fail_apply -= 1;
             return Err(PublicationError::Retryable("injected".to_owned()));
         }
-        let height = block.header.height;
+        let height = block.header().height;
         state.applied = (height, commit_qc.block_hash, commit_qc.result);
         state.cache.retain(|_, (h, _)| *h > height);
-        let committed: Vec<u64> = iroha_sumeragi::sim::driver::decode_txs(&block.payload)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
+        let committed: Vec<u64> =
+            iroha_sumeragi::sim::driver::decode_txs(&block.payload().as_slice())
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
         state.txs.retain(|tx| {
             iroha_sumeragi::sim::driver::decode_txs(tx)
                 .first()
@@ -535,7 +561,7 @@ impl Executor for FakeExecutor {
         _view: u64,
         max_bytes: u32,
         _exec_budget_ms: u32,
-    ) -> (Vec<u8>, bool) {
+    ) -> Result<(Option<iroha_sumeragi::availability::PayloadBytes>, bool), PublicationError> {
         self.wait_open();
         let state = self.state.lock();
         let mut payload = Vec::new();
@@ -546,7 +572,15 @@ impl Executor for FakeExecutor {
             payload.extend_from_slice(tx);
         }
         let attest = payload_mints(&payload);
-        (payload, attest)
+        if payload.is_empty() {
+            return Ok((None, attest));
+        }
+        let mut payload =
+            iroha_sumeragi::availability::PayloadBytes::from_untrusted(payload).unwrap();
+        payload
+            .admit(&self.budget)
+            .map_err(|error| PublicationError::Retryable(error.to_string()))?;
+        Ok((Some(payload), attest))
     }
 
     fn reject(&mut self, _height: u64, _view: u64, block_hash: &Hash32) {
@@ -591,5 +625,88 @@ impl Observer for RecordingObserver {
 
     fn frame_limit(&self, exceeded: &FrameLimitExceeded) {
         self.frame_limits.lock().push(*exceeded);
+    }
+}
+
+/// In-memory storage read returns untrusted exact bytes, never a custody capability.
+struct FakeRead {
+    source: iroha_sumeragi::availability::AvailabilitySource,
+    body: Option<AvailableBody>,
+    completed: bool,
+}
+impl crate::sumeragi::durable_artifact::BodyReadJob for FakeRead {
+    fn source(&self) -> &iroha_sumeragi::availability::AvailabilitySource {
+        &self.source
+    }
+    fn poll(
+        &mut self,
+        _: &iroha_allocation::AllocationBudget,
+    ) -> Result<
+        crate::sumeragi::durable_artifact::BodyReadPoll,
+        crate::sumeragi::durable_artifact::BodyReadError,
+    > {
+        use crate::sumeragi::durable_artifact::{BodyReadError, BodyReadPoll};
+        if self.completed {
+            return Err(BodyReadError::Completed);
+        }
+        self.completed = true;
+        Ok(match self.body.take() {
+            None => BodyReadPoll::Absent,
+            Some(body) => BodyReadPoll::Ready(iroha_sumeragi::availability::BodyRestoration::new(
+                self.source.clone(),
+                body.header().clone(),
+                iroha_sumeragi::availability::AvailabilityFrame::from_untrusted(
+                    body.availability().as_slice().to_vec(),
+                )
+                .unwrap(),
+                iroha_sumeragi::availability::PayloadBytes::from_untrusted(
+                    body.payload().as_slice().to_vec(),
+                )
+                .unwrap(),
+            )),
+        })
+    }
+}
+impl crate::sumeragi::durable_artifact::BodyReader for FakeBodies {
+    fn begin_read(
+        &self,
+        source: iroha_sumeragi::availability::AvailabilitySource,
+    ) -> Result<
+        Box<dyn crate::sumeragi::durable_artifact::BodyReadJob>,
+        crate::sumeragi::durable_artifact::BodyReadError,
+    > {
+        let body = self
+            .bodies
+            .lock()
+            .get(&(source.height(), source.block_hash()))
+            .cloned();
+        Ok(Box::new(FakeRead {
+            source,
+            body,
+            completed: false,
+        }))
+    }
+}
+impl crate::sumeragi::durable_artifact::BodyReader for FakeBlocks {
+    fn begin_read(
+        &self,
+        source: iroha_sumeragi::availability::AvailabilitySource,
+    ) -> Result<
+        Box<dyn crate::sumeragi::durable_artifact::BodyReadJob>,
+        crate::sumeragi::durable_artifact::BodyReadError,
+    > {
+        let body = self
+            .entries
+            .lock()
+            .iter()
+            .find(|(body, _)| {
+                body.header().height == source.height() && super::hash(body) == source.block_hash()
+            })
+            .map(|(body, _)| body.clone());
+        Ok(Box::new(FakeRead {
+            source,
+            body,
+            completed: false,
+        }))
     }
 }

@@ -3,10 +3,12 @@
 //! the chain hash (`iroha_crypto::Hash`) and `norito(·)` the canonical Norito frame.
 //!
 //! [`ExecutionResultCommitment`] binds:
-//! - the slim [`ExecutionCommitment`]: the witnessed pre- and post-state roots, the ordinary-write
-//!   root, the KAGEMUSHA top-up root and count, the exact result-bearing block wire (length and
-//!   hash; it carries every transaction result and trigger output) and the network-input and
-//!   typed-output Merkle commitments;
+//! - the [`ExecutionCommitment`]: the complete World state roots before and after the block's
+//!   execution and the Merkle commitment of the events it emitted ([`WorldStateTransition`]),
+//!   the witnessed pre- and post-state roots, the ordinary-write root, the KAGEMUSHA top-up root
+//!   and count, the exact result-bearing block wire (length and hash; it carries every
+//!   transaction result and trigger output) and the network-input and typed-output Merkle
+//!   commitments;
 //! - the exact current native epoch and complete successor schedule, retaining every ordered
 //!   BLS key, original PoP, immutable Pasta generation and epoch authorization;
 //! - the mandatory complete lane-context set proof against the exact ordinary-write root;
@@ -18,23 +20,27 @@
 //! proof (§11) or a KAGEMUSHA attestation (§3.7) can disclose it and anyone can re-hash it
 //! ([`result_of_preimage`]).
 //!
-//! Deviation (Appendix E): the post-state root covers the witnessed write set only, not the full
-//! state; divergence in unwitnessed state (roles, permissions, peers, parameters, triggers) shows
-//! up in `R` only once it changes a witnessed value or an output, and events are bound only as far
-//! as the result-bearing block carries them.
+//! The World state roots are roots of the complete World state accumulator
+//! (`crate::state::world_projection::WorldStateAccumulator`, Appendix E, E51): a homomorphic
+//! multiset hash over every canonical World entry, updated from the block's complete change set,
+//! so divergence in any World state (roles, permissions, peers, parameters, triggers, ...)
+//! changes `R` at the block that causes it. The witnessed roots stay: the ordinary-write root
+//! carries the per-key sparse-Merkle proofs of a block's writes (§11, KAGEMUSHA receipts).
 //!
 //! Every function here is pure and deterministic: the inputs are the execution witness, the
-//! executed block and the scheduled configuration; no clock, no node configuration and no
-//! hash-map iteration order enter `R`. Each sparse Merkle tree is built once per block.
+//! executed block, the World state transition and the scheduled configuration; no clock, no
+//! node configuration and no hash-map iteration order enter `R`. Each sparse Merkle tree is
+//! built once per block.
 //! The shared result codec and complete epoch graph are owned by
 //! [`iroha_data_model::sumeragi_finality`]; this module produces those canonical values from
 //! Core's execution witnesses and retained schedule without defining a parallel wire layout.
 
 use std::collections::BTreeMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{SignedBlock, consensus::ExecWitness},
+    events::EventBox,
     execution_witness::KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
     isi::kagemusha_v1::{
         KagemushaOperationKindV1, KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
@@ -59,22 +65,53 @@ use crate::exec_witness::{
     roots::{parent_state_from_witness, witness_pairs},
     smt::compute_post_state_root,
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 use iroha_data_model::sumeragi_finality::NativeLaneStateProof;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 
 pub use iroha_data_model::sumeragi_finality::{
     CommitmentError, ExecutionCommitment, ExecutionResultCommitment, MAX_RESULT_PREIMAGE_BYTES,
     RESULT_TAG, chain_hash, result_of_preimage,
 };
 
+/// The complete-World part of one block's execution (`specs/sumeragi.md` §4.1, Appendix E,
+/// E51), produced by the State that executed the block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldStateTransition {
+    /// Complete World state root the block executed on (the empty World for genesis).
+    pub parent_world_state_root: Hash,
+    /// Complete World state root after the block's execution.
+    pub world_state_root: Hash,
+    /// Merkle root and count of the events the execution emitted, in emission order.
+    pub event_commitment: Option<MerkleTreeCommitment<EventBox>>,
+}
+
+/// The event commitment of a block's emitted events, in emission order: the Merkle root over
+/// the hashes of their canonical Norito encodings and their count; `None` without events.
+///
+/// # Errors
+/// The event count exceeds `u64` or the Merkle frontier cannot represent it.
+pub fn event_commitment(
+    events: &[EventBox],
+) -> Result<Option<MerkleTreeCommitment<EventBox>>, CommitmentError> {
+    let count = u64::try_from(events.len())
+        .map_err(|_| CommitmentError::Encoding("event count exceeds u64".into()))?;
+    let Some(count) = core::num::NonZeroU64::new(count) else {
+        return Ok(None);
+    };
+    let root = MerkleTree::<EventBox>::root_from_typed_leaves(events.iter().map(HashOf::new))
+        .ok_or_else(|| CommitmentError::Encoding("event Merkle root overflow".into()))?;
+    Ok(Some(MerkleTreeCommitment::new(root, count)))
+}
+
 /// The execution commitment of `executed` (the result-bearing block, without a certificate)
-/// whose execution produced `witness`.
+/// whose execution produced `witness` and the World state `transition`.
 ///
 /// # Errors
 /// See [`CommitmentError`].
 pub fn execution_commitment(
     witness: &ExecWitness,
     executed: &SignedBlock,
+    transition: &WorldStateTransition,
 ) -> Result<ExecutionCommitment, CommitmentError> {
     if !executed.has_results() {
         return Err(CommitmentError::MissingResult);
@@ -118,6 +155,9 @@ pub fn execution_commitment(
         ordinary_writes_root,
         kagemusha_top_up_root,
         kagemusha_top_up_count,
+        parent_world_state_root: transition.parent_world_state_root,
+        world_state_root: transition.world_state_root,
+        event_commitment: transition.event_commitment,
         executed_block_wire_len,
         executed_block_wire_hash: Hash::new(&wire),
         transaction_input_commitment: executed.network_input_merkle_commitment(),
@@ -135,11 +175,12 @@ pub fn execution_commitment(
 pub(crate) fn execution_result(
     witness: &ExecWitness,
     executed: &SignedBlock,
+    transition: &WorldStateTransition,
     inputs: RetainedPayload<NativeExecutionInputs>,
     native_lanes: NativeLaneStateProof,
 ) -> Result<RetainedPayload<ExecutionResultCommitment>, CommitmentError> {
     let height = executed.header().height().get();
-    let execution = execution_commitment(witness, executed)?;
+    let execution = execution_commitment(witness, executed, transition)?;
     // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
     // extraction. The new height, slim execution commitment and fixed context proof contain
     // no owned allocations.
@@ -220,9 +261,11 @@ pub(crate) enum CertificatePart<'a> {
     Header(&'a iroha_sumeragi::message::BlockHeader),
     /// Complete context-bound exact-quorum receipt.
     Qc(&'a iroha_sumeragi::message::Qc),
+    /// Complete original signed-availability frame; never re-signed at publication.
+    Availability(&'a iroha_sumeragi::availability::AvailabilityFrame),
 }
 
-/// Count and encode a certificate header or QC into exact original-pool backing.
+/// Count and encode a certificate header, QC or original availability frame into exact original-pool backing.
 /// The supplied protocol bound is checked before any output allocation. The caller retains
 /// earlier successfully encoded parts across a later refusal; no result preimage is copied.
 ///
@@ -238,6 +281,7 @@ pub(crate) fn encode_certificate_part(
             encode_canonical_part(&HeaderFrame(value), budget, max_bytes)
         }
         CertificatePart::Qc(value) => encode_canonical_part(&QcFrame(value), budget, max_bytes),
+        CertificatePart::Availability(value) => encode_canonical_part(value, budget, max_bytes),
     }
 }
 
@@ -376,6 +420,14 @@ mod tests {
         }
     }
 
+    fn transition() -> WorldStateTransition {
+        WorldStateTransition {
+            parent_world_state_root: Hash::new(b"parent world"),
+            world_state_root: Hash::new(b"world"),
+            event_commitment: None,
+        }
+    }
+
     fn witness(reads: Vec<ExecKv>, writes: Vec<ExecKv>) -> ExecWitness {
         ExecWitness {
             reads,
@@ -430,7 +482,7 @@ mod tests {
         let native_lanes = context_proof(&witness);
         let commitment = ExecutionResultCommitment::new(
             height,
-            execution_commitment(&witness, executed)?,
+            execution_commitment(&witness, executed, &transition())?,
             schedule,
             beacon,
             native_lanes,
@@ -480,6 +532,7 @@ mod tests {
         let authorization =
             KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, u64::MAX).unwrap();
         ValidatorEpochContextV1 {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             version: 1,
             network_id,
             mode: ConsensusMode::Permissioned,
@@ -572,7 +625,9 @@ mod tests {
         let mut read = sample_witness();
         read.reads[1].value = b"4".to_vec();
         assert_ne!(r_of(&read, &block, next()), base);
-        let mut other = block.canonical_resultless_proposal();
+        let mut other = block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection");
         other
             .set_execution_outputs(
                 Vec::new(),
@@ -711,10 +766,17 @@ mod tests {
                     next.height += 1;
                 }
             }
-            assert!(
-                ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap())
-                    .is_err()
-            );
+            if matches!(mutation, 1..=3) {
+                assert!(matches!(
+                    norito::encode_canonical(&invalid),
+                    Err(norito::Error::NonCanonicalEncoding)
+                ));
+            } else {
+                assert!(
+                    ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap())
+                        .is_err()
+                );
+            }
         }
         assert_eq!(
             ExecutionResultCommitment::decode(&vec![0; MAX_RESULT_PREIMAGE_BYTES + 1]),
@@ -724,6 +786,17 @@ mod tests {
         );
         let mut wide = valid.clone();
         wide.schedule.current.committee = vec![valid.schedule.current.committee[0].clone(); 97];
+        // Keep the omitted epochs equal to their source so these probes reach decoder limits,
+        // rather than the projection's earlier contradictory-graph rejection.
+        let repeat_current = |value: &mut ExecutionResultCommitment| {
+            for slot in [&mut value.schedule.next, &mut value.schedule.after_next] {
+                let ScheduledSlot::Ready(config) = slot else {
+                    unreachable!()
+                };
+                config.epoch = value.schedule.current.clone();
+            }
+        };
+        repeat_current(&mut wide);
         let frame = norito::encode_canonical(&wide).unwrap();
         assert!(frame.len() < MAX_RESULT_PREIMAGE_BYTES);
         assert!(matches!(
@@ -734,12 +807,14 @@ mod tests {
         long.schedule.current.committee[0]
             .proof_of_possession
             .push(0);
+        repeat_current(&mut long);
         assert!(matches!(
             ExecutionResultCommitment::decode(&norito::encode_canonical(&long).unwrap()),
             Err(CommitmentError::Encoding(_))
         ));
         let mut huge = valid;
         huge.schedule.current.committee[0].proof_of_possession = vec![0; MAX_RESULT_PREIMAGE_BYTES];
+        repeat_current(&mut huge);
         assert!(matches!(
             huge.preimage(),
             Err(CommitmentError::PreimageLength(_))
@@ -823,7 +898,7 @@ mod tests {
         let witness = with_context_write(sample_witness(), graph.current.network_id, 6);
         let value = ExecutionResultCommitment::new(
             6,
-            execution_commitment(&witness, &block).unwrap(),
+            execution_commitment(&witness, &block, &transition()).unwrap(),
             graph,
             None,
             context_proof(&witness),
@@ -846,7 +921,8 @@ mod tests {
         current.committee = Vec::new();
         current.authority.validators = Vec::new();
         let witness = with_context_write(sample_witness(), current.network_id, 2);
-        let execution = execution_commitment(&witness, &executed(&KeyPair::random())).unwrap();
+        let execution =
+            execution_commitment(&witness, &executed(&KeyPair::random()), &transition()).unwrap();
         let value = ExecutionResultCommitment {
             height: 2,
             execution,
@@ -894,7 +970,7 @@ mod tests {
         assert!(matches!(
             encode_result_preimage(&owner, &budget),
             Err(ResultPreimageError::Allocation(
-                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
             ))
         ));
         assert_eq!(budget.reserved_bytes(), 1);
@@ -958,8 +1034,12 @@ mod tests {
             next_committee: RetiredAuthority,
             next_params: ChainParamsRecord,
         }
-        let execution =
-            execution_commitment(&sample_witness(), &executed(&KeyPair::random())).unwrap();
+        let execution = execution_commitment(
+            &sample_witness(),
+            &executed(&KeyPair::random()),
+            &transition(),
+        )
+        .unwrap();
         let params = ChainParamsRecord::from_core(&ChainParams::default());
         let digest = DigestOnlyResult {
             execution,
@@ -989,7 +1069,8 @@ mod tests {
     #[test]
     fn commitment_binds_the_result_bearing_wire_and_roots() {
         let block = executed(&KeyPair::random());
-        let commitment = execution_commitment(&sample_witness(), &block).expect("commitment");
+        let commitment =
+            execution_commitment(&sample_witness(), &block, &transition()).expect("commitment");
         let wire = block.encode_wire().expect("wire");
         assert_eq!(commitment.executed_block_wire_hash, Hash::new(&wire));
         assert_eq!(
@@ -1013,7 +1094,8 @@ mod tests {
         );
         // A read-only block: the ordinary-write root is the empty tree's.
         let read_only = witness(vec![kv("config", "1")], Vec::new());
-        let commitment = execution_commitment(&read_only, &block).expect("commitment");
+        let commitment =
+            execution_commitment(&read_only, &block, &transition()).expect("commitment");
         assert_eq!(
             commitment.ordinary_writes_root,
             compute_post_state_root(&[], &[])
@@ -1024,9 +1106,11 @@ mod tests {
     #[test]
     fn unexecuted_or_certified_blocks_are_refused() {
         let block = executed(&KeyPair::random());
-        let proposal = block.canonical_resultless_proposal();
+        let proposal = block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection");
         assert_eq!(
-            execution_commitment(&sample_witness(), &proposal),
+            execution_commitment(&sample_witness(), &proposal, &transition()),
             Err(CommitmentError::MissingResult)
         );
         let certified = block.with_commit_certificate(Some(
@@ -1034,10 +1118,11 @@ mod tests {
                 vec![1],
                 vec![2],
                 vec![3],
+                vec![4],
             ),
         ));
         assert_eq!(
-            execution_commitment(&sample_witness(), &certified),
+            execution_commitment(&sample_witness(), &certified, &transition()),
             Err(CommitmentError::CertifiedBlock)
         );
     }
@@ -1055,12 +1140,12 @@ mod tests {
             vec![receipt_write.clone(), receipt_write.clone()],
         );
         assert!(matches!(
-            execution_commitment(&duplicate, &block),
+            execution_commitment(&duplicate, &block, &transition()),
             Err(CommitmentError::KagemushaTopUps(_))
         ));
         let malformed = witness(Vec::new(), vec![receipt_write]);
         assert!(matches!(
-            execution_commitment(&malformed, &block),
+            execution_commitment(&malformed, &block, &transition()),
             Err(CommitmentError::KagemushaTopUps(_))
         ));
     }
@@ -1084,6 +1169,7 @@ mod tests {
             parent_hash: Hash32([2; 32]),
             parent_result: Hash32([3; 32]),
             payload_hash: Hash32([4; 32]),
+            availability_digest: Hash32([10; 32]),
             payload_len: 0,
             proposer: 2,
             skipped_leaders: Vec::new(),
@@ -1157,5 +1243,64 @@ mod tests {
         let mut tagged = RESULT_TAG.to_vec();
         tagged.extend_from_slice(b"p");
         assert_eq!(result_of_preimage(b"p"), chain_hash(&tagged));
+    }
+
+    #[test]
+    fn event_commitment_is_the_ordered_merkle_root_and_count() {
+        use iroha_data_model::events::time::{TimeEvent, TimeInterval};
+        let event = |since_ms: u64| {
+            EventBox::Time(TimeEvent {
+                interval: TimeInterval::new(
+                    core::time::Duration::from_millis(since_ms),
+                    core::time::Duration::from_millis(1),
+                ),
+            })
+        };
+        assert_eq!(event_commitment(&[]).unwrap(), None);
+        let events = [event(1), event(2), event(3)];
+        let commitment = event_commitment(&events).unwrap().unwrap();
+        assert_eq!(commitment.leaf_count().get(), 3);
+        let tree: MerkleTree<EventBox> = events.iter().map(HashOf::new).collect();
+        assert_eq!(Some(*commitment.root()), tree.root());
+        let reordered = [event(2), event(1), event(3)];
+        assert_ne!(
+            event_commitment(&reordered).unwrap(),
+            Some(commitment),
+            "emission order is bound"
+        );
+        assert_ne!(
+            event_commitment(&events[..2]).unwrap(),
+            Some(commitment),
+            "every event is bound"
+        );
+    }
+
+    #[test]
+    fn execution_commitment_binds_the_complete_world_transition() {
+        let block = executed(&KeyPair::random());
+        let witness = sample_witness();
+        let base = transition();
+        let bound = execution_commitment(&witness, &block, &base).unwrap();
+        assert_eq!(bound.parent_world_state_root, base.parent_world_state_root);
+        assert_eq!(bound.world_state_root, base.world_state_root);
+        assert_eq!(bound.event_commitment, None);
+        for changed in [
+            WorldStateTransition {
+                parent_world_state_root: Hash::new(b"other parent world"),
+                ..base
+            },
+            WorldStateTransition {
+                world_state_root: Hash::new(b"other world"),
+                ..base
+            },
+        ] {
+            let other = execution_commitment(&witness, &block, &changed).unwrap();
+            assert_ne!(other, bound);
+            assert_eq!(
+                (other.parent_state_root, other.post_state_root),
+                (bound.parent_state_root, bound.post_state_root),
+                "the witnessed roots do not see the World outside the witness"
+            );
+        }
     }
 }

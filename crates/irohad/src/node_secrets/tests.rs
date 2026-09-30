@@ -261,7 +261,7 @@ fn mint_roster(network_id: NetworkId) -> KagemushaMintFinalityAuthorityGeneratio
             .into_iter()
             .enumerate()
             .map(|(index, validator)| {
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0x70 + u8::try_from(index).expect("four validators"); 32],
                     0,
                     validator,

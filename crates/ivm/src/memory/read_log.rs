@@ -6,7 +6,7 @@
 
 use std::{fmt, ops::Deref};
 
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 use super::AccessRange;
 use crate::{

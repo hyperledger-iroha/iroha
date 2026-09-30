@@ -8,6 +8,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { buildDistribution } from "./build-dist.mjs";
+
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const SDK_DIRECTORY = path.resolve(SCRIPT_DIRECTORY, "..");
 const TEST_DIRECTORY = path.join(SDK_DIRECTORY, "test");
@@ -87,6 +89,11 @@ async function run(profile) {
   const files = selectedTests(profile);
   if (files.length === 0) {
     throw new Error(`JavaScript test profile ${profile} selected no tests`);
+  }
+  if (profile === "unit") {
+    // The unit corpus exercises shipped browser exports as well as source.
+    // Publish the current source before readers acquire the distribution lock.
+    await buildDistribution();
   }
 
   const state = { unsatisfied: [] };

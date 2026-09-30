@@ -61,6 +61,8 @@ mod sorafs_stream_token_runtime_signer;
 mod soranet_privacy_ingest_hard_cut;
 #[path = "sumeragi_core_config.rs"]
 mod sumeragi_core_config;
+#[path = "transaction_gossip_config.rs"]
+mod transaction_gossip_config;
 #[path = "transaction_ingress_limits.rs"]
 mod transaction_ingress_limits;
 #[path = "trusted_peers_pop_validation.rs"]

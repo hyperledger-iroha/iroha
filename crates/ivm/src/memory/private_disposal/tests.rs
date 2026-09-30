@@ -10,7 +10,7 @@ use std::{
 
 use super::super::{Memory, MemoryImage};
 use crate::execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan};
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 std::thread_local! {
     static CAPTURE_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

@@ -209,19 +209,19 @@ fn capture_query_identity_frames_for_first_release_migration() {
 }
 
 #[test]
-fn complete_query_frames_match_pre_declaration_fixtures() {
+fn complete_query_frames_match_current_canonical_fixtures() {
     use sha2::{Digest as _, Sha256};
 
     #[cfg(not(feature = "ids_projection"))]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_full_identity_frames.json"),
-        "42ad4a32128727fdbddc7cabff5a1c39d3237a08667d2c4b2fa18a7eb7baf2c2",
+        "66a36a6d0a10c05917ab9782817784926d8dc1d96dfa39ac31a4973b9edb47f9",
         23,
     );
     #[cfg(feature = "ids_projection")]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_ids_identity_frames.json"),
-        "a89b323adcd15fd420e32751c1ecc43e3b4da40eda4ab55b2e7b5578e2ff6a13",
+        "de644c2f23dd85776b6fc82ff5652fe219f709a827449d6f1d95db17ea8b5a73",
         28,
     );
     assert_eq!(hex::encode(Sha256::digest(source.as_bytes())), digest);

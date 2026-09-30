@@ -16,6 +16,7 @@
 /// Explicit stationary scheduling context for protocol-unit fixtures.
 /// Rotation harnesses replace bounds and identity from their declared schedule.
 pub const TEST_EPOCH: crate::types::EpochConfig = crate::types::EpochConfig {
+    da_layout: crate::availability::recommended_data_availability_layout(),
     id: crate::types::EpochId {
         epoch: 0,
         context: crate::types::Hash32([0xE0; 32]),
@@ -164,8 +165,12 @@ const K: [u32; 64] = [
 ];
 
 /// SHA-256 (FIPS 180-4), the fake scheme's `H`.
-#[allow(clippy::many_single_char_names)] // FIPS 180-4 names
 pub fn sha256(data: &[u8]) -> [u8; 32] {
+    sha256_chunks(&[data])
+}
+
+/// Hash test inputs without allocating a concatenated message or padding buffer.
+fn sha256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
     let mut state: [u32; 8] = [
         0x6a09_e667,
         0xbb67_ae85,
@@ -176,58 +181,76 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         0x1f83_d9ab,
         0x5be0_cd19,
     ];
-    let bit_len = u64::try_from(data.len())
-        .unwrap_or(u64::MAX)
-        .wrapping_mul(8);
-    let mut message = data.to_vec();
-    message.push(0x80);
-    while message.len() % 64 != 56 {
-        message.push(0);
-    }
-    message.extend_from_slice(&bit_len.to_be_bytes());
-    for block in message.chunks_exact(64) {
-        let mut w = [0u32; 64];
-        for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
-        for (k, word) in K.iter().zip(w.iter()) {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ (!e & g);
-            let t1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(*k)
-                .wrapping_add(*word);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
-            *slot = slot.wrapping_add(value);
+    let mut block = [0_u8; 64];
+    let mut filled = 0;
+    let mut bit_len = 0_u64;
+    for chunk in chunks {
+        bit_len = bit_len.wrapping_add((chunk.len() as u64).wrapping_mul(8));
+        let mut rest = *chunk;
+        while !rest.is_empty() {
+            let take = (64 - filled).min(rest.len());
+            block[filled..filled + take].copy_from_slice(&rest[..take]);
+            filled += take;
+            rest = &rest[take..];
+            if filled == 64 {
+                sha256_compress(&mut state, &block);
+                filled = 0;
+            }
         }
     }
-    let mut out = [0u8; 32];
+    block[filled] = 0x80;
+    block[filled + 1..].fill(0);
+    if filled >= 56 {
+        sha256_compress(&mut state, &block);
+        block.fill(0);
+    }
+    block[56..].copy_from_slice(&bit_len.to_be_bytes());
+    sha256_compress(&mut state, &block);
+    let mut out = [0_u8; 32];
     for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
         chunk.copy_from_slice(&word.to_be_bytes());
     }
     out
+}
+
+#[allow(clippy::many_single_char_names)] // FIPS 180-4 names
+fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
+    let mut w = [0u32; 64];
+    for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
+        *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    }
+    for i in 16..64 {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+    for (k, word) in K.iter().zip(w.iter()) {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = h
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(*k)
+            .wrapping_add(*word);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        h = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+        *slot = slot.wrapping_add(value);
+    }
 }
 
 const TAG_FAKE_SIG: &[u8] = b"sumeragi/fake-sig";
@@ -463,8 +486,8 @@ impl FakeCrypto {
 }
 
 impl Crypto for FakeCrypto {
-    fn hash(&self, bytes: &[u8]) -> Hash32 {
-        Hash32(sha256(bytes))
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32 {
+        Hash32(sha256_chunks(chunks))
     }
 
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool {
@@ -914,7 +937,6 @@ impl FakeValidators {
         header: BlockHeader,
         justify: Option<TimeoutCert>,
         parent_qc: Option<Qc>,
-        payload: Option<Vec<u8>>,
     ) -> Proposal {
         let bh = preimage::block_hash(&self.crypto, &header);
         let ad = preimage::att_digest(&self.crypto, justify.as_ref(), parent_qc.as_ref());
@@ -933,7 +955,6 @@ impl FakeValidators {
             header,
             justify,
             parent_qc,
-            payload,
             sig: self.signer(leader).sign(&msg),
         }
     }
@@ -975,6 +996,23 @@ mod tests {
         // Block-boundary lengths.
         for len in [55usize, 56, 63, 64, 65, 119, 120] {
             assert_eq!(sha256(&vec![0x61; len]).len(), 32);
+        }
+    }
+
+    #[test]
+    fn chunked_hash_preserves_every_split_and_empty_chunk() {
+        let crypto = FakeCrypto::new();
+        for len in [0, 1, 15, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 257] {
+            let bytes: Vec<_> = (0..len).map(|i| (i * 37) as u8).collect();
+            let expected = crypto.hash(&bytes);
+            for split in 0..=len {
+                assert_eq!(
+                    crypto.hash_chunks(&[&[], &bytes[..split], &[], &bytes[split..], &[]]),
+                    expected
+                );
+            }
+            let singles: Vec<_> = bytes.chunks(1).collect();
+            assert_eq!(crypto.hash_chunks(&singles), expected);
         }
     }
 
@@ -1092,4 +1130,23 @@ mod tests {
         };
         assert!(!log.tc_provenance_ok(&v.committee, &bad_index));
     }
+}
+
+/// Construct fixture custody through the real signed RS16 author worker.
+/// Invalid carrier tests must mutate the untrusted wire record, never this opaque output.
+pub fn author_body(
+    header: crate::message::BlockHeader,
+    payload: &[u8],
+    config: &crate::types::HeightConfig,
+    budget: &iroha_allocation::AllocationBudget,
+    crypto: &dyn crate::crypto::Crypto,
+    signer: &dyn crate::crypto::Signer,
+) -> crate::availability::AvailableBody {
+    let mut bytes = crate::availability::PayloadBytes::from_untrusted(payload.to_vec()).unwrap();
+    bytes.admit(budget).unwrap();
+    let instance = header.instance;
+    crate::availability::PayloadAuthoring::new(header, bytes)
+        .complete(instance, config, budget, crypto, signer)
+        .unwrap_or_else(|(_, error)| panic!("fixture authoring failed: {error:?}"))
+        .body
 }

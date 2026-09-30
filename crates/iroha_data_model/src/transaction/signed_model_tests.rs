@@ -967,14 +967,14 @@ fn assert_canonical_privacy_intent_kat(
     );
     assert_eq!(
         normalized_bytes.len(),
-        50_264,
+        50_259,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
     // Final V1 includes the eight-byte wire marker and 48-byte catalog
     // commitment, each with its canonical field-length prefix.
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "99c38462e3d9dd3e1284cc59a618a42ee507dc1417b545c258d0b2997f04c5ca",
+        "52756936c8e625cec56483d94eda82a3a9f5e8749922239622d78b37ab9009bc",
         "canonical privacy transaction-intent V1 digest"
     );
 }
@@ -1278,7 +1278,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         .expect("derive Vega draft intent");
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "cc0150859ff3efb3abc0c6c9491a486672bae9b353c61ebc8db80657acc20915",
+        "3d3928fdee164c3e9efc55c9a90bdd491380b62c94723b076cf95ddc81bb232b",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
     let mut changed_hdev = payload.clone();
@@ -2741,6 +2741,25 @@ fn native_transaction_payload_has_nine_fields_and_rejects_retired_admission_slot
         assert!(
             TransactionPayload::decode_all(&mut old_wire.as_slice()).is_err(),
             "retired admission slot must never be decoded as the native layout"
+        );
+    }
+}
+
+#[test]
+#[ignore = "explicit canonical transaction-intent KAT capture after an intentional wire change"]
+fn capture_current_privacy_transaction_intent_kats() {
+    for (name, payload) in [
+        ("privacy", finalized_privacy_payload()),
+        ("vega", draft_vega_privacy_payload()),
+    ] {
+        let projection = payload
+            .privacy_transaction_intent_projection_bytes_v1()
+            .unwrap();
+        let digest = payload.privacy_transaction_intent_digest_v1().unwrap();
+        println!(
+            "PRIVACY_INTENT_KAT={name}\t{}\t{}",
+            projection.len(),
+            hex::encode(digest.as_bytes())
         );
     }
 }

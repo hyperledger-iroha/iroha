@@ -50,7 +50,7 @@ Data Spaces Model
 - Governance: DS membership and validator rotation defined by the manifest’s governance section (on-chain proposals, multisig, or external governance anchored by nexus transactions and attestations).
 
 Dataspace-aware gossip
-- Transaction gossip batches now carry a plane tag (public vs restricted) derived from the lane catalog; restricted batches are unicast to the online peers in the current commit topology (respecting `transaction_gossip_restricted_target_cap`) while public batches use `transaction_gossip_public_target_cap` (set `null` for broadcast). Target selection reshuffles on the per-plane cadence set by `transaction_gossip_public_target_reshuffle_ms` and `transaction_gossip_restricted_target_reshuffle_ms` (default: `transaction_gossip_period_ms`). When no commit-topology peers are online, operators can choose to either refuse or forward restricted payloads onto the public overlay via `transaction_gossip_restricted_public_payload` (default `refuse`); telemetry surfaces fallback attempts, forward/drop counts, and the configured policy alongside per-dataspace target selections.
+- Transaction gossip batches carry a plane tag (public or restricted) derived from the lane catalog. Each restricted batch contains one exact lane/dataspace route. Recipients come from that route’s current committed native incarnation and live participant-role keys with matching pinned proofs of possession. Restricted gossip receivers enforce the same membership before materializing transactions; Torii ingress remains a separate admission boundary. Restricted batches target only connected authorized members, respecting `transaction_gossip_restricted_target_cap`; missing authority or unavailable recipients defer delivery without using the public overlay. Public batches use `transaction_gossip_public_target_cap` (set `null` for broadcast). Target selection reshuffles on the per-plane cadence set by `transaction_gossip_public_target_reshuffle_ms` and `transaction_gossip_restricted_target_reshuffle_ms` (default: `transaction_gossip_period_ms`). Telemetry reports per-dataspace recipient selections, outcomes, and drop reasons.
 - Unknown dataspaces are re-queued when `transaction_gossip_drop_unknown_dataspace` is enabled; otherwise they fall back to restricted targeting to avoid leaks.
 - Receive-side validation drops entries whose lanes/dataspaces disagree with the local catalog, whose plane tag does not match the derived dataspace visibility, or whose advertised route does not match the locally re-derived routing decision.
 
@@ -162,25 +162,18 @@ Reference `specs/torii/portfolio_api.md` for complete request/response
 schemas and `specs/space_directory.md` for the source-adjacent operator
 playbook.
 
-Recent SDK/AMX updates
-- **NX-11 (cross-lane relay verification):** SDK helpers now validate the lane relay
-  envelopes exposed by `/v1/sumeragi/status`. The Rust client ships `iroha::nexus`
-  helpers for building/verifying relay proofs and rejecting duplicate `(lane_id,
-  dataspace_id, height)` tuples, the Python binding exposes
-  `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, and the JS SDK surfaces
-  `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` so operators can gate cross-lane
-  transfer proofs with consistent hashes before forwarding them downstream.【crates/iroha/src/nexus.rs:1】【python/iroha_python/iroha_python_rs/src/lib.rs:666】【crates/iroha_js_host/src/lib.rs:640】【javascript/iroha_js/src/nexus.js:1】
-- **NX-17 (AMX budget guardrails):** `ivm::analysis::enforce_amx_budget` estimates
-  per-dataspace and group execution cost using the static analysis report and enforces
-  the 30 ms / 140 ms budgets captured here. The helper surfaces clear violations for
-  per-DS and group budgets and is covered by unit tests, making the AMX slot budget
-  deterministic for Nexus schedulers and SDK tooling.【crates/ivm/src/analysis.rs:142】【crates/ivm/src/analysis.rs:241】
+AMX budget guardrails (NX-17)
+- `ivm::analysis::enforce_amx_budget` estimates per-dataspace and group execution
+  cost from the static analysis report. At AXT commit the host enforces
+  `pipeline.amx_per_dataspace_budget_ms` (default 30 ms) and
+  `pipeline.amx_group_budget_ms` (default 140 ms); a violation rejects the
+  transaction with `AMX_TIMEOUT`.【crates/ivm/src/analysis.rs:795】
 
 High‑Level Architecture
 1) Global Composition Layer (Nexus Chain)
 - Maintains a single, canonical ordering of 1‑second Nexus Blocks that finalize atomic transactions spanning one or more Data Spaces (DS). Every committed transaction updates the unified global world state (vector of per‑DS roots).
 - Contains minimal metadata plus aggregated proofs/QCs to ensure composability, finality, and fraud detection (DSIDs touched, per‑DS state roots before/after, DA commitments, per‑DS validity proofs, and the DS quorum certificate using ML‑DSA‑87). No private data is included.
-- Consensus: Single global, pipelined BFT committee of size 22 (3f+1 with f=7), selected from a pool of up to ~200k potential validators by an epochal stake mechanism seeded from the finalized global threshold-BLS beacon. Consensus VRF commit/reveal is retired. The nexus committee sequences transactions and finalizes the block within 1s.
+- Consensus: the global Sumeragi instance (`sumeragi.md`). Each committee is exactly `3f + 1` (4 to 31 validators) from governed NPoS elections, with epoch randomness from the finalized global threshold-BLS beacon.
 
 2) Data Space Layer (Public/Private)
 - Executes per‑DS fragments of global transactions, updates DS‑local WSV, and produces per‑block validity artifacts (aggregated per‑DS proofs and DA commitments) that roll up into the 1‑second Nexus Block.
@@ -188,15 +181,12 @@ High‑Level Architecture
 - Public DS export full data bodies (via DA) and PQ validity proofs.
 
 3) Atomic Cross‑Data‑Space Transactions (AMX)
-- Model: Each user transaction may touch multiple DS (e.g., domain DS and one or more asset DS). It commits atomically in a single Nexus Block or aborts; no partial effects.
-- Prepare‑Commit within 1s: For each candidate transaction, touched DS execute in parallel against the same snapshot (start‑of‑slot DS roots) and produce per‑DS PQ validity proofs (FASTPQ‑ISI) and DA commitments. The nexus committee commits the transaction only if all required DS proofs verify and the DA certificates arrive (≤300 ms target); otherwise the transaction is re‑scheduled for the next slot.
-- Consistency: Read‑write sets are declared; conflict detection occurs at commit against the start‑of‑slot roots. Lock‑free optimistic execution per DS avoids global stalls; atomicity is enforced by the nexus commit rule (all‑or‑nothing across DS).
-- Privacy: Private DS export only proofs/commitments tied to pre/post DS roots. No raw private data leaves the DS.
+- Transactions on different lanes of one dataspace need no cross-lane protocol: the global block that merges the lanes fixes their order and atomicity (`sumeragi_lanes.md`).
+- Dataspaces with separate state keep DS-local finality; AMX across them is a two-phase commit through the global chain (Begin, Prepare/escrow, relay, Decision by deadline, Settle; `sumeragi.md` §11, goal S6).
+- Privacy: private DS export only proofs/commitments; no raw private data leaves the DS.
 
-This section describes transparent Native AMX/AXT. Confidential CBDC-style
-settlement uses the separate governed, default-off
-`AtomicPrivateSettlementV1` path specified in `private_settlement.md`; it does
-not extend or reinterpret Native AMX DvP/PvP.
+Confidential CBDC-style settlement uses the separate governed, default-off
+`AtomicPrivateSettlementV1` path specified in `private_settlement.md`.
 
 4) Data Availability (DA) with Erasure Coding
 - Kura stores block bodies and WSV snapshots as erasure-coded blobs. Public blobs are widely sharded; private blobs are stored only within private‑DS validators, with encrypted chunks.
@@ -212,8 +202,7 @@ Block and Commit Structure
   - Function: finalizes all atomic transactions whose required DS artifacts verify; updates the global world state vector of DS roots in one step.
 
 Consensus and Scheduling
-- Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected by stake from ~200k candidates using the finalized global threshold-BLS beacon as the canonical seed; the retired consensus VRF is not a fallback. Rotation maintains decentralization and censorship resistance.
-- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Every lane committee is exactly `3f+1` using the dataspace `fault_tolerance` setting (`f >= 1`), never the complete live validator pool. The exact lane/dataspace route must be active at the authority height, and the canonical manifest or stake pool must contain at least `3f+1` distinct live peers. An exact-size pool is canonically ordered directly; only an oversized pool requires a consensus-stable epoch seed bound with `(dataspace_id, lane_id)` to narrow it to `3f+1` before canonical peer ordering. Route mismatch, malformed authority, missing required sampling entropy, and undersized pools fail closed. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
+- Consensus: one Sumeragi instance orders the global chain (`sumeragi.md`). Each lane is a further Sumeragi instance whose committee is pinned at creation; the global chain merges its certified blocks (`sumeragi_lanes.md`). Dataspaces with separate state use the two-phase commit of `sumeragi.md` §11.
 - Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
 - Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
 
@@ -327,20 +316,13 @@ System‑Level Improvements and Considerations
 - DS attestation (PQ): Default DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class). This is post‑quantum and larger than EC signatures but acceptable at one QC per slot. DS may explicitly opt for ML‑DSA‑65/44 (smaller) or EC signatures if declared in the DS Manifest; public DS are strongly encouraged to keep ML‑DSA‑87.
 - DA attesters: For public DS, use VRF‑sampled regional attesters that issue DA certificates. The nexus committee validates certificates instead of raw shard sampling; private DS keep DA attestations internal.
 - Recursion and epoch proofs: Optionally aggregate multiple micro‑batches within a DS into one recursive proof per slot/epoch to keep proof sizes and verify time steady under high load.
-- Lane scaling (if needed): If a single global committee becomes a bottleneck, introduce K parallel sequencing lanes with a deterministic merge. This preserves a single global order while scaling horizontally.
+- Lane scaling: lanes are Sumeragi instances opened and closed by deterministic autoscale in the global chain (`sumeragi_lanes.md` §6).
 - Deterministic acceleration: Provide SIMD/CUDA feature‑gated kernels for hashing/FFT with a bit‑exact CPU fallback to preserve cross‑hardware determinism.
-- Lane activation thresholds (proposal): Enable 2–4 lanes if either (a) p95 finality exceeds 1.2 s for >3 consecutive minutes, or (b) per‑block occupancy exceeds 85% for >5 minutes, or (c) incoming tx rate would require >1.2× block capacity at sustained levels. Lanes deterministically bucket transactions by DSID hash and merge in the nexus block.
 
 Fees and Economics (Initial Defaults)
 - Gas unit: per‑DS gas token with metered compute/IO; fees are paid in the DS’s native gas asset. Conversion across DS is an application concern.
 - Inclusion priority: round‑robin across DS with per‑DS quotas to preserve fairness and 1s SLOs; within a DS, fee bidding can break ties.
 - Future: optional global fee market or MEV‑minimizing policies can be explored without changing atomicity or PQ proof design.
-
-Cross‑Data‑Space Workflow (Native AMX Example)
-1) A user submits an AMX transaction touching public DS P and private DS S: move asset X from S to beneficiary B whose account is in P.
-2) Within the slot, P and S each execute their fragment against the slot snapshot. S verifies authorization and availability, updates its internal state, and produces a PQ validity proof and DA commitment (no private data leaked). P prepares the corresponding state update (e.g., mint/burn/locking in P according to policy) and its proof.
-3) The nexus committee verifies both DS proofs and DA certificates; if both verify within the slot, the transaction is committed atomically in the 1s Nexus Block, updating both DS roots in the global world state vector.
-4) If any proof or DA certificate is missing/invalid, the transaction aborts (no effects), and the client may resubmit for the next slot. No private data leaves S at any step.
 
 - Security Considerations
 - Deterministic Execution: IVM syscalls remain deterministic; cross‑DS outcomes are driven by AMX commit and finality, not wall‑clock or network timing.
@@ -364,14 +346,16 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Consensus lifecycle transaction:** add, replace, or retire manual lanes by
+- **Consensus lifecycle transaction:** add lanes to the physical lane catalog by
   submitting a signed transaction containing `SetParameter` with the custom
   parameter id `nexus_lane_lifecycle_v1`. Construct the versioned payload with
   `LaneLifecycleParameterV1::new(&current_catalog, &active_incarnations, plan)`;
   it commits to the exact catalog and active lane incarnations reviewed by the
-  signer and is rejected if topology changed or an identically configured lane
-  was replaced before execution. The transaction authority must hold
-  `CanSetParameters`.
+  signer and is rejected if topology changed before execution. The transaction
+  authority must hold `CanSetParameters`. The physical catalog only grows:
+  plans that retire a lane and configuration swaps that drop one are rejected,
+  because a lane's storage and history outlive its closure. Opening and closing
+  consensus lanes is native lane state (`sumeragi_lanes.md` §2).
   Lifecycle effects publish only with the committed block, replay identically
   on every peer, reconcile lane storage before state publication, and refresh
   queue routing after publication. A block accepts at most one lifecycle
@@ -384,9 +368,8 @@ Configuration and Determinism
   `catalog_hash`, plus the exact active lane-incarnation entries
   and their `incarnation_root`. Clients validate both commitments before signing,
   so a delayed request cannot replay after a lane is retired and recreated with
-  identical metadata. The Rust client exposes `get_lane_lifecycle_status` and
-  `submit_lane_lifecycle_blocking`; Python and Mochi follow the same fetch-once,
-  sign, submit, and wait sequence. They intentionally surface stale concurrent
+  identical metadata. The Rust client exposes `get_lane_lifecycle_status`;
+  Python and Mochi follow the same fetch-once, sign, submit, and wait sequence. They intentionally surface stale concurrent
   updates instead of silently refetching and signing a topology the operator did
   not review.
 - **Behaviour:** Normal transaction validation rejects malformed or unsupported
@@ -395,14 +378,12 @@ Configuration and Determinism
   without `CanSetParameters`. A rejected transaction leaves both the block
   overlay and committed topology unchanged.
 - **Safety:** Commit revalidates the signed plan against committed state under
-  the lifecycle lock before publishing storage or topology. Retirement and
-  replacement fail closed while a lane has unmerged relay progress or an
-  unapplied certified lane block.
+  the lifecycle lock before publishing storage or topology.
 - **Propagation:** Queue routing, per-lane limits, and manifests are rebuilt
-  from the committed catalog. Consensus, DA, and RBC workers consume the same
+  from the committed catalog. Consensus and DA workers consume the same
   refreshed state snapshot, while snapshots and startup replay restore the
   effective catalog and lane storage geometry after restart.
-- **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
+- **Storage:** Kura and tiered WSV geometry are provisioned for added lanes, and DA shard cursor mappings are synced and persisted.
 
 Implementation Path
 1) Introduce data‑space‑qualified IDs and Nexus block/global state composition in the data model.
@@ -415,7 +396,6 @@ Testing Strategy
 - Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
 - IVM tests to pin ABI v1 syscall list/ABI hash/pointer‑type goldens.
 - Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
-- Reproducible localnet proof workflow: `scripts/run_nexus_cross_dataspace_atomic_swap.sh` and `specs/nexus_cross_dataspace_localnet.md` run and explain the `integration_tests/tests/nexus/cross_dataspace_localnet.rs` all-or-nothing ds1↔ds2 swap/rollback scenario.
 - Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
 
 ### NX-18 Telemetry & Runbook Assets
@@ -423,7 +403,7 @@ Testing Strategy
 - **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
 - **CI gate:** `scripts/telemetry/check_slot_duration.py` parses Prometheus snapshots, prints the p50/p95/p99 slot latency, and enforces the NX‑18 thresholds (p95 ≤ 1000 ms, p99 ≤ 1100 ms). The companion harness `scripts/telemetry/nx18_acceptance.py` gates DA quorum, oracle staleness/TWAP/haircuts, settlement buffers, and slot quantiles in one pass (`--json-out` persists evidence), and both run inside `ci/check_nexus_lane_smoke.sh` for RCs.
 - **Evidence bundler:** `scripts/telemetry/bundle_slot_artifacts.py` copies the metrics snapshot + JSON summary into `artifacts/nx18/` and emits `slot_bundle_manifest.json` with SHA-256 digests, ensuring every RC uploads the exact artefacts that triggered the NX‑18 gate.
-- **Release automation:** `scripts/run_release_pipeline.py` now invokes `ci/check_nexus_lane_smoke.sh` (skip with `--skip-nexus-lane-smoke`) and `ci/check_nexus_cross_dataspace_localnet.sh` (skip with `--skip-nexus-cross-dataspace-proof`), then copies `artifacts/nx18/` into the release output so NX‑18 evidence and cross-dataspace regression proofing ride alongside the bundle/image artefacts without a manual step.
+- **Release automation:** `scripts/run_release_pipeline.py` invokes `ci/check_nexus_lane_smoke.sh` (skip with `--skip-nexus-lane-smoke`) and copies `artifacts/nx18/` into the release output so NX‑18 evidence rides alongside the bundle/image artefacts without a manual step.
 - **Runbook:** `specs/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
 - **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift) and `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
 

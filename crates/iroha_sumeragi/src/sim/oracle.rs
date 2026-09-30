@@ -13,21 +13,24 @@ use super::{
     world::{Inst, World},
 };
 use crate::{
-    api::{Action, ExecOutcome, LocalFault},
+    api::{Action, CoreStatus, ExecOutcome, LocalFault, LocalParams},
+    availability::AvailableBody,
     crypto::{Crypto, Signer, verify_attestations, verify_vote_attestation},
-    message::{Block, BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
-    pacemaker::{PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, view_timeout},
+    message::{BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
+    pacemaker::{
+        PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, propose_allowance, view_timeout,
+    },
     preimage::{self, KIND_COMMIT, KIND_ECHO, KIND_PREPARE, KIND_PROPOSAL, KIND_TIMEOUT},
     safety::SafetyRecord,
     testing::{FakeVerifier, fake_sig},
     topology::Topology,
-    types::{Bitmap, Hash32, Millis, PublicKey},
+    types::{Bitmap, ChainParams, Hash32, Millis, PublicKey},
 };
 
 /// A committed block of the reference chain.
 #[derive(Clone, Debug)]
 pub struct RefBlock {
-    /// Block hash.
+    /// AvailableBody hash.
     pub bh: Hash32,
     /// Certified result.
     pub result: Hash32,
@@ -69,6 +72,23 @@ pub struct RepObs {
     pub max_t_retx: Millis,
     /// Highest start level reported (§9.2 adaptation, F15).
     pub max_start_level: u32,
+    /// [`Perf::LeaderTurns`]: the replica's uncommitted height and its bound.
+    pub turn: Option<Turn>,
+}
+
+/// [`Perf::LeaderTurns`] state of a replica at its uncommitted height (Appendix E, E62).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Turn {
+    /// The height.
+    pub height: u64,
+    /// When the replica was first observed at the height.
+    pub entry: Millis,
+    /// `v*(height)` and the machine leading it (`None`: no running holder leads a view).
+    pub first: Option<(u64, usize)>,
+    /// The start level the bound was computed with (the highest reported at the height).
+    pub level: u32,
+    /// `entry` plus the leader-turn bound ([`leader_turns_bound`]).
+    pub deadline: Millis,
 }
 
 /// Oracle state of a world.
@@ -94,6 +114,12 @@ pub struct Oracle {
     live_ok: Vec<bool>,
     /// When the precondition was last evaluated (every 50 virtual ms at most).
     live_eval_at: Option<Millis>,
+    /// [`Perf::LeaderTurns`]: the machine owning `L(h, v)` for `v = 0 ..= a_h` per
+    /// `(instance, height)` (ground-truth topology, one full rotation).
+    turn_leaders: BTreeMap<(usize, u64), Vec<Option<usize>>>,
+    /// [`Perf::LeaderTurns`]: the highest start level an honest replica reported at
+    /// `(instance, height)` (timers are local, §9.1).
+    turn_levels: BTreeMap<(usize, u64), u32>,
 }
 
 impl Oracle {
@@ -119,14 +145,14 @@ impl Oracle {
     }
 
     /// Adopt a pre-built chain as committed (F17).
-    pub fn adopt_chain(&mut self, inst: usize, chain: &[(Block, Qc)]) {
+    pub fn adopt_chain(&mut self, inst: usize, chain: &[(AvailableBody, Qc)]) {
         for (block, qc) in chain {
             self.refs[inst].insert(
-                block.header.height,
+                block.header().height,
                 RefBlock {
                     bh: qc.block_hash,
                     result: qc.result,
-                    header: block.header.clone(),
+                    header: block.header().clone(),
                     at: 0,
                     honest_proposer: true,
                     view: qc.view,
@@ -165,6 +191,32 @@ pub fn covers(record: &SafetyRecord, slot: &SigSlot) -> bool {
     }
 }
 
+/// [`Perf::LeaderTurns`]: the longest a replica stays at a height whose views `0 .. turns`
+/// fail and whose view `turns` commits (Appendix E, E62). Each view `v ≤ turns` lasts at most
+/// its anchor allowance and timer, `P(v) + T(min(level_cap, start + v))` (§9.1), plus `slack`
+/// for the entry skew and the certificate that ends it (`σ + Δ`, §8.2 L1, L2).
+pub fn leader_turns_bound(
+    local: &LocalParams,
+    params: &ChainParams,
+    t_max_eff: Millis,
+    start: u32,
+    turns: u64,
+    slack: Millis,
+) -> Millis {
+    let cap = level_cap(local.t_base, t_max_eff);
+    (0..=turns)
+        .map(|v| {
+            let level = u32::try_from(v)
+                .unwrap_or(u32::MAX)
+                .saturating_add(start)
+                .min(cap);
+            propose_allowance(v, params, local.build_timeout)
+                .saturating_add(view_timeout(local.t_base, t_max_eff, level))
+                .saturating_add(slack)
+        })
+        .fold(0, Millis::saturating_add)
+}
+
 /// Build a committed chain of `len` transaction blocks at view 0 using one exact quorum
 /// from `signers` at each height (F17), selected in canonical committee order.
 pub fn build_chain(
@@ -172,7 +224,7 @@ pub fn build_chain(
     signers: &[SimSigner],
     len: u64,
     crypto: &dyn Crypto,
-) -> Vec<(Block, Qc)> {
+) -> Vec<(AvailableBody, Qc)> {
     let mut chain = Vec::new();
     let (mut parent_hash, mut parent_result) = (inst.genesis_hash, inst.genesis_result);
     for h in 1..=len {
@@ -197,12 +249,26 @@ pub fn build_chain(
             parent_hash,
             parent_result,
             payload_hash: preimage::payload_hash(crypto, &payload),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
             attest: h == inst.config(h).epoch.last_height,
         };
-        let bh = preimage::block_hash(crypto, &header);
+        let author = signers
+            .iter()
+            .find(|signer| committee.get(header.proposer) == Some(signer.public_key()))
+            .expect("prebuilt author key");
+        let block = crate::testing::author_body(
+            header,
+            &payload,
+            &inst.config(h),
+            &iroha_allocation::AllocationBudget::new(1 << 30),
+            crypto,
+            author,
+        );
+        let header = block.header();
+        let bh = block.hash(crypto);
         let ExecOutcome::Valid(result) = reference_exec(&parent_result, &payload) else {
             break;
         };
@@ -267,7 +333,7 @@ pub fn build_chain(
                 Vec::new()
             },
         };
-        chain.push((Block { header, payload }, qc));
+        chain.push((block, qc));
         parent_hash = bh;
         parent_result = result;
     }
@@ -400,12 +466,12 @@ impl World {
 
     /// Checks after every `handle` of an honest replica.
     pub fn after_handle(&mut self, r: usize, actions: &[Action]) {
-        let violations = self.log.borrow_mut().take_violations();
+        let violations = self.log.lock().expect("signing log").take_violations();
         if let Some(v) = violations.into_iter().next() {
             return self.fail(v);
         }
         self.check_view_change(actions);
-        let commits = std::mem::take(&mut self.log.borrow_mut().commits);
+        let commits = std::mem::take(&mut self.log.lock().expect("signing log").commits);
         for (m, msg) in commits {
             if let Err(e) = self.commit_backed(&msg) {
                 return self.fail(format!("O-SIGN: honest machine {m} {e}"));
@@ -445,7 +511,10 @@ impl World {
                 .min()
                 .unwrap_or(0);
             // A margin: a store restored from backup re-syncs (and re-verifies) old heights.
-            self.log.borrow_mut().prune_below(low.saturating_sub(256));
+            self.log
+                .lock()
+                .expect("signing log")
+                .prune_below(low.saturating_sub(256));
         }
     }
 
@@ -469,8 +538,8 @@ impl World {
         let applied = self.replicas[r].applied.0;
         let mut per_height: BTreeMap<u64, u64> = BTreeMap::new();
         for block in self.replicas[r].bodies.values() {
-            *per_height.entry(block.header.height).or_default() +=
-                u64::try_from(block.payload.len()).unwrap_or(u64::MAX);
+            *per_height.entry(block.header().height).or_default() +=
+                u64::try_from(block.payload().as_slice().len()).unwrap_or(u64::MAX);
         }
         if let Some((h, bytes)) = per_height
             .iter()
@@ -540,24 +609,159 @@ impl World {
                 jumped || !had_commit,
             );
         }
+        if self.failure.is_none() {
+            self.check_turns(r, &status);
+        }
     }
 
-    /// F35 (`no_view_change`): after heal every height commits in view 0 with a block first
-    /// proposed there (no timer may move because of a local queue).
+    /// `no_view_change` (F9r): after heal every height commits in view 0 with a block first
+    /// proposed there (no timer may move).
     fn check_view_change(&mut self, actions: &[Action]) {
         if !self.checks.no_view_change || self.now < self.heal_at {
             return;
         }
         for action in actions {
             if let Action::CommitBlock { block, commit_qc } = action
-                && (commit_qc.view > 0 || block.header.origin_view > 0)
+                && (commit_qc.view > 0 || block.header().origin_view > 0)
             {
                 return self.fail(format!(
-                    "O-PERF F35: height {} committed in view {} (origin view {}); a timer moved",
-                    block.header.height, commit_qc.view, block.header.origin_view
+                    "O-PERF no view change: height {} committed in view {} (origin view {}); a \
+                     timer moved",
+                    block.header().height,
+                    commit_qc.view,
+                    block.header().origin_view
                 ));
             }
         }
+    }
+
+    /// [`Perf::LeaderTurns`] at honest replica `r` (Appendix E, E62): a replica never passes
+    /// `v*(h)` at its uncommitted height `h`, and it commits `h` by its leader-turn deadline.
+    fn check_turns(&mut self, r: usize, status: &CoreStatus) {
+        let Perf::LeaderTurns(holders) = self.checks.perf else {
+            return;
+        };
+        let inst = self.replicas[r].inst;
+        if self.now < self.heal_of(inst) {
+            return;
+        }
+        let height = status.height;
+        let previous = self.oracle.reps[r].turn;
+        if let Some(turn) = previous
+            && turn.height != height
+        {
+            // The replica left `turn.height` in this handle; it committed it at the latest now.
+            self.oracle.reps[r].turn = None;
+            if status.committed_height >= turn.height && self.now > turn.deadline {
+                return self.turn_late(r, &turn);
+            }
+        }
+        if status.awaiting || height <= status.committed_height {
+            return;
+        }
+        let level = self.oracle.turn_levels.entry((inst, height)).or_default();
+        *level = (*level).max(status.start_level);
+        let level = *level;
+        let first = self.first_holder_turn(inst, height, holders);
+        let turn = match self.oracle.reps[r].turn {
+            Some(turn) if turn.first == first && turn.level == level => turn,
+            other => {
+                let entry = other.map_or(self.now, |turn| turn.entry);
+                let deadline = first.map_or(Millis::MAX, |(view, _)| {
+                    entry.saturating_add(self.turns_budget(inst, r, height, level, view))
+                });
+                Turn {
+                    height,
+                    entry,
+                    first,
+                    level,
+                    deadline,
+                }
+            }
+        };
+        self.oracle.reps[r].turn = Some(turn);
+        if let Some((view, m)) = first
+            && status.view > view
+        {
+            return self.fail(format!(
+                "O-PERF LeaderTurns: replica {r} is in view {} of height {height}, past view \
+                 {view} led by running holder machine {m} (§6.10, §8.2 L4)",
+                status.view
+            ));
+        }
+        if self.now > turn.deadline {
+            self.turn_late(r, &turn);
+        }
+    }
+
+    fn turn_late(&mut self, r: usize, turn: &Turn) {
+        self.fail(format!(
+            "O-PERF LeaderTurns: replica {r} entered height {} at t={} and did not commit it by \
+             t={} (v* {:?}, start level {})",
+            turn.height, turn.entry, turn.deadline, turn.first, turn.level
+        ));
+    }
+
+    /// `v*(height)`: the first view `v ≥ 1` whose leader is a running honest holder that may
+    /// sign, and that machine (`None` if no view of a whole rotation has one).
+    fn first_holder_turn(
+        &mut self,
+        inst: usize,
+        height: u64,
+        holders: u64,
+    ) -> Option<(u64, usize)> {
+        if !self.oracle.turn_leaders.contains_key(&(inst, height)) {
+            let topo = self.ground_topology(inst, height);
+            let committee = self.instances[inst].committee(height);
+            let rotation = topo.n().saturating_sub(topo.demoted().len());
+            let leaders = (0..=u64::try_from(rotation).unwrap_or(u64::MAX))
+                .map(|view| {
+                    committee
+                        .get(topo.leader(view))
+                        .and_then(|key| self.key_owner.get(key).copied())
+                })
+                .collect();
+            self.oracle
+                .turn_leaders
+                .retain(|(i, h), _| *i != inst || h.saturating_add(16) >= height);
+            self.oracle
+                .turn_levels
+                .retain(|(i, h), _| *i != inst || h.saturating_add(16) >= height);
+            self.oracle.turn_leaders.insert((inst, height), leaders);
+        }
+        let leaders = self.oracle.turn_leaders.get(&(inst, height))?;
+        leaders.iter().enumerate().skip(1).find_map(|(view, m)| {
+            let m = (*m)?;
+            let holder = u32::try_from(m)
+                .ok()
+                .and_then(|bit| 1u64.checked_shl(bit))
+                .is_some_and(|bit| holders & bit != 0);
+            let running = self.replica_of(m, inst).is_some_and(|x| {
+                self.honest_running(x)
+                    && self.replicas[x]
+                        .host
+                        .core()
+                        .is_some_and(|core| !core.abstaining())
+            });
+            (holder && running).then(|| (u64::try_from(view).unwrap_or(u64::MAX), m))
+        })
+    }
+
+    /// The leader-turn bound of replica `r` at `height` with start level `level` and
+    /// `v*(height) = turns`, with O-LIVE's 3 % margin for clock drift.
+    fn turns_budget(&self, inst: usize, r: usize, height: u64, level: u32, turns: u64) -> Millis {
+        let instance = &self.instances[inst];
+        let b = self.bounds(inst, self.replicas[r].machine);
+        let t_max = effective_t_max(&instance.local, &instance.config(height));
+        leader_turns_bound(
+            &instance.local,
+            &instance.params,
+            t_max,
+            level,
+            turns,
+            b.sigma + b.delta,
+        ) * 103
+            / 100
     }
 
     fn on_commit(&mut self, r: usize, height: u64, gap: Millis, t_hat: Millis, skip_gap: bool) {
@@ -593,7 +797,8 @@ impl World {
             Perf::P2 => b.g_norm + t_hat.max(b.rebroadcast),
             Perf::P3 => b.g_norm + 2 * t_hat + b.delta,
             Perf::P4 | Perf::OneViewFailure => b.p4 + 2 * t_hat + b.delta,
-            Perf::None | Perf::P5 | Perf::P6 => return,
+            // Bounded per height and view by `check_turns` instead.
+            Perf::None | Perf::P5 | Perf::P6 | Perf::LeaderTurns(_) => return,
         };
         if gap > limit {
             self.fail(format!(
@@ -772,15 +977,17 @@ impl World {
         obs.checked_lock = None;
         obs.checked_tc = None;
         obs.checked_cqc = None;
+        // A restarted replica enters its height anew (§7.4: start level 0).
+        obs.turn = None;
         if self.oracle.heal_seen {
             self.reset_live(r);
         }
     }
 
     /// O-AGR and O-VAL on a `CommitBlock` of an honest replica.
-    fn check_commit(&mut self, r: usize, block: &Block, qc: &Qc) {
+    fn check_commit(&mut self, r: usize, block: &AvailableBody, qc: &Qc) {
         let inst = self.replicas[r].inst;
-        let h = block.header.height;
+        let h = block.header().height;
         let emitted = self.oracle.reps[r].emitted;
         if h != emitted + 1 {
             return self.fail(format!(
@@ -813,12 +1020,12 @@ impl World {
         }
         let proposer_key = self.instances[inst]
             .committee(h)
-            .get(block.header.proposer)
+            .get(block.header().proposer)
             .cloned();
         let honest_proposer = proposer_key
             .and_then(|k| self.key_owner.get(&k).copied())
             .is_some_and(|m| !self.machines[m].byz);
-        for (id, _) in decode_txs(&block.payload) {
+        for (id, _) in decode_txs(&block.payload().as_slice()) {
             if let Some(entry) = self.txs[inst].get_mut(&id)
                 && entry.2.is_none()
             {
@@ -830,7 +1037,7 @@ impl World {
             RefBlock {
                 bh: qc.block_hash,
                 result: qc.result,
-                header: block.header.clone(),
+                header: block.header().clone(),
                 at: self.now,
                 honest_proposer,
                 view: qc.view,
@@ -838,15 +1045,15 @@ impl World {
         );
     }
 
-    fn validity(&self, inst: usize, block: &Block, qc: &Qc) -> Result<(), String> {
+    fn validity(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {
         let instance = &self.instances[inst];
-        let h = block.header.height;
-        if block.header.epoch != instance.config(h).epoch.id || qc.epoch != block.header.epoch {
+        let h = block.header().height;
+        if block.header().epoch != instance.config(h).epoch.id || qc.epoch != block.header().epoch {
             return Err(
                 "block or certificate epoch context differs from authenticated schedule".into(),
             );
         }
-        if h == instance.config(h).epoch.last_height && !block.header.attest {
+        if h == instance.config(h).epoch.last_height && !block.header().attest {
             return Err("boundary execution lacks current-authority attestation".into());
         }
         if qc.kind != VoteKind::Commit || qc.height != h {
@@ -855,9 +1062,24 @@ impl World {
         if block.hash(&self.hasher) != qc.block_hash {
             return Err("block hash differs from the CommitQC's".to_owned());
         }
-        if !block.body_ok(&self.hasher) {
-            return Err("payload fails body_ok".to_owned());
-        }
+        let proof = crate::availability::verify_availability(
+            instance.id,
+            &instance.config(h),
+            block.header(),
+            block.availability().as_slice(),
+            &self.hasher,
+        )
+        .map_err(|error| format!("original availability rejected: {error:?}"))?;
+        let mut codeword = vec![0; proof.shape().encoded_bytes()];
+        let mut scratch = vec![0; proof.shape().workspace_words()];
+        proof
+            .verify_payload(
+                block.payload().as_slice(),
+                &mut codeword,
+                &mut scratch,
+                &self.hasher,
+            )
+            .map_err(|error| format!("actual canonical codeword rejected: {error:?}"))?;
         let (parent_hash, parent_result) = if h == 1 {
             (instance.genesis_hash, instance.genesis_result)
         } else {
@@ -866,10 +1088,12 @@ impl World {
                 .ok_or("parent not committed")?;
             (parent.bh, parent.result)
         };
-        if block.header.parent_hash != parent_hash || block.header.parent_result != parent_result {
+        if block.header().parent_hash != parent_hash
+            || block.header().parent_result != parent_result
+        {
             return Err("does not extend the committed parent".to_owned());
         }
-        if block.header.instance != instance.id {
+        if block.header().instance != instance.id {
             return Err("foreign instance".to_owned());
         }
         match block_exec(&parent_result, block, &instance.config(h).epoch) {
@@ -891,25 +1115,25 @@ impl World {
             window,
             &headers,
         );
-        if block.header.proposer != topo.leader(block.header.origin_view) {
+        if block.header().proposer != topo.leader(block.header().origin_view) {
             return Err(format!(
                 "proposer {} is not L(h, {}) = {}",
-                block.header.proposer,
-                block.header.origin_view,
-                topo.leader(block.header.origin_view)
+                block.header().proposer,
+                block.header().origin_view,
+                topo.leader(block.header().origin_view)
             ));
         }
         let proposer = instance
             .committee(h)
-            .get(block.header.proposer)
+            .get(block.header().proposer)
             .and_then(|k| self.key_owner.get(k).copied());
         if let Some(m) = proposer
             && !self.machines[m].byz
-            && !block.payload.is_empty()
+            && !block.payload().as_slice().is_empty()
             && !self
                 .oracle
                 .built
-                .contains(&(inst, m, block.header.payload_hash))
+                .contains(&(inst, m, block.header().payload_hash))
         {
             return Err(format!("payload was not built by the honest proposer {m}"));
         }
@@ -930,7 +1154,7 @@ impl World {
             *kind = KIND_PREPARE;
         }
         let committee = self.instances[inst].committee(slot.height);
-        let log = self.log.borrow();
+        let log = self.log.lock().expect("signing log");
         let backing = committee
             .members()
             .iter()
@@ -971,7 +1195,7 @@ impl World {
             ));
         }
         let msg = qc.preimage();
-        let log = self.log.borrow();
+        let log = self.log.lock().expect("signing log");
         if let Some(key) = keys.iter().find(|k| !log.was_signed(k, &msg)) {
             return Err(format!(
                 "a {:?}QC h {} v {} whose signer {key:?} never signed it",
@@ -987,11 +1211,12 @@ impl World {
     ///
     /// # Errors
     /// A description of the defect.
-    pub fn attested(&self, inst: usize, block: &Block, qc: &Qc) -> Result<(), String> {
-        if qc.attest != block.header.attest {
+    pub fn attested(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {
+        if qc.attest != block.header().attest {
             return Err(format!(
                 "a CommitQC with flag {} for a block with flag {}",
-                qc.attest, block.header.attest
+                qc.attest,
+                block.header().attest
             ));
         }
         let committee = self.instances[inst].committee(qc.height);
@@ -1032,7 +1257,7 @@ impl World {
             ));
         }
         {
-            let log = self.log.borrow();
+            let log = self.log.lock().expect("signing log");
             for entry in &tc.entries {
                 let key = committee
                     .get(entry.signer)
@@ -1164,7 +1389,7 @@ impl World {
 
     fn check_exposed(&mut self, r: usize, own: Vec<(PublicKey, Vec<u8>)>) {
         for (key, msg) in own {
-            if !self.log.borrow_mut().expose(&key, &msg) {
+            if !self.log.lock().expect("signing log").expose(&key, &msg) {
                 continue;
             }
             let Some(slot) = parse_preimage(&msg).filter(|slot| slot.kind != KIND_ECHO) else {
@@ -1236,7 +1461,7 @@ impl World {
 
     fn own_in_msg(&self, r: usize, msg: &WireMessage, out: &mut Vec<(PublicKey, Vec<u8>)>) {
         match msg {
-            WireMessage::Proposal(p) => self.own_in_proposal(r, p, out),
+            WireMessage::Proposal(p) => self.own_in_proposal(r, &p.proposal, out),
             WireMessage::Vote(v) => {
                 for (key, index) in self.own_index(r, v.height) {
                     if v.signer == index {
@@ -1270,8 +1495,9 @@ impl World {
                 }
             }
             WireMessage::SyncRequest(_)
-            | WireMessage::BlockRequest(_)
-            | WireMessage::BlockResponse(_)
+            | WireMessage::PayloadRequest(_)
+            | WireMessage::PayloadManifest(_)
+            | WireMessage::PayloadChunk(_)
             | WireMessage::ApplicationControl(_) => {}
         }
     }
@@ -1437,7 +1663,12 @@ impl World {
             let heal = self.heal_of(inst);
             let b = self.bounds(inst, 0);
             // Transactions old enough to be judged: the spec's B_live bound, and a sanity
-            // check that most transactions older than 20 s committed at all.
+            // check that most transactions older than 20 s committed at all. Under sparse
+            // local work a height may take several leader turns (§8.1), so there each
+            // transaction must instead be in a block of the second height first committed
+            // after its submission: that height is entered after the submission, and a holder
+            // builds its block from its whole queue (Appendix E, E62).
+            let turns = matches!(self.checks.perf, Perf::LeaderTurns(_));
             let mut judged = 0usize;
             let mut committed = 0usize;
             for (id, (submitted, poison, at)) in &self.txs[inst] {
@@ -1449,6 +1680,22 @@ impl World {
                     return self.fail(format!(
                         "O-TXP: transaction {id} not committed within B_live"
                     ));
+                }
+                if turns {
+                    let due = self.oracle.refs[inst]
+                        .values()
+                        .map(|block| block.at)
+                        .filter(|t| t > submitted)
+                        .nth(1);
+                    if let Some(due) = due
+                        && at.is_none_or(|t| t > due)
+                    {
+                        return self.fail(format!(
+                            "O-TXP: transaction {id} submitted at t={submitted} not committed \
+                             by t={due}, the second height first committed after it"
+                        ));
+                    }
+                    continue;
                 }
                 if *submitted + 20_000 <= self.now {
                     judged += 1;

@@ -1,11 +1,11 @@
 //! Multi-version append-only storage for canonical carrier and replay identities.
 #![allow(clippy::disallowed_types)]
-use concread::shared::{Reserved, Shared};
-use iroha_crypto::HashOf;
-use iroha_data_model::prelude::TransactionEntrypoint;
-use mv::allocation::{
+use iroha_allocation::shared::{Reserved, Shared};
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferFromChargeError,
 };
+use iroha_crypto::HashOf;
+use iroha_data_model::prelude::TransactionEntrypoint;
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 use norito::json::JsonDeserialize as JsonDeserializeTrait;
 use norito::json::JsonKeyCodec;
@@ -60,10 +60,10 @@ pub struct TransactionsStorage {
     // The opaque identity covers both the hot tip and the historical map.
     // It rotates while the writer is held, never from a caller-provided scalar.
     write_lock: Mutex<Identity>,
-    pub(in crate::state) budget: mv::allocation::AllocationBudget,
+    pub(in crate::state) budget: iroha_allocation::AllocationBudget,
     pending: Mutex<Option<history::Pending>>,
     publication_sequence: AtomicU64,
-    released: concread::release::ReleaseNotification,
+    released: iroha_allocation::release::ReleaseNotification,
 }
 type Tip = Shared<BlockInfo, AllocationCharge>;
 
@@ -220,7 +220,7 @@ fn admit_tip(
     height: Value,
 ) -> Result<Tip, MembershipAdmissionError> {
     let backing = Layout::array::<Key>(transactions.len()).map_err(|_| {
-        MembershipAdmissionError::Capacity(mv::allocation::AllocationRefusal::DemandOverflow)
+        MembershipAdmissionError::Capacity(iroha_allocation::AllocationRefusal::DemandOverflow)
     })?;
     let shell = Tip::layout();
     let mut reservation = budget
@@ -280,12 +280,12 @@ fn admit_tip_from_sources<I: ExactSizeIterator<Item = Key>>(
 ) -> Result<Tip, TipStageError> {
     let capacity = ordinary.len().checked_add(merge.len()).ok_or_else(|| {
         TipStageError::Admission(MembershipAdmissionError::Capacity(
-            mv::allocation::AllocationRefusal::DemandOverflow,
+            iroha_allocation::AllocationRefusal::DemandOverflow,
         ))
     })?;
     let backing = Layout::array::<Key>(capacity).map_err(|_| {
         TipStageError::Admission(MembershipAdmissionError::Capacity(
-            mv::allocation::AllocationRefusal::DemandOverflow,
+            iroha_allocation::AllocationRefusal::DemandOverflow,
         ))
     })?;
     let shell = Tip::layout();
@@ -349,11 +349,13 @@ impl TransactionsStorage {
     /// Construct a finite-pool fixture; production supplies its original Kura pool.
     #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn new() -> Self {
-        Self::try_new(mv::allocation::AllocationBudget::new(256 * 1024 * 1024))
+        Self::try_new(iroha_allocation::AllocationBudget::new(256 * 1024 * 1024))
             .expect("finite fixture membership pool")
     }
     #[cfg(test)]
-    pub(in crate::state) fn reader_release_wait_for_tests(&self) -> concread::release::ReleaseWait {
+    pub(in crate::state) fn reader_release_wait_for_tests(
+        &self,
+    ) -> iroha_allocation::release::ReleaseWait {
         self.blocks.observe_reader_release()
     }
     #[cfg(test)]
@@ -364,14 +366,14 @@ impl TransactionsStorage {
             .is_some()
     }
     /// Retain the actual reader-lock source outside an enclosing physical owner.
-    pub(crate) fn reader_release_batch(&self) -> concread::release::DeferredReleaseBatch {
+    pub(crate) fn reader_release_batch(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.blocks.reader_release_batch()
     }
     /// Pin a committed generation while retaining every actual reader unlock.
     /// The original batch spans all retries; a foreign source is refused before locking.
     pub(crate) fn view_retaining(
         &self,
-        releases: &mut concread::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<TransactionsView<'_>, concread::bptree::OwnedWriteError> {
         loop {
             let before = self.publication_sequence.load(Ordering::Acquire);
@@ -677,9 +679,9 @@ mod block {
         /// The original prepaid history could not acquire its publication locks.
         MembershipAdmission(#[source] MembershipAdmissionError),
         /// The original hash publication reader or writer is busy
-        BlockHashesBusy(concread::release::ReleaseWait),
+        BlockHashesBusy(iroha_allocation::release::ReleaseWait),
         /// An original World, runtime or membership publication participant is busy
-        PublicationBusy(concread::release::ReleaseWait),
+        PublicationBusy(iroha_allocation::release::ReleaseWait),
         /// Local execution resources refused publication before any effects: {0}
         ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
         /// `TransactionsBlock::insert_block()` was not called
@@ -786,13 +788,13 @@ mod block {
     pub(crate) struct PreparedDetachedTransactionsBlock<'storage, Installation> {
         prepared: PreparedTransactionsBlock<'storage>,
         installation: Installation,
-        preflight_release: Option<concread::release::DeferredRelease>,
+        preflight_release: Option<iroha_allocation::release::DeferredRelease>,
     }
 
     /// All original history retirement and physical release observations.
     pub(crate) struct MembershipRelease {
         _history: Option<history_slot::Cleanup>,
-        _writer: concread::release::DeferredRelease,
+        _writer: iroha_allocation::release::DeferredRelease,
     }
 
     /// Original membership payloads and notification after its physical unlock.
@@ -808,7 +810,7 @@ mod block {
     /// Original abort or refusal cleanup retained with installation admission.
     pub(crate) struct AbortedTransactions<Installation> {
         _installation: Option<Installation>,
-        _preflight_release: Option<concread::release::DeferredRelease>,
+        _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
         _release: Option<MembershipRelease>,
     }
 
@@ -816,7 +818,7 @@ mod block {
     pub(crate) struct PublishedTransactions<Installation> {
         _retirement: TransactionsPublicationRetirement,
         _installation: Installation,
-        _preflight_release: Option<concread::release::DeferredRelease>,
+        _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
     }
 
     /// A short observation, never authorization to publish a detached journal.
@@ -1815,14 +1817,14 @@ mod serialization {
         /// historical node, native cursor and generation identity is prepaid here.
         pub(crate) fn from_json_with_budget(
             source: &str,
-            budget: mv::allocation::AllocationBudget,
+            budget: iroha_allocation::AllocationBudget,
         ) -> Result<Self, MembershipRestoreError> {
             let value = json::from_str::<json::Value>(source)?;
             Self::from_value_with_budget(value, budget)
         }
         fn from_value_with_budget(
             value: json::Value,
-            budget: mv::allocation::AllocationBudget,
+            budget: iroha_allocation::AllocationBudget,
         ) -> Result<Self, MembershipRestoreError> {
             let json::Value::Object(mut map) = value else {
                 return Err(json::Error::InvalidField {
@@ -1883,7 +1885,7 @@ mod serialization {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             Self::from_value_with_budget(
                 json::Value::json_deserialize(parser)?,
-                mv::allocation::AllocationBudget::new(256 * 1024 * 1024),
+                iroha_allocation::AllocationBudget::new(256 * 1024 * 1024),
             )
             .map_err(|error| match error {
                 MembershipRestoreError::Json(error) => error,
@@ -2012,7 +2014,7 @@ mod tests {
         assert!(matches!(
             next.try_stage_block(&mut original_source, &merge, second),
             Err(TipStageError::Admission(MembershipAdmissionError::Capacity(
-                mv::allocation::AllocationRefusal::Capacity { requested_bytes, .. }
+                iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }
             ))) if requested_bytes == tip_bytes
         ));
         assert!(!next.has_staged_block());
@@ -2328,7 +2330,7 @@ mod tests {
             task::{Context, Waker},
         };
 
-        let release = concread::release::ReleaseNotification::default();
+        let release = iroha_allocation::release::ReleaseNotification::default();
         let original_owner = release.guard(());
         let observation = release.observe();
         let error = TransactionsBlockError::from(LaneLifecycleError::PublicationBusy {

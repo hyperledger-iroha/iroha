@@ -14040,12 +14040,12 @@ async fn handler_zk_verify_batch(
 mod exact_proof_circuit_id_tests {
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         record_id == env_id
-            && match iroha_core::zk::production_verify_backend_tag(backend) {
+            && match iroha_core_zk::production_verify_backend_tag(backend) {
                 Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
-                    iroha_core::zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
+                    iroha_core_zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
                 }
                 Some(iroha_data_model::zk::BackendTag::Stark) => {
-                    iroha_core::zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
+                    iroha_core_zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
                 }
                 None => false,
             }
@@ -14053,7 +14053,7 @@ mod exact_proof_circuit_id_tests {
 
     #[test]
     fn proof_metadata_uses_core_canonical_identity_without_aliases() {
-        let backend = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
+        let backend = iroha_core_zk::ZK_BACKEND_HALO2_IPA;
         let canonical = "halo2/pasta/ipa/kaigi-usage-v1";
         for halo2_backend in [backend, "halo2/pasta/kaigi-usage-v1"] {
             assert!(circuit_id_matches(halo2_backend, canonical, canonical));
@@ -14068,7 +14068,7 @@ mod exact_proof_circuit_id_tests {
                 assert!(!circuit_id_matches(halo2_backend, alias, canonical));
             }
         }
-        let stark = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
+        let stark = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1;
         let exact = format!("{stark}:torii-worker-v1");
         assert!(circuit_id_matches(stark, &exact, &exact));
         for alias in [
@@ -19666,7 +19666,7 @@ fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Respo
     }
     response
 }
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 fn admitted_torii_proxy_snapshot_to_response(admitted: AdmittedToriiProxySnapshot) -> Response {
     let mut response = torii_proxy_snapshot_to_response(admitted.snapshot);
     if let Some(reservation) = admitted.fanout_reservation {
@@ -34095,7 +34095,7 @@ async fn handler_ram_lfe_receipt_verify(
         &request.receipt,
         &program_policy,
         now_ms,
-        iroha_core::zk::ZkVerifyGuardrails::from_cfg(&app.state.zk_snapshot()),
+        iroha_core::zk_guardrails::guardrails_from_config(&app.state.zk_snapshot()),
     )
     .err();
     let validation = match (validation, output_hash_matches) {

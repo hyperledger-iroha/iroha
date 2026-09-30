@@ -16,7 +16,7 @@ mod halo2_bundle {
         },
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
-    use iroha_core::zk;
+    use iroha_core_zk as zk;
     use iroha_crypto::Hash as CryptoHash;
     use iroha_data_model::{
         confidential::ConfidentialStatus,
@@ -160,7 +160,7 @@ mod halo2_bundle {
         let k: u32 = 6;
         let params: <IPACommitmentScheme<Curve> as CommitmentScheme>::ParamsProver =
             ParamsIPA::<Curve>::new(k);
-        let circuit = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::default();
+        let circuit = iroha_core_zk::depth::VoteBoolCommitMerkle::<8>::default();
         let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
         let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
         let rc0 = Scalar::from(7u64);
@@ -312,10 +312,10 @@ mod vote_bundle_sanity {
         let bundle = dev_vote_merkle8_bundle();
         let k = 6;
         let params = ParamsIPA::<Curve>::new(k);
-        let circuit = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::default();
+        let circuit = iroha_core_zk::depth::VoteBoolCommitMerkle::<8>::default();
         // Ensure circuit config does not panic when synthesized without witnesses.
         let mut cs = ConstraintSystem::<Scalar>::default();
-        let _ = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::configure(&mut cs);
+        let _ = iroha_core_zk::depth::VoteBoolCommitMerkle::<8>::configure(&mut cs);
         let instances = vec![vec![bundle.commit], vec![bundle.root]];
         let prover = MockProver::run(k, &circuit, instances).expect("mock prover should run");
         assert!(prover.verify().is_ok());

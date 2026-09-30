@@ -183,7 +183,8 @@ def parse_native_status_json(payload: bytes, label: str = "native status") -> di
 
 LANES_MAX_BYTES = 16 * 1024 * 1024
 _LANE_STATUS = frozenset(("record", "instance"))
-_LANE_RECORD = frozenset("lane dataspace incarnation params committee created_at active_from closing anchor_freshness merged merged_at rescued".split())
+_LANE_RECORD = frozenset("lane dataspace incarnation params da_layout committee created_at active_from closing anchor_freshness merged merged_at rescued".split())
+_LANE_DA_LAYOUT = frozenset("encoding chunk_size_bytes data_shards parity_shards max_payload_size_bytes max_chunk_count".split())
 _LANE_PARAMS = tuple("block_cadence_ms max_clock_drift_ms key_activation_lead_blocks key_overlap_grace_blocks key_expiry_grace_blocks key_allowed_algorithms payload_retry_interval_ms exec_budget_ms apply_budget_ms max_block_bytes epoch_length_blocks demotion_window".split())
 _LANE_NONZERO_PARAMS = frozenset(("block_cadence_ms", "payload_retry_interval_ms", "exec_budget_ms", "apply_budget_ms", "max_block_bytes", "epoch_length_blocks", "demotion_window"))
 _LANE_FRONTIER = frozenset(("height", "block_hash", "result"))
@@ -262,12 +263,45 @@ class SumeragiLaneFrontier:
     result: str
 
 @dataclass(frozen=True)
+class SumeragiDataAvailabilityLayout:
+    """Mandatory signed RS16 geometry pinned into one lane incarnation."""
+    encoding: str
+    chunk_size_bytes: int
+    data_shards: int
+    parity_shards: int
+    max_payload_size_bytes: int
+    max_chunk_count: int
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "SumeragiDataAvailabilityLayout":
+        """Require canonical RS16 encoding and the native protocol resource bounds."""
+        r = _record(payload, _LANE_DA_LAYOUT, "native lane data-availability layout")
+        encoding = _record(r["encoding"], ("encoding", "details"), "native lane payload encoding")
+        if encoding["encoding"] != "reed_solomon16" or encoding["details"] is not None:
+            raise ValueError("native lane payload encoding must be Reed-Solomon16")
+        chunk = _uint(r["chunk_size_bytes"], 32)
+        data = _uint(r["data_shards"], 16)
+        parity = _uint(r["parity_shards"], 16)
+        maximum = _uint(r["max_payload_size_bytes"])
+        chunks = _uint(r["max_chunk_count"], 32)
+        if not (2 <= chunk <= 256 * 1024 and chunk % 2 == 0 and 1 <= data <= 16 and
+                1 <= parity <= 16 and 1 <= maximum <= 16 * 1024 * 1024 and 1 <= chunks <= 1024):
+            raise ValueError("native lane data-availability layout exceeds protocol bounds")
+        full, remainder = divmod(maximum, data * chunk)
+        stripes = full + (remainder > 0)
+        terminal_row = 2 * ((remainder + 2 * data - 1) // (2 * data))
+        if stripes * (data + parity) > chunks or (full * chunk + terminal_row) * (data + parity) > 32 * 1024 * 1024:
+            raise ValueError("native lane data-availability geometry exceeds protocol bounds")
+        return cls("reed_solomon16", chunk, data, parity, maximum, chunks)
+
+@dataclass(frozen=True)
 class SumeragiLaneRecord:
     """Committed lifecycle record of one lane incarnation (`specs/sumeragi_lanes.md` §2.1)."""
     lane: int
     dataspace: int
     incarnation: str
     params: SumeragiParameters
+    da_layout: SumeragiDataAvailabilityLayout
     committee: tuple[SumeragiLaneMember, ...]
     created_at: int
     active_from: int
@@ -286,8 +320,12 @@ class SumeragiLaneRecord:
             raise ValueError("native lane committee must be an array")
         f = _record(r["merged"], _LANE_FRONTIER, "native lane frontier")
         merged = SumeragiLaneFrontier(_uint(f["height"]), _byte32(f["block_hash"], "native lane block_hash"), _byte32(f["result"], "native lane result"))
+        params = SumeragiParameters.from_payload(r["params"])
+        layout = SumeragiDataAvailabilityLayout.from_payload(r["da_layout"])
+        if params.max_block_bytes > layout.max_payload_size_bytes:
+            raise ValueError("native lane block limit exceeds its data-availability payload limit")
         return cls(_uint(r["lane"], 32), _uint(r["dataspace"]), _byte32(r["incarnation"], "native lane incarnation"),
-                   SumeragiParameters.from_payload(r["params"]),
+                   params, layout,
                    tuple(SumeragiLaneMember.from_payload(member) for member in committee),
                    _uint(r["created_at"]), _uint(r["active_from"]), _optional_uint(r["closing"]),
                    _uint(r["anchor_freshness"]), merged, _uint(r["merged_at"]), _uint(r["rescued"]))

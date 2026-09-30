@@ -41,7 +41,8 @@ pub use physical::PublishedPublication;
 /// Charged cells require both original allocation owners before cloning either
 /// writer. The untracked convenience API is unavailable in that mode.
 /// ```compile_fail
-/// use mv::{allocation::AllocationCharge, cell::Cell};
+/// use iroha_allocation::{AllocationCharge};
+/// use mv::{cell::Cell};
 /// fn cannot_skip_admission(cell: &Cell<u64, AllocationCharge>) {
 ///     let _block = cell.block();
 /// }
@@ -115,7 +116,7 @@ impl<V: Value> Cell<V> {
     }
 }
 
-impl<V: Value> Cell<V, crate::allocation::AllocationCharge> {
+impl<V: Value> Cell<V, iroha_allocation::AllocationCharge> {
     /// Attach both original physical generation shells and the exact successor.
     /// Every owner must originate from the enclosing execution pool. Refusal
     /// returns all three unchanged before acquiring any physical writer.
@@ -123,9 +124,9 @@ impl<V: Value> Cell<V, crate::allocation::AllocationCharge> {
         &self,
         backing: CellGenerationBacking<V>,
         successor: CellPublicationSuccessor,
-        budget: &crate::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<
-        BlockAcquisitionSlot<'_, V, crate::allocation::AllocationCharge>,
+        BlockAcquisitionSlot<'_, V, iroha_allocation::AllocationCharge>,
         (CellGenerationBacking<V>, CellPublicationSuccessor),
     > {
         if !backing.belongs_to(budget) || !successor.belongs_to(budget) {
@@ -237,7 +238,7 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
         &self,
         charges: CellAllocationCharges<Charge>,
         successor: CellPublicationSuccessor,
-        budget: &crate::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<
         BlockAcquisitionSlot<'_, V, Charge>,
         (CellAllocationCharges<Charge>, CellPublicationSuccessor),

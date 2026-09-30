@@ -42,8 +42,12 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    `supervisor.genesis_profile` when using presets).
    CLI runs accept the same presets or an inline profile table via
    `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
-   For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
-   sections in `config/local.toml` (or pass `--nexus-config` on the CLI).
+   For multi-lane/Nexus profiles, populate the `[nexus]` section in
+   `config/local.toml` (or pass `--nexus-config` on the CLI). An optional
+   `[sumeragi]` table accepts only the node's node-local Sumeragi settings
+   (participation role, consensus-key policy, local-parameter overrides and
+   safety-record paths); Mochi rejects every other key, such as the retired
+   `sumeragi.queues` table, before it writes peer configs.
    Nexus routing is mandatory; generated configs omit the retired availability
    switch and require NPoS consensus for custom multi-lane topology. Consensus
    mode and chain parameters come from signed genesis and committed state; the
@@ -134,7 +138,8 @@ id = 0
 
 [sumeragi]
 # role = "validator"
-# Consensus mode, committee geometry and deadlines come from signed genesis and committed state.
+# Only node-local settings belong here. Consensus mode, committee geometry, block limits and
+# payload limits come from signed genesis and committed state.
 ```
 
 Alternatively, store exactly the `[nexus]` block above, with no sibling root

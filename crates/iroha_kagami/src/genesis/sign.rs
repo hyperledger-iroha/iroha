@@ -1145,7 +1145,11 @@ fn staged_sumeragi_context_hashes_on_bounded_stack(
         provisional,
     ) {
         Ok(staged) => Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash)),
-        Err(error) => match error.downcast_ref::<iroha_core::block::BlockValidationError>() {
+        // Staging wraps the boxed validation error exactly as core returns it.
+        Err(error) => match error
+            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+            .map(Box::as_ref)
+        {
             Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                 actual_execution,
                 actual_nexus,
@@ -2000,6 +2004,7 @@ pub(crate) mod tests {
         io::{BufWriter, Write},
         path::PathBuf,
         str::FromStr,
+        time::Duration,
     };
 
     pub(crate) struct NativeGenesisFixture {
@@ -2028,6 +2033,36 @@ pub(crate) mod tests {
             .build_raw()
             .expect("complete signed native genesis fixture")
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        // The clock authority performs ordinary charged work after genesis. Its
+        // currency, fee recipient and allocation must therefore be signed inputs,
+        // with the original configured fee policy retained during execution.
+        let fee_asset = AssetDefinitionId::parse_address_literal(&config.nexus.fees.fee_asset_id)
+            .expect("canonical fixture fee currency");
+        let fee_sink = AccountId::parse_encoded(&config.nexus.fees.fee_sink_account_id)
+            .expect("canonical fixture fee recipient");
+        let mut registrations = BootstrapRegistrations::from_manifest(&raw);
+        let mut builder = raw.into_builder().next_transaction();
+        if registrations.asset_defs.insert(fee_asset.clone()) {
+            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+                fee_asset.clone(),
+                "XOR",
+                NumericSpec::fractional(9),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
+        }
+        if fee_sink != AccountId::new(key.public_key().clone())
+            && registrations.accounts.insert(fee_sink.clone())
+        {
+            builder = builder.append_instruction(Register::account(Account::new(fee_sink)));
+        }
+        let raw = builder
+            .append_instruction(Mint::asset_quantity(
+                10_000_u64,
+                AssetId::new(fee_asset, AccountId::new(key.public_key().clone())),
+            ))
+            .build_raw()
+            .expect("explicit original clock fee allocation");
         use iroha_data_model::sumeragi_lanes::{
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
         };
@@ -2040,6 +2075,7 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         committee.sort_by(|a, b| a.peer.cmp(&b.peer));
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,
@@ -2117,16 +2153,68 @@ pub(crate) mod tests {
                 chain.state().view().world().sumeragi_lanes().lanes.len(),
                 lane_count as usize - 1
             );
-            chain.commit(Vec::new());
+            let key = KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519);
+            let fee_asset =
+                AssetDefinitionId::parse_address_literal(&fixture.config.nexus.fees.fee_asset_id)
+                    .unwrap();
+            let payer_asset =
+                AssetId::new(fee_asset.clone(), AccountId::new(key.public_key().clone()));
+            let before = chain
+                .state()
+                .view()
+                .world()
+                .asset(&payer_asset)
+                .unwrap()
+                .value()
+                .clone()
+                .into_inner();
+            let mut transaction = iroha_data_model::transaction::TransactionBuilder::new(
+                chain.network_id(),
+                AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                        iroha_data_model::transaction::FeeChargeKind::Nexus,
+                        fee_asset,
+                        1_u64.into(),
+                    )],
+                    None,
+                ),
+            );
+            transaction.set_creation_time(
+                chain.genesis().header().creation_time()
+                    + Duration::from_millis(
+                        fixture
+                            .manifest
+                            .effective_parameters()
+                            .unwrap()
+                            .sumeragi()
+                            .block_cadence_ms
+                            .get()
+                            - 1,
+                    ),
+            );
+            let transaction = transaction
+                .with_instructions([Log::new(
+                    Level::DEBUG,
+                    "original prepared configuration charged work".into(),
+                )])
+                .sign(key.private_key());
+            assert_eq!(chain.commit(vec![transaction]), [true]);
             let committed = chain.committed(2);
+            let outcome = &committed.block().network_output_at(0).unwrap().1.result;
+            assert!(outcome.is_ok(), "original clock transaction: {outcome:?}");
             assert!(
-                committed
-                    .block()
-                    .network_output_at(0)
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset(&payer_asset)
                     .unwrap()
-                    .1
-                    .result
-                    .is_ok()
+                    .value()
+                    .clone()
+                    .into_inner()
+                    < before,
+                "the original configured fee policy must actually debit signed funds"
             );
             let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
                 fixture.manifest.chain_id(),
@@ -2358,10 +2446,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         table.insert(file_field, path.to_string_lossy().into_owned().into());
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture materializes the exact complete private config and its real signing identity together"
-    )]
     fn runtime_test_peer_config(
         mut table: toml::Table,
         manifest: &RawGenesisTransaction,
@@ -2763,10 +2847,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         load_peer_config(&path).expect("owner-only signing config must load");
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the parity test keeps final-identity signing and both independent tamper checks in one ordered scenario"
-    )]
     fn signer_and_final_network_id_restaging_have_exact_context_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/peer0.toml"));
@@ -2886,12 +2966,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Hash::prehashed(signed_parameters.execution_policy_hash),
         )
         .expect_err("a final-identity Nexus/AMX policy mismatch must fail closed");
-        assert!(
-            nexus_error
-                .to_string()
-                .contains("changed the signed Nexus/AMX context"),
-            "unexpected Nexus/AMX tamper error: {nexus_error:#}"
+        let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+            expected_execution,
+            actual_execution,
+            expected_nexus,
+            actual_nexus,
+        }) = nexus_error
+            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+            .map(Box::as_ref)
+        else {
+            panic!("unexpected Nexus/AMX tamper error: {nexus_error:#}");
+        };
+        assert_eq!(
+            *expected_nexus,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash)
         );
+        assert_eq!(
+            *expected_execution,
+            Hash::prehashed(signed_parameters.execution_policy_hash)
+        );
+        assert_ne!(actual_nexus, expected_nexus);
+        assert_ne!(actual_execution, expected_execution);
 
         let mut tampered_execution_config = config.clone();
         tampered_execution_config
@@ -2909,12 +3004,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Hash::prehashed(signed_parameters.execution_policy_hash),
         )
         .expect_err("a final-identity execution-policy mismatch must fail closed");
-        assert!(
-            execution_error
-                .to_string()
-                .contains("changed the signed execution policy"),
-            "unexpected execution-policy tamper error: {execution_error:#}"
+        let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+            expected_execution,
+            actual_execution,
+            expected_nexus,
+            actual_nexus,
+        }) = execution_error
+            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+            .map(Box::as_ref)
+        else {
+            panic!("unexpected execution-policy tamper error: {execution_error:#}");
+        };
+        assert_eq!(
+            *expected_execution,
+            Hash::prehashed(signed_parameters.execution_policy_hash)
         );
+        assert_eq!(
+            *expected_nexus,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash)
+        );
+        assert_ne!(actual_execution, expected_execution);
+        assert_eq!(actual_nexus, expected_nexus);
     }
 
     #[test]
@@ -3006,7 +3116,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
     }
-    fn with_explicit_test_xor_allocations(
+    pub(crate) fn with_explicit_test_xor_allocations(
         manifest: RawGenesisTransaction,
         topology: &[PeerId],
     ) -> RawGenesisTransaction {
@@ -3321,10 +3431,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the regression test audits the complete bound-manifest write/sign contract as one transaction"
-    )]
     fn bound_manifest_output_matches_the_manifest_used_for_signing() {
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
@@ -4294,10 +4400,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the integration regression exercises one generated Nexus localnet through complete peer-config resigning"
-    )]
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
         let output_dir = fs::canonicalize(temp.path()).expect("canonical localnet output path");
@@ -5059,7 +5161,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect_err("public stake config must match XOR alias binding");
         assert!(
             err.to_string()
-                .contains("must match the canonical XOR binding"),
+                .contains("NPoS stake asset must equal the committed canonical XOR definition"),
             "unexpected error: {err}"
         );
     }

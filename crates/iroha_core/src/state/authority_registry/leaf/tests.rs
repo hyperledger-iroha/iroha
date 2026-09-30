@@ -830,10 +830,10 @@ fn selected_table_hashed_key_range_rejects_wrong_root_omission_and_limits() {
     ));
 }
 
-fn capture_budget() -> mv::allocation::AllocationBudget {
-    mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
+fn capture_budget() -> iroha_allocation::AllocationBudget {
+    iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)
 }
 
-fn fixture_budget() -> mv::allocation::AllocationBudget {
-    mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
+fn fixture_budget() -> iroha_allocation::AllocationBudget {
+    iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)
 }

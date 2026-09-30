@@ -12,7 +12,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use iroha_core::zk::kagemusha_v1_recursion::{
+use iroha_core_zk::kagemusha_v1_recursion::{
     KagemushaTestnetMintCreditLedgerV1, KagemushaTestnetMintLedgerCreditV1,
 };
 use libc::{c_int, c_uchar};

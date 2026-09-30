@@ -17,6 +17,8 @@ fi
 do_check() {
     local cmd="$1"
     local target="$2"
+    # Manual regeneration hint; empty when `--update` is the only reproducible route.
+    local manual="${3-$cmd > $target}"
     local output_dir
     local output_name
     local staged_output
@@ -47,8 +49,12 @@ do_check() {
     else
         if ! diff "$staged_output" "$target" > /dev/null; then
             echo "[DIFF] $target is out of date"
-            echo "Run with \"--update\" to regenerate automatically, or run manually:"
-            echo "  $cmd > $target"
+            if [[ -n "$manual" ]]; then
+                echo "Run with \"--update\" to regenerate automatically, or run manually:"
+                echo "  $manual"
+            else
+                echo "Run with \"--update\" to regenerate it."
+            fi
             exit_code=1
         else
             echo "[OK] $target is up to date"
@@ -136,13 +142,50 @@ PY
     echo "[OK] $target is a canonical incomplete genesis source template"
 }
 
+# Deterministic development committee shared by every checked-in Compose snapshot.
+compose_seed="Iroha"
+compose_peers=4
+compose_dev_root=""
+
+remove_compose_dev_root() {
+    if [[ -n "$compose_dev_root" ]]; then
+        rm -rf -- "$compose_dev_root"
+        compose_dev_root=""
+    fi
+}
+
+# `kagami docker --seed` reads a complete `genesis.json` from `--config-dir`. Complete manifests
+# carry operator-provisioned KAGEMUSHA mint-finality authority and are never checked in, so the
+# snapshots render against a disposable localnet bundle derived from the same development seed.
+# The manifest only selects the consensus mode: the Compose bytes depend on the seed, peer count,
+# image, build context and output path, never on this temporary directory.
+prepare_compose_dev_bundle() {
+    local tmp_root="${TMPDIR:-/tmp}"
+    compose_dev_root="$(mktemp -d "${tmp_root%/}/iroha-compose-dev.XXXXXX")"
+    trap 'remove_compose_dev_root' EXIT
+    local cmd="${bin_kagami[*]} localnet --peers $compose_peers --seed $compose_seed --out-dir \"$compose_dev_root/localnet\""
+    if ! eval "$cmd" > "$compose_dev_root/localnet.log" 2>&1; then
+        echo "[FAIL] unable to render the deterministic development genesis input"
+        echo "  $cmd"
+        cat -- "$compose_dev_root/localnet.log"
+        exit_code=1
+        return 1
+    fi
+    if [[ ! -s "$compose_dev_root/localnet/genesis.json" ]]; then
+        echo "[FAIL] the development genesis input lacks genesis.json"
+        echo "  $cmd"
+        exit_code=1
+        return 1
+    fi
+}
+
 do_check_swarm() {
-    local peers="$1"
-    local image="$2"
-    local extra="$3"
-    local target="$4"
-    local cmd_base="${bin_kagami[@]} docker --peers $peers --seed Iroha --healthcheck --config-dir ./defaults --image $image --print"
-    do_check "$cmd_base --out-file $target $extra" "$target"
+    local image="$1"
+    local extra="$2"
+    local target="$3"
+    local cmd_base="${bin_kagami[*]} docker --peers $compose_peers --seed $compose_seed --healthcheck --config-dir \"$compose_dev_root/localnet\" --image $image --print"
+    # The rendering command names a temporary bundle, so `--update` is the only manual route.
+    do_check "$cmd_base --out-file $target $extra" "$target" ""
 }
 
 cmd_schema="${bin_kagami[@]} advanced schema"
@@ -177,9 +220,12 @@ for task in "${tasks[@]}"; do
             do_check "$cmd_kagami_help" "crates/iroha_kagami/CommandLineHelp.md"
             ;;
         "docker-compose")
-            do_check_swarm 4 hyperledger/iroha:local "--build ." "defaults/docker-compose.single.yml"
-            do_check_swarm 4 hyperledger/iroha:local "--build ." "defaults/docker-compose.local.yml"
-            do_check_swarm 4 hyperledger/iroha:dev "" "defaults/docker-compose.yml"
+            if prepare_compose_dev_bundle; then
+                do_check_swarm hyperledger/iroha:local "--build ." "defaults/docker-compose.single.yml"
+                do_check_swarm hyperledger/iroha:local "--build ." "defaults/docker-compose.local.yml"
+                do_check_swarm hyperledger/iroha:dev "" "defaults/docker-compose.yml"
+            fi
+            remove_compose_dev_root
             ;;
     esac
 done

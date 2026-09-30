@@ -1643,10 +1643,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
 /// Returns `None` when the domain and column shapes do not match, mirroring the
 /// validation performed by [`PoseidonColumnBatch::from_domains_and_columns`].
 #[cfg(test)]
-pub fn hash_columns_cpu_batch_inputs(
-    domains: &[&str],
-    columns: &[Vec<u64>],
-) -> Option<Vec<u64>> {
+pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> Option<Vec<u64>> {
     if domains.len() != columns.len() {
         return None;
     }

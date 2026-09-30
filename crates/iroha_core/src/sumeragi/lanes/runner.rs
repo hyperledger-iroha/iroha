@@ -36,7 +36,7 @@ use iroha_sumeragi::{crypto::NoAttestation, types::Hash32};
 use parking_lot::Mutex;
 
 use super::{
-    executor::LaneExecutor,
+    executor::{LaneExecutor, LaneRecovery},
     global::{AppliedWatch, GlobalAnchors, QueueLaneTransactions, StatelessChecks},
     lane_genesis_result, lane_height_config, lane_instance,
     registry::LaneStores,
@@ -51,9 +51,11 @@ use crate::{
             Driver, DriverConfig, DriverStart, RunningDriver, SharedCrypto, assemble_init,
             persist::install_records,
             traits::{
-                BlockStore as _, Frame, LogEntry, Net, Observer, RecordStore as _, SystemClock,
+                BlockStore as _, Frame, LogEntry, Net, Observer, RecordStore as _, SendOutcome,
+                SystemClock,
             },
         },
+        metrics::{InstanceMetrics, MetricsInstance},
         net::SumeragiIngress,
         node::{LogObserver, local_params, startup_nonce},
         records::{FileRecordStore, fresh_store_id},
@@ -67,8 +69,8 @@ const IDLE_CHECK: Duration = Duration::from_millis(500);
 struct SharedNet(Arc<dyn Net>);
 
 impl Net for SharedNet {
-    fn send(&self, to: &iroha_sumeragi::types::PublicKey, frame: &Frame) {
-        self.0.send(to, frame);
+    fn send(&self, to: &iroha_sumeragi::types::PublicKey, frame: &Frame) -> SendOutcome {
+        self.0.send(to, frame)
     }
 }
 
@@ -111,10 +113,13 @@ struct RunningLane {
     driver: RunningDriver,
 }
 
+type PendingRecovery = LaneRecovery<GlobalAnchors, StatelessChecks, QueueLaneTransactions>;
+
 struct Inner {
     inputs: LaneRunnerInputs,
     net: Arc<SharedNet>,
     running: Mutex<BTreeMap<(LaneId, [u8; 32]), RunningLane>>,
+    recovering: Mutex<BTreeMap<(LaneId, [u8; 32]), PendingRecovery>>,
     stop: AtomicBool,
 }
 
@@ -216,6 +221,7 @@ impl LaneRunner {
             net: Arc::new(SharedNet(Arc::clone(&inputs.net))),
             inputs,
             running: Mutex::new(BTreeMap::new()),
+            recovering: Mutex::new(BTreeMap::new()),
             stop: AtomicBool::new(false),
         });
         inner.reconcile();
@@ -298,6 +304,11 @@ impl Inner {
                 view.world().sumeragi_lanes().clone(),
             )
         };
+        self.recovering.lock().retain(|(lane, incarnation), _| {
+            lanes
+                .lane(*lane)
+                .is_some_and(|record| record.incarnation == *incarnation)
+        });
         let mut running = self.running.lock();
         let retired = running
             .keys()
@@ -311,6 +322,7 @@ impl Inner {
         for key in retired {
             if let Some(lane) = running.remove(&key) {
                 self.stop_lane(lane);
+                InstanceMetrics::retire(&self.inputs.state.telemetry, MetricsInstance::Lane(key.0));
                 self.inputs.stores.release(key.0, &key.1);
                 iroha_logger::info!(lane = %key.0, "sumeragi: lane instance retired");
             }
@@ -407,15 +419,6 @@ impl Inner {
             startup_nonce(),
         )
         .map_err(|error| error.to_string())?;
-        let bodies = Arc::new(
-            FileBodyStore::open(
-                &inputs.bodies_dir,
-                &instance,
-                Arc::clone(&shared),
-                BodyLimits::default(),
-            )
-            .map_err(|error| error.to_string())?,
-        );
         let member = record
             .committee
             .iter()
@@ -427,20 +430,47 @@ impl Inner {
                 Arc::clone(&inputs.state),
             ))
         });
-        let executor = LaneExecutor::recover(
-            record.clone(),
-            config.clone(),
-            Arc::new(GlobalAnchors::new(
-                Arc::clone(&inputs.state),
-                Arc::clone(&inputs.watch),
-            )),
-            StatelessChecks::new(inputs.network),
-            transactions,
-            genesis.0,
-            &*store,
-        )?;
+        let recovery_key = (record.lane, record.incarnation);
+        let pending = self.recovering.lock().remove(&recovery_key);
+        let recovery = pending.unwrap_or_else(|| {
+            LaneExecutor::begin_recover(
+                record.clone(),
+                config.clone(),
+                instance,
+                Arc::new(GlobalAnchors::new(
+                    Arc::clone(&inputs.state),
+                    Arc::clone(&inputs.watch),
+                )),
+                StatelessChecks::new(inputs.network),
+                transactions,
+                genesis.0,
+                store.clone(),
+                shared.clone(),
+                inputs.state.ivm_execution_budget(),
+            )
+        });
+        let executor = match recovery.complete() {
+            Ok(executor) => executor,
+            Err((recovery, error)) => {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    self.recovering.lock().insert(recovery_key, recovery);
+                }
+                return Err(error.to_string());
+            }
+        };
+        let bodies = Arc::new(
+            FileBodyStore::open(
+                &inputs.bodies_dir,
+                &instance,
+                Arc::clone(&shared),
+                BodyLimits::default(),
+                inputs.state.ivm_execution_budget(),
+            )
+            .map_err(|error| error.to_string())?,
+        );
         let signer = KeyPairSigner::new(&inputs.key_pair).map_err(|error| error.to_string())?;
         let observer: Arc<dyn Observer> = Arc::new(LogObserver);
+        let metrics = MetricsInstance::Lane(record.lane);
         let driver = Driver::new(
             Arc::clone(&self.net),
             Arc::clone(&inputs.records),
@@ -450,6 +480,7 @@ impl Inner {
             executor,
             observer,
         )
+        .with_metrics(InstanceMetrics::for_node(&inputs.state.telemetry, metrics))
         .spawn(
             inputs.driver,
             DriverStart {
@@ -457,13 +488,17 @@ impl Inner {
                 allocation_budget: inputs.state.ivm_execution_budget(),
                 local: local_params(config.committee.n(), &inputs.local),
                 init,
-                signers: vec![Box::new(signer)],
+                signers: vec![Arc::new(signer)],
                 crypto: shared,
                 attestor: Box::new(NoAttestation),
                 verifier: Box::new(NoAttestation),
             },
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            // A lane that did not start exports no series.
+            InstanceMetrics::retire(&inputs.state.telemetry, metrics);
+            error.to_string()
+        })?;
         if let Some(ingress) = &inputs.ingress {
             ingress.register(instance, Arc::new(driver.handle()));
         }

@@ -7,7 +7,7 @@ use crate::{
     types::{AggregateSignature, SIGNATURE_LEN},
 };
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -36,7 +36,10 @@ fn chain(h: &H, k: u64) -> Vec<SyncEntry> {
         let block = h.block_at(height, parent, 0, &height.to_be_bytes());
         let commit_qc = h.cqc_for(&block, 0);
         parent = (h.bh(&block), result_of(&block));
-        chain.push(SyncEntry { block, commit_qc });
+        chain.push(SyncEntry {
+            manifest: manifest(&block),
+            commit_qc,
+        });
     }
     chain
 }
@@ -51,7 +54,10 @@ fn junk(h: &H, from: u64, count: u64) -> Vec<SyncEntry> {
         let mut commit_qc = h.cqc_for(&block, 0);
         commit_qc.agg_sig = AggregateSignature([7; SIGNATURE_LEN]);
         parent = (h.bh(&block), result_of(&block));
-        out.push(SyncEntry { block, commit_qc });
+        out.push(SyncEntry {
+            manifest: manifest(&block),
+            commit_qc,
+        });
     }
     out
 }
@@ -201,13 +207,15 @@ fn review_init_configs_beyond_t_plus_2_are_refused() {
         false,
     )];
     let start = |init: Init| {
-        let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+        let signers: Vec<std::sync::Arc<dyn Signer>> =
+            vec![std::sync::Arc::new(h.signers[0].clone())];
         Core::new(
             h.local,
             init,
             signers,
             Box::new(h.v.crypto.clone()),
             crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            h.budget.clone(),
             0,
         )
         .map(|_| ())
@@ -408,13 +416,14 @@ fn review_zero_payload_retry_refused_at_start() {
             config.params.block_time = 0;
         }
     }
-    let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+    let signers: Vec<std::sync::Arc<dyn Signer>> = vec![std::sync::Arc::new(h.signers[0].clone())];
     let started = Core::new(
         h.local,
         init,
         signers,
         Box::new(h.v.crypto.clone()),
         crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+        h.budget.clone(),
         0,
     );
     assert!(matches!(
@@ -431,7 +440,12 @@ fn review_leader_preserves_nonempty_payload_at_view_0() {
     let out = h.built(b"tx");
     let sent = proposals(&out);
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].payload.as_deref(), Some(&b"tx"[..]));
+    assert_eq!(
+        h.bodies[&sent[0].block_hash(&h.v.crypto)]
+            .payload()
+            .as_slice(),
+        &b"tx"[..]
+    );
 }
 
 /// E22: a zero `build_timeout` is refused (it answered every build with `EMPTY` before the
@@ -449,13 +463,14 @@ fn review_zero_build_timeout_refused() {
         build_timeout: 0,
         ..h.local
     };
-    let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+    let signers: Vec<std::sync::Arc<dyn Signer>> = vec![std::sync::Arc::new(h.signers[0].clone())];
     let started = Core::new(
         local,
         h.init(records),
         signers,
         Box::new(h.v.crypto.clone()),
         crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+        h.budget.clone(),
         0,
     );
     assert!(matches!(

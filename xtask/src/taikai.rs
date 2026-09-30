@@ -390,7 +390,11 @@ mod tests {
     };
     use iroha_model_base::name::Name;
     use std::str::FromStr;
-    use tempfile::tempdir;
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        // Resolve the system temporary root before constructing strict output paths.
+        // macOS spells it through /var, which is itself a symlink.
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
+    }
     fn sample_name(raw: &str) -> Name {
         Name::from_str(raw).expect("valid name")
     }
@@ -573,7 +577,12 @@ mod tests {
         })
         .expect_err("empty validity windows must fail");
 
-        assert!(err.to_string().contains("validity window is invalid"));
+        assert!(
+            err.root_cause()
+                .to_string()
+                .contains("validity window is invalid"),
+            "the native validity-window refusal must remain the root cause: {err:#}"
+        );
     }
 
     #[test]

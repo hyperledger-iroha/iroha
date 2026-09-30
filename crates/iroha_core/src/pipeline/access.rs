@@ -3233,7 +3233,7 @@ seiyaku StaticAccessCounter {
   kotoage fn write_one_again() authorize("CanWrite") { Counters[1] = 30; }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile static-access contract");
         let code_hash = ivm::contract_code_hash(&program);
@@ -3299,7 +3299,7 @@ seiyaku WarmAccessCounter {
   kotoage fn write_one() authorize("CanWrite") { Counters[1] = 10; }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile warm-access contract");
         let mut cache = IvmCache::with_capacity(2);
@@ -3354,7 +3354,7 @@ seiyaku HelperStaticAccess {
   kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile helper-static contract");
         let code_hash = ivm::contract_code_hash(&program);
@@ -3479,7 +3479,7 @@ seiyaku DynamicAccessCounter {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic-access contract");
         let code_hash = ivm::contract_code_hash(&program);
@@ -3831,7 +3831,7 @@ seiyaku DynamicAccessCounter {
             .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(13, 10, 0)
+            &kotodama_lang::compiler::encode_addi(13, 10, 0)
                 .expect("encode addi")
                 .to_le_bytes(),
         ); // save account ptr
@@ -3848,7 +3848,7 @@ seiyaku DynamicAccessCounter {
             .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(11, 10, 0)
+            &kotodama_lang::compiler::encode_addi(11, 10, 0)
                 .expect("encode addi")
                 .to_le_bytes(),
         ); // r11 = key ptr
@@ -3865,12 +3865,12 @@ seiyaku DynamicAccessCounter {
             .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(12, 10, 0)
+            &kotodama_lang::compiler::encode_addi(12, 10, 0)
                 .expect("encode addi")
                 .to_le_bytes(),
         ); // r12 = value ptr
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(10, 13, 0)
+            &kotodama_lang::compiler::encode_addi(10, 13, 0)
                 .expect("encode addi")
                 .to_le_bytes(),
         ); // r10 = account ptr
@@ -3994,7 +3994,7 @@ seiyaku DynamicAccessCounter {
         }
         .encode();
         program.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(10, 0, 72)
+            &kotodama_lang::compiler::encode_addi(10, 0, 72)
                 .expect("encode allocation size")
                 .to_le_bytes(),
         );

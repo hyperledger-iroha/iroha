@@ -386,3 +386,22 @@ wallet, and remove the Java transport/wallet callers in the same candidate.
 The Kotlin-owned mirror suites cover 17 API, four transport, and 11 Android
 wallet cases, but they do not replace Java-source compilation evidence. No
 Java compatibility facade or fallback validator belongs in the first release.
+
+## Complete-checkpoint Java paging ownership (2026-09-30)
+
+The Java Android wallet accepts Kotlin's canonical
+`ParliamentTimedOvnCastingTrustAnchorV1` and returns Kotlin's complete public-record
+and page-verification owners. The duplicate Java trust anchor and diagnostic-only
+paging value types are removed. Java response framing delegates to the canonical
+Kotlin parser. `ParliamentTimedOvnCastingProofPagerV1` owns the pure paging loop for
+both transport consumers: complete signed checkpoints survive promotion and
+persistence, every next page waits for durable persistence, and the existing page,
+height and checkpoint limits remain mandatory. Each transport retains exact
+signed, bounded, one-shot requests and requires fresh nonce/timestamp authority.
+
+Java and Kotlin consumer controls carry the genuine checked-in signed genesis
+and height-2 checkpoints, whose lengths differ from a 32-byte context hash, and
+assert defensive copies and persistence ordering. These managed controls test
+API ownership and byte preservation; current native and device qualification is
+recorded separately. Exact preceding source and assertion preimages are retained
+in the unit-repair evidence lane after concurrent removal of repository history.

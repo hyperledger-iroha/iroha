@@ -199,6 +199,46 @@ def section(text: str, start: str, end: str, relative: str) -> str:
     return match.group("body")
 
 
+RUST_TEXT_PATH = Path(__file__).resolve().with_name("rust_text.py")
+_RUST_TEXT: dict[str, object] = {}
+
+
+def mask_rust(source: str) -> str:
+    """Blank Rust comments and literals, preserving offsets, with the shared lexer."""
+    if not _RUST_TEXT:
+        namespace = {"__name__": "sora_parliament_rust_text", "__file__": str(RUST_TEXT_PATH)}
+        exec(compile(RUST_TEXT_PATH.read_bytes(), str(RUST_TEXT_PATH), "exec"), namespace)
+        _RUST_TEXT.update(namespace)
+    return _RUST_TEXT["mask_rust_comments"](source)
+
+
+def rust_item(text: str, declaration: str, relative: str) -> str:
+    """Return one live Rust item from its declaration through its matching brace.
+
+    Comments and literals are masked first, so a commented or quoted copy of the
+    declaration is not an owner and a brace inside a string cannot move the end.
+    """
+    masked = mask_rust(text)
+    starts = [match.start() for match in re.finditer(re.escape(declaration), masked)]
+    if len(starts) != 1:
+        raise RuntimeError(
+            f"{relative}: expected one live declaration {declaration!r}, found {len(starts)}"
+        )
+    # A declaration may include its own opening brace; signatures contain none.
+    opening = masked.find("{", starts[0])
+    depth = 0
+    for index in range(max(opening, 0), len(masked)):
+        depth += (masked[index] == "{") - (masked[index] == "}")
+        if depth == 0:
+            return text[starts[0]:index + 1]
+    raise RuntimeError(f"{relative}: unclosed item {declaration!r}")
+
+
+def compact_rust(text: str) -> str:
+    """Drop line comments and all whitespace for exact statement comparison."""
+    return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))
+
+
 def public_field_names(text: str) -> tuple[str, ...]:
     """Return public named fields from one Rust DTO source section."""
     return tuple(re.findall(r"\bpub\s+([A-Za-z_][A-Za-z0-9_]*)\s*:", text))
@@ -221,6 +261,17 @@ def require_opaque_release_authorizations(tle_release: str) -> None:
             raise RuntimeError(
                 f"{tle_release_path}: opaque release authorization exposes {forbidden!r}"
             )
+    if re.search(
+        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
+        tle_release,
+    ):
+        raise RuntimeError(
+            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
+        )
+
+def require_opaque_release_projection(tle_release: str) -> None:
+    """Public verification results must never become decodable capabilities."""
+    tle_release_path = "crates/iroha_core_timed_ovn/src/tle.rs"
     validated_projection = section(
         tle_release,
         "/// Revalidated public statement admitted by an authenticated runtime broker.",
@@ -235,13 +286,6 @@ def require_opaque_release_authorizations(tle_release: str) -> None:
             raise RuntimeError(
                 f"{tle_release_path}: validated broker projection exposes {forbidden!r}"
             )
-    if re.search(
-        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
-        tle_release,
-    ):
-        raise RuntimeError(
-            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
-        )
 
 def require_opaque_casting_authorization(casting: str) -> None:
     """Keep the replay-validated casting context outside payload and frame codecs."""
@@ -301,7 +345,7 @@ def require_parliament_broker_primitives(source: str) -> None:
         (
             "ParliamentTleCapabilityAttestRequestWireV1",
             (
-                "pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1",
+                "pub(super) key_session: iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1",
                 "pub(super) participant_index: u16",
             ),
         ),
@@ -508,7 +552,7 @@ def require_block_start_construction(state: str) -> None:
     handoff = section(code, "finish_state_block_construction(||{", "})}}#[inline(never)]", path)
     prefix = (
         "letcanonical_runtime::AcquiredRuntimeBlockFields{world,transactions,"
-        "commit_topology,prev_commit_topology,lane_consensus_contexts,canonical_runtime,"
+        "commit_topology,prev_commit_topology,canonical_runtime,native_execution_tip,"
         "projection,block_hashes,da_rewind_releases,}=original.take()"
         '.expect("originalacquiredStateblock").into_fields();'
         "letblock=StateBlock::from_fields(StateBlockFields{"
@@ -551,20 +595,14 @@ def require_block_start_construction(state: str) -> None:
     )}
     expected.update({
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
+        "native_execution_tip": "block_field::BlockField::new(native_execution_tip)",
         "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
         "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
         "commit_topology": "block_field::BlockField::new(commit_topology)",
         "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
-        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
         "local_storage_refusal": "None",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
-        "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
-        "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
-        "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
-        "commit_topology": "block_field::BlockField::new(commit_topology)",
-        "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
-        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
         "pending_parliament_telemetry_events":
             'pending_parliament_telemetry_events.take().expect("preparedStateinput")',
     })
@@ -705,12 +743,36 @@ def require_block_start_enactment_phases(state: str) -> None:
 def require_parliament_event_capture(state: str) -> None:
     """Capture the committed telemetry projection before draining original events."""
     state_path = "crates/iroha_core/src/state.rs"
-    parliament_event_capture = section(
-        state,
-        "    fn apply_without_execution_inner(",
-        "    fn pin_new_autoscale_lane_committee(",
-        state_path,
-    )
+    # The committed Sumeragi carrier reaches the sole event drain only through
+    # its original carrier-bound preparation; neither caller drains on its own.
+    production = compact_rust(mask_rust(rust_item(
+        state, "    pub(crate) fn apply_without_execution_with_sumeragi_commit(", state_path,
+    )))
+    carrier = compact_rust(mask_rust(rust_item(state, "    fn apply_without_execution_inner(", state_path)))
+    if (production.count("state.apply_without_execution_inner(block,committee)") != 1
+            or carrier.count("self.prepare_carrier_publication_events(block.as_ref().header())") != 1
+            or "take_external_events" in production + carrier):
+        raise RuntimeError(
+            f"{state_path}: committed carrier events must drain only through the "
+            "original Parliament projection"
+        )
+    require_all(state_path, production, (
+        "let(events,authorization)=state.apply_without_execution_inner(block,committee);"
+        "authorization.map(|()|events)",
+    ))
+    require_all(state_path, carrier, (
+        "let events = match self.prepare_carrier_publication_events(block.as_ref().header()) {"
+        "Ok(events) => events, Err(error) => return (Vec::new(), Err(error)), }; (events, Ok(()))".replace(" ", ""),
+    ))
+    parliament_event_capture = mask_rust(rust_item(
+        state, "    fn prepare_carrier_publication_events(", state_path
+    ))
+    carrier_guard = "ifheader!=self._curr_block{returnErr("
+    projection = compact_rust(parliament_event_capture).find("letparliament_transitions=self")
+    if not 0 <= compact_rust(parliament_event_capture).find(carrier_guard) < projection:
+        raise RuntimeError(
+            f"{state_path}: Parliament event capture must belong to the original carrier"
+        )
     require_all(
         state_path,
         parliament_event_capture,
@@ -748,22 +810,52 @@ def require_parliament_event_capture(state: str) -> None:
 
 
 def require_parliament_commit_publication(state: str) -> None:
-    """Publish Parliament metrics only from the retained State owner, with replay guards."""
+    """Publish Parliament metrics only from the retained State owner, once, after publication."""
     state_path = "crates/iroha_core/src/state.rs"
     require_all(state_path, state, (
         "mod publication;", "publication: Option<publication::StatePublication<'state>>",
+    ))
+    # The telemetry distinction is retained by the same move-only execution
+    # authority. It selects observations only, after the real replay path has
+    # admitted sources, witnesses and finality through the ordinary pipeline.
+    executor_path = "crates/iroha_core/src/sumeragi/executor.rs"
+    executor = compact_rust(read(executor_path))
+    require_all(executor_path, executor, (
+        ".prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::HistoricalReplay)",
+        "self.prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::Forward)",
+        "require_body_admission(block,&self.execution_budget)?;require_qc_witness_admission(commit_qc,&self.execution_budget)?;self.call(|reply|Request::Prepare(block.clone(),commit_qc.clone(),origin,reply))",
+        "Request::Prepare(block,qc,origin,reply)=>{let_=reply.send(self.prepare_with_origin(&block,&qc,origin));}",
+        "pending.matches(block,qc)&&pending.telemetry_origin==origin",
+        "iflive.telemetry_origin.is_some_and(|original|original!=origin){returnErr(\"preparedexecutiontelemetryorigincannotbereplaced\".into());}",
+        "live.telemetry_origin=Some(origin);",
+        'telemetry_origin:live.telemetry_origin.expect("originalpreparedtelemetryorigin")',
+        "pub(crate)fntelemetry_origin(&self)->CommitTelemetryOrigin{self.telemetry_origin}",
+        "let(state,tip,telemetry_origin)=original.into_parts();Self{state,tip,parent:None,telemetry_origin,}",
+    ))
+    startup_path = "crates/iroha_core/src/sumeragi/startup.rs"
+    require_all(startup_path, compact_rust(read(startup_path)), (
+        "telemetry_origin:matchstored{Some(_)=>super::executor::CommitTelemetryOrigin::HistoricalReplay,None=>super::executor::CommitTelemetryOrigin::Forward,}",
+        "(self.state,self.tip,self.telemetry_origin)",
+    ))
+    seal_path = "crates/iroha_core/src/state/output_seal.rs"
+    seal = compact_rust(rust_item(read(seal_path),
+                                 "    pub(in crate::state) fn committed_telemetry_origin(", seal_path))
+    require_all(seal_path, seal, (
+        "Some(ExecutionOutputPlanState::Finalized(finalized))=>{Ok(finalized.authorized.native_execution.telemetry_origin())}",
+        '_=>Err("telemetryoriginlacksfinalizedexecutionauthority".into())',
     ))
     path = "crates/iroha_core/src/state/publication.rs"
     publication = read(path)
     source_compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", publication))
     require_all(path, source_compact, (
-        "pub(crate)fntry_publish(&mutself)->StatePublicationOutcome{self.try_publish_inner(None,None)}",
-        "self.try_publish_inner(authorization,veto).into_result()",
-        "letmutoriginal=self.publication.take().unwrap_or_else(||StatePublication::new(self.state_ref,authorization));",
+        "pub(crate)fntry_publish(&mutself)->StatePublicationOutcome{self.try_publish_inner()}",
+        "pub(super)fncommit_inner(mutself)->Result<(),TransactionsBlockError>{self.try_publish_inner().into_result()}",
+        "letmutoriginal=self.publication.take().unwrap_or_else(||StatePublication::new(self.state_ref));",
         "iforiginal.published{self.publication=Some(original);returnStatePublicationOutcome::Published;}",
-        "letresult=self.attempt_original_publication(&mutoriginal,veto);",
+        "letresult=self.attempt_original_publication(&mutoriginal);",
         "iforiginal.fields_frozen&&!original.irreversible{self.recover_original_publication_fields();self.retire_original_publication_notices();}",
         "self.publication=Some(original);ifterminal{mv::BlockRetirement::release_writers(self);}result",
+        '#[cfg(feature="telemetry")]lettelemetry_origin=this.committed_telemetry_origin().map_err(|_|TransactionsBlockError::WorldCommitPreparation)?;',
     ))
     constructor = section(source_compact, "impl<'state>StatePublication<'state>{", "impl<'state>StateBlock<'state>{", path)
     if not (0 <= constructor.find("effect_cleanup:effect_publication::StateEffectLocks::new(state)")
@@ -775,9 +867,22 @@ def require_parliament_commit_publication(state: str) -> None:
     # visibility interval. The prepared World effects are consumed under that
     # same writer, after the original World journal publishes.
     compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", commit))
-    prepare = section(compact, "*world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay_mutations(",
-                      "if!*fields_frozen{", path)
-    if not prepare.endswith("ExecutionAttemptError::Deferred(reason)=>{TransactionsBlockError::ExecutionDeferred(reason)}}})?,);}"):
+    # The retained effects come from the original propagated preparation and
+    # survive the final accumulator write before the immutable field freeze.
+    prepare_call = "world_commit::PreparedWorldCommit::prepare_overlay_mutations("
+    original_preparation = "leteffects=" + prepare_call
+    retained = "*world_effects=Some(effects);"
+    refusal = "ExecutionAttemptError::Deferred(reason)=>{TransactionsBlockError::ExecutionDeferred(reason)}}})?"
+    preparation_code = compact_rust(mask_rust(commit))
+    call = preparation_code.find(prepare_call)
+    propagated = preparation_code.find(refusal, call)
+    assignment = preparation_code.find(retained)
+    frozen = preparation_code.find("if!*fields_frozen{")
+    if (preparation_code.count(prepare_call) != 1 or preparation_code.count(original_preparation) != 1
+            or preparation_code.count("leteffects=") != 1
+            or preparation_code.count(retained) != 1 or preparation_code.count("*world_effects=Some(") != 1
+            or not 0 <= call < propagated < frozen
+            or not propagated < assignment < frozen):
         raise RuntimeError(f"{path}: World preparation must propagate refusal before publication")
     validation = section(compact, "world_commit::PreparedWorldCommit::validate_prepared_overlay(",
                          "letverifier:&dynstd::any::Any=", path)
@@ -803,10 +908,14 @@ def require_parliament_commit_publication(state: str) -> None:
     geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)
     if not geometry.endswith("returnErr(TransactionsBlockError::from(err));}"):
         raise RuntimeError(f"{path}: geometry refusal must return before State publication")
+    parliament_telemetry = (
+        '#[cfg(feature="telemetry")]{iftelemetry_origin==crate::sumeragi::executor::CommitTelemetryOrigin::Forward{for&(transition,no_result_kind)'
+        "inpending_parliament_telemetry_events.iter(){"
+    )
     ordered = (
         "letcommitted_parliament_attempt_counts=world.parliament_attempt_counts.is_dirty()",
         "let_state_commit_lock=commit_fence.lock();",
-        "*world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay_mutations(",
+        prepare_call,
         "letverifier:&dynstd::any::Any=kagemusha_v1_runtime_verifier.as_ref();",
         "*tiered_snapshot=Some(",
         "ifletErr(err)=geometry_result{",
@@ -820,7 +929,7 @@ def require_parliament_commit_publication(state: str) -> None:
         "block_hashes.publish_prepared();",
         "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
         "drop(autoscale_lifecycle_guard);",
-        '#[cfg(feature="telemetry")]if!*replay_prevalidation{if!*authenticated_replay_commit{for&(transition,no_result_kind)inpending_parliament_telemetry_events.iter(){',
+        parliament_telemetry,
         "tiered_snapshot.take().expect(\"originalpreparedtieredsnapshot\").publish(",
         "drop(_state_commit_lock);",
         "*published=true;",
@@ -843,9 +952,11 @@ def require_parliament_commit_publication(state: str) -> None:
         "block_hashes.try_prepare_publication().map_err(|error|matcherror{mv::PublicationPreparationError::Busy(wait)=>{TransactionsBlockError::BlockHashesBusy(wait)}_=>TransactionsBlockError::SnapshotObservationChanged,})?;",
         "world.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
         "canonical_runtime.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
+        "native_execution_tip.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
         "effect_locks.prepare_blocking();",
         "let_view_generation=publication_notice.begin();",
         "transactions.publish_prepared();", "canonical_runtime.publish_prepared();",
+        "native_execution_tip.publish_prepared();",
         "world.publish_prepared();",
         "block_hashes.publish_prepared();",
         "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
@@ -867,14 +978,14 @@ def require_parliament_commit_publication(state: str) -> None:
     if "drop(_state_write_lock);" in publication or "drop(_view_generation);" in publication:
         raise RuntimeError(f"{path}: State publication must retain its original writer and generation")
     # Match the exact nested control-flow region, not independent tokens which
-    # could survive while replay guards or the publisher move to another scope.
+    # could survive while the replay origin, publisher or gauge changes scope.
     telemetry = section(compact, 'ifletSome(post)=da_post_publication.take(){post.publish(state_ref);}',
-                        "if!verified_lane_relay_records.is_empty(){", path)
-    start = telemetry.find('#[cfg(feature="telemetry")]if!*replay_prevalidation{if!*authenticated_replay_commit{for&(transition,no_result_kind)inpending_parliament_telemetry_events.iter(){')
+                        "*published=true;", path)
+    start = telemetry.find(parliament_telemetry)
     expected = """
         #[cfg(feature="telemetry")]
-        if !*replay_prevalidation {
-            if !*authenticated_replay_commit {
+        {
+            if telemetry_origin == crate::sumeragi::executor::CommitTelemetryOrigin::Forward {
                 for &(transition, no_result_kind) in pending_parliament_telemetry_events.iter() {
                     state_ref.telemetry.record_committed_parliament_transition(transition, no_result_kind);
                 }
@@ -887,12 +998,10 @@ def require_parliament_commit_publication(state: str) -> None:
                 state_ref.telemetry.record_citizens_total(citizens_total);
             }
         }
-        tiered_snapshot.take().expect("original prepared tiered snapshot").publish(state_ref, *replay_prevalidation);
-        if !*replay_prevalidation {
+        tiered_snapshot.take().expect("original prepared tiered snapshot").publish(state_ref);
+        {
             state_ref.enforce_nexus_storage_budget(block_height);
-            if *authenticated_replay_commit {
-                state_ref.set_query_index_status(block_height, Some(block_header_hash));
-            } else {
+            {
                 state_ref.persist_query_index_status(block_height, Some(block_header_hash));
             }
         }
@@ -900,126 +1009,386 @@ def require_parliament_commit_publication(state: str) -> None:
     """
     expected = re.sub(r"\s+", "", expected)
     if start < 0 or telemetry[start:] != expected:
-        raise RuntimeError(f"{path}: Parliament telemetry requires exact replay-guarded transition and gauge scopes")
+        raise RuntimeError(f"{path}: Parliament telemetry requires exact transition and gauge scopes")
     if compact.find(expected) <= positions[ordered.index("drop(autoscale_lifecycle_guard);")]:
         raise RuntimeError(f"{path}: Parliament telemetry must follow successful canonical publication")
     if compact.count(".record_committed_parliament_transition(") != 1:
         raise RuntimeError(f"{path}: Parliament commit must have one exact transition-metric publisher")
 
 
-def require_parliament_beacon_requirement(beacon: str) -> None:
-    """One exact indexed requirement survives deferred activation and candidate gating."""
-    # TODO(N1): the previous consensus runtime's `v2_beacon.rs`, `wire::HeightContext`
-    # and the `State::apply_without_execution_inner` section are deleted, so this
-    # check and its callers fail. Rebind the Parliament beacon-pulse requirement and
-    # the other runtime sections to the Sumeragi node driver's beacon owner.
-    path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
-    def compact(text: str) -> str:
-        return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))
+EPOCH_BEACON_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon.rs"
+BEACON_PRODUCER_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
+BEACON_PRODUCER_TESTS_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"
+BEACON_EXECUTION_TESTS_PATH = (
+    "crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"
+)
+SCHEDULE_EXECUTION_PATH = "crates/iroha_core/src/sumeragi/schedule/execution.rs"
+NATIVE_HEADER_SOURCE_PATH = "crates/iroha_core/src/block/native_header_source.rs"
 
-    requirement = section(beacon,
-        "    fn required_for_height(context: &wire::HeightContext, state: &State) -> bool {",
-        "    /// Activate only on real carrier demand,", path)
-    expected = """
-        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
-            && context.height.checked_add(1) == Some(context.epoch_end_height);
-        let world = state.world_view();
-        let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
-        let parliament_requested = world.parliament_required_beacon_pulse_slots
-            .get(&(logical_beacon_id, context.height))
-            .is_some_and(|attempts| !attempts.is_empty());
-        npos_boundary_requested || parliament_requested
-    }
-    """
-    if compact(requirement) != compact(expected):
-        raise RuntimeError(f"{path}: mandatory beacon demand must use the exact committed network-height index")
-    opened = compact(section(beacon, "    pub(crate) fn open(",
-        "    /// Retain the height's pulse requirement without starting an idle ceremony.", path))
-    required_assignment = "letrequired_for_consensus=Self::required_for_height(context,state);"
-    require_all(path, opened, (
-        "context.validate()?;", required_assignment,
-        "if!required_for_consensus{returnOk(Self{",
-        "letactive=matchactive{Ok(active)=>Some(active),Err(_)if!required_for_consensus=>None,Err(error)=>returnErr(error),};",
-        "signer,required_for_consensus,active,deferred_state:None,",
-    ))
-    if opened.count("letrequired_for_consensus") != 1:
-        raise RuntimeError(f"{path}: immediate beacon activation must retain one original requirement")
-    deferred = compact(section(beacon, "    pub(crate) fn open_deferred(",
-        "    fn required_for_height(", path))
-    require_all(path, deferred, (
-        "context.validate()?;",
-        "letrequired_for_consensus=local_validator.is_some()&&Self::required_for_height(context,state.as_ref());",
-        "required_for_consensus,active:None,deferred_state:required_for_consensus.then_some(state),",
-    ))
-    if deferred.count("letrequired_for_consensus") != 1:
-        raise RuntimeError(f"{path}: deferred beacon activation must retain one original requirement")
-    activation = section(beacon, "    pub(crate) fn activate(&mut self) -> Result<(), V2GlobalBeaconError> {",
-                         "    /// Return whether committed state requests a pulse attempt at this height.", path)
-    expected_activation = """
-        if self.active.is_some() || !self.required_for_consensus { return Ok(()); }
-        let state = self.deferred_state.as_ref().ok_or(V2GlobalBeaconError::State(
-            "mandatory beacon activation lost its committed state owner",
-        ))?;
-        let activated = Self::open(&self.context, state, self.local_validator, self.signer.clone(),)?;
-        *self = activated;
-        Ok(())
-    }
-    """
-    if compact(activation) != compact(expected_activation):
-        raise RuntimeError(f"{path}: deferred beacon must authenticate the original activation before replacement")
-    getter = section(beacon, "    pub(crate) const fn pulse_required_for_consensus(&self) -> bool {",
-                     "    /// Route the height-bound pulse through a view and emit the local share.", path)
-    if compact(getter) != "self.required_for_consensus}":
-        raise RuntimeError(f"{path}: candidate requirement must be the original committed beacon demand")
-    opening = section(beacon, "    pub(crate) fn open(",
-                      "    /// Return whether committed state requests a pulse attempt at this height.", path)
-    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in opening:
-        raise RuntimeError(f"{path}: beacon production regressed to an unbounded Parliament attempt scan")
 
-    beacon_attach = section(
-        beacon,
-        "    pub(crate) fn attach_candidate_effects(",
-        "        Ok(())\n    }",
-        path,
+def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
+    """One exact committed demand gates follower admission and local production."""
+    path = EPOCH_BEACON_PATH
+    requirement = compact_rust(rust_item(beacon, "pub(crate) fn required(", path))
+    expected = compact_rust("""
+        pub(crate) fn required(
+            world: &impl WorldReadOnly,
+            current: &ValidatorEpochContextV1,
+            height: u64,
+        ) -> bool {
+            (current.mode == ConsensusMode::Npos
+                && height.checked_add(1) == Some(current.authorization.last_height))
+                || world
+                    .parliament_required_beacon_pulse_slots()
+                    .get(&(BeaconSessionId::for_network_v1(&current.network_id), height))
+                    .is_some_and(|attempts| !attempts.is_empty())
+        }
+    """)
+    if requirement != expected:
+        raise RuntimeError(
+            f"{path}: mandatory beacon demand must use the exact committed network-height index"
+        )
+    # Follower admission: a demanded pulse is obligatory, an unrequested one is
+    # refused, and a supplied pulse passes the committed slot history and the
+    # height roster before its threshold proof is verified.
+    admission = compact_rust(rust_item(beacon, "pub(crate) fn capture(", path))
+    admission_order = (
+        "current.validate()?;",
+        "letdemanded=required(world,current,height);",
+        compact_rust("""
+            let Some(pulse) = supplied else {
+                return if demanded {
+                    Err("mandatory native beacon control witness is absent".into())
+                } else {
+                    Ok(VerifiedEpochPulse {
+                        pulse: None,
+                        link: None,
+                    })
+                };
+            };
+        """),
+        compact_rust("""
+            if !demanded {
+                return Err("native beacon control witness was not requested".into());
+            }
+        """),
+        "validate_pending_slot(world,current,height)?;",
+        "letpeers=current.committee.iter().map(|seat|seat.validator.clone()).collect::<Vec<_>>();",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session,&peers)",
+        "verify_finalized_global_threshold_beacon_pulse_v1(",
     )
-    require_all(
-        path,
-        beacon_attach,
-        (
-            "if self.pulse_required_for_consensus() && pulse.is_none()",
-            '"required finalized pulse is absent for the candidate view"',
-            "effects.finalized_global_beacon_pulse = pulse;",
-        ),
-    )
+    positions = [admission.find(token) for token in admission_order]
+    if (any(admission.count(token) != 1 for token in admission_order)
+            or positions != sorted(positions)):
+        raise RuntimeError(
+            f"{path}: follower admission must require, refuse and authenticate the committed demand"
+        )
+    require_all(path, admission, (
+        "record.session.adaptive_dkg.session.authority_generation!=current.authority.generation",
+        "current.authorization.beacon!=BeaconEpochBindingV1::Installed(installed)",
+        "Ok(VerifiedEpochPulse{pulse:Some(pulse),link:Some(link),})",
+    ))
+    pending = compact_rust(rust_item(beacon, "fn validate_pending_slot(", path))
+    require_all(path, pending, (
+        "letslot=(BeaconSessionId::for_network_v1(&current.network_id),height);",
+        ".parliament_unavailable_beacon_pulse_slots().get(&slot)"
+        ".is_some_and(|attempts|!attempts.is_empty())"
+        "||world.global_beacon_pulse_slots().get(&slot).is_some()",
+        'returnErr("nativebeaconwitnessrepeatsorcontradictscommittedpulsehistory".into());',
+    ))
 
-def require_beacon_parliament_pulse_fixtures(core: str, fixtures: str) -> None:
-    """Follow the actual compiled test module to both canonical fixture admissions."""
+    # Local production opens one round only on that same committed demand, after
+    # the committed slot check, and never builds an empty witness for it.
+    producer_path = BEACON_PRODUCER_PATH
+    code = compact_rust(mask_rust(producer))
+    if code.count("super::required(") != 1 or code.count("ActiveRound::open(") != 1:
+        raise RuntimeError(
+            f"{producer_path}: native production must retain one original beacon requirement"
+        )
+    source = compact_rust(rust_item(producer, "    fn ensure_source(", producer_path))
+    activation = compact_rust("""
+        let active = if super::required(state.world(), current, context.height) {
+            super::validate_pending_slot(state.world(), current, context.height)
+                .map_err(NativeBeaconError::Source)?;
+            Some(ActiveRound::open(
+    """)
+    installed = "self.active=active;self.prepared=Some(*context);Ok(())}"
+    source_order = (
+        "ifcontext.instance!=self.instance||applied.0.checked_add(1)!=Some(context.height)"
+        "||applied.1!=context.parent_hash||u64::try_from(state.height()).ok()!=Some(applied.0)"
+        "{returnErr(NativeBeaconError::Context);}",
+        "letparent=committed_block(state,applied.0)",
+        "ifparent.core_hash()!=context.parent_hash||parent.result()!=context.parent_result"
+        "{returnErr(NativeBeaconError::Context);}",
+        "letretained=state.world().consensus_schedule();",
+        ".ready(context.height)",
+        "ifcurrent.network_id!=*state.network_id()||schedule::core_epoch(current)",
+        "ifself.prepared.as_ref()==Some(context){returnOk(());}",
+        activation,
+        "GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.block_hash(),}",
+        ")?)}else{None};",
+        "self.mandatory_attestation=current.mode==ConsensusMode::Npos"
+        "&&context.height==current.authorization.last_height;",
+        installed,
+    )
+    positions = [source.find(token) for token in source_order]
+    if (any(source.count(token) != 1 for token in source_order)
+            or positions != sorted(positions) or not source.endswith(installed)):
+        raise RuntimeError(
+            f"{producer_path}: native production must activate only on the committed demand"
+        )
+    build = compact_rust(rust_item(producer, "    pub(crate) fn build(", producer_path))
+    witness = compact_rust("""
+            let pulse = match &self.active {
+                None => None,
+                Some(active) => Some(active.finalized.ok_or(NativeBeaconError::AwaitingShares {
+                    height: context.height,
+                })?),
+            };
+            Ok((control::encode(pulse)?, self.mandatory_attestation))
+        }
+    """)
+    if (not build.endswith(witness)
+            or "ifself.prepared.as_ref()!=Some(&source){returnErr(NativeBeaconError::Context);}"
+            not in build):
+        raise RuntimeError(
+            f"{producer_path}: a demanded pulse must await actual shares, never an empty witness"
+        )
+    for relative, text in ((path, beacon), (producer_path, producer)):
+        for scan in ("requires_beacon_pulse_at(", "classifies_beacon_pulse_unavailable_at(",
+                     "parliament_attempts"):
+            if scan in text:
+                raise RuntimeError(
+                    f"{relative}: beacon demand regressed to an unbounded Parliament attempt scan"
+                )
+
+
+def require_native_beacon_pulse_application(
+    block: str, native_source: str, schedule: str
+) -> None:
+    """The signed header witness is the sole pulse owner, admitted before any write."""
+    block_path = "crates/iroha_core/src/block.rs"
+    payload = compact_rust(rust_item(
+        block, "        fn validate_sumeragi_consensus_effects(", block_path
+    ))
+    require_all(block_path, payload, (
+        "ifblock.global_beacon_pulse().is_some()"
+        "||block.header().global_beacon_pulse_hash().is_some()"
+        '{returnErr(Self::npos_effects_error("nativepayloadrejectsasecondbeaconpulseowner",));}',
+    ))
+    execution = compact_rust(rust_item(
+        block, "        fn state_block_for_execution<'state>(", block_path
+    ))
+    execution_order = (
+        "Self::validate_sumeragi_consensus_effects(block)?;",
+        ".block_with_recorded_pristine_carrier_stage(",
+        ".request_sumeragi_schedule(genesis_height,block,profile.sumeragi_pulse(),"
+        "profile.sumeragi_pulse_context(),).map_err(BlockValidationError::from)?;",
+    )
+    positions = [execution.find(token) for token in execution_order]
+    if (any(execution.count(token) != 1 for token in execution_order)
+            or positions != sorted(positions)):
+        raise RuntimeError(
+            f"{block_path}: the pristine schedule must admit the header pulse before effects"
+        )
+    # Followers decode the pulse only from the signed native header witness.
+    native_path = NATIVE_HEADER_SOURCE_PATH
+    include = 'include!("block/native_header_source.rs");'
+    masked_block = mask_rust(block)
+    live_includes = [
+        match.start() for match in re.finditer(re.escape(include), block)
+        if masked_block.startswith("include!(", match.start())
+    ]
+    if len(live_includes) != 1:
+        raise RuntimeError(f"{block_path}: the native header source must remain the included owner")
+    header_source = compact_rust(rust_item(
+        native_source, "    pub(crate) fn native_header_source<'state>(", native_path
+    ))
+    require_all(native_path, header_source, (
+        "letpulse=crate::sumeragi::epoch_beacon::control::decode(&native_header.control_witness)",
+        "Ok(NativeHeaderSource{state,generation,header:block.header(),",
+        "expected_context,pulse,})",
+    ))
+
+    schedule_path = SCHEDULE_EXECUTION_PATH
+    request = compact_rust(rust_item(
+        schedule, "    pub(crate) fn request_sumeragi_schedule(", schedule_path
+    ))
+    require_all(schedule_path, request, (
+        "source.header()!=self._curr_block",
+        "authenticate_successor_context(self,&self._curr_block,expected)?;",
+    ))
+    capture = (
+        "epoch_beacon::capture(&self.world,self.block_hashes(),{epoch},height,"
+        "supplied_pulse,expected_context,).map_err(ScheduleError::Epoch)?;"
+    )
+    application = compact_rust("""
+            if let (Some(value), Some(link)) = (pulse.pulse(), pulse.link()) {
+                let slot = (
+                    iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                        &value.network_id,
+                    ),
+                    value.height,
+                );
+                self.world
+                    .global_beacon_pulses
+                    .insert(value.pulse_id, value);
+                self.world
+                    .global_beacon_pulse_slots
+                    .insert(slot, value.pulse_id);
+                self.world
+                    .global_beacon_latest_pulse
+                    .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+            }
+            self.sumeragi_schedule = ScheduleStep::Requested { captured, pulse };
+            Ok(())
+        }
+    """)
+    request_order = (
+        capture.format(epoch="&epoch"),
+        "letcurrent=&schedule.ready(height)?.epoch;",
+        capture.format(epoch="current"),
+        application,
+    )
+    positions = [request.find(token) for token in request_order]
+    if (any(request.count(token) != 1 for token in request_order)
+            or positions != sorted(positions) or not request.endswith(application)
+            or request.count(".global_beacon_pulses.insert(") != 1):
+        raise RuntimeError(
+            f"{schedule_path}: only the verified height-roster pulse may be applied, once"
+        )
+
+
+def require_beacon_parliament_pulse_fixtures(
+    core: str,
+    fixtures: str,
+    state_tests: str,
+    producer: str,
+    producer_tests: str,
+    execution_tests: str,
+) -> None:
+    """Follow the compiled fixtures to canonical admission and both demand consumers."""
     core_path = "crates/iroha_core/src/beacon.rs"
     tests_path = "crates/iroha_core/src/beacon/tests.rs"
-    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", core, flags=re.S)
-    declarations = list(re.finditer(
-        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)pub\(crate\)\s+mod\s+tests\s*;",
-        code,
-    ))
-    if (len(declarations) != 1
-            or re.sub(r"\s+", "", declarations[0].group("attrs")) != "#[cfg(test)]"):
-        raise RuntimeError(f"{core_path}: Parliament pulse fixtures must use the original test module")
-    fixtures = re.sub(r"/\*.*?\*/|//[^\n]*", "", fixtures, flags=re.S)
-    for declaration in (
-        "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
-        "fn assert_same_block_key_rotation_persists_requested_pulse(",
-    ):
-        if fixtures.count(declaration) != 1:
-            raise RuntimeError(f"{tests_path}: Parliament pulse fixture declaration changed: {declaration}")
-        body = section(fixtures, declaration, "\n}\n", tests_path)
-        require_all(tests_path, body, (
-            ".put_parliament_attempt(attempt)",
-            'expect("persist the Parliament request and its beacon-slot index")',
+    state_tests_path = "crates/iroha_core/src/state/tests.rs"
+
+    def compiled_module(source: str, relative: str, declaration: str, attributes: str) -> None:
+        code = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+        declarations = list(re.finditer(
+            r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)" + declaration, code,
         ))
-    if fixtures.count(".put_parliament_attempt(attempt)") < 2:
+        if (len(declarations) != 1
+                or re.sub(r"\s+", "", declarations[0].group("attrs")) != attributes):
+            raise RuntimeError(
+                f"{relative}: Parliament pulse fixtures must use the original test module"
+            )
+
+    compiled_module(core, core_path, r"pub\(crate\)\s+mod\s+tests\s*;", "#[cfg(test)]")
+    compiled_module(producer, BEACON_PRODUCER_PATH, r"(?<![A-Za-z0-9_])mod\s+tests\s*;",
+                    "#[cfg(test)]")
+    compiled_module(
+        producer_tests, BEACON_PRODUCER_TESTS_PATH, r"mod\s+execution_tests\s*;",
+        '#[path="execution_tests.rs"]',
+    )
+    rust_item(fixtures, "pub(crate) fn pending_batched_sortition_attempt(", tests_path)
+
+    # Canonical admission maintains both derived slot indexes the consumers read.
+    admission = compact_rust(rust_item(
+        state_tests,
+        "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()",
+        state_tests_path,
+    ))
+    admission_order = (
+        "crate::beacon::tests::pending_batched_sortition_attempt(",
+        '.put_parliament_attempt(attempt.clone()).expect("persistthelivesortitionrequest");',
+        ".parliament_required_beacon_pulse_slots.get(&pulse_slot),"
+        "Some(&BTreeSet::from([governance_attempt_id]))",
+        ".fail_body_election_no_roster(",
+        ".put_parliament_attempt(attempt).expect(",
+        ".parliament_unavailable_beacon_pulse_slots.get(&pulse_slot),"
+        "Some(&BTreeSet::from([governance_attempt_id]))",
+    )
+    positions = [admission.find(token) for token in admission_order]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
         raise RuntimeError(
-            f"{tests_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
+            f"{state_tests_path}: canonical Parliament admission must maintain both "
+            "derived pulse-slot indexes"
         )
+
+    # Both native consumers start with canonical attempt admission; directly
+    # fabricating the derived pulse index would miss the production handoff.
+    fixture = compact_rust(rust_item(
+        producer_tests, "fn fixture() -> Fixture {", BEACON_PRODUCER_TESTS_PATH
+    ))
+    require_all(BEACON_PRODUCER_TESTS_PATH, fixture, (
+        "crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(),&roster,9)",
+        '.put_parliament_attempt(attempt).expect("admittheproducer\'sParliamentdemand");',
+        "&(BeaconSessionId::for_network_v1(&chain.network_id()),9)",
+        "Some(&BTreeSet::from([attempt_id]))",
+    ))
+    real_shares = compact_rust(rust_item(
+        producer_tests,
+        "fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()",
+        BEACON_PRODUCER_TESTS_PATH,
+    ))
+    require_all(BEACON_PRODUCER_TESTS_PATH, real_shares, (
+        "Err(NativeBeaconError::AwaitingShares{height:9})",
+        "control::verify_result(&witness,None).is_err()",
+    ))
+    if real_shares.count("Err(NativeBeaconError::AwaitingShares{height:9})") != 2:
+        raise RuntimeError(
+            f"{BEACON_PRODUCER_TESTS_PATH}: observers and validators must await actual shares"
+        )
+    foreign_committee = compact_rust(rust_item(
+        producer_tests,
+        "fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()",
+        BEACON_PRODUCER_TESTS_PATH,
+    ))
+    require_all(BEACON_PRODUCER_TESTS_PATH, foreign_committee, (
+        "Err(NativeBeaconError::Source(_))",
+        "count.load(Ordering::SeqCst)==0",
+    ))
+    unavailable = compact_rust(rust_item(
+        producer_tests,
+        "fn wrong_source_sender_and_proof_never_change_the_owned_round()",
+        BEACON_PRODUCER_TESTS_PATH,
+    ))
+    require_all(BEACON_PRODUCER_TESTS_PATH, unavailable, (
+        ".parliament_unavailable_beacon_pulse_slots.insert(",
+        "fresh.drive(&source,&fixture.context,applied),Err(NativeBeaconError::Source(_))",
+        '"anunavailablecommittedslotcannotopenanewlocalsigninground"',
+    ))
+    replay = compact_rust(rust_item(
+        execution_tests,
+        "fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result()",
+        BEACON_EXECUTION_TESTS_PATH,
+    ))
+    require_all(BEACON_EXECUTION_TESTS_PATH, replay, (
+        "letreplay=same_predecessor(&fixture,true);",
+        "missing_header.control_witness=ControlWitness::empty();",
+        "invalid(&mutworker,&replay,&missing);",
+        'expect("coldexecutorreproducestheoriginalcertifiedpulsewrites")',
+        'expect("completedpublicationisidempotent")',
+    ))
+    refusals = compact_rust(rust_item(
+        execution_tests,
+        "fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work()",
+        BEACON_EXECUTION_TESTS_PATH,
+    ))
+    require_all(BEACON_EXECUTION_TESTS_PATH, refusals, (
+        "letunrequested=same_predecessor(&fixture,false);",
+        "invalid(&mutexecutor(&unrequested),&unrequested,&unrequested_body);",
+    ))
+    predecessor = compact_rust(rust_item(
+        execution_tests,
+        "fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {",
+        BEACON_EXECUTION_TESTS_PATH,
+    ))
+    require_all(BEACON_EXECUTION_TESTS_PATH, predecessor, (
+        "crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(),&roster,9)",
+        'ifdemand{transaction.world.put_parliament_attempt(attempt)'
+        '.expect("admitthereplay\'sParliamentdemand");}',
+    ))
 
 
 def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
@@ -2406,7 +2775,7 @@ def main() -> int:
         ),
     )
 
-    evidence_path = "crates/iroha_core/src/governance/timed_ovn.rs"
+    evidence_path = "crates/iroha_core_timed_ovn/src/evidence.rs"
     evidence = read(evidence_path)
     require_all(
         evidence_path,
@@ -2418,7 +2787,7 @@ def main() -> int:
             "fn verify_final_release_pregate(",
             "CorpusOpen(TimedOvnCorpusOpenStateV1)",
             "fn is_bounded_ballot_prefix_extension(",
-            "pub(crate) fn validate_committed_cache(",
+            "pub fn validate_committed_cache(",
         ),
     )
     corpus_open_impl = section(
@@ -3135,7 +3504,9 @@ def main() -> int:
     )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
-    tle_release = read(tle_release_path)
+    tle_public = read("crates/iroha_core_timed_ovn/src/tle.rs")
+    require_opaque_release_projection(tle_public)
+    tle_release = read(tle_release_path) + "\n" + tle_public
     require_all(
         tle_release_path,
         tle_release,
@@ -3238,7 +3609,13 @@ def main() -> int:
             )
 
     casting_path = "crates/iroha_core/src/tle_release/casting.rs"
-    casting = read(casting_path)
+    casting_public = read("crates/iroha_core_timed_ovn/src/casting.rs")
+    casting_error_offset = casting_public.index(
+        "/// Closed failures while authorizing a public timed-OVN casting context."
+    )
+    # Preserve declaration section boundaries across the state-free and state-authority owners.
+    casting = (casting_public[:casting_error_offset] + "\n" + read(casting_path)
+               + "\n" + casting_public[casting_error_offset:])
     require_all(
         casting_path,
         casting,
@@ -3880,7 +4257,7 @@ def main() -> int:
         tle_broker_backend,
         (
             "fn attest_partial_release_capability(",
-            "session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
+            "session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1",
             "expected_participant_index: u16",
             "ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,\n    >;",
         ),
@@ -4490,9 +4867,8 @@ def main() -> int:
         ),
     )
 
-    beacon_runtime_path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
-    beacon_runtime = read(beacon_runtime_path)
-    require_parliament_beacon_requirement(beacon_runtime)
+    beacon_producer = read(BEACON_PRODUCER_PATH)
+    require_parliament_beacon_requirement(read(EPOCH_BEACON_PATH), beacon_producer)
     beacon_state_path = "crates/iroha_core/src/beacon.rs"
     beacon_state = read(beacon_state_path)
     require_encrypted_beacon_dkg_source(
@@ -4504,69 +4880,17 @@ def main() -> int:
         read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
     )
     require_beacon_parliament_pulse_fixtures(
-        beacon_state, read("crates/iroha_core/src/beacon/tests.rs")
+        beacon_state,
+        read("crates/iroha_core/src/beacon/tests.rs"),
+        read("crates/iroha_core/src/state/tests.rs"),
+        beacon_producer,
+        read(BEACON_PRODUCER_TESTS_PATH),
+        read(BEACON_EXECUTION_TESTS_PATH),
     )
-
-    block_path = "crates/iroha_core/src/block.rs"
-    block = read(block_path)
-    pulse_validation = section(
-        block,
-        "        fn validate_global_beacon_pulse_effect(",
-        "        fn execution_context_error(",
-        block_path,
-    )
-    require_all(
-        block_path,
-        pulse_validation,
-        (
-            ".parliament_required_beacon_pulse_slots",
-            ".get(&(logical_beacon_id, context.height))",
-            "let pulse_requested = pulse_required_for_successor || parliament_requested;",
-            "return if pulse_requested {",
-            '"block is missing a finalized global beacon pulse requested by committed pre-state"',
-            ".parliament_unavailable_beacon_pulse_slots",
-            ".get(&(logical_beacon_id, pulse.height))",
-            '"global beacon pulse arrives after Parliament terminally classified its slot as unavailable"',
-            "authenticated_global_threshold_beacon_roster_hash_v1(",
-            "&context_roster,",
-        ),
-    )
-    if "attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)" in pulse_validation:
-        raise RuntimeError(
-            f"{block_path}: block validation regressed to an unbounded unavailable-pulse attempt scan"
-        )
-    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in pulse_validation:
-        raise RuntimeError(
-            f"{block_path}: block validation regressed to an unbounded required-pulse attempt scan"
-        )
-    require_all(
-        block_path,
-        block,
-        (
-            "fn committed_parliament_request_rejects_candidate_without_pulse()",
-            ".put_parliament_attempt(attempt)",
-            'expect("persist the committed Parliament pulse request and its indexes")',
-        ),
-    )
-
-    penalty_path = "crates/iroha_core/src/sumeragi/penalties.rs"
-    penalties = read(penalty_path)
-    pulse_application = section(
-        penalties,
-        "pub(crate) fn apply_npos_consensus_effects_to_transaction(",
-        "    for admission in &effects.v2_evidence_admissions",
-        penalty_path,
-    )
-    require_all(
-        penalty_path,
-        pulse_application,
-        (
-            "authenticated_roster: &[PeerId]",
-            "authenticated_global_threshold_beacon_roster_hash_v1(",
-            "authenticated_roster,",
-            '"pulse-height global beacon key differs from the authenticated height roster"',
-            "roster_hash: expected_roster_hash,",
-        ),
+    require_native_beacon_pulse_application(
+        read("crates/iroha_core/src/block.rs"),
+        read(NATIVE_HEADER_SOURCE_PATH),
+        read(SCHEDULE_EXECUTION_PATH),
     )
 
     for declaration in ("SPECIFICATION Spec", "INVARIANTS", "CHECK_DEADLOCK FALSE"):
@@ -4582,7 +4906,7 @@ def main() -> int:
     formal_job = section(
         workflow,
         "  formal_models:\n",
-        "\n  nexus_cross_dataspace_localnet:\n",
+        "\n  sora_parliament_lifecycle:\n",
         workflow_path,
     )
     require_all(

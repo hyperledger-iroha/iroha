@@ -7129,23 +7129,20 @@ mod executor_model {
                     .expect_err("both genesis anchors require the native marker bit");
                 assert!(format!("{hash_error:#}").contains(label));
                 let mut inventory = original.clone();
-                let expected_inventory_error = match field {
+                match field {
                     "previous" => {
                         inventory.previous_genesis_hash = unmarked.clone();
-                        label
                     }
                     "next" => {
                         inventory.next_genesis_hash = unmarked.clone();
-                        // The beacon plan already binds the canonical next hash;
-                        // admission checks that exact binding before hash labels.
-                        "beacon bootstrap plan differs from the exact signed four-validator deployment"
                     }
                     _ => unreachable!("closed genesis-hash fixture field"),
-                };
+                }
                 let error = validate_inventory_structure(&inventory)
                     .expect_err("an unmarked genesis hash must fail inventory admission");
                 assert!(
-                    format!("{error:#}").contains(expected_inventory_error),
+                    format!("{error:#}").contains(label)
+                        && format!("{error:#}").contains("least significant bit of hash to be 1"),
                     "{error:#}"
                 );
             }
@@ -9821,7 +9818,15 @@ mod executor_model {
                 next_genesis_hash: Hash::new(b"fixture next Taira genesis").to_string(),
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
-                beacon_bootstrap: host::beacon::fixture_plan(&validators, &validator_clients),
+                beacon_bootstrap: host::beacon::fixture_plan(
+                    &validators,
+                    &validator_clients,
+                    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                        iroha_data_model::block::BlockHeader,
+                    >::from_untyped_unchecked(
+                        Hash::new(b"fixture next Taira genesis"),
+                    )),
+                ),
 
                 validators,
                 validator_clients,

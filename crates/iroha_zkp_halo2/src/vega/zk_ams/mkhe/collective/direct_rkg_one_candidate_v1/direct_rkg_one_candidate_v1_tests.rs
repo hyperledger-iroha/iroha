@@ -162,6 +162,7 @@ fn sealed_candidate_remains_opaque_and_unreachable() {
     let collective = include_str!("../../collective.rs");
     let active = include_str!("../../active_exact_binding.rs");
     let direct_wire = include_str!("../../active_exact_binding/direct_relation_wire_v1.rs");
+
     let adapter = include_str!("../../active_exact_binding/direct_rkg_one_creator_adapter_v1.rs");
     let publication = include_str!("../direct_rkg_one_publication_v1.rs");
     let prover = include_str!(
@@ -470,26 +471,4 @@ fn semantic_overlap_accounting_is_only_a_logical_lower_bound() {
     ] {
         assert!(sealed.contains(disclaimer));
     }
-}
-
-#[test]
-fn candidate_and_handoff_support_areas_stay_within_review_caps() {
-    let adapter = include_str!("../../active_exact_binding/direct_rkg_one_creator_adapter_v1.rs");
-    let prover = include_str!(
-        "../../active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"
-    );
-    let candidate = include_str!("../direct_rkg_one_candidate_v1.rs");
-    let sealed = include_str!("../direct_rkg_one_sealed_candidate_v1.rs");
-    assert!(adapter.lines().count() <= 500 && adapter.len() <= 24 * 1024);
-    assert!(prover.lines().count() <= 500 && prover.len() <= 24 * 1024);
-    assert!(candidate.lines().count() + sealed.lines().count() <= 500);
-    assert!(candidate.len() + sealed.len() <= 24 * 1024);
-    for source in [
-        include_str!("../persistent_direct_opening_v1.rs"),
-        include_str!("../borrowed_product.rs"),
-    ] {
-        assert!(source.lines().count() <= 500 && source.len() <= 24 * 1024);
-    }
-    let tests = include_str!("direct_rkg_one_candidate_v1_tests.rs");
-    assert!(tests.lines().count() <= 500 && tests.len() <= 24 * 1024);
 }

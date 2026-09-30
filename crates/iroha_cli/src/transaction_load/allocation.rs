@@ -9,16 +9,25 @@ use super::*;
 const ADMISSION_SCHEMA: &str = "iroha.sumeragi.resource_probe.admission.v1";
 
 pub(super) struct JournalAllocation {
-    pub(super) _label: String,
+    pub(super) label: String,
     pub(super) max_bytes: usize,
 }
 pub(super) struct TraceAllocation {
-    pub(super) _label: String,
+    pub(super) label: String,
     pub(super) max_bytes: usize,
 }
 pub(super) struct Writers {
     pub(super) journal: JournalAllocation,
     pub(super) trace: TraceAllocation,
+}
+impl Writers {
+    /// The admitted writer allocations, recorded in the journal's plan event so that the
+    /// journal names the ledger entries it and the trace were written under.
+    pub(super) fn value(&self) -> Value {
+        norito::json!({
+            "journal": {"label": (self.journal.label), "max_bytes": (self.journal.max_bytes)},
+            "trace": {"label": (self.trace.label), "max_bytes": (self.trace.max_bytes)}})
+    }
 }
 #[derive(Clone)]
 pub(super) struct Expected {
@@ -141,11 +150,11 @@ pub(super) fn parse(expected: &Expected, line: &[u8]) -> Result<Writers> {
     }
     Ok(Writers {
         journal: JournalAllocation {
-            _label: journal_label,
+            label: journal_label,
             max_bytes: journal_cap,
         },
         trace: TraceAllocation {
-            _label: trace_label,
+            label: trace_label,
             max_bytes: trace_cap,
         },
     })

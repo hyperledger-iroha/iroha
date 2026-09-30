@@ -9657,7 +9657,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
-        let (artifact, _) = ivm::KotodamaCompiler::new()
+        let (artifact, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
             )
@@ -11903,7 +11903,7 @@ pub mod tests {
                 )
             }};
         }
-        let (code, _) = ivm::KotodamaCompiler::new()
+        let (code, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
             )
@@ -12794,8 +12794,8 @@ pub mod tests {
         let alias_bytes = std::alloc::Layout::array::<HashOf<TransactionEntrypoint>>(2)
             .unwrap()
             .size();
-        let alias_budget = mv::allocation::AllocationBudget::new(alias_bytes);
-        let mut paid_aliases = mv::allocation::ChargedBuffer::new(2, &alias_budget)
+        let alias_budget = iroha_allocation::AllocationBudget::new(alias_bytes);
+        let mut paid_aliases = iroha_allocation::ChargedBuffer::new(2, &alias_budget)
             .expect("exact two-identity backing admits at its capacity boundary");
         for_each_canonical_carrier_membership_hash(
             &open_block,
@@ -13041,7 +13041,7 @@ pub mod tests {
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: state.lane_manifests.read().clone(),

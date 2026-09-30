@@ -273,6 +273,16 @@ pub enum Perf {
     /// Every gap within the P4 leader-turn bound (at most one failed view per height; ML18),
     /// without P4's count limit.
     OneViewFailure,
+    /// Sparse local work (F35, §8.1): the workload reaches only the honest machines of this
+    /// bit mask (the holders), each of which builds every block from its whole queue. Let
+    /// `v*(h)` be the first view `v ≥ 1` whose leader `L(h, v)` (ground-truth topology, §2.1)
+    /// is a running holder. Every height commits in a view `≤ v*(h)` (§6.10: new work wakes
+    /// the eligible leader; §8.2 L4), within `Σ_{v ≤ v*(h)} (P(v) + T(level(h, v)) + σ + Δ)`
+    /// of the replica's entry (§9.1; §8.2 L1, L2), and every transaction by the second height
+    /// first committed after its submission (Appendix E, E62). Requires a workload interval
+    /// `every_max` below `P(0) + T(0) + P(1) + T(1)` minus the commit latency, so a holder
+    /// leading any view `≥ 1` holds work before that view ends.
+    LeaderTurns(u64),
 }
 
 /// Which oracles and bounds apply to a scenario.
@@ -294,7 +304,7 @@ pub struct Checks {
     /// Machines allowed to report executor faults (O-FAULT).
     pub may_fault: Vec<usize>,
     /// No view change after heal: every committed block is proposed and committed in view 0
-    /// (F35: no timer may move).
+    /// (F9r: the round in progress at GST still commits in view 0).
     pub no_view_change: bool,
     /// Instances exempt from O-LIVE/progress until the given time (F31 stalls).
     pub stalled: Vec<(usize, Millis)>,

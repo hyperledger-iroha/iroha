@@ -354,8 +354,12 @@ def test_current_js_computed_wire_id_and_imported_bindings_match_manifest(
     assert source_map["iroha.instruction.v1::game::OpenGameSessionV1"] == (
         "iroha_data_model::isi::game::OpenGameSessionV1"
     )
+    assert source_map["iroha.asset.retail_day.activate.v1"] == (
+        "iroha_data_model::isi::retail_daily_limit::ActivateRetailDailyLimitV1"
+    )
     mint_type = source_map["iroha.mint"]
     zk_type = source_map["iroha.instruction.v1::zk::RegisterZkAsset"]
+    retail_type = source_map["iroha.asset.retail_day.activate.v1"]
     manifest = _write_manifest(
         tmp_path,
         "manifest.json",
@@ -371,6 +375,11 @@ def test_current_js_computed_wire_id_and_imported_bindings_match_manifest(
                 "type_name": zk_type,
                 "schema_hash": _schema_hash(zk_type),
             },
+            {
+                "discriminant": "iroha.asset.retail_day.activate.v1",
+                "type_name": retail_type,
+                "schema_hash": _schema_hash(retail_type),
+            },
         ],
     )
     errors: list[str] = []
@@ -379,7 +388,7 @@ def test_current_js_computed_wire_id_and_imported_bindings_match_manifest(
     )
     assert errors == []
     assert summary["entry_count"] == len(source_map)
-    assert summary["manifest_matched_entry_count"] == 2
+    assert summary["manifest_matched_entry_count"] == 3
     assert summary["wire_binding_sha256"] == MODULE._canonical_sha256(source_map)  # type: ignore[attr-defined]
 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -436,4 +445,25 @@ def test_current_js_binding_parser_rejects_second_hash_map(tmp_path: Path) -> No
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="retains a separate instruction schema-hash map"):
+        MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "error"),
+    [
+        ('  "BindRetailIdentityV1",', '  "ActivateRetailDailyLimitV1",', "repeats a RETAIL_INSTRUCTION_NAMES_V1 entry"),
+        ('  "iroha.asset.retail_day.identity.bind.v1",', '  "iroha.asset.retail_day.activate.v1",', "repeats a RETAIL_INSTRUCTION_WIRE_IDS_V1 entry"),
+        ('  "iroha.asset.retail_day.identity.bind.v1",\n', '', "differ in length"),
+        ('RETAIL_INSTRUCTION_NAMES_V1.map((name, index)', 'RETAIL_INSTRUCTION_NAMES_V1.reverse().map((name, index)', "unsupported JS instruction spread"),
+    ],
+)
+def test_current_js_binding_parser_rejects_retail_inventory_drift(
+    tmp_path: Path, old: str, new: str, error: str,
+) -> None:
+    js_source = _copy_current_js_inventory(tmp_path)
+    original = js_source.read_text(encoding="utf-8")
+    changed = original.replace(old, new, 1)
+    assert changed != original
+    js_source.write_text(changed, encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
         MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]

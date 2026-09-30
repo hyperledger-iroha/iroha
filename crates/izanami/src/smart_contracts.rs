@@ -2,7 +2,7 @@
 use color_eyre::{Result, eyre::eyre};
 use iroha_data_model::transaction::IvmBytecode;
 use iroha_test_network::repo_root;
-use ivm::KotodamaCompiler;
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::{
     collections::HashMap,
     path::{Component, Path},

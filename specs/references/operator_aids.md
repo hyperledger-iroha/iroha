@@ -9,22 +9,23 @@ substitutes. The `/v1/sumeragi/status/sse` stream uses the same operator
 request-signature boundary before opening the long-lived response.
 
 Consensus (Sumeragi)
-- Metrics: `sumeragi_new_view_receipts_by_hv{height,view}` gauges mirror the counts.
 - GET `/v1/sumeragi/status`
-  - Authoritative revision-4 reducer and operator snapshot: protocol/shared-context fingerprints, height/view/phase/leader, QC and TimeoutCertificate references, body/persistence state, latest durable commit, bounded lane state, adapter queues, and transaction queue.
+  - Authoritative snapshot of the node's Sumeragi core (`SumeragiStatus`, spec §12.1): protocol version, signed-genesis configuration fingerprint, instance id, height, view and routing stage, leader and proxy tail, the lock's view, pacemaker level and start level, retransmission interval, committed and applied heights, whether the node awaits the next configuration, the signing key (absent on an observer), `unanchored` and `abstaining`, halt reason, memory footprint, and the beacon horizon.
 - GET `/v1/sumeragi/status/sse`
   - Operator-authenticated SSE stream (≈1s) of the same payload as `/v1/sumeragi/status` for live dashboards.
-- GET `/v1/sumeragi/qc`
-- Snapshot of highest/locked QCs; includes `subject_block_hash` for the highest QC when known.
-- GET `/v1/sumeragi/leader`
-  - Leader index snapshot. In NPoS mode, includes PRF context: `{ height, view, epoch_seed }`.
+- GET `/v1/sumeragi/diagnostics`
+  - Non-authoritative operator and lane diagnostics.
+- GET `/v1/sumeragi/lanes`
+  - The global chain's lane records (`specs/sumeragi_lanes.md`) and the node's lane instances.
+- GET `/v1/sumeragi/bls-keys` and `/v1/sumeragi/consensus-keys`
+  - The consensus key rosters.
 - GET `/v1/sumeragi/params`
-  - Compatibility snapshot of governed NPoS/V1 parameter records. It does not replace signed revision-4 height context or the shared configuration fingerprint.
+  - Governed NPoS parameter records.
 
 Evidence (read-only committed consensus audit)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Includes the frozen context and exact signed-artifact summary for the sole `SumeragiV2Equivocation` evidence shape.
+  - Each item is the sole first-release kind `NativeSumeragiEvidence`: its `class` (`proposal`, `phase_vote`, `timeout_vote`, `invalid_proposal` or `conflicting_certificates`), instance, height, epoch, context id, authority generation, offenders, `safety_violation`, the native frame hash, the recording height/view/time and the penalty status.
   - CLI helpers:
     - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence list`
     - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence count`

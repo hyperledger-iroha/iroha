@@ -653,7 +653,7 @@ mod tests {
     }
     #[test]
     fn compiler_and_node_release_cycle_defaults_match() {
-        let compiler_default = ivm::kotodama::compiler::CompilerOptions::default().max_cycles;
+        let compiler_default = kotodama_lang::compiler::CompilerOptions::default().max_cycles;
         let node_default = iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND;
         assert_eq!(compiler_default, node_default.get());
         assert_eq!(compiler_default, 1_000_000);
@@ -665,7 +665,7 @@ mod tests {
     }
     #[test]
     fn declared_contract_abort_maps_to_manifest_authenticated_rejection() {
-        let artifact = ivm::kotodama::compiler::Compiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
                 seiyaku LiquidityPolicy {

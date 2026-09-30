@@ -26,7 +26,8 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_governance_dag_ipfs_authenticator",
     "with_governance_dag_head_authenticator",
     "with_governance_dag_checkpoint_store",
-    "with_stream_token_signer",
+    "with_stream_token_signer_client",
+    "with_stream_token_state_observer",
     "with_stream_token_gateway_admission",
     "with_appeal_finance_checkpoint",
     "with_proof_outcome_transaction_signer",
@@ -91,7 +92,7 @@ EXPECTED_CONSENSUS_SIGNERS = {
     ),
 }
 EXPECTED_INVENTORY_SHA256 = (
-    "bdf62c939ed697a662f65782d7e865f0361606330e871120ad9ac9c93783d73a"
+    "61ff12820063662dcb9174e4b3038be045fbea4142d88ae7c51c10b7777d1ecd"
 )
 GENERATOR_MACROS = (
     "runtime_provider_backend_collection_v1",
@@ -195,7 +196,7 @@ def _generator_hashes(source: str) -> dict[str, str]:
 
 def _validate_source(source: str) -> None:
     records = _inventory(source)
-    _require(len(records) == 56, f"expected 56 frozen backends, found {len(records)}")
+    _require(len(records) == 57, f"expected 57 frozen backends, found {len(records)}")
     _require(
         len({record[2] for record in records}) == len(records),
         "backend fields must be unique",
@@ -207,7 +208,7 @@ def _validate_source(source: str) -> None:
 
     optional = [record for record in records if record[1] == "optional"]
     repeated = [record for record in records if record[1] == "repeated"]
-    _require(len(optional) == 55, f"expected 55 optional backends, found {len(optional)}")
+    _require(len(optional) == 56, f"expected 56 optional backends, found {len(optional)}")
     _require(len(repeated) == 1, f"expected one repeated backend, found {len(repeated)}")
     _require(
         tuple(record[5] for record in optional) == EXPECTED_OPTIONAL_METHODS,
@@ -273,6 +274,19 @@ class RuntimeProviderBrokerBackendSetterSourceTests(unittest.TestCase):
             ),
             "missing TLE signer": _remove_inventory_entry(
                 source, "with_parliament_tle_partial_release_signer"
+            ),
+            "missing independent stream observer": _remove_inventory_entry(
+                source, "with_stream_token_state_observer"
+            ),
+            "observer replaced by signer authority": source.replace(
+                "Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1>",
+                "Arc<dyn iroha_torii::sorafs::StreamTokenSignerClientV1>",
+                1,
+            ),
+            "retired stream signer alias": source.replace(
+                "with_stream_token_signer_client(client)",
+                "with_stream_token_signer(client)",
+                1,
             ),
             "mis-mapped field": source.replace(
                 "optional bootle_lantern_issuance:",

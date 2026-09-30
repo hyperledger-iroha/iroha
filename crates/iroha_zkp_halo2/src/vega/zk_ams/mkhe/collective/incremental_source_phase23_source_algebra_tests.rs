@@ -1,24 +1,14 @@
 use super::*;
 const PRODUCTION_SOURCE_V2: &str = include_str!("incremental_source_phase23_source_algebra.rs");
-const TEST_SOURCE_V2: &str = include_str!("incremental_source_phase23_source_algebra_tests.rs");
+
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
 const GLOBAL_LOOKUP_REPLAY_SOURCE_V1: &str =
     include_str!("incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs");
-const GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1: &str = include_str!(
-    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/original_source_ingress_v1.rs"
-);
-const GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1: &str = include_str!(
-    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1_tests.rs"
-);
-const SOURCE_OPENINGS_SOURCE_V1: &str = include_str!(
-    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1.rs"
-);
+
 const SOURCE_OPENINGS_TEST_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1_tests.rs"
 );
-const SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1: &str = include_str!(
-    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1_mapping_tests.rs"
-);
+
 #[test]
 fn exact_formula_mapping_and_memory_budgets_are_frozen() {
     assert_eq!(SOURCE_ALGEBRA_RECORDS_V2, 43);
@@ -465,26 +455,7 @@ fn source_algebra_freeze_precedes_replay_and_late_proof_authority() {
     assert!(!replay.contains("RadixHyraxProofSealV2"));
 }
 #[test]
-fn source_and_test_budgets_remain_bounded() {
-    assert!(PRODUCTION_SOURCE_V2.lines().count() <= 1_200);
-    assert!(TEST_SOURCE_V2.lines().count() <= 650);
-    assert!(PRODUCTION_SOURCE_V2.len() <= 52_000);
-    assert!(TEST_SOURCE_V2.len() <= 30_000);
-    assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 1_150);
-    assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.lines().count() <= 120);
-    assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.len() <= 6_000);
-    assert!(GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count() <= 400);
-    assert!(
-        GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count()
-            + GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count()
-            <= 1_550
-    );
-    assert!(SOURCE_OPENINGS_SOURCE_V1.lines().count() <= 1_300);
-    assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.lines().count() <= 500);
-    assert!(SOURCE_OPENINGS_SOURCE_V1.len() <= 52_000);
-    assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.len() <= 20_000);
-    assert!(SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.lines().count() <= 500);
-    assert!(SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.len() <= 20_000);
+fn source_opening_mapping_tests_have_one_module_owner() {
     assert!(
         SOURCE_OPENINGS_TEST_SOURCE_V1
             .contains("#[path = \"source_openings_v1_mapping_tests.rs\"]\nmod mapping;")

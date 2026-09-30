@@ -1463,6 +1463,7 @@ fn native_lane_states(history: &RetainedHistory) -> Result<Vec<SumeragiLaneState
                 );
                 let fixed = &policy.fixed[0];
                 let mut record = SumeragiLaneRecord {
+                    da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                     lane: fixed.lane,
                     dataspace: fixed.dataspace,
                     incarnation: lanes::step::incarnation(
@@ -1732,9 +1733,9 @@ fn authenticate_retained_history(
     let stored_genesis = decode_framed_signed_block(&retained.blocks[0])?;
     ensure!(
         stored_genesis
-            .canonical_resultless_proposal()
+            .canonical_resultless_proposal()?
             .encode_wire()?
-            == genesis.0.canonical_resultless_proposal().encode_wire()?,
+            == genesis.0.canonical_resultless_proposal()?.encode_wire()?,
         "original signed genesis changed"
     );
     let states = native_lane_states(retained)?;
@@ -2391,9 +2392,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 },
             ),
         };
-        let plan_client = validator_client.clone();
-        let prepared =
-            read(move || plan_client.client().prepare_public_lane_plan(&request)).await?;
+        let prepared = validator_client
+            .client()
+            .nexus()
+            .prepare_public_lane_plan(&request)
+            .await?;
         ensure!(
             prepared.xor_asset_definition_id == stake_asset_definition_id(),
             "prepared BPNG self-bond must use the signed network XOR"
@@ -2535,6 +2538,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Physical catalog ownership and native lane consensus are distinct signed state.
     // Install the one native lane only after its four funded validators are active.
     let native_policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         anchor_freshness: MAX_RETAINED_HEIGHT,
         max_merge_blocks: 16,
         stall_window: MAX_RETAINED_HEIGHT * 2,

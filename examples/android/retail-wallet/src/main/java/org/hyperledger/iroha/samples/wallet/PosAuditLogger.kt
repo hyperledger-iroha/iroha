@@ -7,6 +7,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import org.json.JSONObject
+import org.hyperledger.iroha.samples.wallet.WalletPreviewViewModel.VerdictStatus
 
 class PosAuditLogger(context: Context) {
 
@@ -132,7 +133,7 @@ class PosAuditLogger(context: Context) {
     private fun logManifestRotationIfNeeded(status: ManifestStatus) {
         val previousId = prefs.getString(PREF_MANIFEST_ID, null)
         val previousSeq = prefs.getLong(PREF_MANIFEST_SEQUENCE, -1L)
-        if (previousId == status.manifestId && previousSeq == status.sequence.toLong()) {
+        if (previousId == status.manifestId && previousSeq == status.sequence) {
             return
         }
         append(
@@ -146,7 +147,7 @@ class PosAuditLogger(context: Context) {
         )
         prefs.edit()
             .putString(PREF_MANIFEST_ID, status.manifestId)
-            .putLong(PREF_MANIFEST_SEQUENCE, status.sequence.toLong())
+            .putLong(PREF_MANIFEST_SEQUENCE, status.sequence)
             .apply()
     }
 }

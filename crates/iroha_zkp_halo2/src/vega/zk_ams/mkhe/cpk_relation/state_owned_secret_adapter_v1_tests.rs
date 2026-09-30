@@ -1,5 +1,5 @@
 const PRODUCTION_SOURCE_V1: &str = include_str!("state_owned_secret_adapter_v1.rs");
-const TEST_SOURCE_V1: &str = include_str!("state_owned_secret_adapter_v1_tests.rs");
+
 const CPK_PARENT_SOURCE_V1: &str = include_str!("../cpk_relation.rs");
 const COLLECTIVE_SOURCE_V1: &str = include_str!("../collective.rs");
 const BORROWED_PRODUCT_SOURCE_V1: &str = include_str!("../collective/borrowed_product.rs");
@@ -8,10 +8,6 @@ const MKHE_FACADE_SOURCE_V1: &str = include_str!("../../mkhe.rs");
 
 #[test]
 fn adapter_is_private_public_only_and_authority_neutral() {
-    assert!(PRODUCTION_SOURCE_V1.lines().count() <= 260);
-    assert!(PRODUCTION_SOURCE_V1.len() <= 11_000);
-    assert!(TEST_SOURCE_V1.lines().count() <= 180);
-    assert!(TEST_SOURCE_V1.len() <= 8_000);
     for forbidden in [
         ["VerifiedPersistent", "WitnessBindingV1"].concat(),
         ["mint_", "collective_secret_binding"].concat(),

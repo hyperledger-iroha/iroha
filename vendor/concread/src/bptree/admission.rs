@@ -643,7 +643,7 @@ where
         // allocation. The still-owned SuperBlock reclaims it if setup unwinds.
         let source = unsafe { SuperBlock::new_with_funding(&mut provider) };
         let charges = InitialCharges {
-            notification: crate::release::ReleaseNotification::new_charged(
+            notification: iroha_allocation::release::ReleaseNotification::new_charged(
                 provider.take_node_charge(initial.notification),
             ),
             root: provider.take_node_charge(initial.root),

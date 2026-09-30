@@ -281,7 +281,7 @@ fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
         ("hayahi-app", hayahi_app_contract_ko("hayahi_api")),
         ("split-app-vault", split_app_vault_contract_ko("travel_ops")),
     ] {
-        ivm::KotodamaCompiler::new()
+        kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(&source)
             .unwrap_or_else(|error| panic!("{name} Kotodama fixture must compile: {error:?}"));
     }

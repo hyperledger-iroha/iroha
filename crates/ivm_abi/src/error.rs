@@ -4,7 +4,7 @@
 use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
 /// Original local allocation refusal carried by [`VMError::AllocationDeferred`].
 /// This is the allocation owner's type; re-exporting it does not copy its custody.
-pub use mv::allocation::AllocationRefusal;
+pub use iroha_allocation::AllocationRefusal;
 use std::{error::Error as StdError, fmt};
 /// Memory region permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,7 +528,7 @@ mod execution_deferral_tests {
 
     #[test]
     fn original_capacity_release_survives_every_metered_boundary() {
-        let budget = mv::allocation::AllocationBudget::new(8);
+        let budget = iroha_allocation::AllocationBudget::new(8);
         let occupied = budget.try_reserve_bytes(8).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let error = VMError::AllocationDeferred(refusal.clone());

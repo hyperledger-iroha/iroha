@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pytests.scripts import iso_audit_notary_adapter_test as audit_test
@@ -86,7 +87,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=receipt-ancestor-secret"
         path_type = type(VERIFIER.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -97,15 +97,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(VERIFIER.ReceiptError) as caught:
                         VERIFIER._reject_symlinked_existing_ancestors(
                             VERIFIER.Path("ancestor") / "leaf",
                             display_label="receipt",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt ancestors", message)
@@ -137,12 +134,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(VERIFIER.ReceiptError) as caught:
                         VERIFIER._read_regular_file(path, display_label="receipt")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt", message)
@@ -196,12 +190,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                                 raise error
                             return original_lstat(self)
 
-                        path_type.lstat = failing_lstat
-                        try:
+                        with patch.object(path_type, "lstat", failing_lstat):
                             with self.assertRaises(VERIFIER.ReceiptError) as caught:
                                 action(path)
-                        finally:
-                            path_type.lstat = original_lstat
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -351,12 +342,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                                 raise error
                             return original_exists(self)
 
-                        path_type.exists = failing_exists
-                        try:
+                        with patch.object(path_type, "exists", failing_exists):
                             with self.assertRaises(VERIFIER.ReceiptError) as caught:
                                 action(root)
-                        finally:
-                            path_type.exists = original_exists
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -420,12 +408,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                                 raise error
                             return original_is_symlink(self)
 
-                        path_type.is_symlink = failing_is_symlink
-                        try:
+                        with patch.object(path_type, "is_symlink", failing_is_symlink):
                             with self.assertRaises(VERIFIER.ReceiptError) as caught:
                                 action(root)
-                        finally:
-                            path_type.is_symlink = original_is_symlink
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -494,12 +479,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                                 raise error
                             return original_resolve(self, *args, **kwargs)
 
-                        path_type.resolve = failing_resolve
-                        try:
+                        with patch.object(path_type, "resolve", failing_resolve):
                             with self.assertRaises(VERIFIER.ReceiptError) as caught:
                                 action(root)
-                        finally:
-                            path_type.resolve = original_resolve
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)

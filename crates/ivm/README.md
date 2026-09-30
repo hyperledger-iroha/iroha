@@ -219,21 +219,22 @@ cargo run --example sha256    # SHA256BLOCK vector instruction
 
 ### Kotodama toolchain
 
-`koto` is the single V1 frontend for checking, building, testing, formatting,
-documenting, explaining diagnostics, and language-server integration:
+`koto` (crate `kotodama_toolchain`) is the single V1 frontend for checking,
+building, testing, formatting, documenting, explaining diagnostics, and
+language-server integration:
 
 ```bash
 # Parse, resolve, type-check, and analyze source
-cargo run -p ivm --bin koto -- check path/to/contract.ko
+cargo run -p kotodama_toolchain --bin koto -- check path/to/contract.ko
 
 # Emit machine-readable diagnostics
-cargo run -p ivm --bin koto -- check --format json path/to/contract.ko
+cargo run -p kotodama_toolchain --bin koto -- check --format json path/to/contract.ko
 
 # Build a canonical deployable artifact and hash-keyed sidecars
-cargo run -p ivm --bin koto -- build path/to/contract.ko
+cargo run -p kotodama_toolchain --bin koto -- build path/to/contract.ko
 
 # Run contract tests
-cargo run -p ivm --bin koto -- test path/to/contract.test.ko
+cargo run -p kotodama_toolchain --bin koto -- test path/to/contract.test.ko
 ```
 
 ## Benchmarking

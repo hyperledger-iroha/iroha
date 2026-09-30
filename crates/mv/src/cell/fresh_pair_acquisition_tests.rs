@@ -217,8 +217,8 @@ impl Wake for Probe {
 struct Waits {
     undo: crate::ReleaseWait,
     current: crate::ReleaseWait,
-    undo_future: concread::release::ReleaseFuture,
-    current_future: concread::release::ReleaseFuture,
+    undo_future: iroha_allocation::release::ReleaseFuture,
+    current_future: iroha_allocation::release::ReleaseFuture,
     undo_waker: Waker,
     current_waker: Waker,
 }

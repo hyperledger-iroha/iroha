@@ -15,6 +15,8 @@ pub mod executor;
 pub mod global;
 /// The global chain's merge of certified lane blocks.
 pub mod merge;
+/// Canonical durable lane certificate and original payload records.
+pub(crate) mod record;
 /// The node's lane block stores.
 pub mod registry;
 /// Routing transactions to lanes from committed state.
@@ -127,6 +129,7 @@ pub fn lane_genesis_result(record: &SumeragiLaneRecord) -> Hash32 {
         record.dataspace,
         record.incarnation,
         record.params.clone(),
+        record.da_layout,
         record.committee.clone(),
         record.created_at,
         record.active_from,
@@ -143,6 +146,10 @@ pub fn lane_genesis_result(record: &SumeragiLaneRecord) -> Hash32 {
 /// A pinned member whose key is not BLS-normal, an empty or oversized committee, or chain
 /// parameters that fail §9.4 validation.
 pub fn lane_height_config(record: &SumeragiLaneRecord) -> Result<HeightConfig, LaneError> {
+    record
+        .da_layout
+        .validate()
+        .map_err(|error| LaneError::Schedule(ScheduleError::Epoch(error.to_string())))?;
     let keys = record
         .committee
         .iter()
@@ -155,9 +162,15 @@ pub fn lane_height_config(record: &SumeragiLaneRecord) -> Result<HeightConfig, L
     params
         .validate()
         .map_err(|error| LaneError::Schedule(ScheduleError::Params(error)))?;
+    if u64::from(params.to_core().max_block_bytes) > record.da_layout.max_payload_size_bytes {
+        return Err(LaneError::Schedule(ScheduleError::Params(
+            iroha_sumeragi::api::ConfigError::PayloadAboveAvailabilityLimit,
+        )));
+    }
     let context = lane_genesis_result(record);
     Ok(HeightConfig {
         epoch: Box::new(EpochConfig {
+            da_layout: record.da_layout,
             id: EpochId { epoch: 0, context },
             authority_generation: context,
             first_height: 0,
@@ -446,6 +459,7 @@ mod tests {
 
     fn record(closing: Option<u64>) -> SumeragiLaneRecord {
         SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(2),
             dataspace: DataSpaceId::new(0),
             incarnation: [9; 32],
@@ -459,6 +473,24 @@ mod tests {
             merged_at: 7,
             rescued: 0,
         }
+    }
+
+    #[test]
+    fn lane_availability_is_pinned_in_context_and_validated() {
+        let original = record(None);
+        let config = lane_height_config(&original).unwrap();
+        assert_eq!(config.epoch.da_layout, original.da_layout);
+        let mut changed = original.clone();
+        changed.da_layout.chunk_size_bytes /= 2;
+        assert_ne!(
+            lane_genesis_result(&original),
+            lane_genesis_result(&changed)
+        );
+        changed.da_layout.parity_shards = 0;
+        assert!(lane_height_config(&changed).is_err());
+        let mut too_small = original;
+        too_small.da_layout.max_payload_size_bytes = 1;
+        assert!(lane_height_config(&too_small).is_err());
     }
 
     fn tx(seed: u8) -> SignedTransaction {

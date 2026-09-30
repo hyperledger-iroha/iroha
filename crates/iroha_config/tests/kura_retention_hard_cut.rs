@@ -1,18 +1,27 @@
-//! Validate that retired Kura retention settings are not configuration inputs.
+//! Validate that retired Kura retention and replica-eviction settings are not configuration
+//! inputs.
 
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 
-const RETIRED_TOML_FIELDS: [&str; 3] = [
+const RETIRED_TOML_FIELDS: [&str; 7] = [
     "block_sync_roster_retention",
     "roster_sidecar_retention",
     "lane_history_retention",
+    "eviction_required_replicas",
+    "replica_advert_evictable_window",
+    "replica_advert_ttl_ms",
+    "replica_advert_refresh_interval_ms",
 ];
-const RETIRED_ENV_NAMES: [&str; 3] = [
+const RETIRED_ENV_NAMES: [&str; 7] = [
     "KURA_BLOCK_SYNC_ROSTER_RETENTION",
     "KURA_ROSTER_SIDECAR_RETENTION",
     "KURA_LANE_HISTORY_RETENTION",
+    "KURA_EVICTION_REQUIRED_REPLICAS",
+    "KURA_REPLICA_ADVERT_EVICTABLE_WINDOW",
+    "KURA_REPLICA_ADVERT_TTL_MS",
+    "KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MS",
 ];
 
 fn base_reader() -> ConfigReader {
@@ -60,10 +69,9 @@ fn retired_kura_retention_toml_fields_are_unknown() {
 
 #[test]
 fn retired_kura_retention_environment_names_are_unvisited() {
-    let env = MockEnv::new()
-        .set(RETIRED_ENV_NAMES[0], "17")
-        .set(RETIRED_ENV_NAMES[1], "19")
-        .set(RETIRED_ENV_NAMES[2], "23");
+    let env = RETIRED_ENV_NAMES
+        .into_iter()
+        .fold(MockEnv::new(), |env, name| env.set(name, "17"));
     let _actual: ActualConfig = base_reader()
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()

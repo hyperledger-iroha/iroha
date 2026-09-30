@@ -6,7 +6,7 @@ use super::{
 };
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
-use iroha_core::privacy_engines::bootle_lantern::issuer::{
+use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
     TairaBootleLanternBrokerQualificationInputsV1,
     derive_taira_bootle_lantern_broker_qualification_digest_v1,
     taira_bootle_lantern_broker_contract_digest_v1,
@@ -54,7 +54,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "1bd32f52a73c4e4785fa7cea53104734f5940e0cfe0cb0a26f01cac7b5720d5c";
+    "a74cd8ed8bba80f2cb0bfe614935780f7d2bfd21dad28e573ecbac28b203a57a";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -291,10 +291,6 @@ fn compose_release_artifacts_v1(
         native_recomposition_passed: nevo_review.is_some(),
     })
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the review validator keeps the complete canonical field and value contract auditable as one ordered check"
-)]
 fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<()> {
     let value: JsonValue =
         norito::json::from_slice(review).wrap_err("Taira NEVO review is not strict JSON")?;
@@ -675,10 +671,6 @@ fn expected_nevo_genesis_v1(
     Ok(expected)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "broker export admission keeps canonical-byte, identity, digest, policy, and instruction checks in one ordered verification pass"
-)]
 fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPublicMaterialV1> {
     let export: JsonValue = norito::json::from_slice(bytes)
         .wrap_err("Taira Bootle/Lantern broker public export is not strict JSON")?;
@@ -949,10 +941,6 @@ fn render_release_plan_v1(
     }
     json_pretty_bytes_v1(&plan, "Taira privacy release plan")
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed release-plan schema is validated field-by-field in one auditable first-release contract"
-)]
 fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     let root = object_v1(plan, "privacy plan")?;
     expect_exact_keys_v1(
@@ -1566,10 +1554,6 @@ fn render_release_config_v1(
     }
     Ok(rendered.into_bytes())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the exact secret-free template and its three credential rows are one ordered admission contract"
-)]
 fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::Result<()> {
     let root = config
         .as_table()
@@ -1735,10 +1719,6 @@ fn expect_toml_string_v1(
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "genesis rendering preserves ordered native and JSON-level admission before its deterministic append"
-)]
 fn render_release_genesis_v1(
     bytes: &[u8],
     nevo_review: Option<&[u8]>,
@@ -2058,7 +2038,7 @@ fn write_new_artifact_set_v1<const N: usize>(
 mod tests {
     use super::*;
     use crate::privacy_bootstrap::build_taira_privacy_bootstrap_v1;
-    use iroha_core::{
+    use iroha_core_privacy::{
         privacy_engines::bootle_lantern::issuer::{
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
         },
@@ -2129,10 +2109,6 @@ mod tests {
             .expect("derive valid governed issuer-policy fixture");
         RegisterPrivacyBootleLanternIssuerPolicyV1::new(policy)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture spells out every field of the exact canonical public broker export"
-    )]
     fn broker_export_fixture_v1() -> Vec<u8> {
         let registration = policy_registration_fixture_v1();
         let instruction = InstructionBox::from(registration.clone());

@@ -27,6 +27,9 @@ docker_bins = [
 # workspace declarations feature-free prevents focused builds from inheriting a
 # node-sized graph (or test-only features) accidentally.
 iroha_core = { path = "crates/iroha_core", default-features = false }
+iroha_core_zk = { path = "crates/iroha_core_zk", default-features = false }
+iroha_core_privacy = { path = "crates/iroha_core_privacy", default-features = false }
+iroha_core_timed_ovn = { path = "crates/iroha_core_timed_ovn", default-features = false }
 
 iroha_torii = { path = "crates/iroha_torii", default-features = false }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
@@ -81,6 +84,8 @@ iroha_accel = { path = "crates/iroha_accel", default-features = false }
 ivm = { path = "crates/ivm" }
 ivm_abi = { path = "crates/ivm_abi" }
 kotodama_lang = { path = "crates/kotodama_lang" }
+kotodama_surface = { path = "crates/kotodama_surface" }
+kotodama_toolchain = { path = "crates/kotodama_toolchain" }
 sorafs_car = { path = "crates/sorafs_car" }
 sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest", features = ["pqc"] }
@@ -174,6 +179,7 @@ tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
 halo2curves = { version = "0.9" }
 
+iroha_allocation = { path = "crates/iroha_allocation" }
 mv = { path = "crates/mv" }
 concread = { version = "=0.5.10", default-features = false }
 
@@ -253,6 +259,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
 
 # pedantic
 clippy.pedantic = { level = "warn", priority = -1 }
+clippy.too_many_lines = "allow"
 clippy.match_wildcard_for_single_variants = "allow"
 clippy.semicolon_if_nothing_returned = "allow"
 clippy.wildcard_imports = "allow"
@@ -295,6 +302,10 @@ clippy.wildcard_dependencies = "deny"
 [workspace]
 resolver = "2"
 default-members = [
+    "crates/irohad/bins",
+    "crates/iroha_cli/bins",
+    "crates/iroha_core_privacy",
+    "crates/iroha_core_timed_ovn",
     "crates/norito",
     "crates/norito_derive",
     "crates/iroha_primitives",
@@ -306,6 +317,7 @@ default-members = [
     "crates/iroha_logger",
     "crates/iroha_p2p",
     "crates/iroha_panic_hook",
+    "crates/iroha_core_zk",
     "crates/iroha_core",
     "crates/iroha_torii_shared",
     "crates/iroha_torii",
@@ -315,8 +327,12 @@ default-members = [
     "crates/ivm",
     "crates/ivm_abi",
     "crates/kotodama_lang",
+    "crates/kotodama_surface",
+    "crates/kotodama_toolchain",
 ]
 members = [
+    "crates/irohad/bins",
+    "crates/iroha_cli/bins",
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",
     "crates/norito/accelerators/jsonstage1_metal",
@@ -354,6 +370,10 @@ debug = 0
 [profile.dev.build-override]
 debug = 0
 codegen-units = 256
+# On macOS 27, stripping host proc-macro debuginfo can misalign the Mach-O
+# LINKEDIT string pool and prevent dyld from loading the freshly built tool.
+# Keep dev/test host profiles identical, as with their dependency profiles.
+strip = "none"
 
 [profile.test]
 # Avoid long dsymutil phases on macOS test binaries.
@@ -368,10 +388,13 @@ incremental = false
 [profile.test.build-override]
 debug = 0
 codegen-units = 256
+strip = "none"
 
 [profile.dev.package."*"]
 debug = 0
 codegen-units = 256
+# Package overrides take precedence over build-override for registry proc macros.
+strip = "none"
 
 # `iroha_data_model` is a workspace member, so the wildcard dependency override
 # above does not apply to it. Its very large generated/derived surface otherwise
@@ -389,6 +412,7 @@ codegen-units = 8
 [profile.test.package."*"]
 debug = 0
 codegen-units = 256
+strip = "none"
 
 # Local validators execute the production memory-hard authentication puzzle.
 # Optimize only its arithmetic dependencies so debug builds can service the

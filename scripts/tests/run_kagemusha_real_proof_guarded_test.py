@@ -41,7 +41,7 @@ def test_command_runs_only_the_dedicated_real_mint_proof_binary(tmp_path: Path) 
 
 def test_proof_binary_is_an_explicit_non_default_target() -> None:
     repository = MODULE_PATH.parents[1]
-    with (repository / "crates/iroha_core/Cargo.toml").open("rb") as source:
+    with (repository / "crates/iroha_core_zk/Cargo.toml").open("rb") as source:
         manifest = tomllib.load(source)
     targets = {target["name"]: target for target in manifest["bin"]}
     assert targets[MODULE.PROOF_BINARY] == {

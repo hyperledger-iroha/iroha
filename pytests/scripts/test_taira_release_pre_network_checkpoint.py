@@ -37,12 +37,12 @@ class PreNetworkCheckpointTests(unittest.TestCase):
     def complete(self) -> Path:
         return self.fixture.fixture.out / "independent-checks.json"
 
-    def network(self, _root, fixture_root, env, lock_fds, *, harness, stages):
+    def network(self, _root, fixture_root, env, lock_fds, *, harness, stages, inventories):
         self.assertTrue(self.prefix.is_file(), "the passed prefix must be durable before shipping codegen")
         self.assertFalse(self.complete.exists(), "a prefix cannot claim the deferred census")
         if self.fail_at_shipping_copy:
             raise gate.CheckError("fixture shipping artifact copy reserve")
-        gate.run_stages(harness, fixture_root, env, stages, lock_fds)
+        gate.run_stages(harness, fixture_root, env, stages, lock_fds, inventories=inventories)
 
     def fail_once(self):
         with self.assertRaisesRegex(release.PrepareError, "shipping artifact copy reserve"):

@@ -11,7 +11,7 @@ fn in_memory_map_contains_is_rejected() {
             }
         }
     "#;
-    let error = ivm::KotodamaCompiler::new()
+    let error = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect_err("V1 must reject the removed in-memory Map type");
     assert!(error.contains("Map"), "unexpected diagnostic: {error}");

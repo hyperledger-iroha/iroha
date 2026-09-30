@@ -104,7 +104,7 @@ pub(super) fn load_kagemusha_mint_finality_parameters(
     })?;
     let parameters: KagemushaMintFinalityGenesisParametersV1 =
         norito::json::from_slice(&bytes).wrap_err("decode KAGEMUSHA mint-finality parameters")?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| {
@@ -807,23 +807,29 @@ mod consensus_manifest_tests {
         .expect("build source-template test authority")
         .kagemusha_mint_finality_genesis_parameters()
         .clone();
+        // Public Nexus forbids the Taira XOR definition; match whole directory names so public
+        // Taira under `configs/soranexus/` keeps the canonical Taira definition it requires.
+        let nexus = std::path::Path::new(relative_path)
+            .components()
+            .any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some("nexus" | "iroha3-nexus")
+                )
+            });
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
             .and_then(|template| {
                 template.materialize(
                     parameters,
-                    Some(
-                        if relative_path.contains("nexus/")
-                            || relative_path.contains("iroha3-nexus/")
-                        {
-                            AssetDefinitionId::derive_from_components(
-                                DomainId::parse_fully_qualified("mainnet-fixture.universal")
-                                    .expect("fixture domain"),
-                                "xor".parse().expect("fixture asset"),
-                            )
-                        } else {
-                            SumeragiNposParameters::default().xor_asset_definition_id
-                        },
-                    ),
+                    Some(if nexus {
+                        AssetDefinitionId::derive_from_components(
+                            DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                                .expect("fixture domain"),
+                            "xor".parse().expect("fixture asset"),
+                        )
+                    } else {
+                        SumeragiNposParameters::default().xor_asset_definition_id
+                    }),
                 )
             })
             .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))
@@ -1086,6 +1092,7 @@ mod consensus_manifest_tests {
         };
         let key = iroha_crypto::KeyPair::from_seed(vec![7; 32], Algorithm::BlsNormal);
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,

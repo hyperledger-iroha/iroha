@@ -3,8 +3,8 @@
 
 Requires Python 3.10+ and Git. Checks tracked and nonignored untracked files in
 the current checkout, including unstaged edits. It never changes files and has
-no environment override. Upstream vendored source and historical records are
-not Iroha build targets. Only the named upstream source roots are exempt from
+no environment override. Upstream vendored source is not an Iroha build target.
+Only the named upstream source roots are exempt from
 text checks; artifacts are checked everywhere in the Git-owned boundary.
 This static declaration check does not resolve dynamically constructed programs.
 """
@@ -77,9 +77,9 @@ def check_path(root: Path, relative: Path) -> list[str]:
     with path.open("rb") as stream:
         if stream.read(4) == b"\x00asm":
             return [f"{name}: WebAssembly binary magic is prohibited"]
-    # Exempt source text only. A historical or vendored binary remains a
+    # Exempt source text only. A vendored binary remains a
     # prohibited artifact, and an arbitrary nested directory is not upstream.
-    if name in {SELF, TEST} or name.startswith("docs/history/"):
+    if name in {SELF, TEST}:
         return []
     if any(name.startswith(prefix + "/") for prefix in UPSTREAM_VENDOR_ROOTS):
         return []

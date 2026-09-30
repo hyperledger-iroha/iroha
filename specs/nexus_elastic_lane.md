@@ -146,7 +146,7 @@ NX-7 change controls include the signed bundle references automatically:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
+  --lifecycle-file artifacts/nexus/lanes/nexus_lifecycle.json \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -178,9 +178,9 @@ directly inside the smoke helper, and pass
 `--allow-missing-lane-metrics` only when staging clusters have not yet exposed those gauges
 (production evidence should keep the defaults enforced).
 
-`--lifecycle-url` and `--lifecycle-file` are the only accepted spellings and
-both expect the `/v1/nexus/lifecycle` shape; they must not be pointed at
-`/v1/sumeragi/status`.
+`--lifecycle-file` is the only lane-catalog input: a recorded `LaneLifecycleStatusV1`
+document (the `GET /v1/nexus/lifecycle` shape). It must not be a `/v1/sumeragi/status`
+or `/v1/sumeragi/lanes` capture.
 
 The same helper now enforces scheduler load-test telemetry. Use `--min-teu-capacity` to prove each
 lane reports a non-zero `nexus_scheduler_lane_teu_capacity`, gate the slot utilisation with
@@ -276,16 +276,14 @@ bundle manifest into one artefact set so load runs can be published directly to 
 
 ### 6.1 Workload preparation
 
-1. Capture the lane's original certified native execution evidence and retain its launch
-   plan so Kagami can replay it independently. The canonical one-lane and four-lane
-   SDK parity captures live in `fixtures/sumeragi/native_execution_evidence_*_lanes_v1.json`;
-   they exercise the contract in [Sumeragi lanes](sumeragi_lanes.md) and do not grant
-   authority to a load run on another network.
+1. Record the lane configuration the run exercises: the committed `sumeragi_lane_policy`
+   and the lane records of `GET /v1/sumeragi/lanes` ([Sumeragi lanes](sumeragi_lanes.md)),
+   together with the recorded lane catalog (`LaneLifecycleStatusV1`) the smoke checks read.
 2. Baseline the lane before the run:
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
+     --lifecycle-file artifacts/nexus/lanes/nexus_lifecycle.json \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \

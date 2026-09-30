@@ -157,6 +157,7 @@ mod canonical_evidence_reader_tests {
                 assert_eq!(actual.consensus_header(), expected.consensus_header());
                 assert_eq!(actual.commit_qc(), expected.commit_qc());
                 assert_eq!(actual.result_preimage(), expected.result_preimage());
+                assert_eq!(actual.availability(), expected.availability());
                 assert_eq!(wire, original.encode_wire().unwrap());
                 bytes += wire.len() as u64;
             }
@@ -453,27 +454,33 @@ mod canonical_evidence_reader_tests {
             let header = original.consensus_header().to_vec();
             let qc = original.commit_qc().to_vec();
             let result = original.result_preimage().to_vec();
+            let availability = original.availability().to_vec();
+            assert_eq!(availability.is_empty(), at == 0);
             let replacement = match variant {
                 0 => None,
                 1 => Some(CommitCertificate::from_untrusted_parts(
                     vec![1],
                     vec![2],
                     result,
+                    availability,
                 )),
                 2 => Some(CommitCertificate::from_untrusted_parts(
                     Vec::new(),
                     qc,
                     result,
+                    availability,
                 )),
                 3 => Some(CommitCertificate::from_untrusted_parts(
                     header,
                     Vec::new(),
                     result,
+                    availability,
                 )),
                 _ => Some(CommitCertificate::from_untrusted_parts(
                     header,
                     qc,
                     Vec::new(),
+                    availability,
                 )),
             };
             block.set_commit_certificate(replacement);
@@ -490,6 +497,101 @@ mod canonical_evidence_reader_tests {
             assert!(reader.finish().is_err());
         }
     }
+    /// Native carriers require their original signed availability before any bytes escape.
+    #[test]
+    fn read_only_evidence_rejects_missing_native_availability() {
+        use iroha_data_model::block::CommitCertificate;
+        let mut fixture = Fixture::new();
+        let mut block = (*fixture.blocks[1]).clone();
+        let original = block.commit_certificate().unwrap();
+        assert!(
+            !original.availability().is_empty(),
+            "native signed availability"
+        );
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            original.consensus_header().to_vec(),
+            original.commit_qc().to_vec(),
+            original.result_preimage().to_vec(),
+            Vec::new(),
+        )));
+        fixture.blocks[1] = Arc::new(block);
+        fixture.write_store();
+        let before = fixture.snapshot();
+        let mut reader = fixture.open();
+        reader
+            .read_carrier(1)
+            .expect("unchanged result-only genesis");
+        let mut consumed = false;
+        let error = reader
+            .read_carrier_with(2, |wire| {
+                consumed = true;
+                Ok(wire)
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CanonicalKuraEvidenceError::Invalid("native commit certificate shape")
+        ));
+        assert!(
+            !consumed,
+            "malformed native carrier must not reach the consumer"
+        );
+        assert!(
+            reader.finish().is_err(),
+            "rejection poisons the evidence owner"
+        );
+        assert_eq!(fixture.snapshot(), before, "rejection remains read-only");
+    }
+
+    /// The result-only genesis exception cannot carry a later native availability frame.
+    #[test]
+    fn read_only_evidence_rejects_native_availability_on_genesis() {
+        use iroha_data_model::block::CommitCertificate;
+        let mut fixture = Fixture::new();
+        let availability = fixture.blocks[1]
+            .commit_certificate()
+            .unwrap()
+            .availability()
+            .to_vec();
+        assert!(
+            !availability.is_empty(),
+            "genuine later native availability"
+        );
+        let mut block = (*fixture.blocks[0]).clone();
+        let original = block.commit_certificate().unwrap();
+        assert!(original.consensus_header().is_empty());
+        assert!(original.commit_qc().is_empty());
+        assert!(original.availability().is_empty());
+        assert!(!original.result_preimage().is_empty());
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            original.consensus_header().to_vec(),
+            original.commit_qc().to_vec(),
+            original.result_preimage().to_vec(),
+            availability,
+        )));
+        fixture.blocks[0] = Arc::new(block);
+        fixture.write_store();
+        let before = fixture.snapshot();
+        let mut reader = fixture.open();
+        let mut consumed = false;
+        let error = reader
+            .read_carrier_with(1, |wire| {
+                consumed = true;
+                Ok(wire)
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CanonicalKuraEvidenceError::Invalid("native commit certificate shape")
+        ));
+        assert!(!consumed, "malformed genesis must not reach the consumer");
+        assert!(
+            reader.finish().is_err(),
+            "rejection poisons the evidence owner"
+        );
+        assert_eq!(fixture.snapshot(), before, "rejection remains read-only");
+    }
+
     #[test]
     fn read_only_evidence_carries_untrusted_native_signature_bytes_without_rewriting() {
         use iroha_data_model::block::CommitCertificate;
@@ -499,10 +601,13 @@ mod canonical_evidence_reader_tests {
         let mut qc = original.commit_qc().to_vec();
         let last = qc.last_mut().unwrap();
         *last ^= 1;
+        let availability = original.availability().to_vec();
+        assert!(!availability.is_empty(), "native signed availability");
         let changed = CommitCertificate::from_untrusted_parts(
             original.consensus_header().to_vec(),
             qc.clone(),
             original.result_preimage().to_vec(),
+            availability.clone(),
         );
         block.set_commit_certificate(Some(changed));
         fixture.blocks[1] = Arc::new(block);
@@ -512,6 +617,10 @@ mod canonical_evidence_reader_tests {
         let wire = reader.read_carrier(2).unwrap();
         let decoded = iroha_data_model::block::decode_versioned_signed_block(&wire).unwrap();
         assert_eq!(decoded.commit_certificate().unwrap().commit_qc(), qc);
+        assert_eq!(
+            decoded.commit_certificate().unwrap().availability(),
+            availability
+        );
         assert_eq!(wire, fixture.blocks[1].encode_wire().unwrap());
         reader.read_carrier(3).unwrap();
         reader.finish().unwrap(); // Disk completion grants no signature or execution authority.

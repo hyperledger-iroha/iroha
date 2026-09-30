@@ -146,8 +146,8 @@ impl BlsCrypto {
 }
 
 impl Crypto for BlsCrypto {
-    fn hash(&self, bytes: &[u8]) -> Hash32 {
-        Hash32(Hash::new(bytes).into())
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32 {
+        Hash32(Hash::new_from_chunks(chunks).into())
     }
 
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool {
@@ -331,6 +331,24 @@ mod tests {
         assert_eq!(h.0, <[u8; 32]>::from(Hash::new(b"sumeragi")));
         assert_eq!(h.0[31] & 1, 1);
         assert_ne!(crypto.hash(b"a"), crypto.hash(b"b"));
+    }
+
+    #[test]
+    fn hash_chunks_matches_contiguous_payload_preimage() {
+        let crypto = BlsCrypto::new();
+        for len in [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1024] {
+            let payload = vec![0x5a; len];
+            let mut original = iroha_sumeragi::preimage::TAG_PAY.to_vec();
+            original.extend_from_slice(&payload);
+            assert_eq!(
+                iroha_sumeragi::preimage::payload_hash(&crypto, &payload),
+                crypto.hash(&original)
+            );
+            assert_eq!(
+                crypto.hash_chunks(&[&[], &payload, &[]]),
+                crypto.hash(&payload)
+            );
+        }
     }
 
     /// Core keys and Iroha keys convert both ways; other algorithms and malformed bytes are

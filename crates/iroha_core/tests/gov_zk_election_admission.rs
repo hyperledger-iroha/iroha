@@ -6,8 +6,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{ElectionState, StandaloneBallotCorpusEntryV1, State, World, WorldReadOnly},
-    zk::{ZK_BACKEND_HALO2_IPA, hash_vk},
 };
+use iroha_core_zk::{ZK_BACKEND_HALO2_IPA, hash_vk};
 use iroha_data_model::{
     Registrable,
     account::Account,

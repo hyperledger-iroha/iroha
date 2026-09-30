@@ -14,7 +14,7 @@ pub(crate) enum KuraPublicationPreparationError {
         /// Original Kura mutex which prevented the joint acquisition.
         field: &'static str,
         /// Release observation captured before probing that mutex.
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     },
     /// The actual Kura requires storage repair, not a lock-release retry.
     Storage(Error),
@@ -62,7 +62,7 @@ struct AcquiredKuraPublicationFences<'kura> {
 /// Original notifications after every physical Kura owner has unlocked.
 #[must_use = "retain Kura cleanup through every enclosing physical owner"]
 pub(crate) struct KuraPublicationCleanup {
-    _fences: [Option<concread::release::DeferredRelease>; 4],
+    _fences: [Option<iroha_allocation::release::DeferredRelease>; 4],
 }
 
 impl<'kura> AcquiredKuraPublicationFences<'kura> {

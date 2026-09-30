@@ -35,7 +35,7 @@ impl<V: Value> Wake for Probe<V> {
 fn arm<V: Value>(
     cell: &Arc<Cell<V>>,
     panic_once: bool,
-) -> (Arc<Probe<V>>, [concread::release::ReleaseFuture; 2]) {
+) -> (Arc<Probe<V>>, [iroha_allocation::release::ReleaseFuture; 2]) {
     let probe = Arc::new(Probe {
         cell: Arc::clone(cell),
         calls: AtomicUsize::new(0),
@@ -59,7 +59,7 @@ fn arm<V: Value>(
 
 fn assert_released<V: Value>(
     probe: &Arc<Probe<V>>,
-    mut waits: [concread::release::ReleaseFuture; 2],
+    mut waits: [iroha_allocation::release::ReleaseFuture; 2],
 ) {
     assert_eq!(probe.calls.load(SeqCst), 2);
     assert!(!probe.saw_held_writer.load(SeqCst));

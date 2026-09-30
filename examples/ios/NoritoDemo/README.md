@@ -1,6 +1,6 @@
 ## NoritoDemo iOS Template (XcodeGen)
 
-This is a minimal iOS app template that compiles out-of-the-box and can link the NoritoBridge XCFramework.
+This iOS sample and its XCTest target depend on the repository-local `IrohaSwift` package and its authenticated NoritoBridge XCFramework.
 
 Requirements
 - Xcode 15+
@@ -12,11 +12,11 @@ Generate Xcode project
 - `xcodegen generate`
 - `open NoritoDemo.xcodeproj`
 
-By default it shows whether NoritoBridge is linked (`canImport(NoritoBridge)`).
-
-To exercise the SDK-backed paths, add the repository-local `IrohaSwift/`
-package via **File → Add Package Dependencies… → Add Local…** and select
-`../../../IrohaSwift`.
+Build the maintained Apple artifact described in
+[`docs/norito_bridge_release.md`](../../../docs/norito_bridge_release.md), then
+set `MOBILE_SDK_APPLE_ARTIFACT_DIR` to its absolute canonical artifact directory
+before invoking Xcode. `project.yml` already declares the local SDK dependency
+for the app and tests.
 
 Environment bootstrap
 - Copy `.env.example` to `.env` (or configure the scheme directly) to pre-fill Connect values.
@@ -29,15 +29,10 @@ Environment bootstrap
   - Optional helpers: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
     `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`, `CONNECT_APPROVE_SIGNATURE_B64`.
 
-Link NoritoBridge (optional)
-1. Copy `NoritoBridge.xcframework` into `examples/ios/NoritoDemo/Frameworks/` (create the folder if needed).
-2. Edit `project.yml` and uncomment the dependency under the `NoritoDemo` target:
-   - `- framework: Frameworks/NoritoBridge.xcframework`
-3. Re-run `xcodegen generate` and re-open the project.
-
 Provisioning manifest status (OA12)
-- `Sources/Resources/pos_manifest.json` mirrors the OA12 provisioning fixture from the Android sample.
-- `PosManifestLoader` decodes the manifest, and the SwiftUI view renders a manifest card that calls out the manifest ID/sequence, rotation hint, dual-signature state, and backend roots.
+- [`fixtures/sdk/pos/manifest_v1.json`](../../../fixtures/sdk/pos/manifest_v1.json) is the shared synthetic Swift/Android unit fixture. XcodeGen includes it as a resource.
+- `PosManifestLoader` verifies one canonical signed payload before exposing its typed fields. The envelope contains only its base64 payload and Ed25519 signature; unsigned outer fields and duplicate or unknown payload fields are rejected.
+- The manifest card shows its ID/sequence, rotation hint and configured backend roots. A fixture signature does not qualify hardware custody.
 - Pair manifest card screenshots with the Android sample’s `pos_security_audit.log` entries when rehearsing rotation drills so both platforms keep aligned OA12 evidence.
 
 Next steps

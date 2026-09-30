@@ -1,9 +1,7 @@
 //! Caller-owned retained hash acquisition, before preflight or admission.
 use super::*;
-use concread::{
-    bptree::{BptreeMapAbandonment, BptreeMapCommitSlot, BptreeMapOwnedAcquisition},
-    release::{DeferredRelease, ReleaseGuard},
-};
+use concread::bptree::{BptreeMapAbandonment, BptreeMapCommitSlot, BptreeMapOwnedAcquisition};
+use iroha_allocation::release::{DeferredRelease, ReleaseGuard};
 
 type Acquired<'a> =
     ReleaseGuard<'a, BptreeMapOwnedAcquisition<'a, usize, HashOf<BlockHeader>, BlockHashMode>>;

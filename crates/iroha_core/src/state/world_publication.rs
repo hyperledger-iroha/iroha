@@ -164,7 +164,7 @@ where
 pub(super) fn storage_slot<'target, K: Key, V: Value, M: WorldStorageMode<K, V>>(
     mut original: Box<RetainedStorage<K, V, M>>,
     world: &'target World,
-    scope: &mv::allocation::OwnedAllocationScope,
+    scope: &iroha_allocation::OwnedAllocationScope,
 ) -> Box<dyn PreparedWorldField + 'target>
 where
     M::Charge: Send + Sync + 'static,
@@ -458,7 +458,7 @@ pub(in crate::state) struct AbortedWorld<'target, Installation> {
     _fields: PreparedWorldFields<'target>,
     _installation: Option<Installation>,
     _shell_installation: Option<WorldJournalShellInstallation>,
-    _operation_index_scope: Option<mv::allocation::OwnedAllocationScope>,
+    _operation_index_scope: Option<iroha_allocation::OwnedAllocationScope>,
 }
 
 /// All original World writers retained together, with no State authorization.
@@ -477,7 +477,7 @@ pub(in crate::state) struct PreparedWorld<'target, Admission, Installation> {
     shell_installation: WorldJournalShellInstallation,
     admission: Admission,
     installation: Installation,
-    operation_index_scope: mv::allocation::OwnedAllocationScope,
+    operation_index_scope: iroha_allocation::OwnedAllocationScope,
 }
 
 /// Original field boxes and containers retained after physical publication.
@@ -487,7 +487,7 @@ pub(in crate::state) struct WorldRetirement<'target> {
     _retry: Vec<Box<dyn RetainedWorldField>>,
     _shells: WorldJournalShellReservation,
     _shell_installation: WorldJournalShellInstallation,
-    _operation_index_scope: mv::allocation::OwnedAllocationScope,
+    _operation_index_scope: iroha_allocation::OwnedAllocationScope,
 }
 
 #[path = "world_preparation.rs"]

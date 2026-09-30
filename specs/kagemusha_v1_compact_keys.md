@@ -94,5 +94,5 @@ seeded proof recovery, immutable release evidence and physical profiles remain
 separate required qualification.
 
 Implementation: `vendor/halo2-axiom/src/plonk/structured_key.rs`; production boundary:
-`crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs`; early admission:
-`crates/iroha_core/src/zk/kagemusha_v1_recursion/artifact_resource_preflight.rs`.
+`crates/iroha_core_zk/src/kagemusha_v1_recursion/generation.rs`; early admission:
+`crates/iroha_core_zk/src/kagemusha_v1_recursion/artifact_resource_preflight.rs`.

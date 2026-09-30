@@ -35,6 +35,8 @@ def test_source_owned_offline_deep_bound_and_retained_diagnostic_floor() -> None
         ("deep_tests", "assert_eq!(bytes.len(), 502_895);", "assert_eq!(bytes.len(), 502_894);"),
         ("deep_row", "COMMITTED_COLUMN_COUNT * size_of::<u64>()", "COMMITTED_COLUMN_COUNT * 4"),
         ("deep_fri", "1 + arity * Fp4::BYTES", "8 + arity * Fp4::BYTES"),
+        ("deep_fri", "Self::Eight(_) => 8,", "Self::Eight(_) => 4,"),
+        ("deep_fri", "writer.write_all(&[self.arity_byte()])", "writer.write_all(&[self.arity_byte(), 0])"),
         ("deep_geometry", "[16, 16, 8, 8, 4]", "[16, 16, 8, 8, 8]"),
         ("resources", "QUANTITY_SHARED_FRAME_BOUND: usize = deep_proof::MAX_FRAME_BYTES", "QUANTITY_SHARED_FRAME_BOUND: usize = 4_017_376"),
         ("resources", "QUANTITY_QUERY_COUNT: usize = deep_geometry::QUERY_COUNT", "QUANTITY_QUERY_COUNT: usize = 375"),

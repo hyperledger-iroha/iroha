@@ -2122,10 +2122,6 @@ fn sample_fhe_full_bootstrap_execution_proof_with_statement(
         proof: attachment,
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "test fixture enumerates every full-bootstrap artifact role inline"
-)]
 fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
     let params = ram_lfe_bfv_parameters_v1();
     let linear_transform_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1| {

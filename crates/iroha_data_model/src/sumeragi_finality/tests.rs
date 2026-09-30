@@ -9,7 +9,7 @@ use crate::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_crypto::{KeyPair, bls_normal_pop_prove};
-use iroha_sumeragi::types::{Bitmap, ChainParams};
+use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
 pub(crate) struct Fixture {
@@ -44,6 +44,9 @@ pub(super) fn result(
             ordinary_writes_root: ordinary_root,
             kagemusha_top_up_root: None,
             kagemusha_top_up_count: 0,
+            parent_world_state_root: Hash::new(b"fixture parent world"),
+            world_state_root: Hash::new(b"fixture world"),
+            event_commitment: None,
             executed_block_wire_len: len,
             executed_block_wire_hash: hash,
             transaction_input_commitment: block.network_input_merkle_commitment(),
@@ -81,6 +84,107 @@ pub(super) fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
             .try_into()
             .unwrap(),
     );
+}
+
+// Preserve the selected original epoch and use the sole fixture authoring path.
+pub(super) fn author_payload(
+    header: CoreHeader,
+    payload: &[u8],
+    epoch: &ValidatorEpochContextV1,
+    keys: &[KeyPair],
+) -> iroha_sumeragi::availability::AuthoredBody {
+    let config = ScheduledConfig {
+        height: header.height,
+        epoch: epoch.clone(),
+        params: ChainParamsRecord::from_core(&ChainParams::default()),
+    }
+    .height_config()
+    .unwrap();
+    let validators = epoch
+        .committee
+        .iter()
+        .map(|member| FinalityValidator {
+            public_key: member.validator.public_key().clone(),
+            proof_of_possession: member.proof_of_possession.clone(),
+        })
+        .collect::<Vec<_>>();
+    let proposer = &keys[header.proposer as usize];
+    let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
+    super::test_fixtures::author_payload(header, payload, &config, &budget, &validators, proposer)
+}
+
+/// Certify `block` as the direct successor of `parent`.
+///
+/// Committee member 0 proposes the exact resultless proposal and signs its genuine RS16
+/// availability table under the parent's authenticated next-height configuration; members
+/// 0, 1 and 2 then sign the exact `CommitQC` over `result`.
+pub(super) fn certify_successor(
+    keys: &[KeyPair],
+    validators: &[FinalityValidator],
+    instance: Hash32,
+    parent: &DecodedSumeragiBlock,
+    mut block: SignedBlock,
+    result: &ExecutionResultCommitment,
+) -> SumeragiFinalityProof {
+    let height = block.header().height().get();
+    let ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
+        panic!("fixture parent has no authenticated successor configuration");
+    };
+    assert_eq!(scheduled.height, height);
+    let config = scheduled.height_config().unwrap();
+    let (crypto, committee) = ProofCrypto::new(validators).unwrap();
+    assert_eq!(config.committee, committee);
+    let proposal = block
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
+    let header = CoreHeader {
+        instance,
+        epoch: config.epoch.id,
+        height,
+        origin_view: 0,
+        parent_hash: parent.core_hash,
+        parent_result: parent.result,
+        payload_hash: payload_hash(&crypto, &proposal),
+        availability_digest: Hash32::ZERO,
+        payload_len: proposal.len().try_into().unwrap(),
+        proposer: 0,
+        skipped_leaders: vec![],
+        control_witness: ControlWitness::empty(),
+        attest: false,
+    };
+    let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
+    let authored = super::test_fixtures::author_payload(
+        header, &proposal, &config, &budget, validators, &keys[0],
+    );
+    let header = authored.body.header();
+    let mut qc = Qc {
+        kind: VoteKind::Commit,
+        instance,
+        epoch: header.epoch,
+        height,
+        view: 0,
+        block_hash: header.hash(&crypto),
+        result: result.result().unwrap(),
+        attest: false,
+        signers: Bitmap::new(keys.len()),
+        agg_sig: AggregateSignature([0; 96]),
+        attestations: vec![],
+        attestation_witness: None,
+    };
+    sign_qc(&mut qc, keys, &[0, 1, 2]);
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        norito::encode_canonical(header).unwrap(),
+        norito::encode_canonical(&qc).unwrap(),
+        result.preimage().unwrap(),
+        norito::encode_canonical(authored.body.availability()).unwrap(),
+    )));
+    SumeragiFinalityProof {
+        block_header: block.header(),
+        block_wire: block.encode_wire().unwrap(),
+        committee: validators.to_vec(),
+    }
 }
 
 impl Fixture {
@@ -168,10 +272,12 @@ impl Fixture {
         output_test_support::install_network(&mut first_block, vec![Ok(Default::default())])
             .unwrap();
         let first_result = result(&first_block, &epoch);
+        // Genesis is result-only: no consensus header, CommitQC or availability frame.
         first_block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             vec![],
             vec![],
             first_result.preimage().unwrap(),
+            vec![],
         )));
         let first = SumeragiFinalityProof {
             block_header: first_block.header(),
@@ -193,46 +299,8 @@ impl Fixture {
         let mut block = builder.build(BTreeSet::new());
         output_test_support::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
         let result = result(&block, &epoch);
-        let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
-        let header = CoreHeader {
-            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            instance,
-            epoch: core_epoch(&epoch).unwrap().id,
-            height: 2,
-            origin_view: 0,
-            parent_hash: Hash32(Hash::from(genesis.hash()).into()),
-            parent_result: first_result.result().unwrap(),
-            payload_hash: payload_hash(&crypto, &payload),
-            payload_len: payload.len().try_into().unwrap(),
-            proposer: 0,
-            skipped_leaders: vec![],
-            attest: false,
-        };
-        let mut qc = Qc {
-            kind: VoteKind::Commit,
-            instance,
-            epoch: header.epoch,
-            height: 2,
-            view: 0,
-            block_hash: header.hash(&crypto),
-            result: result.result().unwrap(),
-            attest: false,
-            signers: Bitmap::new(4),
-            agg_sig: AggregateSignature([0; 96]),
-            attestations: vec![],
-            attestation_witness: None,
-        };
-        sign_qc(&mut qc, &keys, &[0, 1, 2]);
-        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-            norito::encode_canonical(&header).unwrap(),
-            norito::encode_canonical(&qc).unwrap(),
-            result.preimage().unwrap(),
-        )));
-        let second = SumeragiFinalityProof {
-            block_header: block.header(),
-            block_wire: block.encode_wire().unwrap(),
-            committee: validators.clone(),
-        };
+        let parent = first.decode_checked().unwrap();
+        let second = certify_successor(&keys, &validators, instance, &parent, block, &result);
         Self {
             genesis,
             first,
@@ -256,6 +324,7 @@ impl Fixture {
         let certificate = block.commit_certificate().unwrap();
         let consensus_header = certificate.consensus_header().to_vec();
         let result_preimage = certificate.result_preimage().to_vec();
+        let availability = certificate.availability().to_vec();
         let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         qc.view = 1;
         sign_qc(&mut qc, &self.keys, &[1, 2, 3]);
@@ -263,6 +332,7 @@ impl Fixture {
             consensus_header,
             norito::encode_canonical(&qc).unwrap(),
             result_preimage,
+            availability,
         )));
         proof.block_wire = block.encode_wire().unwrap();
         proof
@@ -331,14 +401,15 @@ fn alternate_current_quorum_witnesses_have_one_authenticated_execution() {
 }
 
 #[test]
-fn current_proof_rejects_tampered_qc_result_committee_parent_and_wire() {
+fn current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availability() {
     let fixture = Fixture::new();
-    for mutation in 0..6 {
+    for mutation in 0..8 {
         let mut bad = fixture.second.clone();
         let mut block = decode_versioned_signed_block(&bad.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut consensus_header = certificate.consensus_header().to_vec();
         let mut result_preimage = certificate.result_preimage().to_vec();
+        let mut availability = certificate.availability().to_vec();
         let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         match mutation {
             0 => qc.agg_sig.0[0] ^= 1,
@@ -347,18 +418,30 @@ fn current_proof_rejects_tampered_qc_result_committee_parent_and_wire() {
             3 => {
                 let mut header: CoreHeader = norito::decode_canonical(&consensus_header).unwrap();
                 header.parent_result = Hash32([9; 32]);
+                let epoch = genesis_epoch(&fixture.genesis).unwrap();
+                let payload = block
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal")
+                    .encode_wire()
+                    .unwrap();
+                let authored = author_payload(header, &payload, &epoch, &fixture.keys);
+                let header = authored.body.header();
+                availability = norito::encode_canonical(authored.body.availability()).unwrap();
                 let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
                 qc.block_hash = header.hash(&crypto);
                 sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
-                consensus_header = norito::encode_canonical(&header).unwrap();
+                consensus_header = norito::encode_canonical(header).unwrap();
             }
             4 => sign_qc(&mut qc, &fixture.keys, &[0, 1]),
-            _ => result_preimage.push(0),
+            5 => result_preimage.push(0),
+            6 => availability.clear(),
+            _ => *availability.last_mut().unwrap() ^= 1,
         }
         block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             consensus_header,
             norito::encode_canonical(&qc).unwrap(),
             result_preimage,
+            availability,
         )));
         bad.block_wire = block.encode_wire().unwrap();
         let mut verifier = fixture.verifier();
@@ -501,6 +584,18 @@ fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
         }
         value.validate().unwrap();
         let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+        let availability = if change_epoch {
+            let payload = block
+                .canonical_resultless_proposal()
+                .expect("valid original proposal")
+                .encode_wire()
+                .unwrap();
+            let authored = author_payload(header, &payload, &value.schedule.current, &fixture.keys);
+            header = authored.body.header().clone();
+            norito::encode_canonical(authored.body.availability()).unwrap()
+        } else {
+            certificate.availability().to_vec()
+        };
         qc.block_hash = header.hash(&crypto);
         qc.result = value.result().unwrap();
         sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
@@ -508,6 +603,7 @@ fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
             norito::encode_canonical(&header).unwrap(),
             norito::encode_canonical(&qc).unwrap(),
             value.preimage().unwrap(),
+            availability,
         )));
         proof.block_wire = block.encode_wire().unwrap();
         proof.decode_checked().unwrap();
@@ -533,6 +629,7 @@ fn certified_beacon_pulse_requires_the_exact_committed_parent() {
         let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
+        let availability = certificate.availability().to_vec();
         let native_header: CoreHeader = norito::decode_canonical(&header).unwrap();
         let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
@@ -576,6 +673,7 @@ fn certified_beacon_pulse_requires_the_exact_committed_parent() {
             header,
             norito::encode_canonical(&qc).unwrap(),
             value.preimage().unwrap(),
+            availability,
         )));
         proof.block_wire = block.encode_wire().unwrap();
         let mut verifier = fixture.verifier();
@@ -666,6 +764,7 @@ fn certified_beacon_pulse_requires_exact_parent_and_native_context() {
         let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
+        let availability = certificate.availability().to_vec();
         let native_header: CoreHeader = norito::decode_canonical(&header).unwrap();
         let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
@@ -717,6 +816,7 @@ fn certified_beacon_pulse_requires_exact_parent_and_native_context() {
             header,
             norito::encode_canonical(&qc).unwrap(),
             value.preimage().unwrap(),
+            availability,
         )));
         proof.block_wire = block.encode_wire().unwrap();
         let mut verifier = fixture.verifier();
@@ -750,6 +850,7 @@ fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
         let certificate = block.commit_certificate().unwrap();
         let mut header: CoreHeader =
             norito::decode_canonical(certificate.consensus_header()).unwrap();
+        let availability = certificate.availability().to_vec();
         let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         let epoch = genesis_epoch(&fixture.genesis).unwrap();
         block.set_external_entrypoints(Vec::new());
@@ -757,7 +858,11 @@ fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
         output_test_support::install_network(&mut block, Vec::new()).unwrap();
         assert!(!block.has_consensus_work());
         let result = result(&block, &epoch);
-        let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
+        let payload = block
+            .canonical_resultless_proposal()
+            .expect("valid original proposal")
+            .encode_wire()
+            .unwrap();
         header.origin_view = 19;
         // Public control bytes cannot change the original work predicate. No
         // threshold validity is claimed or needed for this early no-work rejection.
@@ -776,6 +881,7 @@ fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
             norito::encode_canonical(&header).unwrap(),
             norito::encode_canonical(&qc).unwrap(),
             result.preimage().unwrap(),
+            availability,
         )));
         proof.block_header = block.header();
         proof.block_wire = block.encode_wire().unwrap();
@@ -823,53 +929,19 @@ impl Fixture {
             0,
         )
     }
-    pub(crate) fn proof_for_block(&self, mut block: SignedBlock) -> SumeragiFinalityProof {
+    pub(crate) fn proof_for_block(&self, block: SignedBlock) -> SumeragiFinalityProof {
         assert_eq!(block.header().height().get(), 2);
         assert_eq!(block.header().prev_block_hash(), Some(self.genesis.hash()));
         let parent = self.first.decode_checked().unwrap();
-        let epoch = &parent.commitment.schedule.current;
-        let result = result(&block, epoch);
-        let (crypto, _) = ProofCrypto::new(&self.validators).unwrap();
-        let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
-        let header = CoreHeader {
-            instance: self.verifier().instance(),
-            epoch: core_epoch(epoch).unwrap().id,
-            height: 2,
-            origin_view: 0,
-            parent_hash: parent.core_hash,
-            parent_result: parent.result,
-            payload_hash: payload_hash(&crypto, &payload),
-            payload_len: payload.len().try_into().unwrap(),
-            proposer: 0,
-            skipped_leaders: vec![],
-            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            attest: false,
-        };
-        let mut qc = Qc {
-            kind: VoteKind::Commit,
-            instance: header.instance,
-            epoch: header.epoch,
-            height: 2,
-            view: 0,
-            block_hash: header.hash(&crypto),
-            result: result.result().unwrap(),
-            attest: false,
-            signers: Bitmap::new(4),
-            agg_sig: AggregateSignature([0; 96]),
-            attestations: vec![],
-            attestation_witness: None,
-        };
-        sign_qc(&mut qc, &self.keys, &[0, 1, 2]);
-        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-            norito::encode_canonical(&header).unwrap(),
-            norito::encode_canonical(&qc).unwrap(),
-            result.preimage().unwrap(),
-        )));
-        SumeragiFinalityProof {
-            block_header: block.header(),
-            block_wire: block.encode_wire().unwrap(),
-            committee: self.validators.clone(),
-        }
+        let result = result(&block, &parent.commitment.schedule.current);
+        certify_successor(
+            &self.keys,
+            &self.validators,
+            self.verifier().instance(),
+            &parent,
+            block,
+            &result,
+        )
     }
     pub(crate) fn verify_block(&self, block: SignedBlock) -> VerifiedSumeragiBlock {
         let proof = self.proof_for_block(block);
@@ -877,4 +949,13 @@ impl Fixture {
         verifier.verify(&self.first).unwrap();
         verifier.verify(&proof).unwrap()
     }
+}
+
+#[test]
+fn signed_genesis_layout_reaches_the_native_epoch_exactly() {
+    let fixture = Fixture::new();
+    let signed = signed_genesis_consensus_metadata(&fixture.genesis).unwrap();
+    let epoch = genesis_epoch(&fixture.genesis).unwrap();
+    assert_eq!(epoch.da_layout, signed.sumeragi_context.da_layout);
+    assert_eq!(core_epoch(&epoch).unwrap().da_layout, epoch.da_layout);
 }

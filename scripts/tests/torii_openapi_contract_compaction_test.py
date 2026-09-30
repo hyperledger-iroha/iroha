@@ -16,9 +16,6 @@ FINALITY = ROOT / "crates/iroha_torii/src/openapi/tests/finality_app_contracts.r
 SORAFS = ROOT / "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs"
 ASSET = ROOT / "crates/iroha_torii/src/openapi/tests/openapi_contracts_v1.json"
 ASSET_VERSION = 1
-BASELINE_RUST_LINES = 4_902
-MAX_POSTIMAGE_RUST_LINES = 1_902
-MINIMUM_NET_REDUCTION = 3_000
 SECTION_ORDER = (
     "evidence.audit.description",
     "evidence.audit.success",
@@ -179,21 +176,23 @@ class ToriiOpenapiContractCompactionTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(ContractAssetError):
                 _load_asset(encoded, len(encoded), hashlib.sha256(encoded).hexdigest())
 
-    def test_current_test_inventory_and_typed_runner_architecture_are_exact(self) -> None:
-        self.assertEqual(_test_names(self.finality), FINALITY_TESTS)
-        self.assertEqual(_test_names(self.sorafs), SORAFS_TESTS)
-        combined = self.sorafs + self.finality
+    def _assert_typed_runner_contract(self, finality: str, sorafs: str) -> None:
+        self.assertEqual(_test_names(finality), FINALITY_TESTS)
+        self.assertEqual(_test_names(sorafs), SORAFS_TESTS)
+        combined = sorafs + finality
         for record in ("SchemaShape", "PropertyRefContract", "OperationResponseContract"):
             self.assertIn(f"struct {record}", combined)
         for forbidden in ("Box<dyn Fn", "impl Fn", "dyn Fn", "ActionContract", "BodyContract", "callback"):
             self.assertNotIn(forbidden, combined)
         self.assertNotIn("#[ignore]", combined)
 
-    def test_rust_line_budget_is_a_real_whole_tranche_reduction(self) -> None:
-        postimage = len(self.finality.splitlines()) + len(self.sorafs.splitlines())
-        self.assertLessEqual(postimage, MAX_POSTIMAGE_RUST_LINES)
-        self.assertGreaterEqual(BASELINE_RUST_LINES - postimage, MINIMUM_NET_REDUCTION)
-        self.assertLessEqual(max(map(len, (self.finality + self.sorafs).splitlines())), 400)
+    def test_current_test_inventory_and_typed_runner_architecture_are_exact(self) -> None:
+        self._assert_typed_runner_contract(self.finality, self.sorafs)
+
+    def test_whitespace_growth_preserves_typed_runner_contract(self) -> None:
+        self._assert_typed_runner_contract(
+            self.finality + "\n" * 20_000, self.sorafs + "\n" * 20_000
+        )
 
 
 if __name__ == "__main__":

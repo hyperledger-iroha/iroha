@@ -616,13 +616,17 @@ fn completion_requires_the_selected_running_native_dataspace_lane() {
         })
         .collect();
     let peer = committee[0].peer.clone();
-    let mut policy = SumeragiLanePolicy::for_chain(SumeragiParameters::default());
+    let mut policy = SumeragiLanePolicy::for_chain(
+        SumeragiParameters::default(),
+        iroha_sumeragi::availability::recommended_data_availability_layout(),
+    );
     policy.fixed.push(SumeragiFixedLane {
         lane: manifest.lane.id,
         dataspace: manifest.lane.dataspace_id,
         committee: committee.clone(),
     });
     let record = SumeragiLaneRecord {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         lane: manifest.lane.id,
         dataspace: manifest.lane.dataspace_id,
         incarnation: [42; 32],

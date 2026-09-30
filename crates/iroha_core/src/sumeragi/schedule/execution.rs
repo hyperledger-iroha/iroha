@@ -11,11 +11,12 @@ use crate::{
         epoch_election::{self, FrozenEpochBoundary},
     },
 };
+use iroha_allocation::RetainedPayload;
 use iroha_data_model::{
     block::SignedBlock,
     consensus::{FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconPulseContextV1},
 };
-use mv::{allocation::RetainedPayload, storage::StorageReadOnly};
+use mv::storage::StorageReadOnly;
 use std::fmt;
 
 /// A sealed original capture stays alive through every local post-execution refusal.

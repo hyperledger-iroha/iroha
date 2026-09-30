@@ -8,7 +8,7 @@ use crate::{
     api::{Action, ConfigError, ConfigError::InvalidInit, HaltReason, Init, LocalParams},
     crypto::{Attestation, Crypto, Signer},
     message::VoteKind,
-    pacemaker::{Pacemaker, effective_t_max, validate_chain, validate_local},
+    pacemaker::{Pacemaker, effective_t_max, validate_height, validate_local},
     safety::{
         RecordState, RestartPlan, SafetyRecord, check_recommit, read_record, recommit_candidate,
     },
@@ -29,9 +29,10 @@ impl Core {
     pub fn new(
         local: LocalParams,
         init: Init,
-        signers: Vec<Box<dyn Signer>>,
+        signers: Vec<std::sync::Arc<dyn Signer>>,
         crypto: Box<dyn Crypto>,
         attestation: Attestation,
+        body_budget: iroha_allocation::AllocationBudget,
         now: Millis,
     ) -> Result<(Self, Vec<Action>), ConfigError> {
         let t = init.tip.height;
@@ -52,7 +53,7 @@ impl Core {
         // a zero retry interval or `block_time > payload_retry_interval`
         // is refused at startup (Appendix E, E38).
         for config in &initial {
-            validate_chain(&config.params, u64::MAX)?;
+            validate_height(config, u64::MAX)?;
         }
         let (keys, states) = local_keys(&init, signers)?;
         let first = configs
@@ -64,7 +65,7 @@ impl Core {
             local,
             init,
             keys,
-            (crypto, attestation),
+            (crypto, attestation, body_budget),
             now,
             configs,
             first,
@@ -145,7 +146,11 @@ impl Core {
         local: LocalParams,
         init: Init,
         keys: Vec<LocalKey>,
-        (crypto, attestation): (Box<dyn Crypto>, Attestation),
+        (crypto, attestation, body_budget): (
+            Box<dyn Crypto>,
+            Attestation,
+            iroha_allocation::AllocationBudget,
+        ),
         now: Millis,
         configs: BTreeMap<u64, ConfigSlot>,
         first: HeightConfig,
@@ -175,6 +180,7 @@ impl Core {
             .expect("one placeholder slot is a nonempty permutation");
         let rnd = topo.round(0);
         Self {
+            body_budget,
             crypto,
             attestation,
             local,
@@ -383,9 +389,10 @@ impl Core {
 // (Appendix E, E16).
 fn local_keys(
     init: &Init,
-    signers: Vec<Box<dyn Signer>>,
+    signers: Vec<std::sync::Arc<dyn Signer>>,
 ) -> Result<(Vec<LocalKey>, Vec<RecordState>), ConfigError> {
-    let mut signers: Vec<Option<Box<dyn Signer>>> = signers.into_iter().map(Some).collect();
+    let mut signers: Vec<Option<std::sync::Arc<dyn Signer>>> =
+        signers.into_iter().map(Some).collect();
     let mut keys: Vec<LocalKey> = Vec::with_capacity(init.records.len());
     let mut states = Vec::with_capacity(init.records.len());
     for (pk, state, retired) in &init.records {

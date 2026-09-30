@@ -7,8 +7,8 @@ Run the following commands from the workspace root before submitting changes to 
 ```sh
 cargo check -p mochi-core -p mochi-ui -p mochi-integration --all-targets --features mochi-ui/gui,mochi-integration/dev-tools
 cargo test -p mochi-core --lib torii::tests::
-cargo test -p mochi-core --test torii_streams
-cargo test -p mochi-integration --features dev-tools --test supervisor --test readiness_smoke
+cargo test -p mochi-core --test composer_drafts torii_streams::
+cargo test -p mochi-integration --features dev-tools --test readiness_smoke
 bash -n scripts/mochi_local_sandbox.sh
 ```
 

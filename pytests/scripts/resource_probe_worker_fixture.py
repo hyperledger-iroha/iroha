@@ -16,14 +16,17 @@ from resource_evidence_budget import (
     select_run_budget, RUN_FILE_FIELDS,
 )
 
+# Ledger label suffix of each per-run public file, in RUN_FILE_FIELDS order.
+ROLES = dict(zip(RUN_FILE_FIELDS, ('journal', 'trace', 'receipt'), strict=True))
+
 POLICY = CapturePolicy(status_body_bytes=4096, metrics_body_bytes=16 * 1024)
 SUITE_SOURCE = Path(__file__).with_name('resource_probe_worker_test.py')
 
 def allocation(count=4, policy=POLICY):
     geometry = CaptureGeometry(count, 2_000_000, 40_000_000, 2_000_000)
     runs = tuple(RunBudget(pair, variant, geometry,
-                           *(FileBudget(f'pair{pair}.{variant}.{role}', 4096)
-                             for role in ('journal', 'trace', 'proof', 'receipt', 'raw', *RUN_FILE_FIELDS[5:])))
+                           *(FileBudget(f'pair{pair}.{variant}.{ROLES[field]}', 4096)
+                             for field in RUN_FILE_FIELDS))
                  for pair in range(1, 6) for variant in ('one_lane', 'four_lane'))
     experiment = admit_experiment(policy=policy, runs=runs,
                                  static_files=(StaticFile('worker_fixture', SUITE_SOURCE.stat().st_size),),

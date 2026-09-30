@@ -227,14 +227,14 @@ indexed-owner integration.
 The authenticated Core indexed-key owner and encrypted polynomial store are
 present but remain separate from normal production proof entry points: the six
 direct `create_proof` calls and two `create_proof_consuming` calls in
-[generation.rs](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs)
+[generation.rs](../crates/iroha_core_zk/src/kagemusha_v1_recursion/generation.rs)
 use dense `ProvingKey` owners. The stored continuation and Core
 `capture_indexed_proving_key` have only test callers in the inspected source.
 Closed internal proof completion does not supply authenticated Core producer/key
 integration. Sources: [stored owner](../vendor/halo2-axiom/src/plonk/prover/stored.rs),
 [guarded outer continuation](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening.rs),
 [guarded inner IPA](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening/inner_ipa.rs),
-[indexed artifact owner](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifacts/stored_key.rs).
+[indexed artifact owner](../crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key.rs).
 
 Normal native activation remains unavailable. The only in-repository
 `KagemushaCoreCoordinatorBackendV1` implementation and install calls are in its
@@ -267,10 +267,10 @@ latest checkpoint selection and byte-identical recovery. `restore_from_disk_hist
 explicitly remains unwired to the product coordinator's hardware session. A
 signed historical projection or a replayable host WAL alone must not authorize
 restoration. Sources:
-[Guard delegation](../crates/iroha_core/src/zk/kagemusha_v1_recursion/guard_verifier.rs),
-[transaction verification](../crates/iroha_core/src/zk/kagemusha_v1_recursion/hardware_transactions.rs),
-[durable restoration](../crates/iroha_core/src/zk/kagemusha_v1_state/mod.rs),
-[response archive](../crates/iroha_core/src/zk/kagemusha_v1_state/response_evidence_archive.rs).
+[Guard delegation](../crates/iroha_core_zk/src/kagemusha_v1_recursion/guard_verifier.rs),
+[transaction verification](../crates/iroha_core_zk/src/kagemusha_v1_recursion/hardware_transactions.rs),
+[durable restoration](../crates/iroha_core_zk/src/kagemusha_v1_state/mod.rs),
+[response archive](../crates/iroha_core_zk/src/kagemusha_v1_state/response_evidence_archive.rs).
 
 The real 1,024-handoff qualification test remains ignored and explicitly fails
 because the positive-value MintFold → SendSplit → Payment → ReceiveFold generator
@@ -279,9 +279,9 @@ as incomplete. These fixtures do not establish 1,000 funded merchant balances,
 a live four-validator settlement/recovery run, genuine final-artifact proof
 acceptance, or device resource ceilings. The mint-authority reader also retains
 a bootstrap structure fixed-point qualification TODO. Sources:
-[handoff gate](../crates/iroha_core/src/zk/kagemusha_v1_recursion/real_handoff_qualification_tests.rs),
-[payment corridor](../crates/iroha_core/src/zk/kagemusha_v1_recursion/real_payment_corridor.rs),
-[native verifier](../crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs).
+[handoff gate](../crates/iroha_core_zk/src/kagemusha_v1_recursion/real_handoff_qualification_tests.rs),
+[payment corridor](../crates/iroha_core_zk/src/kagemusha_v1_recursion/real_payment_corridor.rs),
+[native verifier](../crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs).
 
 The next completion sequence is: qualify and connect the full stored proof path;
 qualify real funded recursive payments and complete durable native ownership;
@@ -290,89 +290,14 @@ and independent-review gates. Exact OEM services/profiles for the requested
 brands remain external dependencies. Release authentication and fail-closed
 activation must stay enforced throughout this work.
 
-## Current validation boundary — 2026-09-23
+## Validation boundary
 
-A September 23 focused `connect_norito_bridge` library check reached
-`iroha_core` and exposed two typed SHA-bit provenance errors in the staged
-terminal-recovery relation. Both call sites now use the typed bit decomposition;
-the check and associated new regression tests still need to rerun after the
-concurrent signed Taira release build clears the machine. This is source repair,
-not a passing current-root build.
-
-The fresh Kotlin/JVM KAGEMUSHA selection executes **57 tests: 33 pass, 24 fail,
-zero skipped**, with all 699 captured SDK/build/fixture inputs unchanged. Every
-failure reports unavailable ABI-23 native account-address validation; these are
-not evidence of 24 distinct product assertion defects. The
-[Kotlin validation note](../docs/history/2026-09-22/kagemusha-readiness/kotlin-core-validation.md)
-records the actual JDK 21 command, all JUnit results and exact hashes. A
-current-source native bridge rebuild and rerun are required; this snapshot does
-not bind the Rust native dependency graph or qualify JNI/device execution.
-
-The current indexed-key batch passes the same **79 functions in default and
-no-multicore builds (158 executions)**, with zero failures or ignored tests. All
-267 captured inputs match across both test windows and the passing 3.569 s
-non-test library check. Coverage includes the installed n−1→n permutation-coset
-regression, coefficient conversion, guarded snapshot errors/unwinds, exact key
-roles, advice-role rejection and the prior guarded-inner proof selection. The
-[indexed-key batch note](../docs/history/2026-09-22/kagemusha-readiness/indexed-key-batch-validation.md)
-records exact scopes and hashes. The two new actual Core store-role tests are
-installed but await the separately coordinated root-graph checks. This does not
-qualify consuming indexed-owner integration, Core monetary proofs or hardware.
-
-The earlier 18-function indexed-reader selection remains a separate captured
-candidate in the [reader note](../docs/history/2026-09-22/kagemusha-readiness/indexed-reader-validation.md).
-
-The preceding guarded-inner candidate passes the same **27 distinct test functions in
-default and no-multicore builds: 54 executions, zero failures or ignored tests**.
-All 260 captured source/build inputs match across both windows and the separate
-non-test vendor-library check, which passes in 1.124 s; each test executable remains
-unchanged during its window. The selection includes guarded arithmetic, owner
-failure/erasure controls, ordinary IPA/multiopening regressions, zero-challenge
-rejection, empty/singleton FFT identities and the k0 IPA basis empty product.
-
-The satisfiable square/lookup/copy fixture reaches real whole-PLONK acceptance
-through guarded inner IPA, with dense proof-byte, transcript and next-RNG agreement
-in both Pasta fields and three instance modes (six generic cases). This does not
-qualify final KAGEMUSHA recursive monetary proofs. These checks use the standalone
-vendor manifest/lockfile, not the root-workspace/Core dependency graph.
-
-The [inner validation note](../docs/history/2026-09-22/kagemusha-readiness/inner-validation.md)
-retains every earlier failure: the first window executed 11 functions (10 passed,
-one failed), the accidental unchanged-candidate second window executed 24 (23
-passed, one failed), and the third executed 26 (25 passed, one failed). The third
-window installed the FFT fix but exposed a separate k0 empty-product assertion in
-`compute_s`; the final candidate fixes that assertion and adds its regression.
-The earlier selector/setup failures remain recorded; they are not overall passes.
-
-The earlier guarded-P candidate records 43 distinct passing functions across two
-default windows and 42 passing no-multicore functions, retaining the original
-failed assertion and interrupted first no-multicore attempt. Its positive fixture
-uses a test-only ordinary inner IPA; the new guarded-inner positive fixture above
-is separate. Its deliberately unsatisfied inverse fixture's byte equality and
-opening verification are not positive whole-PLONK acceptance. The
-[opening note](../docs/history/2026-09-22/kagemusha-readiness/opening-validation.md)
-preserves that candidate's exact scope. Earlier default and no-multicore builds
-each passed the same 27 scalar/blind functions (54 executions, 27 distinct); the
-[scalar/blind note](../docs/history/2026-09-22/kagemusha-readiness/scalar-blind-validation.md)
-retains that separate candidate. These earlier receipts do not qualify later
-inner-IPA source changes or final recursive monetary proofs.
-
-The replaced active/current sections and root status row are preserved
-byte-for-byte in the
-[dated archive](../docs/history/2026-09-22/kagemusha-readiness/README.md).
-The previously cited `target/kagemusha-validation/stored-prover-next-window-20260912`,
-`target/kagemusha-validation/20260912-source-window`,
-`target/kagemusha-main-native-jvm-validation-r5` and
-`target/kagemusha-sdk-security-parity-validation-r1` directories are absent.
-Their recorded historical test totals cannot be independently rechecked here or
-used to qualify today's source. Finding entries and test counts below preserve
-earlier scoped work records; they are not fresh validation of this source.
-
-Fresh qualification must retain the exact candidate, dependency/lock inputs,
-compiled artifacts, commands and results. Focused vendor or host tests cannot
-replace authenticated Core/SDK integration, final monetary proofs, workspace
-checks, canonical release provenance, measured full-process resources, qualified
-hardware, or independent review.
+Qualification requires the exact candidate, dependency/lock inputs, compiled
+artifacts, commands and results. Focused vendor or host tests do not replace
+authenticated Core/SDK integration, final monetary proofs, workspace checks,
+canonical release provenance, measured full-process resources, qualified hardware
+or independent review. Kotlin/JVM and physical-device results require the
+current-source native bridge; unavailable native validation is not a pass.
 
 ## Requested device scope
 
@@ -496,8 +421,13 @@ not establish the monetary ratchet. See the [Android attestation
 contract](https://source.android.com/docs/security/features/keystore/attestation)
 and [phone algorithm](kagemusha_v1_phone_algorithm.md).
 
-The Android SDK now has typed method-12 enrollment framing over the existing
-native coordinator. A rebuilt ABI-23 host bridge runs nine focused Android
+The current native coordinator revokes its process-local handle after every
+failed dispatch or response publication. SDK transports mirror that revocation;
+successful exact reads and original-ticket cancellation retries require a live
+owner. Uncertain outcomes require qualified backend recovery in a fresh process.
+
+An earlier Android candidate had typed method-12 enrollment framing over the
+native coordinator. A rebuilt ABI-23 host bridge ran nine focused Android
 host-native tests, including original-ticket phase-6 cancellation retry after a
 lost response or a locally poisoned proof response. The adapter retains one
 phase-1 selection in process, can read its byte-identical response after a lost
@@ -538,8 +468,8 @@ source-sealed monetary XCFramework.
   tests passed on the fresh shared Core harness. This source finding does not establish an
   exported-ABI or monetary exploit, and the fix does not supply hardware
   freshness or qualified speculative-suffix authentication. Sources:
-  [coordinator pairing](../crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store.rs)
-  and [owned journal ancestry](../crates/iroha_core/src/zk/kagemusha_v1_state/private_journal.rs).
+  [coordinator pairing](../crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store.rs)
+  and [owned journal ancestry](../crates/iroha_core_zk/src/kagemusha_v1_state/private_journal.rs).
 - **KGM-01 — High, monetary relation incomplete.** The original MintFold private
   recipient credential and credit opening were retained by Core but not fully
   constrained to the receiving lane and verified authorization in the composite
@@ -547,8 +477,8 @@ source-sealed monetary XCFramework.
   correction now constrains the recipient and opening bytes and routes State SHA
   messages through the mandatory authenticated ordered claim fold. Focused Rust
   checks and actual artifact/resource gates are still required before closure.
-  Sources: [recipient/opening constraint](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L2612)
-  and [claim consumer](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L1705).
+  Sources: [recipient/opening constraint](../crates/iroha_core_zk/src/kagemusha_v1_recursion/composite.rs#L2612)
+  and [claim consumer](../crates/iroha_core_zk/src/kagemusha_v1_recursion/composite.rs#L1705).
 - **KGM-02 — High, operation recovery integration incomplete.** Swift exposed
   operations still allocated retry identities internally while Core had moved to
   caller-owned IDs; some SDK provider calls still used the retired allocator
@@ -557,7 +487,7 @@ source-sealed monetary XCFramework.
   reservation changes now have focused Kotlin/Java/C# coverage, and 22 Swift
   coordinator tests pass against the pinned native host library. C# also now rejects missing-state re-bootstrap, journal rollback
   and recovery equivocation. Current-source native execution is still required.
-  Sources: [Core reservation](../crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store.rs#L274)
+  Sources: [Core reservation](../crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store.rs#L274)
   and [C# ID admission/recovery](../csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaWalletV1.cs#L1014).
 - **KGM-03 — Medium, bridge response substitution.** Outbox release admitted a
   structurally valid response for a different canonical installed envelope.
@@ -754,8 +684,7 @@ source-sealed monetary XCFramework.
   ceiling and required binding count are unchanged. This closes the reproduced
   defect in that source-recorded snapshot; full current-source release validation
   remains separate.
-  Sources: [sidecar decode limits](../crates/iroha_core/src/kura.rs) and
-  [borrowed finality decoder](../crates/iroha_core/src/kura/kagemusha_finality_decode.rs).
+  Sources: [sidecar decode limits](../crates/iroha_core/src/kura.rs) for the current storage owner.
 - **KGM-19 — Release blocker, complete Terminal key/resource budget.** The earlier
   Terminal configuration used five Table8 SHA lanes and four dense accumulator
   lanes. Its 110 original selector bitmaps require 901,120 bytes at k=16, already
@@ -783,8 +712,8 @@ source-sealed monetary XCFramework.
   reciprocal audit against the exact four-lane k16 scheduler before allocating
   its consuming Base graph. This rejects impossible jobs early; it does not
   reduce key size or qualify the graph.
-  Sources: [resource inventory](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifact_resource_preflight.rs)
-  and [generation preflight](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs).
+  Sources: [resource inventory](../crates/iroha_core_zk/src/kagemusha_v1_recursion/artifact_resource_preflight.rs)
+  and [generation preflight](../crates/iroha_core_zk/src/kagemusha_v1_recursion/generation.rs).
 - **KGM-20 — Corrected; focused reciprocal-audit validation passes.** Terminal
   reused a State-specific helper that selected audit positions 48/50, which are
   history cells in Terminal's public column. Terminal's Eq circuit must instead
@@ -800,7 +729,7 @@ source-sealed monetary XCFramework.
   Source/binary hashes remain unchanged. This closes the reproduced positional
   defect; final genuine Terminal proofs and release qualification remain blocked
   separately by resource/authority gates.
-  Source: [Terminal reciprocal audits](../crates/iroha_core/src/zk/kagemusha_v1_recursion/terminal_authorization.rs).
+  Source: [Terminal reciprocal audits](../crates/iroha_core_zk/src/kagemusha_v1_recursion/terminal_authorization.rs).
 - **KGM-21 — Release blocker, typed-SHA claim key convergence.** The actual
   supervised State diagnostic fails before State proving while generating its
   reusable typed-SHA claim artifacts. The convergence graph has 264 advice
@@ -965,7 +894,7 @@ source-sealed monetary XCFramework.
   cleanup authentication error and absent child exit code are preserved, and
   subsequent process checks find both owned processes absent. No final key or
   State proof is produced.
-  Source: [typed-SHA key generation](../crates/iroha_core/src/zk/kagemusha_v1_recursion/mint_hash_generation.rs).
+  Source: [typed-SHA key generation](../crates/iroha_core_zk/src/kagemusha_v1_recursion/mint_hash_generation.rs).
 
 The platform credential circuit already constrains its positive hardware epoch
 inside the proof. The shared credential-assignment helper now enforces the same

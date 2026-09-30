@@ -31,7 +31,7 @@ use iroha_config::parameters::{
         },
     },
 };
-use iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
+use iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{NetworkId, isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1};
 use iroha_model_base::peer::PeerId;
@@ -345,20 +345,37 @@ impl DescriptorIdentityV1 {
         }
     }
 
+    /// Whether `metadata` of the erased descriptor still describes the checked file: the same
+    /// regular inode with the same owner and mode, now empty. A launcher removes the one-shot
+    /// pathname once it observes the empty file, which may precede this check, so the link
+    /// count is either unchanged or zero; any other count (such as a new hard link) is
+    /// rejected.
     fn same_security_identity_after_consumption(&self, metadata: &std::fs::Metadata) -> bool {
         metadata.is_file()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
             && metadata.uid() == self.owner
             && metadata.mode() == self.mode
-            && metadata.nlink() == self.links
+            && (metadata.nlink() == self.links || metadata.nlink() == 0)
             && metadata.len() == 0
     }
 }
 
+/// Erase the loaded record from its one-shot file, then confirm that the descriptor still
+/// identifies the checked file.
 fn consume_trusted_key_file(
     file: &mut File,
     identity: &DescriptorIdentityV1,
+    zeroed_key_record: &[u8],
+) -> Result<(), TairaRuntimeSignerErrorV1> {
+    erase_trusted_key_file(file, zeroed_key_record)?;
+    verify_consumed_key_file(file, identity)
+}
+
+/// Overwrite the record with zeroes and truncate the file. Launchers treat the empty file as
+/// consumed and may remove its one-shot pathname from then on.
+fn erase_trusted_key_file(
+    file: &mut File,
     zeroed_key_record: &[u8],
 ) -> Result<(), TairaRuntimeSignerErrorV1> {
     file.seek(std::io::SeekFrom::Start(0))
@@ -370,7 +387,14 @@ fn consume_trusted_key_file(
     file.set_len(0)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
     file.sync_data()
-        .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
+        .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)
+}
+
+/// Confirm that the erased descriptor still identifies the checked, now empty file.
+fn verify_consumed_key_file(
+    file: &File,
+    identity: &DescriptorIdentityV1,
+) -> Result<(), TairaRuntimeSignerErrorV1> {
     let consumed = file
         .metadata()
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
@@ -673,7 +697,7 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 /// Config validation, help, and version introspection remain offline and do not
 /// read the descriptors. Every node-starting invocation resolves exactly the
 /// Soracloud signer and any explicitly configured global-beacon signer through [`crate::run_with_runtime_provider_registry`].
-pub fn main_entry() {
+pub fn main_entry(build: iroha_core::release_identity::CompiledBuildMetadata) {
     if crate::external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
@@ -682,7 +706,8 @@ pub fn main_entry() {
     }
     crate::soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
-        if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
+        if let Err(report) = crate::run_with_config_guard(build, validate_taira_launcher_config_v1)
+        {
             eprintln!("{report:?}");
             std::process::exit(1);
         }
@@ -696,6 +721,7 @@ pub fn main_entry() {
         }
     };
     if let Err(report) = crate::run_with_runtime_provider_registry_and_config_guard(
+        build,
         &registry,
         validate_taira_launcher_config_v1,
         resolve_inherited_mint_finality_runtime,
@@ -1211,7 +1237,7 @@ mod tests {
                     iroha_crypto::Hash::new(b"Taira mint seed admission fixture"))),
             generation: 0,
             validators: peers.into_iter().enumerate().map(|(index, validator)| {
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0x70 + u8::try_from(index).expect("four validators"); 32], 0, validator)
                     .expect("derive private seed fixture public keys")
             }).collect(),
@@ -1499,6 +1525,107 @@ mod tests {
             load_key_pair_from_file(open_consumable_key_file(&path)),
             Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
         ));
+    }
+
+    /// A consumable owner-only launch copy of `key_pair`'s record beside its retained source.
+    fn staged_launch_key(
+        key_pair: &KeyPair,
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let (directory, source) = key_file(key_pair);
+        let launch = directory.path().join(name);
+        fs::copy(&source, &launch).expect("stage consumable launch key");
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o600))
+            .expect("protect launch key");
+        (directory, launch)
+    }
+
+    #[test]
+    fn consumption_accepts_the_launcher_removing_its_path_before_or_after_the_final_check() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+        // The launcher removes the one-shot pathname after the daemon's final check.
+        let (_directory, launch) = staged_launch_key(&key_pair, "after.fd198");
+        let loaded = load_key_pair_from_file(open_consumable_key_file(&launch))
+            .expect("consume while the launch path exists");
+        assert_eq!(loaded.public_key(), key_pair.public_key());
+        assert_eq!(fs::metadata(&launch).expect("consumed launch").len(), 0);
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+
+        // The launcher removes it as soon as it sees the empty file, before the final check.
+        let (_directory, launch) = staged_launch_key(&key_pair, "before.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+        assert_eq!(file.metadata().expect("unlinked metadata").nlink(), 0);
+        verify_consumed_key_file(&file, &identity)
+            .expect("an erased file keeps its identity after its path is removed");
+    }
+
+    #[test]
+    fn consumption_rejects_a_link_or_mode_change_after_erasure() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x38; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+        let (directory, launch) = staged_launch_key(&key_pair, "linked.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::hard_link(&launch, directory.path().join("alias.fd198")).expect("add a link");
+        assert_eq!(
+            verify_consumed_key_file(&file, &identity),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        );
+
+        let (_directory, launch) = staged_launch_key(&key_pair, "chmod.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o644)).expect("weaken mode");
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+        assert_eq!(
+            verify_consumed_key_file(&file, &identity),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        );
+    }
+
+    #[test]
+    fn mint_seed_consumption_races_a_launcher_that_removes_the_emptied_path() {
+        // Like the localnet launcher, this launcher watches its own descriptor of the one-shot
+        // file and removes the pathname as soon as the daemon's truncation empties it, racing
+        // the daemon's post-consumption check.
+        for round in 0..16 {
+            let (directory, source) = mint_seed_file(&[0x64; 32]);
+            let launch = directory.path().join(format!("launch-{round}.fd199"));
+            fs::copy(&source, &launch).expect("stage seed");
+            fs::set_permissions(&launch, fs::Permissions::from_mode(0o600))
+                .expect("protect staged seed");
+            let observer = File::open(&launch).expect("launcher descriptor");
+            let path = launch.clone();
+            let launcher = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                while observer.metadata().expect("launcher fstat").len() != 0 {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the daemon never consumed the launch file"
+                    );
+                    std::thread::yield_now();
+                }
+                fs::remove_file(&path).expect("launcher removes the consumed path");
+            });
+            let seed = load_mint_finality_seed_from_file(open_consumable_key_file(&launch));
+            launcher.join().expect("launcher thread");
+            assert_eq!(
+                *seed.expect("consumption tolerates the removed launch path"),
+                [0x64; 32]
+            );
+            assert!(!launch.exists());
+        }
     }
 
     #[test]

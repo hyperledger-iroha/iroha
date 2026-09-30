@@ -5,11 +5,13 @@
 //! access history, and never uses caller access hints. Fixed V1 bare Norito is
 //! streamed into domain-separated hashes; no encoded change list is retained.
 //!
-//! This is NOT a complete State root or a read witness. Untouched values require
-//! an authenticated persistent baseline; State-owned membership/runtime fields,
+//! A net delta binds changes only, not a read witness. The complete World state
+//! commitment bound in the execution result `R` is [`WorldStateAccumulator`],
+//! which consumes the same visitor. State-owned membership/runtime fields,
 //! process event delivery and post-finality effects have separate owners.
-//! TODO: compose the complete canonical State tree, lifecycle and agreed resource
-//! admission before changing consensus commitments or enabling publication.
+//! TODO(S9): State-level canonical fields outside World (transaction membership,
+//! canonical runtime policy, commit topologies) are not in the World accumulator;
+//! accelerated restoration must authenticate them separately.
 
 use super::{CellBlock, StorageBlock, World, WorldBlock};
 use iroha_crypto::Hash;
@@ -336,13 +338,6 @@ impl WorldBlock<'_> {
 #[path = "world_projection_tests.rs"]
 mod tests;
 
-#[path = "world_baseline.rs"]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect retained journals to the consuming State publisher"
-    )
-)]
-mod world_baseline;
-pub(in crate::state) use world_baseline::{WorldBaselineError, WorldStateBaseline};
+#[path = "world_state_accumulator.rs"]
+mod world_state_accumulator;
+pub(crate) use world_state_accumulator::WorldStateAccumulator;

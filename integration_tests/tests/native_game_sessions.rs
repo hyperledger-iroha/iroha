@@ -19,7 +19,7 @@ use iroha::{
     blocking::Client,
     client::{AccountTransactionDraft, FeeQuoteRequest},
 };
-use iroha_core::execution_proofs::{
+use iroha_core_privacy::execution_proofs::{
     compiled_race_profile_v1, prove_race_v1, race_profile_id_v1, race_result_v1,
     race_state_root_v1, race_transcript_root_v1, replay_race_v1, verify_game_proof_for_history_v1,
 };
@@ -304,8 +304,8 @@ async fn finalized_state_observation(
         .first()
         .ok_or_else(|| eyre!("missing original genesis"))?;
     ensure!(
-        first.canonical_resultless_proposal().encode_wire()?
-            == original.0.canonical_resultless_proposal().encode_wire()?,
+        first.canonical_resultless_proposal()?.encode_wire()?
+            == original.0.canonical_resultless_proposal()?.encode_wire()?,
         "peer history replaced the independently signed genesis"
     );
     let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(

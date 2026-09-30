@@ -30,8 +30,11 @@ use super::{
 };
 use crate::{
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalParams},
+    availability::AvailableBody,
     crypto::{Attestation, Signer},
-    message::{Block, BlockRequest, BlockResponse, Qc, SyncEntry, SyncResponse, WireMessage},
+    message::{
+        PayloadChunk, PayloadManifest, PayloadRequest, Qc, SyncEntry, SyncResponse, WireMessage,
+    },
     safety::{RecordState, SafetyRecord},
     testing::{FakeAttestor, fake_attestation_ext, sha256},
     types::{ChainParams, Committee, Hash32, HeightConfig, Millis, PublicKey},
@@ -149,13 +152,16 @@ pub struct Replica {
     pub host: Box<dyn Host>,
     /// Counting crypto shared with the core.
     pub crypto: SimCrypto,
+    /// Original pool and live actual reconstruction jobs of this incarnation.
+    pub budget: iroha_allocation::AllocationBudget,
+    acquisitions: BTreeMap<Hash32, crate::availability::PayloadAcquisition>,
     /// Durable safety-record files of this instance per key (part of the machine's record
     /// store; never backed up or restored).
     pub records: BTreeMap<PublicKey, Durable>,
     /// Durable body store.
-    pub bodies: BTreeMap<Hash32, Block>,
+    pub bodies: BTreeMap<Hash32, AvailableBody>,
     /// Durable block store (Kura), consecutive heights from `g + 1`.
-    pub store: Vec<(Block, Qc)>,
+    pub store: Vec<(AvailableBody, Qc)>,
     /// Busy until (virtual CPU).
     pub busy_until: Millis,
     cpu_carry_us: u64,
@@ -457,7 +463,7 @@ impl World {
         let mut machines = Vec::new();
         let mut replicas = Vec::new();
         let mut key_owner = BTreeMap::new();
-        let log: SharedLog = Rc::default();
+        let log: SharedLog = std::sync::Arc::default();
         for m in 0..machines_n {
             let mut machine = Machine {
                 up: false,
@@ -507,6 +513,8 @@ impl World {
                         (sc.host)(m, i)
                     },
                     crypto,
+                    budget: iroha_allocation::AllocationBudget::new(1 << 30),
+                    acquisitions: BTreeMap::new(),
                     records: BTreeMap::new(),
                     bodies: BTreeMap::new(),
                     store: Vec::new(),
@@ -1073,7 +1081,7 @@ impl World {
                     && !self.machines[m].byz
                 {
                     self.stats.proposals += 1;
-                    let bh = p.block_hash(&self.hasher);
+                    let bh = p.proposal.block_hash(&self.hasher);
                     self.oracle.proposed.entry(bh).or_insert(at);
                 }
                 let msg = Rc::new(msg);
@@ -1091,39 +1099,145 @@ impl World {
                 );
                 self.schedule(done, Ev::IoDone { r, epoch, id });
             }
-            Action::FetchBody {
-                height,
-                block_hash,
-                peers,
-            } => {
-                if let Some(block) = self.local_body(r, height, &block_hash) {
-                    self.schedule(
-                        at + 1,
-                        Ev::Local {
-                            r,
-                            epoch,
-                            event: Box::new(Event::BodyAvailable { block }),
-                        },
+            Action::FetchPayload { source, peers } => {
+                if let Some(block) = self.local_body(r, source.height(), &source.block_hash()) {
+                    let frame = crate::availability::AvailabilityFrame::from_untrusted(
+                        block.availability().as_slice().to_vec(),
+                    )
+                    .unwrap();
+                    let payload = crate::availability::PayloadBytes::from_untrusted(
+                        block.payload().as_slice().to_vec(),
+                    )
+                    .unwrap();
+                    let job = crate::availability::BodyRestoration::new(
+                        source,
+                        block.header().clone(),
+                        frame,
+                        payload,
                     );
+                    match job.complete(&self.replicas[r].budget, &self.hasher) {
+                        Ok(block) => self.schedule(
+                            at + 1,
+                            Ev::Local {
+                                r,
+                                epoch,
+                                event: Box::new(Event::BodyAvailable { block }),
+                            },
+                        ),
+                        Err((_, error)) => self.fail(format!("sim restoration failed: {error:?}")),
+                    }
                 } else {
-                    let msg = Rc::new(WireMessage::BlockRequest(BlockRequest {
+                    let msg = Rc::new(WireMessage::PayloadRequest(PayloadRequest {
                         instance,
-                        height,
-                        block_hash,
+                        height: source.height(),
+                        block_hash: source.block_hash(),
                     }));
                     for peer in &peers {
                         self.net_send(r, peer, Rc::clone(&msg), at);
                     }
                 }
             }
-            Action::ServeBody {
+            Action::ServePayload {
                 to,
                 height,
                 block_hash,
             } => {
                 if let Some(block) = self.local_body(r, height, &block_hash) {
-                    let msg = WireMessage::BlockResponse(BlockResponse { instance, block });
-                    self.net_send(r, &to, Rc::new(msg), at);
+                    self.disseminate_body(r, &[to], &block, at);
+                }
+            }
+            Action::DisseminatePayload { peers, body } => {
+                self.disseminate_body(r, &peers, &body, at);
+            }
+            Action::AuthorPayload {
+                req,
+                config,
+                header,
+                payload,
+            } => {
+                let key = config
+                    .committee
+                    .get(header.proposer)
+                    .expect("author member");
+                let signer = SimSigner::new(
+                    key.clone(),
+                    (!self.machines[m].byz).then_some(m),
+                    std::sync::Arc::clone(&self.log),
+                );
+                let job = crate::availability::PayloadAuthoring::new(header, payload);
+                match job.complete(
+                    instance,
+                    &config,
+                    &self.replicas[r].budget,
+                    &self.hasher,
+                    &signer,
+                ) {
+                    Ok(authored) => self.schedule(
+                        at + 1,
+                        Ev::Local {
+                            r,
+                            epoch,
+                            event: Box::new(Event::PayloadAuthored {
+                                req,
+                                body: authored.body,
+                            }),
+                        },
+                    ),
+                    Err((_, error)) => self.fail(format!("sim authoring failed: {error:?}")),
+                }
+            }
+            Action::AcquirePayload { source, manifest } => {
+                let bh = source.block_hash();
+                let mut job = crate::availability::PayloadAcquisition::new(source, manifest);
+                match job.prepare(&self.replicas[r].budget, &self.hasher) {
+                    Ok(()) => {
+                        self.replicas[r].acquisitions.entry(bh).or_insert(job);
+                    }
+                    Err(error) if error.rejects_manifest() => self.schedule(
+                        at + 1,
+                        Ev::Local {
+                            r,
+                            epoch,
+                            event: Box::new(Event::ManifestRejected {
+                                manifest: job.manifest().clone(),
+                            }),
+                        },
+                    ),
+                    Err(error) => {
+                        self.fail(format!("sim acquisition preparation failed: {error:?}"))
+                    }
+                }
+            }
+            Action::ReceivePayloadChunk { chunk, .. } => {
+                let bh = chunk.block_hash;
+                if let Some(mut job) = self.replicas[r].acquisitions.remove(&bh) {
+                    let _ = job.push(chunk, &self.replicas[r].budget, &self.hasher);
+                    match job.complete(&self.replicas[r].budget, &self.hasher) {
+                        Ok(block) => self.schedule(
+                            at + 1,
+                            Ev::Local {
+                                r,
+                                epoch,
+                                event: Box::new(Event::BodyAvailable { block }),
+                            },
+                        ),
+                        Err((job, crate::availability::AcquisitionError::Incomplete)) => {
+                            self.replicas[r].acquisitions.insert(bh, job);
+                        }
+                        Err((job, error)) if error.rejects_manifest() => self.schedule(
+                            at + 1,
+                            Ev::Local {
+                                r,
+                                epoch,
+                                event: Box::new(Event::ManifestRejected {
+                                    manifest: job.manifest().clone(),
+                                }),
+                            },
+                        ),
+                        Err((_, error)) => {
+                            self.fail(format!("sim reconstruction failed: {error:?}"))
+                        }
+                    }
                 }
             }
             Action::ServeBlocks {
@@ -1145,7 +1259,53 @@ impl World {
         }
     }
 
-    fn local_body(&self, r: usize, height: u64, bh: &Hash32) -> Option<Block> {
+    /// Actual worker-side row encoding; all original authorizations stay in the manifest.
+    pub(super) fn disseminate_body(
+        &mut self,
+        r: usize,
+        peers: &[PublicKey],
+        body: &AvailableBody,
+        at: Millis,
+    ) {
+        let config = self.instances[self.replicas[r].inst].config(body.header().height);
+        let shape = config
+            .epoch
+            .da_layout
+            .shape(body.payload().as_slice().len() as u64)
+            .unwrap();
+        let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+            shape,
+            body.payload().as_slice(),
+            &self.replicas[r].budget,
+        )
+        .unwrap();
+        let manifest = Rc::new(WireMessage::PayloadManifest(PayloadManifest {
+            header: body.header().clone(),
+            availability: body.availability().clone(),
+        }));
+        for peer in peers {
+            self.net_send(r, peer, Rc::clone(&manifest), at);
+        }
+        for index in 0..shape.chunk_count() {
+            let range = shape.chunk_range(index).unwrap();
+            let mut bytes =
+                crate::availability::RowBytes::from_untrusted(encoded.codeword()[range].to_vec())
+                    .unwrap();
+            bytes.admit(&self.replicas[r].budget).unwrap();
+            let chunk = Rc::new(WireMessage::PayloadChunk(PayloadChunk {
+                instance: body.header().instance,
+                height: body.header().height,
+                block_hash: body.hash(&self.hasher),
+                index: index as u32,
+                bytes,
+            }));
+            for peer in peers {
+                self.net_send(r, peer, Rc::clone(&chunk), at);
+            }
+        }
+    }
+
+    pub(super) fn local_body(&self, r: usize, height: u64, bh: &Hash32) -> Option<AvailableBody> {
         let rep = &self.replicas[r];
         rep.bodies
             .get(bh)
@@ -1159,7 +1319,7 @@ impl World {
                     .filter(|(_, qc)| qc.block_hash == *bh)
                     .map(|(b, _)| b.clone())
             })
-            .filter(|b| b.header.height == height)
+            .filter(|b| b.header().height == height)
     }
 
     fn serve_blocks(
@@ -1179,7 +1339,7 @@ impl World {
         let mut out = Vec::new();
         let mut bytes = 0u64;
         for (block, qc) in rep.store.iter().skip(start).take(usize::from(max_count)) {
-            let size = u64::try_from(block.payload.len()).unwrap_or(u64::MAX)
+            let size = u64::try_from(block.payload().as_slice().len()).unwrap_or(u64::MAX)
                 + 512
                 + crate::types::MAX_CONTROL_WITNESS_BYTES as u64;
             if !out.is_empty() && bytes + size > u64::from(max_bytes) {
@@ -1187,7 +1347,10 @@ impl World {
             }
             bytes += size;
             out.push(SyncEntry {
-                block: block.clone(),
+                manifest: PayloadManifest {
+                    header: block.header().clone(),
+                    availability: block.availability().clone(),
+                },
                 commit_qc: qc.clone(),
             });
         }
@@ -1319,7 +1482,16 @@ impl World {
             self.byz_observe(r, &from, msg);
         }
         let class = class_of(msg);
-        self.replicas[r].host.receive(from, (**msg).clone(), class);
+        let Ok(bytes) = msg.encode() else {
+            return;
+        };
+        let Ok(mut decoded) = WireMessage::decode(&bytes, self.net.frame_limit as usize) else {
+            return;
+        };
+        if decoded.admit_owned_bytes(&self.replicas[r].budget).is_err() {
+            return;
+        }
+        self.replicas[r].host.receive(from, decoded, class);
         self.refresh(r);
     }
 
@@ -1375,7 +1547,7 @@ impl World {
                 }
                 Write::Body(block) => {
                     let rep = &mut self.replicas[r];
-                    if block.header.height > rep.applied.0 {
+                    if block.header().height > rep.applied.0 {
                         let bh = block.hash(&self.hasher);
                         rep.bodies.insert(bh, *block);
                     }
@@ -1428,14 +1600,14 @@ impl World {
     /// O3: apply a committed block. The cached post-state of exactly this block is reused if
     /// its commitment equals the certified result; otherwise the block is executed (a
     /// divergent executor then reports `ApplyDiverged`). `BlockApplied` carries the header.
-    fn apply_block(&mut self, r: usize, block: &Block, qc: &Qc) {
+    fn apply_block(&mut self, r: usize, block: &AvailableBody, qc: &Qc) {
         let m = self.replicas[r].machine;
         let epoch = self.machines[m].epoch;
         let inst = self.replicas[r].inst;
-        let height = block.header.height;
+        let height = block.header().height;
         let bh = qc.block_hash;
         let (tip_height, tip_hash, tip_result) = self.replicas[r].applied;
-        if height != tip_height + 1 || block.header.parent_hash != tip_hash {
+        if height != tip_height + 1 || block.header().parent_hash != tip_hash {
             let byz = self.machines[m].byz;
             if !byz {
                 self.fail(format!(
@@ -1457,8 +1629,8 @@ impl World {
             .map(|(_, res)| *res)
             .filter(|res| *res == qc.result);
         let local = cached.or_else(|| {
-            let outcome = if profile.divergent && !block.payload.is_empty() {
-                divergent_exec(&tip_result, &block.payload, &bh)
+            let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
+                divergent_exec(&tip_result, &block.payload().as_slice(), &bh)
             } else {
                 block_exec(
                     &tip_result,
@@ -1489,10 +1661,10 @@ impl World {
         }
         let rep = &mut self.replicas[r];
         rep.applied = (height, bh, qc.result);
-        rep.bodies.retain(|_, b| b.header.height > height);
+        rep.bodies.retain(|_, b| b.header().height > height);
         rep.exec.cache.retain(|_, (h, _)| *h >= height);
         rep.exec.executed.prune_through(height);
-        for (id, _) in decode_txs(&block.payload) {
+        for (id, _) in decode_txs(&block.payload().as_slice()) {
             rep.txs.remove(&id);
         }
         let config = self.instances[inst].applied_config(height);
@@ -1504,7 +1676,7 @@ impl World {
                 event: Box::new(Event::BlockApplied {
                     height,
                     block_hash: bh,
-                    header: Box::new(block.header.clone()),
+                    header: Box::new(block.header().clone()),
                     config,
                 }),
             },
@@ -1512,14 +1684,14 @@ impl World {
         self.exec_unpark(r);
     }
 
-    fn parent_result(&self, r: usize, block: &Block) -> Option<Hash32> {
+    fn parent_result(&self, r: usize, block: &AvailableBody) -> Option<Hash32> {
         let rep = &self.replicas[r];
-        if block.header.parent_hash == rep.applied.1 {
+        if block.header().parent_hash == rep.applied.1 {
             return Some(rep.applied.2);
         }
         rep.exec
             .cache
-            .get(&block.header.parent_hash)
+            .get(&block.header().parent_hash)
             .map(|(_, res)| *res)
     }
 
@@ -1551,7 +1723,7 @@ impl World {
     fn exec_outcome(
         &mut self,
         r: usize,
-        block: &Block,
+        block: &AvailableBody,
         bh: &Hash32,
         parent: &Hash32,
     ) -> (ExecOutcome, Millis) {
@@ -1559,16 +1731,16 @@ impl World {
         let profile = self.machines[m].profile;
         let outcome = if self.rng.chance(profile.exec_fail_ppm) {
             ExecOutcome::Failed("injected".to_owned())
-        } else if profile.reject_nonempty && !block.payload.is_empty() {
+        } else if profile.reject_nonempty && !block.payload().as_slice().is_empty() {
             ExecOutcome::Invalid
-        } else if profile.divergent && !block.payload.is_empty() {
-            divergent_exec(parent, &block.payload, bh)
+        } else if profile.divergent && !block.payload().as_slice().is_empty() {
+            divergent_exec(parent, &block.payload().as_slice(), bh)
         } else {
             block_exec(
                 parent,
                 block,
                 &self.instances[self.replicas[r].inst]
-                    .config(block.header.height)
+                    .config(block.header().height)
                     .epoch,
             )
         };
@@ -1576,10 +1748,10 @@ impl World {
     }
 
     /// Execution latency of `block` on machine `m`.
-    fn exec_latency(&self, m: usize, block: &Block) -> Millis {
+    fn exec_latency(&self, m: usize, block: &AvailableBody) -> Millis {
         let profile = self.machines[m].profile;
-        let kib = u64::try_from(block.payload.len()).unwrap_or(u64::MAX) / 1024;
-        let nonempty = if block.payload.is_empty() {
+        let kib = u64::try_from(block.payload().as_slice().len()).unwrap_or(u64::MAX) / 1024;
+        let nonempty = if block.payload().as_slice().is_empty() {
             0
         } else {
             profile.exec_nonempty
@@ -1613,11 +1785,11 @@ impl World {
             job.outcome.clone().unwrap_or(ExecOutcome::Cancelled)
         };
         if let ExecOutcome::Valid(res) = &outcome {
-            let height = job.block.header.height;
+            let height = job.block.header().height;
             rep.exec.cache.insert(job.bh, (height, *res));
             rep.exec
                 .executed
-                .record(&instance, &job.block.header.epoch, height, &job.bh, res);
+                .record(&instance, &job.block.header().epoch, height, &job.bh, res);
         }
         rep.host.deliver(Event::Executed {
             block_hash: job.bh,
@@ -1680,7 +1852,14 @@ impl World {
                 epoch,
                 event: Box::new(Event::PayloadBuilt {
                     req,
-                    payload,
+                    payload: if payload.is_empty() {
+                        None
+                    } else {
+                        let mut owned =
+                            crate::availability::PayloadBytes::from_untrusted(payload).unwrap();
+                        owned.admit(&self.replicas[r].budget).unwrap();
+                        Some(owned)
+                    },
                     attest,
                 }),
             },
@@ -1698,7 +1877,7 @@ impl World {
             return;
         };
         let rep = &mut self.replicas[r];
-        for (id, poison) in decode_txs(&block.payload) {
+        for (id, poison) in decode_txs(&block.payload().as_slice()) {
             if poison {
                 rep.quarantine.insert(id);
                 rep.txs.remove(&id);
@@ -1808,13 +1987,13 @@ impl World {
                 self.replicas[r].records.insert(key, durable);
             }
             OwnedWrite::Body(block) => {
-                if block.header.height > self.replicas[r].applied.0 {
+                if block.header().height > self.replicas[r].applied.0 {
                     let bh = block.hash(&self.hasher);
                     self.replicas[r].bodies.insert(bh, *block);
                 }
             }
             OwnedWrite::Append(entry) => {
-                let height = entry.0.header.height;
+                let height = entry.0.header().height;
                 let stored = u64::try_from(self.replicas[r].store.len()).unwrap_or(u64::MAX);
                 if height != stored + 1 {
                     self.fail(format!(
@@ -1898,7 +2077,7 @@ impl World {
                     return done(self, at, Done::Executed { op, outcome });
                 };
                 let (outcome, latency) = self.exec_outcome(r, &block, &bh, &parent);
-                let height = block.header.height;
+                let height = block.header().height;
                 self.schedule(
                     at + latency,
                     Ev::OwnedExec {
@@ -1907,7 +2086,7 @@ impl World {
                         op,
                         bh,
                         height,
-                        scheduling_epoch: block.header.epoch,
+                        scheduling_epoch: block.header().epoch,
                         outcome,
                     },
                 );
@@ -1921,8 +2100,8 @@ impl World {
             }
             Op::Prepare { op, block, qc } => {
                 let (tip_height, tip_hash, tip_result) = self.replicas[r].applied;
-                let height = block.header.height;
-                if height != tip_height + 1 || block.header.parent_hash != tip_hash {
+                let height = block.header().height;
+                if height != tip_height + 1 || block.header().parent_hash != tip_hash {
                     return self.fail(format!(
                         "O3: replica {r} prepares {height}, which does not extend the applied state {tip_height}"
                     ));
@@ -1937,8 +2116,8 @@ impl World {
                     (Some(res), 0)
                 } else {
                     let profile = self.machines[m].profile;
-                    let outcome = if profile.divergent && !block.payload.is_empty() {
-                        divergent_exec(&tip_result, &block.payload, &qc.block_hash)
+                    let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
+                        divergent_exec(&tip_result, &block.payload().as_slice(), &qc.block_hash)
                     } else {
                         block_exec(
                             &tip_result,
@@ -1957,7 +2136,7 @@ impl World {
             }
             Op::Commit { op, block, qc } => {
                 let inst = self.replicas[r].inst;
-                let height = block.header.height;
+                let height = block.header().height;
                 if self.replicas[r].exec.prepared.take() != Some(qc.block_hash) {
                     return self.fail(format!(
                         "O3: replica {r} commits {height} without its prepared post-state (another executor operation ran after its prepare)"
@@ -1965,10 +2144,10 @@ impl World {
                 }
                 let rep = &mut self.replicas[r];
                 rep.applied = (height, qc.block_hash, qc.result);
-                rep.bodies.retain(|_, b| b.header.height > height);
+                rep.bodies.retain(|_, b| b.header().height > height);
                 rep.exec.cache.retain(|_, (h, _)| *h >= height);
                 rep.exec.executed.prune_through(height);
-                for (id, _) in decode_txs(&block.payload) {
+                for (id, _) in decode_txs(&block.payload().as_slice()) {
                     rep.txs.remove(&id);
                 }
                 let config = self.instances[inst].applied_config(height);
@@ -2039,6 +2218,7 @@ impl World {
         for r in replicas {
             let rep = &mut self.replicas[r];
             rep.host.crash();
+            rep.acquisitions.clear();
             rep.io.clear();
             rep.exec.clear();
             rep.nic.clear();
@@ -2060,11 +2240,14 @@ impl World {
                     .map(|(k, d)| (k.clone(), d.record.clone()))
             })
             .collect();
-        self.log.borrow_mut().retract(m, |key, slot| {
-            durable
-                .iter()
-                .any(|(k, record)| k == key && super::oracle::covers(record, slot))
-        });
+        self.log
+            .lock()
+            .expect("signing log")
+            .retract(m, |key, slot| {
+                durable
+                    .iter()
+                    .any(|(k, record)| k == key && super::oracle::covers(record, slot))
+            });
         self.trace(m, "CRASH".to_owned());
     }
 
@@ -2095,7 +2278,8 @@ impl World {
                 let below = match rep.records.get(key) {
                     None => self
                         .log
-                        .borrow()
+                        .lock()
+                        .expect("signing log")
                         .max_signed_height(key, &instance)
                         .map(|h| h + 1),
                     Some(d) => Some(d.record.height).filter(|h| *h > t + 2),
@@ -2103,17 +2287,24 @@ impl World {
                 if let Some(below) = below
                     && !byz
                 {
-                    self.log.borrow_mut().set_abstain(key, instance, below);
+                    self.log
+                        .lock()
+                        .expect("signing log")
+                        .set_abstain(key, instance, below);
                 }
             }
             let machine = (!byz).then_some(m);
             let retired = &self.machines[m].retired;
-            let signers: Vec<Box<dyn Signer>> = rep
+            let signers: Vec<std::sync::Arc<dyn Signer>> = rep
                 .keys
                 .iter()
                 .filter(|key| !retired.contains(*key))
-                .map(|key| -> Box<dyn Signer> {
-                    Box::new(SimSigner::new(key.clone(), machine, Rc::clone(&self.log)))
+                .map(|key| -> std::sync::Arc<dyn Signer> {
+                    std::sync::Arc::new(SimSigner::new(
+                        key.clone(),
+                        machine,
+                        std::sync::Arc::clone(&self.log),
+                    ))
                 })
                 .collect();
             let local = self.instances[rep.inst].local;
@@ -2123,6 +2314,7 @@ impl World {
                 init,
                 signers,
                 crypto: Box::new(crypto),
+                budget: rep.budget.clone(),
                 attestation: self.attestation_for(r),
                 now: local_now,
                 fifo_ingress: self.machines[m].profile.fifo_ingress
@@ -2143,10 +2335,10 @@ impl World {
                             let instance = &self.instances[rep.inst];
                             (0, instance.genesis_hash, instance.genesis_result)
                         },
-                        |(block, qc)| (block.header.height, qc.block_hash, qc.result),
+                        |(block, qc)| (block.header().height, qc.block_hash, qc.result),
                     );
                     let applied = rep.applied.0;
-                    rep.bodies.retain(|_, b| b.header.height > applied);
+                    rep.bodies.retain(|_, b| b.header().height > applied);
                     self.oracle_on_start(r);
                     if !byz {
                         self.after_handle(r, &actions);
@@ -2253,10 +2445,10 @@ impl World {
                 commit_qc: None,
             },
             Some((block, qc)) => CommittedTip {
-                height: block.header.height,
+                height: block.header().height,
                 block_hash: qc.block_hash,
                 result: qc.result,
-                header: Some(block.header.clone()),
+                header: Some(block.header().clone()),
                 commit_qc: Some(qc.clone()),
             },
         };
@@ -2278,7 +2470,7 @@ impl World {
             .store
             .iter()
             .skip(skip)
-            .map(|(b, _)| b.header.clone())
+            .map(|(b, _)| b.header().clone())
             .collect();
         let retired = &self.machines[rep.machine].retired;
         let records = rep
@@ -2414,7 +2606,7 @@ impl World {
             .committee(1)
             .members()
             .iter()
-            .map(|k| SimSigner::new(k.clone(), None, Rc::clone(&self.log)))
+            .map(|k| SimSigner::new(k.clone(), None, std::sync::Arc::clone(&self.log)))
             .collect();
         let chain = super::oracle::build_chain(&inst, &signers, len, &self.hasher);
         // The pre-built history was exposed long ago.
@@ -2422,7 +2614,7 @@ impl World {
             let msg = qc.preimage();
             if let Some(keys) = inst.committee(qc.height).keys_of(&qc.signers) {
                 for key in keys {
-                    self.log.borrow_mut().expose(key, &msg);
+                    self.log.lock().expect("signing log").expose(key, &msg);
                 }
             }
         }
@@ -2490,12 +2682,12 @@ fn core_wakeup(host: &dyn Host) -> Millis {
 fn describe_op(op: &Op) -> String {
     match op {
         Op::WriteRecord { op, record } => format!("write-record#{op} h{}", record.height),
-        Op::WriteBody { op, block } => format!("write-body#{op} h{}", block.header.height),
-        Op::Execute { op, block } => format!("execute#{op} h{}", block.header.height),
+        Op::WriteBody { op, block } => format!("write-body#{op} h{}", block.header().height),
+        Op::Execute { op, block } => format!("execute#{op} h{}", block.header().height),
         Op::Discard { op, height, .. } => format!("discard#{op} h{height}"),
-        Op::Prepare { op, block, .. } => format!("prepare#{op} h{}", block.header.height),
-        Op::Append { op, block, .. } => format!("append#{op} h{}", block.header.height),
-        Op::Commit { op, block, .. } => format!("commit#{op} h{}", block.header.height),
+        Op::Prepare { op, block, .. } => format!("prepare#{op} h{}", block.header().height),
+        Op::Append { op, block, .. } => format!("append#{op} h{}", block.header().height),
+        Op::Commit { op, block, .. } => format!("commit#{op} h{}", block.header().height),
         Op::Build { req, .. } => format!("build req{req}"),
         Op::Reject { .. } => "reject".to_owned(),
         Op::Effect(effect) => summarize(std::slice::from_ref(&**effect)),
@@ -2511,7 +2703,10 @@ fn describe_event(event: &Event) -> String {
             payload,
             attest,
         } => {
-            format!("PayloadBuilt req{req} {}B attest={attest}", payload.len())
+            format!(
+                "PayloadBuilt req{req} {}B attest={attest}",
+                payload.as_ref().map_or(0, |value| value.as_slice().len())
+            )
         }
         Event::ControlWitnessBuilt { req, context, .. } => {
             format!("ControlWitnessBuilt req{req} h{}", context.height)
@@ -2519,9 +2714,15 @@ fn describe_event(event: &Event) -> String {
         Event::ApplicationControlBuilt { message } => {
             format!("ApplicationControlBuilt h{}", message.context.height)
         }
+        Event::PayloadAuthored { req, body } => {
+            format!("PayloadAuthored req{req} h{}", body.header().height)
+        }
+        Event::ManifestRejected { manifest } => {
+            format!("ManifestRejected h{}", manifest.header.height)
+        }
         Event::PayloadReady { req } => format!("PayloadReady req{req}"),
         Event::Executed { req, outcome, .. } => format!("Executed req{req} {outcome:?}"),
-        Event::BodyAvailable { block } => format!("BodyAvailable h{}", block.header.height),
+        Event::BodyAvailable { block } => format!("BodyAvailable h{}", block.header().height),
         Event::BlockApplied { height, .. } => format!("BlockApplied h{height}"),
         Event::ApplyDiverged { height, .. } => format!("ApplyDiverged h{height}"),
         Event::PublicationRecoveryRequired { height } => {
@@ -2542,7 +2743,7 @@ fn summarize(actions: &[Action]) -> String {
                 r.lock.as_ref().map(|q| q.view),
                 r.timeout.as_ref().map(|t| t.view)
             ),
-            Action::StoreBody { block } => format!("store(h{})", block.header.height),
+            Action::StoreBody { block } => format!("store(h{})", block.header().height),
             Action::Send { to, msg } => format!(
                 "send[{}]{}",
                 &format!("{to:?}")[3..11],
@@ -2568,15 +2769,27 @@ fn summarize(actions: &[Action]) -> String {
             Action::BuildPayload {
                 req, height, view, ..
             } => format!("build(req{req} h{height} v{view})"),
-            Action::Execute { block, req } => format!("exec(h{} req{req})", block.header.height),
+            Action::AuthorPayload { req, header, .. } => {
+                format!("author(req{req} h{})", header.height)
+            }
+            Action::AcquirePayload { source, .. } => format!("acquire(h{})", source.height()),
+            Action::ReceivePayloadChunk { chunk, .. } => {
+                format!("row(h{} i{})", chunk.height, chunk.index)
+            }
+            Action::DisseminatePayload { body, peers } => format!(
+                "disseminate(h{} {} peers)",
+                body.header().height,
+                peers.len()
+            ),
+            Action::Execute { block, req } => format!("exec(h{} req{req})", block.header().height),
             Action::DiscardExecution { height, keep } => {
                 format!("discard(h{height} keep {})", keep.len())
             }
-            Action::CommitBlock { block, .. } => format!("COMMIT(h{})", block.header.height),
-            Action::FetchBody { height, peers, .. } => {
-                format!("fetch(h{height} {} peers)", peers.len())
+            Action::CommitBlock { block, .. } => format!("COMMIT(h{})", block.header().height),
+            Action::FetchPayload { source, peers } => {
+                format!("fetch(h{} {} peers)", source.height(), peers.len())
             }
-            Action::ServeBody { height, .. } => format!("serve_body(h{height})"),
+            Action::ServePayload { height, .. } => format!("serve_body(h{height})"),
             Action::ServeBlocks { from_height, .. } => format!("serve_blocks({from_height})"),
             Action::PayloadRejected { height, .. } => format!("rejected(h{height})"),
             Action::ReportEvidence(_) => "EVIDENCE".to_owned(),
@@ -2593,12 +2806,10 @@ fn summarize(actions: &[Action]) -> String {
 pub fn describe_msg(msg: &WireMessage) -> String {
     match msg {
         WireMessage::Proposal(p) => format!(
-            "<- Proposal h{} v{} payload {}",
-            p.height,
-            p.view,
-            p.payload
-                .as_ref()
-                .map_or_else(|| "none".to_owned(), |b| b.len().to_string())
+            "<- Proposal h{} v{} manifest {}",
+            p.proposal.height,
+            p.proposal.view,
+            p.availability.as_slice().len()
         ),
         WireMessage::Vote(v) => format!(
             "<- Vote {:?} h{} v{} from #{}",
@@ -2624,8 +2835,9 @@ pub fn describe_msg(msg: &WireMessage) -> String {
         ),
         WireMessage::SyncRequest(q) => format!("<- SyncRequest from {}", q.from_height),
         WireMessage::SyncResponse(q) => format!("<- SyncResponse {} blocks", q.blocks.len()),
-        WireMessage::BlockRequest(q) => format!("<- BlockRequest h{}", q.height),
-        WireMessage::BlockResponse(q) => format!("<- BlockResponse h{}", q.block.header.height),
+        WireMessage::PayloadRequest(q) => format!("<- PayloadRequest h{}", q.height),
+        WireMessage::PayloadManifest(q) => format!("<- PayloadManifest h{}", q.header.height),
+        WireMessage::PayloadChunk(q) => format!("<- PayloadChunk h{} i{}", q.height, q.index),
         WireMessage::ApplicationControl(message) => {
             format!("<- ApplicationControl h{}", message.context.height)
         }

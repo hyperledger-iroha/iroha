@@ -20,7 +20,7 @@ EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "d8f7d0f388427eb4560f2b501c528fa92e2b87621a7cc7b5552cd1fa9d5c31cc"
+    "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
     "e80a0361708afeae35261c4e765e80c3814e7be50be9ae81699ba729d7a83c89"
@@ -587,6 +587,27 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):
                 with self.assertRaises(GuardError):
                     validate(self.source, mutated)
+
+    def test_pipeline_builders_bind_the_current_canonical_route_owner(self) -> None:
+        for function, route in (
+            ("iroha_queries_submit_tool", "QUERY"),
+            ("iroha_transactions_submit_tool", "TRANSACTION"),
+            ("iroha_transactions_submit_and_wait_tool", "TRANSACTION"),
+        ):
+            with self.subTest(function=function):
+                builder = _extract_direct_builder(self.source, function)
+                current = f"iroha_torii_shared::route_catalog::pipeline::{route}"
+                self.assertIn(current, builder)
+                self.assertNotIn("iroha_torii_shared::uri::", builder)
+                for replacement in (
+                    "iroha_torii_shared::uri::" + route,
+                    "iroha_torii_shared::route_catalog::pipeline::"
+                    + ("TRANSACTION" if route == "QUERY" else "QUERY"),
+                ):
+                    changed = builder.replace(current, replacement, 1)
+                    self.assertNotEqual(changed, builder)
+                    with self.assertRaises(GuardError):
+                        validate(self.source.replace(builder, changed, 1), self.asset)
 
 
 if __name__ == "__main__":

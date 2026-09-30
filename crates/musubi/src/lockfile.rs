@@ -1299,10 +1299,6 @@ mod tests {
         ));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one boundary test keeps byte, root, aggregate-edge, bounded-writer, and serialized preflight checks adjacent"
-    )]
     fn consumer_lock_resource_bounds_are_enforced() {
         let exact_max = usize::try_from(MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1)
             .expect("consumer-lock byte bound fits usize");

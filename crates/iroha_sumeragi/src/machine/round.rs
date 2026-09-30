@@ -142,7 +142,7 @@ impl Core {
                 return;
             };
             #[cfg(not(sumeragi_mutation = "MS32c"))]
-            let header = &block.header;
+            let header = &block.header();
             #[cfg(not(sumeragi_mutation = "MS32c"))]
             if header.height != front.height
                 || header.parent_hash != front.parent_hash
@@ -512,7 +512,7 @@ impl Core {
         };
         for (height, slot) in &updates {
             if let ConfigSlot::Ready(config) = slot
-                && crate::pacemaker::validate_chain(&config.params, u64::MAX).is_err()
+                && crate::pacemaker::validate_height(config, u64::MAX).is_err()
             {
                 return None;
             }

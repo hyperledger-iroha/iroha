@@ -1452,7 +1452,7 @@ impl TestSuite {
 ///     - Transaction has not expired
 ///     - Every instruction validated against the multisig account: authorized
 /// 6. Either execution or expiration on approval deletes the transaction entry
-#[expect(clippy::cast_possible_truncation, clippy::too_many_lines)]
+#[expect(clippy::cast_possible_truncation)]
 fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
     const N_SIGNATORIES: usize = 5;
     let TestSuite {

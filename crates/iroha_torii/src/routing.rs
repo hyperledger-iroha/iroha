@@ -582,6 +582,9 @@ pub(crate) struct PipelinePreflightResponse {
 }
 }
 #[cfg(test)]
+#[path = "routing/pipeline_preflight_fixture_tests.rs"]
+mod pipeline_preflight_fixture_tests;
+#[cfg(test)]
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
 }
@@ -6980,7 +6983,7 @@ fn zk_merkle_not_found() -> Error {
 fn confidential_checkpoint_validation_cap(reorg_depth_bound: u64) -> usize {
     usize::try_from(reorg_depth_bound.saturating_add(1))
         .unwrap_or(usize::MAX)
-        .min(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2)
+        .min(iroha_core_zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2)
 }
 fn validated_persisted_confidential_tree_root(
     asset_id: &iroha_data_model::asset::id::AssetDefinitionId,
@@ -7005,7 +7008,7 @@ fn validated_persisted_confidential_tree_root(
         )));
     }
     for (index, root) in st.root_history.iter().copied().enumerate() {
-        if !iroha_core::zk::confidential_v2::confidential_tree_node_is_canonical_v2(root) {
+        if !iroha_core_zk::confidential_v2::confidential_tree_node_is_canonical_v2(root) {
             return Err(zk_query_conversion_error(format!(
                 "asset `{asset_id}` confidential root_history[{index}] is not a canonical Pasta scalar"
             )));
@@ -7046,7 +7049,7 @@ fn validated_persisted_confidential_tree_root(
                 "asset `{asset_id}` confidential checkpoint[{index}] exceeds the current frontier"
             )));
         }
-        if !iroha_core::zk::confidential_v2::confidential_tree_node_is_canonical_v2(checkpoint.root)
+        if !iroha_core_zk::confidential_v2::confidential_tree_node_is_canonical_v2(checkpoint.root)
         {
             return Err(zk_query_conversion_error(format!(
                 "asset `{asset_id}` confidential checkpoint[{index}] root is not canonical"
@@ -7258,7 +7261,7 @@ fn handle_v1_zk_merkle_path_sync(
         evaluated_block_height,
     )?;
     let projection =
-        iroha_core::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&st.commitments)
+        iroha_core_zk::confidential_v2::ConfidentialTreeProjectionV2::build(&st.commitments)
             .map_err(|err| {
                 zk_query_conversion_error(format!(
                     "failed to build confidential tree projection for asset `{ad}`: {err}"
@@ -8206,7 +8209,7 @@ mod zk_roots_selector_tests {
             .compute_prefix_roots(&commitments)
             .expect("confidential-v2 prefix roots");
         let projection =
-            iroha_core::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&commitments)
+            iroha_core_zk::confidential_v2::ConfidentialTreeProjectionV2::build(&commitments)
                 .expect("confidential-v2 projection");
         let next_height =
             core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
@@ -20172,7 +20175,7 @@ mod contract_payload_normalization_tests {
     }
     #[test]
     fn normalize_contract_payload_preserves_compiled_public_call_fields() {
-        let code = ivm::KotodamaCompiler::new()
+        let code = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku PublicCallPayloadNormalizeTest {
@@ -22904,7 +22907,7 @@ mod multisig_selector_tests {
             _alias_literal,
             authority_keypair,
         ) = multisig_contract_test_fixture();
-        let code = ivm::KotodamaCompiler::new()
+        let code = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku BytesPayloadNormalizeTest {
@@ -26014,7 +26017,7 @@ struct VkRecordInputs {
 fn mk_record_from_inputs(
     inputs: VkRecordInputs,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
-    use iroha_core::zk::hash_vk;
+    use iroha_core_zk::hash_vk;
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
@@ -26036,7 +26039,7 @@ fn mk_record_from_inputs(
         activation_height,
         withdraw_height,
     } = inputs;
-    let backend_tag = iroha_core::zk::verifier_backend_registry_tag_v1(backend.as_str())
+    let backend_tag = iroha_core_zk::verifier_backend_registry_tag_v1(backend.as_str())
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -39067,7 +39070,8 @@ mod explorer_lookup_tests {
                 fixed.push(SumeragiFixedLane { lane, dataspace, committee: committee.clone() });
                 routes.push(SumeragiLaneRoute { lane, account: Some(dm::AccountId::new(key.public_key().clone()).to_string()), instruction: None });
             }
-            let policy = SumeragiLanePolicy { anchor_freshness: 16, max_merge_blocks: 32, stall_window: 256, lane_params: Default::default(), fixed, routes, autoscale: None };
+            let policy = SumeragiLanePolicy {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(), anchor_freshness: 16, max_merge_blocks: 32, stall_window: 256, lane_params: Default::default(), fixed, routes, autoscale: None };
             config.genesis_parameters.push(dm::Parameter::Custom(policy.into_custom_parameter()));
             let mut nexus = iroha_config::parameters::actual::Nexus::default();
             nexus.dataspace_catalog = DataSpaceCatalog::new(dataspaces.into_iter().map(|id| {
@@ -40619,7 +40623,7 @@ mod query_endpoint_tests {
         let (mut block, recording) = iroha_core::block::ValidBlock::start_component_execution(&source, &state)
             .expect("original proof component execution");
         let mut stx = block.transaction();
-        use iroha_core::zk::test_utils::halo2_fixture_envelope;
+        use iroha_core_zk::test_utils::halo2_fixture_envelope;
         use iroha_data_model::proof;
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
@@ -40630,7 +40634,7 @@ mod query_endpoint_tests {
         let vk_box = seed_fixture
             .vk_box(backend.clone())
             .unwrap_or_else(|| proof::VerifyingKeyBox::new(backend.clone(), vec![0xAA, 0xBB]));
-        let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
+        let vk_commitment = iroha_core_zk::hash_vk(&vk_box);
         let fixture = halo2_fixture_envelope(envelope_circuit_id, vk_commitment);
         let proof = fixture.proof_box(backend.clone());
         let vk_id = proof::VerifyingKeyId::new(backend.clone(), "torii_proof_smoke_vk");
@@ -40676,7 +40680,7 @@ mod query_endpoint_tests {
             .unpack(|_| {});
         block.commit().expect("publish component proof record");
         // Compute expected ProofId string (same as core hash_proof)
-        let arr = iroha_core::zk::hash_proof(&proof);
+        let arr = iroha_core_zk::hash_proof(&proof);
         let pid = proof::ProofId {
             backend,
             proof_hash: arr,

@@ -2,7 +2,7 @@
 //! These component fixtures do not authorize a consensus carrier or a lifecycle plan.
 
 use super::*;
-use crate::query::store::LiveQueryStore;
+use crate::{query::store::LiveQueryStore, state::world_projection::WorldStateAccumulator};
 use iroha_data_model::{
     account::{AccountDetails, AccountValue},
     da::pin_intent::DaPinIntent,
@@ -245,8 +245,7 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
         }
         let nexus = state.nexus_snapshot();
         let world = state.world.block();
-        let parent =
-            WorldStateBaseline::capture_current(&world, &state.ivm_execution_budget()).unwrap();
+        let parent = WorldStateAccumulator::capture(&world).unwrap();
         let prepared = PreparedWorldCommit::prepare(
             &state,
             world,
@@ -274,10 +273,10 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
             "preparation never publishes cache effects"
         );
         assert!(state.world.da_pin_intents_by_ticket.view().is_empty());
-        let next = prepared.baseline_after(&parent).unwrap();
+        let next = parent.apply_block(prepared.world()).unwrap();
         assert_eq!(
             next.root(),
-            WorldStateBaseline::capture_current(prepared.world(), &state.ivm_execution_budget())
+            WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
                 .root()
         );
@@ -289,12 +288,9 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
         prepared.commit();
         assert_eq!(
             next.root(),
-            WorldStateBaseline::capture_current(
-                &state.world.block(),
-                &state.ivm_execution_budget()
-            )
-            .unwrap()
-            .root()
+            WorldStateAccumulator::capture(&state.world.block())
+                .unwrap()
+                .root()
         );
         let cache = state.da_pin_intents.read();
         let record = cache.get_by_ticket(&pin.storage_ticket).unwrap();
@@ -318,10 +314,9 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
 fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
     let (state, key) = fixture();
     let pin = intent(&state, &key, 0, None);
-    let before =
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
-            .unwrap()
-            .root();
+    let before = WorldStateAccumulator::capture(&state.world.block())
+        .unwrap()
+        .root();
     let nexus = state.nexus_snapshot();
     let pending = pending(vec![pin]);
     {
@@ -339,7 +334,7 @@ fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
     }
     assert_eq!(
         before,
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
+        WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
             .root()
     );
@@ -358,7 +353,7 @@ fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
     );
     assert_eq!(
         before,
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
+        WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
             .root()
     );
@@ -493,8 +488,7 @@ fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
         setup.commit();
     }
     let world = state.world.block();
-    let parent =
-        WorldStateBaseline::capture_current(&world, &state.ivm_execution_budget()).unwrap();
+    let parent = WorldStateAccumulator::capture(&world).unwrap();
     let pending = cleanup_fixture(&state, retired);
     let prepared = PreparedWorldCommit::prepare(
         &state,
@@ -545,20 +539,18 @@ fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
             .get(&(retained, 1, 1))
             .is_some()
     );
-    let next = prepared.baseline_after(&parent).unwrap();
+    let next = parent.apply_block(prepared.world()).unwrap();
     prepared.commit();
     assert_eq!(
         next.root(),
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
+        WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
             .root()
     );
     let reverted = state.world.block_and_revert();
     assert_eq!(
         parent.root(),
-        WorldStateBaseline::capture_current(&reverted, &state.ivm_execution_budget())
-            .unwrap()
-            .root()
+        WorldStateAccumulator::capture(&reverted).unwrap().root()
     );
 }
 
@@ -667,10 +659,9 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
     let pins = pending(vec![pin]);
     let nexus = state.nexus_snapshot();
     let activations = state.lane_incarnation_activation_heights_snapshot();
-    let before =
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
-            .unwrap()
-            .root();
+    let before = WorldStateAccumulator::capture(&state.world.block())
+        .unwrap()
+        .root();
     let (expected_root, expected_records) = {
         let prepared = PreparedWorldCommit::prepare(
             &state,
@@ -683,14 +674,14 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         )
         .unwrap();
         (
-            WorldStateBaseline::capture_current(prepared.world(), &state.ivm_execution_budget())
+            WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
                 .root(),
             prepared.effects.da_pins.clone(),
         )
     };
     assert_eq!(
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
+        WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
             .root(),
         before
@@ -699,7 +690,7 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         let mut world = state.world.block();
         let effects = PreparedWorldCommit::prepare_overlay(
             &mut world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             1,
@@ -713,15 +704,13 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         assert_eq!(effects.da_pins, expected_records);
         assert_eq!(effects.da_pins.len(), 1);
         assert_eq!(
-            WorldStateBaseline::capture_current(&world, &state.ivm_execution_budget())
-                .unwrap()
-                .root(),
+            WorldStateAccumulator::capture(&world).unwrap().root(),
             expected_root
         );
         assert_eq!(state.da_pin_intents.read().len(), 0);
     }
     assert_eq!(
-        WorldStateBaseline::capture_current(&state.world.block(), &state.ivm_execution_budget())
+        WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
             .root(),
         before
@@ -846,7 +835,7 @@ fn local_cursor_reset_watermark_cannot_veto_captured_world_admission() {
             pin
         );
         roots.push(
-            WorldStateBaseline::capture_current(prepared.world(), &state.ivm_execution_budget())
+            WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
                 .root(),
         );

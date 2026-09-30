@@ -1,7 +1,7 @@
 //! Original partial Cell acquisition releases all held writers before native wakes.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge};
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -102,7 +102,7 @@ fn arm<C: Send + Sync + 'static>(
     cell: &Arc<Cell<Payload, C>>,
 ) -> (
     Arc<Observed>,
-    [concread::release::ReleaseFuture; 2],
+    [iroha_allocation::release::ReleaseFuture; 2],
     [Waker; 2],
 ) {
     let observed = Arc::new(Observed::default());
@@ -130,7 +130,7 @@ fn arm<C: Send + Sync + 'static>(
 fn assert_signals<C: Send + Sync + 'static>(
     cell: &Cell<Payload, C>,
     observed: &Observed,
-    mut waits: [concread::release::ReleaseFuture; 2],
+    mut waits: [iroha_allocation::release::ReleaseFuture; 2],
     wakers: &[Waker; 2],
     counts: [usize; 2],
     poison_pair: usize,

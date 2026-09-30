@@ -99,7 +99,7 @@ fn assert_physical_prefix(slot: &StateEffectLocks<'_>, blocked_index: usize) {
 fn refusal<G>(
     state: &Arc<State>,
     blocker: G,
-    expected: concread::release::ReleaseWait,
+    expected: iroha_allocation::release::ReleaseWait,
     field: &'static str,
     blocked_index: usize,
     before: &[(&'static str, String)],

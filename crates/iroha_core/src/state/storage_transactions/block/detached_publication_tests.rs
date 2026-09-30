@@ -84,7 +84,10 @@ fn probe(targets: &[Arc<TransactionsStorage>; 2]) -> Arc<Probe> {
         busy: AtomicUsize::new(0),
     })
 }
-fn register(target: &TransactionsStorage, probe: &Arc<Probe>) -> concread::release::ReleaseFuture {
+fn register(
+    target: &TransactionsStorage,
+    probe: &Arc<Probe>,
+) -> iroha_allocation::release::ReleaseFuture {
     let mut wait = target.released.observe().wait_for_release();
     let waker = Waker::from(Arc::clone(probe));
     assert!(
@@ -94,7 +97,7 @@ fn register(target: &TransactionsStorage, probe: &Arc<Probe>) -> concread::relea
     );
     wait
 }
-fn assert_ready(wait: &mut concread::release::ReleaseFuture, probe: &Probe) {
+fn assert_ready(wait: &mut iroha_allocation::release::ReleaseFuture, probe: &Probe) {
     assert!(
         Pin::new(wait)
             .poll(&mut Context::from_waker(Waker::noop()))

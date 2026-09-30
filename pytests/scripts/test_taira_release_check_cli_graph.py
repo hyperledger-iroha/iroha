@@ -36,8 +36,8 @@ class CombinedCliGraphTests(unittest.TestCase):
             "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
             "-p", "iroha_config", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core",
             "-p", "iroha_test_network", "-p", "iroha", "-p", "iroha_torii",
-            "-p", "irohad", "-p", "iroha_cli", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
-            "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts", "--bin", "iroha",
+            "-p", "irohad_lib", "-p", "iroha_cli_lib", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
+            "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts",
             "--no-run", "--message-format=json-render-diagnostics",
         ])
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
@@ -60,7 +60,7 @@ class CombinedCliGraphTests(unittest.TestCase):
         for replacement in (
             cli | {"profile": {"test": False}},
             cli | {"profile": {"test": 1}},
-            cli | {"target": {"name": "iroha", "kind": ["lib"]}},
+            cli | {"target": {"name": "iroha_cli", "kind": ["bin"]}},
             cli | {"target": {"name": "nonexistent_cli_binary", "kind": ["bin"]}},
             cli | {"executable": None},
         ):

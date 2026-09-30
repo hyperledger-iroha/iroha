@@ -254,7 +254,36 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
                         mapping[wire_id] = f"iroha_data_model::isi::{namespace}::{name}"
                     break
             else:
-                raise ValueError(f"{path} has an unsupported JS instruction spread")
+                expected = (
+                    "...Object.fromEntries(RETAIL_INSTRUCTION_NAMES_V1.map((name, index)"
+                    " => [RETAIL_INSTRUCTION_WIRE_IDS_V1[index], "
+                    "`${TEXT_IROHA_DATA_MODEL_ISI}retail_daily_limit::${name}`]))"
+                )
+                compact = re.sub(r"\s+", "", row)
+                compact = re.sub(r",(?=[\])])", "", compact)
+                if compact != re.sub(r"\s+", "", expected):
+                    raise ValueError(f"{path} has an unsupported JS instruction spread")
+                inventory = []
+                for symbol in ("RETAIL_INSTRUCTION_NAMES_V1", "RETAIL_INSTRUCTION_WIRE_IDS_V1"):
+                    declarations = re.findall(
+                        rf"const {symbol} = Object\.freeze\(\s*\[([^\]]+)\]\s*\);",
+                        source,
+                    )
+                    if len(declarations) != 1:
+                        raise ValueError(f"{path} must declare one {symbol} inventory")
+                    values = json.loads("[" + re.sub(r",\s*$", "", declarations[0]) + "]")
+                    if not values or any(not isinstance(value, str) or not value for value in values):
+                        raise ValueError(f"{path} has invalid {symbol} inventory")
+                    if len(values) != len(set(values)):
+                        raise ValueError(f"{path} repeats a {symbol} entry")
+                    inventory.append(values)
+                names, wire_ids = inventory
+                if len(names) != len(wire_ids):
+                    raise ValueError(f"{path} retail instruction names and wire IDs differ in length")
+                for name, wire_id in zip(names, wire_ids):
+                    if wire_id in mapping:
+                        raise ValueError(f"{path} repeats JS instruction wire ID `{wire_id}`")
+                    mapping[wire_id] = f"iroha_data_model::isi::retail_daily_limit::{name}"
             continue
         parts = _split_js_top_level(row, ":")
         if len(parts) != 2:

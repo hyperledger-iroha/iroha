@@ -143,6 +143,25 @@ fn configured_stake_index_pool_keeps_original_charge_through_reconfiguration() {
 }
 
 #[test]
+fn execution_pool_handle_preserves_original_identity_and_reservations() {
+    run_runtime_configuration_test(|| {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let original = state.ivm_execution_budget();
+        let borrowed = state.ivm_execution_budget();
+        assert!(borrowed.same_pool(&original));
+        let held = borrowed.try_reserve_bytes(1).expect("original pool charge");
+        assert!(held.belongs_to(&original));
+        assert_eq!(original.reserved_bytes(), 1);
+        drop(held);
+        assert_eq!(original.reserved_bytes(), 0);
+    });
+}
+
+#[test]
 fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isolated() {
     run_runtime_configuration_test(|| {
         let mut state = State::new_for_testing(
@@ -165,7 +184,7 @@ fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isola
         assert!(held.belongs_to(query.execution_budget()));
         assert!(matches!(
             query.execution_budget().try_reserve_bytes(1),
-            Err(mv::allocation::AllocationRefusal::Capacity { .. })
+            Err(iroha_allocation::AllocationRefusal::Capacity { .. })
         ));
         drop(held);
         assert_eq!(trigger.execution_budget().reserved_bytes(), 0);
@@ -208,7 +227,7 @@ fn pipeline_reload_keeps_borrowed_execution_pool_across_shrink_and_growth() {
             assert_eq!(budget.reserved_bytes(), 120);
             assert!(matches!(
                 budget.try_reserve_bytes(1),
-                Err(mv::allocation::AllocationRefusal::Capacity {
+                Err(iroha_allocation::AllocationRefusal::Capacity {
                     requested_bytes: 1,
                     reserved_bytes: 120,
                     limit_bytes: 80,
@@ -702,7 +721,7 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
             LiveQueryStore::start_test(),
         );
         let snapshot = norito::json::to_value(&state).unwrap();
-        let budget = mv::allocation::AllocationBudget::new(137);
+        let budget = iroha_allocation::AllocationBudget::new(137);
         let held = budget.try_reserve_bytes(120).unwrap();
         let mut restored = deserialize::KuraSeed {
             operation_index_budget: state.world.operation_index_budget().clone(),

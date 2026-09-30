@@ -11,7 +11,6 @@ use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaDeviceSuccessResponseV1,
     kagemusha_decode_device_success_response_v1, kagemusha_verify_device_response_v1,
 };
-#[cfg(test)]
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -46,7 +45,6 @@ const DEVICE_BRIDGE_VERSION_V1: u16 = 1;
 
 /// Public wallet selectors independently pinned by native enrollment/configuration.
 /// Constructing these fields supplies no authenticated state or bootstrap authority.
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ObservationWalletContextV1 {
     pub(crate) network_id: NetworkId,
@@ -57,7 +55,6 @@ pub(crate) struct ObservationWalletContextV1 {
 }
 
 /// Shape-checked startup projection; catalog membership and freshness are separate native checks.
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QualificationProjectionV1 {
     pub(crate) release_id: [u8; 32],
@@ -67,14 +64,12 @@ pub(crate) struct QualificationProjectionV1 {
     pub(crate) credential: KagemushaHardwareCredentialV1,
 }
 
-#[cfg(test)]
 pub(crate) fn qualification_projection_v1(bytes: &[u8]) -> Option<QualificationProjectionV1> {
     control_payload::qualification_projection_v1(bytes).ok()
 }
 
 /// Verify exact coordinator reply components using the sole device signature transcript.
 /// This grants no catalog membership, current credential status, or outstanding-challenge authority.
-#[cfg(test)]
 pub(crate) fn verify_observation_reply_v1(
     operation: u8,
     request_id: [u8; 32],
@@ -240,7 +235,6 @@ fn decode_success_response_frame_v1(
 ///
 /// The authenticator digest from the transport header is deliberately absent:
 /// it hashes the signature itself and therefore cannot be a signature input.
-#[cfg(test)]
 fn response_authenticator_transcript_v1(
     frame: KagemushaDeviceSuccessResponseV1<'_>,
     canonical_command: &[u8],
@@ -425,7 +419,7 @@ pub(crate) fn validate_coordinator_reservation_binding_v1(
         return false;
     }
     if operation == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition {
-        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
         let maximum = MAX_COMMAND_PAYLOAD_BYTES_V1;
         let Ok(inputs) = norito::decode_canonical_with_limits::<KagemushaOutgoingPublicInputsV1>(
             binding,

@@ -78,7 +78,7 @@ network, bundle, and all validator identities must also be fresh in every run.
 Each owner-only `run-NN` directory contains the request, raw command log,
 terminal command receipt, Rust result, source/binary seals before and after
 execution, and an initially empty owner-only `evidence` directory. The Rust
-result binds an exact 80-file inventory with lengths and SHA-256 digests:
+result binds an exact 112-file inventory with lengths and SHA-256 digests:
 
 - The bound request, before/after process inventories and all 16 restart records.
 - Three participant authorities, the all-Prepare barrier, Commit certificates,
@@ -88,7 +88,11 @@ result binds an exact 80-file inventory with lengths and SHA-256 digests:
   all-16 state snapshot after each of the 16 sequential restarts.
 - Sixteen continuous raw observation streams, bound to their exact phase
   attempts, classifications, counts, checkpoint coverage and hash chains.
-- Sixteen full `BridgeFinalityProof` files before restart and sixteen afterward.
+- Sixteen canonical `SumeragiFinalityProof` files before restart and sixteen afterward.
+- Sixteen before-restart transport summaries and their sixteen complete raw
+  log prefixes. Each summary binds its process PID, canonical peer identity,
+  current run, proof bytes, certified source and exact ordered audit lines.
+  Each raw prefix is capped at 64 MiB; JSON retains its 16 MiB bound.
 
 Validation checks a nonzero genesis-readiness observation, a strictly later
 authority-context observation, finalized-height ordering, disjoint four-member
@@ -101,14 +105,20 @@ summaries. Replay and every restart must retain the exact finalized financial
 state and signed finality decision. Observation/file bounds are strict;
 exceeding them fails and retains the run instead of truncating observations.
 
-The Rust client verifies canonical finality and BLS signatures before writing
-the genuine proof objects. Python checks structural and cross-record bindings,
-including the exact global roster, signed RS16 layout, finalized height and
-semantic height context. Protocol hashes must retain Iroha's low marker bit;
+The Rust harness verifies contiguous native finality through `CertifiedPrefix`
+from the configured signed genesis, including exact-quorum BLS and original
+signed RS16 availability. Python validates the current proof schema, exact
+global committee and PoPs, retained proof digest, certified-source bindings,
+and every selected row/custody/application observation against the complete raw
+prefix. It rejects omitted lines, changed offsets, duplicate rows, wrong PID or
+sender, insufficient stripe coverage, and mismatched payload/context/result.
+Restart recovery must retain the same certified decision; it does not claim
+fresh network transport because restoration emits no network custody evidence. Protocol hashes must retain Iroha's low marker bit;
 the reserved empty Prepare digest is `00…01`, and Commit must bind a nonempty
 Prepare barrier. It does not independently verify BLS or recompute
-Norito protocol hashes. Independent cryptographic review remains a separate
-release requirement.
+Norito protocol hashes. The log observations are source-bound local process
+evidence, not Byzantine remote-transport attestations. Independent cryptographic
+review remains a separate release requirement.
 
 The read-only `validate_campaign(path, expected_commit=...)` API rechecks every
 artifact plus the retained signed checkout and executable bytes. Keep those
@@ -132,9 +142,10 @@ can own signal handling; do not terminate the enclosing app/session to drain it.
 
 `private_settlement_happy_day_campaign.py` validates the distinct native entrypoint
 `nexus::atomic_private_settlement_localnet::atomic_private_settlement_n3_happy_day`.
-The request and completion marker explicitly bind `happy_day`. Its 47 retained
+The request and completion marker explicitly bind `happy_day`. Its 79 retained
 artifacts prove the same three-leg financial state checks, all sixteen signed
-finality observations, replay idempotence, and continuous terminal cleanup. All
+finality observations, sixteen transport summaries plus their complete raw log
+prefixes, replay idempotence, and continuous terminal cleanup. All
 sixteen validator PIDs remain unchanged; no restart artifact is accepted. Every
 terminal observation must match the finalized financial state with zero local
 and replicated staging. Earlier finalization observations may show monotonic

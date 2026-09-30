@@ -336,7 +336,8 @@ impl IVM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KotodamaCompiler, ProgramMetadata, host::DefaultHost};
+    use crate::{ProgramMetadata, host::DefaultHost};
+    use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
     fn boolean_root(gas: u64) -> IVM {
         let (bytes, _) = KotodamaCompiler::new()

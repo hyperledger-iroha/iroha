@@ -47,7 +47,7 @@ fn fixture() -> Fixture {
     let lane = LaneId::new(0);
     let network_id = *DEFAULT_TEST_NETWORK_ID;
     let binding = AxtBinding::new([0xA5; 32]);
-    let program = ivm::KotodamaCompiler::new()
+    let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(
             "seiyaku IssuerFixture { kotoage fn main() authorize(\"issuer_fixture_run\") {} }",
         )
@@ -645,7 +645,7 @@ fn current_issuer_rejects_changed_policy_envelope_code_and_key() {
         ),
         Err(AxtCurrentIssuerErrorV1::InvocationBinding)
     );
-    let other_program = ivm::KotodamaCompiler::new().compile_source(
+    let other_program = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku OtherIssuerFixture { kotoage fn other() authorize(\"other_issuer_fixture_run\") {} }",
     ).unwrap();
     let other = ivm::prepare_contract(Arc::<[u8]>::from(other_program)).unwrap();

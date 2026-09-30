@@ -284,6 +284,7 @@ fn create(
     state.incarnations = state.incarnations.saturating_add(1);
     let active_from = height.saturating_add(2);
     let mut record = SumeragiLaneRecord {
+        da_layout: policy.da_layout,
         lane,
         dataspace,
         incarnation,
@@ -504,6 +505,7 @@ mod tests {
 
     fn policy() -> SumeragiLanePolicy {
         SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 4,
             max_merge_blocks: 8,
             stall_window: 10,

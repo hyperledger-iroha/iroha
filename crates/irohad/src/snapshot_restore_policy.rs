@@ -26,7 +26,7 @@ pub(super) fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -
 mod tests {
     use super::*;
     use crate::snapshot_failure_allows_empty_state_fallback;
-    use mv::allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
     use std::{
         future::Future,
         pin::pin,

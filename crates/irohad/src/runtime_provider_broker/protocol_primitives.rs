@@ -148,13 +148,13 @@ define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol
     pub(super) partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
 });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ParliamentTlePartialReleaseSignRequestWireV1"; pub(super) ParliamentTlePartialReleaseSignRequestWireV1 {
-    pub(super) projection: iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
+    pub(super) projection: iroha_core_timed_ovn::tle::AuthorizedTleReleaseProjectionV1,
 });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ParliamentTlePartialReleaseSignResultWireV1"; pub(super) ParliamentTlePartialReleaseSignResultWireV1 {
-    pub(super) partial: iroha_core::tle_release::TlePartialReleaseShareV1,
+    pub(super) partial: iroha_core_timed_ovn::tle::TlePartialReleaseShareV1,
 });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ParliamentTleCapabilityAttestRequestWireV1"; pub(super) ParliamentTleCapabilityAttestRequestWireV1 {
-    pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1,
+    pub(super) key_session: iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1,
     pub(super) participant_index: u16,
 });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ParliamentTleCapabilityAttestResultWireV1"; pub(super) ParliamentTleCapabilityAttestResultWireV1 {

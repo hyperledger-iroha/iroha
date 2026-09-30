@@ -203,7 +203,7 @@ fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
         AssetId::of(asset_definition_id.clone(), sink_id.clone()),
         Quantity::zero(),
     );
-    let (program, manifest) = ivm::KotodamaCompiler::new()
+    let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku MeteredFailure {

@@ -723,10 +723,6 @@ fn registry_policy_successors_bind_price_changes_to_pricing_revisions() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one page-boundary matrix covers every Musubi page and cursor representation"
-)]
 fn page_and_cursor_bounds_are_enforced() {
     for limit in [
         0,
@@ -873,10 +869,6 @@ fn page_and_cursor_bounds_are_enforced() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one empty-page matrix verifies exact query identity across all Musubi page families"
-)]
 fn empty_response_pages_retain_their_exact_query_identity() {
     let package_id = package("empty-context");
     let package_query = MusubiPackagePageQueryV1 {

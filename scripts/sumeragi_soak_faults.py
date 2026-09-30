@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fault injection of the Sumeragi release-gate soak (``scripts/sumeragi_soak.py``).
+"""Fault injection for optional Sumeragi diagnostics (``scripts/sumeragi_soak.py``).
 
 * Network loss and delay spikes on every P2P link:
 
@@ -326,8 +326,16 @@ class ProxyNetwork:
             server.close()
         for writer in list(self._writers):
             _abort(writer)
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         for server in self._servers:
-            await server.wait_closed()
+            try:
+                await asyncio.wait_for(server.wait_closed(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
 
     async def _reset_all(self) -> int:
         writers = list(self._writers)

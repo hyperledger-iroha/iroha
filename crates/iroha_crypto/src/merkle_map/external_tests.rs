@@ -82,7 +82,7 @@ fn read(root: &LocatedRoot, key: Hash, store: &Store) -> Option<Hash> {
 
 #[test]
 fn external_versions_match_actual_mutations_and_survive_resident_drop() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let mut store = Store::default();
     let empty = export(&map, &mut store);
     assert_eq!(read(&empty, hash(0), &store), None);
@@ -122,7 +122,7 @@ fn external_versions_match_actual_mutations_and_survive_resident_drop() {
 
 #[test]
 fn root_authentication_and_metadata_fail_before_external_reads() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(hash(1), None, Some(hash(2))).unwrap();
     let root = export(&map, &mut Store::default());
     let (len, node) = root.parts();
@@ -153,7 +153,7 @@ fn root_authentication_and_metadata_fail_before_external_reads() {
         );
     }
     let empty = export(
-        &MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024)),
+        &MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)),
         &mut Store::default(),
     );
     assert_eq!(
@@ -168,7 +168,7 @@ fn root_authentication_and_metadata_fail_before_external_reads() {
 
 #[test]
 fn missing_source_and_corrupt_content_never_become_absence() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..8 {
         map.replace(hash(n), None, Some(hash(n + 20))).unwrap();
     }
@@ -214,7 +214,7 @@ fn missing_source_and_corrupt_content_never_become_absence() {
 
 #[test]
 fn authenticated_prefix_and_leaf_divergence_prove_absence() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let first = Hash::prehashed([0; 32]);
     let mut bytes = [0; 32];
     bytes[0] = 0x40;
@@ -233,7 +233,7 @@ fn authenticated_prefix_and_leaf_divergence_prove_absence() {
         Ok(None)
     );
     assert_eq!(calls, 1, "divergence at authenticated compressed prefix");
-    let mut singleton = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut singleton = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     singleton.replace(first, None, Some(hash(3))).unwrap();
     let root = export(&singleton, &mut store);
     assert_eq!(read(&root, Hash::prehashed(bytes), &store), None);
@@ -373,7 +373,7 @@ fn independently_hashed_children_must_preserve_original_parent_path() {
 fn all_split_bits_export_and_lookup_on_the_default_thread_stack() {
     std::thread::spawn(|| {
         let key = Hash::prehashed([0; 32]);
-        let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+        let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
         map.replace(key, None, Some(hash(999))).unwrap();
         for bit in (0..255).rev() {
             let mut bytes = [0; 32];
@@ -408,7 +408,7 @@ fn all_split_bits_export_and_lookup_on_the_default_thread_stack() {
 
 #[test]
 fn export_stops_at_the_original_error_without_changing_versions() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..32 {
         map.replace(hash(n), None, Some(hash(n + 50))).unwrap();
     }
@@ -430,7 +430,7 @@ fn export_stops_at_the_original_error_without_changing_versions() {
 
 #[test]
 fn physical_node_and_value_placement_never_changes_logical_commitments() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..32 {
         map.replace(hash(n), None, Some(hash(n + 100))).unwrap();
     }
@@ -474,7 +474,7 @@ fn physical_node_and_value_placement_never_changes_logical_commitments() {
 fn wrong_root_and_child_locations_fail_without_inventing_absence() {
     let left_key = Hash::prehashed([0; 32]);
     let right_key = Hash::prehashed([255; 32]);
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(left_key, None, Some(hash(1))).unwrap();
     map.replace(right_key, None, Some(hash(2))).unwrap();
     let mut store = Store::default();
@@ -573,7 +573,7 @@ fn equal_child_hashes_are_invalid_even_at_different_physical_locations() {
 
 #[test]
 fn cold_export_keeps_its_original_version_at_every_value_and_node_failure() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..16 {
         map.replace(hash(n), None, Some(hash(n + 100))).unwrap();
     }

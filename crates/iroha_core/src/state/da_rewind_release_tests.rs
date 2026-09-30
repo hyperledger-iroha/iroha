@@ -19,8 +19,8 @@ fn observe_rewind_source(
     state: &State,
     state_write: bool,
 ) -> (
-    concread::release::ReleaseWait,
-    concread::release::DeferredRelease,
+    iroha_allocation::release::ReleaseWait,
+    iroha_allocation::release::DeferredRelease,
 ) {
     if state_write {
         let guard = state.state_write_lock.lock();

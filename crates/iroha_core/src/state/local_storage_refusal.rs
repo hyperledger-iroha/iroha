@@ -37,8 +37,8 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, TransactionsBlockError, World},
     };
+    use iroha_allocation::AllocationRefusal;
     use iroha_data_model::block::BlockHeader;
-    use mv::allocation::AllocationRefusal;
     use std::num::NonZeroU64;
 
     #[test]

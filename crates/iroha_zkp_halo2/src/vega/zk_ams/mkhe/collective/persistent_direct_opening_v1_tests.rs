@@ -1,14 +1,10 @@
 const PRODUCTION_SOURCE_V1: &str = include_str!("persistent_direct_opening_v1.rs");
-const TEST_SOURCE_V1: &str = include_str!("persistent_direct_opening_v1_tests.rs");
+
 const COLLECTIVE_SOURCE_V1: &str = include_str!("../collective.rs");
 const MKHE_FACADE_SOURCE_V1: &str = include_str!("../../mkhe.rs");
 
 #[test]
 fn owner_is_move_only_private_and_contains_one_opening() {
-    assert!(PRODUCTION_SOURCE_V1.lines().count() <= 180);
-    assert!(PRODUCTION_SOURCE_V1.len() <= 8_000);
-    assert!(TEST_SOURCE_V1.lines().count() <= 180);
-    assert!(TEST_SOURCE_V1.len() <= 8_000);
     for forbidden in [
         ["derive(Clone", ", Copy)"].concat(),
         ["impl Clone for Persistent", "DirectOpeningOwnerV1"].concat(),

@@ -9,7 +9,7 @@ fn hash(first: u8) -> Hash {
 }
 
 fn sample() -> (MerkleMap, Vec<(Hash, Hash)>) {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let rows: Vec<_> = [3, 9, 10, 11, 18, 31, 32, 45, 55, 89]
         .into_iter()
         .map(|first| (hash(first), Hash::new([first])))
@@ -43,7 +43,7 @@ fn range_proof_authenticates_every_row_and_empty_gaps() {
             );
         }
     }
-    let empty = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let empty = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let proof = empty
         .prove_range(&hash(0), &hash(255), 0)
         .expect("empty map range");
@@ -153,7 +153,7 @@ fn range_proof_keeps_older_root_after_map_mutation() {
 #[test]
 fn range_proof_is_independent_of_insertion_order() {
     let (forward, rows) = sample();
-    let mut reverse = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut reverse = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for (key, value) in rows.iter().rev() {
         reverse
             .replace(*key, None, Some(*value))
@@ -170,7 +170,7 @@ fn range_proof_is_independent_of_insertion_order() {
 
 #[test]
 fn range_proof_accepts_exact_row_ceiling_and_rejects_one_more() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let key = |index: u16| {
         let mut bytes = [0_u8; Hash::LENGTH];
         bytes[..2].copy_from_slice(&index.to_be_bytes());

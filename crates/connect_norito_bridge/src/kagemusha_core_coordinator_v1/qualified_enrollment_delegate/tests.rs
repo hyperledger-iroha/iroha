@@ -113,6 +113,8 @@ fn delegate_consumes_original_selection_and_prepares_exact_proof() {
     });
     let delegate = KagemushaKernelEnrollmentDelegateV1::new(provider.clone());
     let request = challenge_request(&selection);
+    let verified =
+        super::super::pre_enrollment_qualification::tests::verified_for_selection(&selection);
     let accepted = delegate
         .accept_challenge(
             7,
@@ -123,6 +125,7 @@ fn delegate_consumes_original_selection_and_prepares_exact_proof() {
                 )
                 .unwrap(),
             &request,
+            Some(&verified),
         )
         .unwrap();
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -167,6 +170,7 @@ fn delegate_rejects_replaced_ticket_before_requesting_context() {
             )
             .unwrap(),
         &request,
+        None,
     );
     assert!(matches!(
         result,
@@ -189,6 +193,8 @@ fn delegate_rejects_independently_provisioned_context_substitution() {
         });
         let delegate = KagemushaKernelEnrollmentDelegateV1::new(provider.clone());
         let request = challenge_request(&selection);
+        let verified =
+            super::super::pre_enrollment_qualification::tests::verified_for_selection(&selection);
         let result = delegate.accept_challenge(
             7,
             journal
@@ -215,6 +221,8 @@ fn delegate_rejects_a_different_live_journal_for_an_accepted_challenge() {
         calls: AtomicUsize::new(0),
     });
     let delegate = KagemushaKernelEnrollmentDelegateV1::new(provider);
+    let verified =
+        super::super::pre_enrollment_qualification::tests::verified_for_selection(&first_selection);
     let accepted = delegate
         .accept_challenge(
             7,
@@ -225,6 +233,7 @@ fn delegate_rejects_a_different_live_journal_for_an_accepted_challenge() {
                 )
                 .unwrap(),
             &challenge_request(&first_selection),
+            Some(&verified),
         )
         .unwrap();
     let (other_journal, other_selection) = selected_journal();

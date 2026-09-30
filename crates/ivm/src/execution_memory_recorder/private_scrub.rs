@@ -73,7 +73,7 @@ impl DiagnosticMemoryAccessRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
 
     #[test]
     fn scrub_ordinal_overflow_refuses_before_publishing_any_row() {

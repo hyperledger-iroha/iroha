@@ -24,7 +24,10 @@ sim = []
 mutation-testing = []
 
 [dependencies]
+# Shared original-pool custody of admitted witnesses, availability tables, payloads and rows.
+iroha_allocation = { workspace = true }
+iroha_primitives = { workspace = true, default-features = false, features = ["simd-accel"] }
+# Pure compiled type descriptions (no IO): the consensus wire root of the release wire-schema
+# identity (`iroha_core::release_identity::wire_schema_hash`).
+iroha_schema = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
-
-# Shared original-pool custody of canonical application-result witnesses.
-mv = { workspace = true }

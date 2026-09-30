@@ -1,7 +1,7 @@
 //! Fixed staged-row owners admitting replacement overlap before growth.
 
 use super::*;
-use mv::allocation::{AllocationBudget, ChargedBuffer};
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 
 /// A staged canonical key and the two value commitments from one encoder pass.
 pub(super) struct PairedDigestRow {

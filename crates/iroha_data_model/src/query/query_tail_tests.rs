@@ -24,6 +24,9 @@ mod canonical_output_inclusion_tests {
             ordinary_writes_root: Hash::new(b"writes"),
             kagemusha_top_up_root: None,
             kagemusha_top_up_count: 0,
+            parent_world_state_root: Hash::new(b"parent world"),
+            world_state_root: Hash::new(b"world"),
+            event_commitment: None,
             executed_block_wire_len: wire.len() as u64,
             executed_block_wire_hash: Hash::new(&wire),
             transaction_input_commitment: block.network_input_merkle_commitment(),
@@ -39,6 +42,9 @@ mod canonical_output_inclusion_tests {
             ordinary_writes_root: Hash,
             kagemusha_top_up_root: Option<Hash>,
             kagemusha_top_up_count: u32,
+            parent_world_state_root: Hash,
+            world_state_root: Hash,
+            event_commitment: Option<iroha_crypto::MerkleTreeCommitment<crate::events::EventBox>>,
             executed_block_wire_len: u64,
             executed_block_wire_hash: Hash,
             transaction_input_commitment:
@@ -58,6 +64,9 @@ mod canonical_output_inclusion_tests {
             ordinary_writes_root: current.ordinary_writes_root,
             kagemusha_top_up_root: current.kagemusha_top_up_root,
             kagemusha_top_up_count: current.kagemusha_top_up_count,
+            parent_world_state_root: current.parent_world_state_root,
+            world_state_root: current.world_state_root,
+            event_commitment: current.event_commitment,
             executed_block_wire_len: current.executed_block_wire_len,
             executed_block_wire_hash: current.executed_block_wire_hash,
             transaction_input_commitment: current.transaction_input_commitment,
@@ -193,10 +202,14 @@ mod canonical_output_inclusion_tests {
         let (block, committed) = execution_fixture();
         let expected = commitment(&block);
         assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
-        assert!(!committed.verify_inclusion_in_authenticated_execution(
-            &block.canonical_resultless_proposal(),
-            &expected
-        ));
+        assert!(
+            !committed.verify_inclusion_in_authenticated_execution(
+                &block
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal"),
+                &expected
+            )
+        );
         let mut other = block.clone();
         let mut header = other.header();
         header.creation_time_ms += 1;
@@ -332,10 +345,14 @@ mod canonical_output_inclusion_tests {
         let mut wrong = network.clone();
         wrong.entrypoint_proof = MerkleProof::from_audit_path(1, vec![]);
         assert!(!wrong.verify_inclusion_in_authenticated_execution(&block, &expected));
-        assert!(!network.verify_inclusion_in_authenticated_execution(
-            &block.canonical_resultless_proposal(),
-            &expected
-        ));
+        assert!(
+            !network.verify_inclusion_in_authenticated_execution(
+                &block
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal"),
+                &expected
+            )
+        );
     }
     #[test]
     fn committed_query_rejects_retired_parallel_result_and_merge_wire() {
@@ -475,10 +492,6 @@ mod tests {
         assert_eq!(decoded.backend, query.backend);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one authoritative SoraFS vector keeps every singular V1 query payload roundtrip in registry order"
-    )]
     fn sorafs_authoritative_singular_query_payloads_roundtrip() {
         use norito::codec::{Decode, Encode};
         let juror = AccountId::new(KeyPair::random().public_key().clone());

@@ -34,7 +34,7 @@ fn local_storage_recovery_emits_no_block_rejection() {
         MergeLedgerCommitError,
     };
     use iroha_data_model::block::error::BlockRejectionReason;
-    use mv::allocation::AllocationRefusal;
+    use iroha_allocation::AllocationRefusal;
 
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -99,7 +99,8 @@ fn npos_local_admission_keeps_all_resource_refusals_out_of_rejection() {
         StateStorageAdmissionError,
     };
     use concread::bptree::PlanningError;
-    use mv::{allocation::AllocationRefusal, storage::AdmittedStorageError};
+    use iroha_allocation::{AllocationRefusal};
+    use mv::{storage::AdmittedStorageError};
 
     let refusals = [
         StateAdmissionError::Storage(StateStorageAdmissionError::World(
@@ -170,7 +171,9 @@ fn event_fixture_block(
     }
     builder.set_execution_context(routes.map(BlockExecutionContextBundle::new));
     let mut block = builder.build_with_signature(0, keypair.private_key());
-    let proposal = block.canonical_resultless_proposal();
+    let proposal = block
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let fragments = u64::try_from(
         outputs
             .iter()
@@ -194,7 +197,12 @@ fn event_fixture_block(
             },
         )
         .expect("complete fixture outputs must satisfy their explicit finite policy");
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(
+        block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection"),
+        proposal
+    );
     block
         .signatures()
         .next()
@@ -335,7 +343,7 @@ fn valid_block_transaction_events_use_entrypoint_index_after_sealed_commitment()
 }
 
 #[test]
-fn peer_received_v2_block_events_use_committed_route_without_local_routing_state() {
+fn peer_received_block_events_use_committed_route_without_local_routing_state() {
     let route = crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
     let (valid, hash) = peer_received_valid_block_with_committed_route(0x06, Some(route));
     let events = valid.produce_events().collect::<Vec<_>>();

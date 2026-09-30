@@ -3,7 +3,8 @@ use hex::decode;
 use iroha_crypto::{Hash, Sm2PrivateKey, Sm2PublicKey, Sm3Digest};
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{IVM, PointerType, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::collections::BTreeMap;
 mod common;
 fn new_sm_host() -> ivm::host::DefaultHost {

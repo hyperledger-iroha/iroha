@@ -1005,7 +1005,7 @@ pub(super) fn run_zk_x509_stage_v1(
     } = prepare_zk_x509_stage_v1(case_kind)?;
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     let resources = PrivacyReleaseResourceFactsV1 {
-        primary_units: u64::try_from(fixture.witness.certificate_chain_der.len())
+        primary_units: u64::try_from(fixture.witness.certificate_chain_len_v1())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
         primary_ceiling: u64::try_from(ZK_X509_MAX_CHAIN_DEPTH_V1)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
@@ -1534,18 +1534,17 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let expected_effect = VerifiedZkX509CertificateEffectV1 {
-        namespace: authoritative_state.namespace(),
-        certificate_nullifier: statement.certificate_nullifier,
-        trust_anchor_record_digest: trust_anchor.record_digest,
-        trust_anchor_record_epoch: trust_anchor.record_epoch,
-        certificate_policy_record_digest: certificate_policy.record_digest,
-        certificate_policy_record_epoch: certificate_policy.record_epoch,
-        crl_record_digest: crl.record_digest,
-        crl_record_epoch: crl.record_epoch,
-    };
     match effects.into_ledger() {
-        VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(actual) if actual == expected_effect => {
+        VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(actual)
+            if actual.namespace == authoritative_state.namespace()
+                && actual.certificate_nullifier == statement.certificate_nullifier
+                && actual.trust_anchor_record_digest == trust_anchor.record_digest
+                && actual.trust_anchor_record_epoch == trust_anchor.record_epoch
+                && actual.certificate_policy_record_digest == certificate_policy.record_digest
+                && actual.certificate_policy_record_epoch == certificate_policy.record_epoch
+                && actual.crl_record_digest == crl.record_digest
+                && actual.crl_record_epoch == crl.record_epoch =>
+        {
             Ok(())
         }
         _ => Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),

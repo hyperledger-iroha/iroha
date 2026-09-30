@@ -37,10 +37,10 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     sources, lock, _ = captured
     projected = project(sources, lock)
     expected = expected_files(sources)
-    assert len(sources) == 202 and len(projected.members) == 199
+    assert len(sources) == 207 and len(projected.members) == 204
     assert projected.version == "0.0.3"
     assert {row.name: row.content for row in projected.members} == expected
-    assert sum(row.name.startswith("dist/") for row in projected.members) == 160
+    assert sum(row.name.startswith("dist/") for row in projected.members) == 166
     assert projected.source_sha256 == tuple((name, hashlib.sha256(body).hexdigest()) for name, body in sorted(sources.items()))
     for row in projected.members:
         if row.name == package.CHECKSUM_MEMBER:
@@ -220,7 +220,7 @@ def test_projection_and_original_content_perform_no_io_or_execution(captured, mo
                              (subprocess, ("run", "Popen")), (socket, ("create_connection",))):
             for name in names: patch.setattr(owner, name, forbidden)
         observed = verify(raw, sources, lock)
-    assert len(observed.projection.members) == 199
+    assert len(observed.projection.members) == 204
 
 
 @pytest.mark.parametrize("name", ("src/._hidden.js", "src/CVS/a.js", "src/.git/a.js", "src/a.orig/b.js",

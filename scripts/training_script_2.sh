@@ -540,7 +540,7 @@ dump_reuse_stall_diagnostics() {
   for log in "$run_dir"/peer*.log; do
     [[ -f "$log" ]] || continue
     echo "[run $run] $(basename "$log") recent relevant lines:" >&2
-    if ! rg -n "queue_size|view change|view_changes|timeout|stall|panic|error|warn|availability|RBC|consensus" "$log" | tail -n 20 >&2; then
+    if ! rg -n "queue_size|view change|view_changes|timeout|stall|panic|error|warn|availability|consensus" "$log" | tail -n 20 >&2; then
       tail -n 20 "$log" >&2 || true
     fi
   done

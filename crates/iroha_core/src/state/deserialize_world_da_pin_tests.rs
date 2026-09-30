@@ -76,7 +76,7 @@ fn restore(world: &World) -> Result<World, json::Error> {
         _marker: PhantomData,
     };
     parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         SnapshotJsonMap::parse(&encoded, "world")?,
@@ -152,7 +152,7 @@ fn every_pin_map_is_a_required_first_release_snapshot_field() {
             "serialized schema must include {name}"
         );
         let error = parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             map,

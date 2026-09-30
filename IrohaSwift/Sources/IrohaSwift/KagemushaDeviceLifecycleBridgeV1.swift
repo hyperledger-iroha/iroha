@@ -222,6 +222,76 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     guard let endpoint else {
       throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
     }
+    let responseKey = try Self.requireAcceptedDevicePublicKey(
+      operation: operation, acceptedDevicePublicKey: acceptedDevicePublicKey)
+    var command = try Codec.encodeCommand(
+      operation: operation,
+      requestID: requestID,
+      payload: canonicalCommand
+    )
+    let commandRange = command.startIndex..<command.endIndex
+    defer { command.resetBytes(in: commandRange) }
+    var response: Data
+    do {
+      response = try endpoint.execute(command)
+    } catch {
+      throw KagemushaDeviceLifecycleBridgeErrorV1.executionFailed
+    }
+    let responseRange = response.startIndex..<response.endIndex
+    defer { response.resetBytes(in: responseRange) }
+    guard let acceptedCapabilities else {
+      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+    }
+    return try Self.authenticateResponse(
+      response, operation: operation, requestID: requestID,
+      canonicalCommand: canonicalCommand, capabilities: acceptedCapabilities,
+      acceptedDevicePublicKey: responseKey,
+      verify: { response, command, operation, requestID, policy, qualification, key in
+        endpoint.verifyResponseAuthenticator(response: response, canonicalCommand: command,
+          operation: operation, requestID: requestID, hardwarePolicyID: policy,
+          qualificationReportDigest: qualification, acceptedDevicePublicKey: key)
+      })
+  }
+
+  /// Shared by synchronous native and asynchronous Apple wired-mode transports.
+  /// Framing is checked before invoking the independently native-authenticated verifier.
+  static func authenticateResponse(
+    _ encoded: Data,
+    operation: KagemushaDeviceLifecycleOperationV1,
+    requestID: Data,
+    canonicalCommand: Data,
+    capabilities: KagemushaDeviceLifecycleCapabilitiesV1,
+    acceptedDevicePublicKey: Data?,
+    verify: (Data, Data, KagemushaDeviceLifecycleOperationV1, Data, Data, Data, Data?) -> Bool
+      = KagemushaDeviceNativeResponseAuthenticatorVerifierV1.verify
+  ) throws -> KagemushaDeviceLifecycleResultV1 {
+    let key = try requireAcceptedDevicePublicKey(operation: operation,
+      acceptedDevicePublicKey: acceptedDevicePublicKey)
+    // Admit the complete original command and capability scope even for a failure reply.
+    _ = try Codec.encodeCommand(operation: operation, requestID: requestID, payload: canonicalCommand)
+    guard capabilities.hardwarePolicyID.count == 32,
+      capabilities.hardwarePolicyID.contains(where: { $0 != 0 }),
+      capabilities.qualificationReportDigest.count == 32,
+      capabilities.qualificationReportDigest.contains(where: { $0 != 0 }),
+      capabilities.hardwarePolicyID != capabilities.qualificationReportDigest else {
+      throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract("invalid response qualification scope")
+    }
+    let result = try Codec.decodeResponse(encoded, expectedOperation: operation,
+      expectedRequestID: requestID)
+    if result.status == .success {
+      guard verify(result.canonicalResponseFrame, canonicalCommand, operation, requestID,
+        capabilities.hardwarePolicyID, capabilities.qualificationReportDigest, key) else {
+        throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
+          "KAGEMUSHA response authenticator verification failed")
+      }
+    }
+    return result
+  }
+
+  static func requireAcceptedDevicePublicKey(
+    operation: KagemushaDeviceLifecycleOperationV1,
+    acceptedDevicePublicKey: Data?
+  ) throws -> Data? {
     let responseKey: Data?
     if operation == .readActiveHardwareCredential {
       guard acceptedDevicePublicKey == nil else {
@@ -240,43 +310,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       }
       responseKey = Data(acceptedDevicePublicKey)
     }
-    var command = try Codec.encodeCommand(
-      operation: operation,
-      requestID: requestID,
-      payload: canonicalCommand
-    )
-    let commandRange = command.startIndex..<command.endIndex
-    defer { command.resetBytes(in: commandRange) }
-    var response: Data
-    do {
-      response = try endpoint.execute(command)
-    } catch {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.executionFailed
-    }
-    let responseRange = response.startIndex..<response.endIndex
-    defer { response.resetBytes(in: responseRange) }
-    let result = try Codec.decodeResponse(
-      response,
-      expectedOperation: operation,
-      expectedRequestID: requestID
-    )
-    if result.status == .success {
-      guard let acceptedCapabilities,
-        endpoint.verifyResponseAuthenticator(
-          response: result.canonicalResponseFrame,
-          canonicalCommand: canonicalCommand,
-          operation: operation,
-          requestID: requestID,
-          hardwarePolicyID: acceptedCapabilities.hardwarePolicyID,
-          qualificationReportDigest: acceptedCapabilities.qualificationReportDigest,
-          acceptedDevicePublicKey: responseKey
-        )
-      else {
-        throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
-          "KAGEMUSHA response authenticator verification failed")
-      }
-    }
-    return result
+    return responseKey
   }
 
   static func withEndpointForTests(
@@ -721,7 +755,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   }
 }
 
-private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
+enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
   #if canImport(Darwin)
     private typealias VerifyFn = @convention(c) (
       UnsafePointer<UInt8>?, Int,

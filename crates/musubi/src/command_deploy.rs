@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn deployment_rejects_replaced_artifact_bytes_before_signing() {
         let root = tempfile::tempdir().expect("build directory");
-        let compiler = ivm::kotodama::compiler::Compiler::new();
+        let compiler = kotodama_lang::compiler::Compiler::new();
         let original = compiler
             .compile_source("seiyaku Quote { view fn quote() -> int { return 30; } }")
             .expect("original contract");

@@ -29,15 +29,12 @@ public_address = "addr:172.28.0.11:1338#B96B"
 address = "addr:0.0.0.0:8081#A903"
 max_content_len = 64_000_000
 
-
 [streaming]
 identity_public_key = "ed01201A0CDF025951CA5BBD4192B86B6E8737281B5154FA7804514A850B8DFC4E2E85"
 identity_private_key = "80262057B9685FDFF5B2D23FDD4A2140121BC79D7E45ECC1CCED767AEDBD911CFFC81C"
 
-
 [nexus]
 lane_count = 3
-
 
 
 [genesis]

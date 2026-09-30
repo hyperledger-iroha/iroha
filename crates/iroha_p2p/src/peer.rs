@@ -1176,10 +1176,6 @@ fn sign_soranet_transport_delegation_v5(
         binding,
     })
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "keep the ordered fail-closed V5 certificate/proof checks in one auditable validation path"
-)]
 fn verify_soranet_transport_delegation_v5(
     canonical_signed_frame: &[u8],
     expected_network_id: &iroha_data_model::NetworkId,
@@ -4366,10 +4362,6 @@ mod run {
             .try_recv_now()
             .map(|m| (HighTopic::ConsensusChunk, m))
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the ordered fairness checks stay together so deterministic topic priority remains auditable"
-    )]
     #[cfg(test)]
     fn try_recv_high_fair<T>(
         safety_burst: &mut u8,
@@ -4955,10 +4947,6 @@ mod run {
                 retained_cap.saturating_add(Self::U32_SIZE),
             );
         }
-        #[expect(
-            clippy::too_many_lines,
-            reason = "ordered one-pass validation keeps offsets, caps, alignment, and prefix delivery cohesive"
-        )]
         fn parse_decrypted_frame_messages(
             decrypted: &[u8],
             encrypted_size: usize,
@@ -7232,10 +7220,6 @@ mod run {
             ));
         }
         #[tokio::test(flavor = "current_thread")]
-        #[expect(
-            clippy::too_many_lines,
-            reason = "the shutdown test deliberately keeps one linear timeline so every ownership transfer across the replaced connection remains visible"
-        )]
         async fn dispatch_worker_shutdown_drains_reliable_replaced_connection_to_actor() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
@@ -7346,7 +7330,6 @@ mod run {
             );
         }
         #[tokio::test(flavor = "current_thread")]
-        #[expect(clippy::too_many_lines, reason = "complete abort/drain timeline")]
         async fn peer_task_abort_drains_queued_worker_then_notifies_exact_connection_once() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
@@ -8222,10 +8205,6 @@ mod run {
             );
         }
         #[tokio::test(flavor = "current_thread")]
-        #[expect(
-            clippy::too_many_lines,
-            reason = "the adversarial replacement test keeps the write, failed flush witness, teardown, retry, and replacement acknowledgement in one auditable timeline"
-        )]
         async fn full_write_without_flush_ack_closes_actor_witness_and_retries_on_replacement() {
             let message = RoutedMsg::Consensus(12);
             let charge = routed_post_charge(&message);

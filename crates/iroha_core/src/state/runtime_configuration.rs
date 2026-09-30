@@ -3,7 +3,7 @@ impl State {
     ///
     /// Cloning this handle preserves pool identity across pipeline reloads;
     /// observed counters do not grant an execution reservation.
-    pub(crate) fn ivm_execution_budget(&self) -> mv::allocation::AllocationBudget {
+    pub(crate) fn ivm_execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.pipeline_ivm_prepared_cache
             .read()
             .execution_budget()

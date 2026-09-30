@@ -49,9 +49,9 @@ fn probe(first: &Arc<TransactionsStorage>, second: &Arc<TransactionsStorage>) ->
 }
 
 fn register(
-    wait: concread::release::ReleaseWait,
+    wait: iroha_allocation::release::ReleaseWait,
     probe: &Arc<Probe>,
-) -> concread::release::ReleaseFuture {
+) -> iroha_allocation::release::ReleaseFuture {
     let mut future = wait.wait_for_release();
     let waker = Waker::from(Arc::clone(probe));
     assert!(
@@ -62,7 +62,7 @@ fn register(
     future
 }
 
-fn assert_released(future: &mut concread::release::ReleaseFuture, probe: &Probe) {
+fn assert_released(future: &mut iroha_allocation::release::ReleaseFuture, probe: &Probe) {
     assert!(
         Pin::new(future)
             .poll(&mut Context::from_waker(Waker::noop()))

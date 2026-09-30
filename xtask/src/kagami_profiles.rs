@@ -581,7 +581,7 @@ fn load_profile_kagemusha_mint_finality_parameters(
     }
     let bytes = fs::read(&path)?;
     let parameters: KagemushaMintFinalityGenesisParametersV1 = json::from_slice(&bytes)?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )?;
     let mut expected_validators = peers
@@ -1386,7 +1386,7 @@ Files:
 fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
     if !is_valid_committee_size(spec.min_peers) {
         return Err(format!(
-            "profile {} peer count {} is not an exact revision-4 `3f + 1` committee",
+            "profile {} peer count {} is not an exact Sumeragi `3f + 1` committee",
             spec.slug, spec.min_peers
         )
         .into());
@@ -1587,7 +1587,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, validator)| {
-                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
                         0,
                         validator,
@@ -1778,7 +1778,7 @@ mod tests {
             };
             let error = build_peers(&spec).expect_err("non-committee profile must fail");
             assert!(
-                error.to_string().contains("exact revision-4 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }

@@ -1,6 +1,6 @@
 //! Immutable Sumeragi certificate bytes and their original allocation custody.
 //!
-//! The sole canonical record contains the consensus header, CommitQC and result preimage.
+//! The sole canonical record contains the consensus header, CommitQC, result preimage and original availability frame.
 //! Runtime ownership is never encoded. Decoding produces untrusted bytes; publication requires
 //! explicit admission against the original execution budget. Shared clones keep each exact
 //! backing allocation and its prepaid control allocation alive through the last retained block.
@@ -13,11 +13,11 @@ use std::{
 };
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, ChargedShared,
     PrepaidSharedError,
 };
+use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 use norito::{
     codec::{Decode, Encode},
     core as ncore,
@@ -26,7 +26,7 @@ use norito::{
 /// Finality artifacts of one block, stored as immutable canonical bytes.
 ///
 /// Admission proves resource custody only. The consensus verifier must independently verify
-/// the header, exact quorum and result. Genesis stores a result-only artifact whose unsigned
+/// the header, exact quorum, result and original availability signatures. Genesis stores a result-only artifact whose unsigned
 /// execution result becomes authenticated only by a verified successor's parent-result link.
 /// Decoding and [`Self::from_untrusted_parts`] never authorize production publication.
 pub struct CommitCertificate {
@@ -38,7 +38,7 @@ enum Storage {
     Admitted(ChargedShared<ChargedCertificateParts>),
 }
 
-// Exactly the canonical three-field record. No storage-state tag is serialized or accepted.
+// Exactly the canonical four-field record. No storage-state tag is serialized or accepted.
 #[derive(Encode, Decode, DeriveJsonSerialize, DeriveJsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct CanonicalParts {
@@ -57,6 +57,11 @@ struct CanonicalParts {
         bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
     )]
     result_preimage: Vec<u8>,
+    #[norito(
+        with = "crate::json_helpers::base64_vec",
+        bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
+    )]
+    availability: Vec<u8>,
 }
 
 /// Original fixed allocations awaiting one immutable certificate control owner.
@@ -70,6 +75,8 @@ pub struct ChargedCertificateParts {
     pub commit_qc: ChargedBuffer<u8>,
     /// Original canonical execution-result preimage from that same pool.
     pub result_preimage: ChargedBuffer<u8>,
+    /// Complete canonical original signed-availability frame from that same pool.
+    pub availability: ChargedBuffer<u8>,
 }
 
 impl ChargedCertificateParts {
@@ -79,6 +86,7 @@ impl ChargedCertificateParts {
         self.consensus_header.belongs_to(budget)
             && self.commit_qc.belongs_to(budget)
             && self.result_preimage.belongs_to(budget)
+            && self.availability.belongs_to(budget)
     }
 }
 
@@ -89,6 +97,7 @@ impl fmt::Debug for ChargedCertificateParts {
             .field("consensus_header", &self.consensus_header.as_slice())
             .field("commit_qc", &self.commit_qc.as_slice())
             .field("result_preimage", &self.result_preimage.as_slice())
+            .field("availability", &self.availability.as_slice())
             .finish()
     }
 }
@@ -143,12 +152,14 @@ impl CommitCertificate {
         consensus_header: Vec<u8>,
         commit_qc: Vec<u8>,
         result_preimage: Vec<u8>,
+        availability: Vec<u8>,
     ) -> Self {
         Self {
             storage: Storage::Untrusted(Arc::new(CanonicalParts {
                 consensus_header,
                 commit_qc,
                 result_preimage,
+                availability,
             })),
         }
     }
@@ -156,12 +167,13 @@ impl CommitCertificate {
     /// Move actual original charged buffers into one prepaid shared immutable owner.
     ///
     /// # Errors
-    /// Returns all three original buffers unchanged on a source, admission or allocator refusal.
+    /// Returns all four original buffers unchanged on a source, admission or allocator refusal.
     /// Retain these buffers for retry; do not rerun execution or reconstruct the result preimage.
     pub fn from_charged_parts(
         consensus_header: ChargedBuffer<u8>,
         commit_qc: ChargedBuffer<u8>,
         result_preimage: ChargedBuffer<u8>,
+        availability: ChargedBuffer<u8>,
         budget: &AllocationBudget,
     ) -> Result<Self, (ChargedCertificateParts, CertificateAdmissionError)> {
         Self::from_charged_owner(
@@ -169,6 +181,7 @@ impl CommitCertificate {
                 consensus_header,
                 commit_qc,
                 result_preimage,
+                availability,
             },
             budget,
         )
@@ -230,7 +243,9 @@ impl CommitCertificate {
         let header = copy(self.consensus_header(), budget)?;
         let qc = copy(self.commit_qc(), budget)?;
         let preimage = copy(self.result_preimage(), budget)?;
-        Self::from_charged_parts(header, qc, preimage, budget).map_err(|(_parts, error)| error)
+        let availability = copy(self.availability(), budget)?;
+        Self::from_charged_parts(header, qc, preimage, availability, budget)
+            .map_err(|(_parts, error)| error)
     }
 
     /// Whether this immutable owner retains original backing and control from this exact pool.
@@ -269,6 +284,16 @@ impl CommitCertificate {
             Storage::Admitted(parts) => parts.result_preimage.as_slice(),
         }
     }
+    /// Borrow the mandatory canonical original signed-availability frame.
+    /// Only the exact result-only genesis artifact has an empty frame; semantic verifiers
+    /// enforce that exception against the independently authenticated genesis identity.
+    #[must_use]
+    pub fn availability(&self) -> &[u8] {
+        match &self.storage {
+            Storage::Untrusted(parts) => &parts.availability,
+            Storage::Admitted(parts) => parts.availability.as_slice(),
+        }
+    }
     /// Total opaque payload byte count, excluding the containing canonical record frame.
     #[must_use]
     pub fn payload_len(&self) -> usize {
@@ -276,12 +301,14 @@ impl CommitCertificate {
             .len()
             .saturating_add(self.commit_qc().len())
             .saturating_add(self.result_preimage().len())
+            .saturating_add(self.availability().len())
     }
-    fn parts(&self) -> (&[u8], &[u8], &[u8]) {
+    fn parts(&self) -> (&[u8], &[u8], &[u8], &[u8]) {
         (
             self.consensus_header(),
             self.commit_qc(),
             self.result_preimage(),
+            self.availability(),
         )
     }
     fn binary(&self) -> BinaryRef<'_> {
@@ -289,6 +316,7 @@ impl CommitCertificate {
             consensus_header: ByteSequence(self.consensus_header()),
             commit_qc: ByteSequence(self.commit_qc()),
             result_preimage: ByteSequence(self.result_preimage()),
+            availability: ByteSequence(self.availability()),
         }
     }
     fn json(&self) -> JsonRef<'_> {
@@ -296,6 +324,7 @@ impl CommitCertificate {
             consensus_header: self.consensus_header(),
             commit_qc: self.commit_qc(),
             result_preimage: self.result_preimage(),
+            availability: self.availability(),
         }
     }
     fn from_decoded(parts: CanonicalParts) -> Result<Self, ncore::Error> {
@@ -322,6 +351,7 @@ impl fmt::Debug for CommitCertificate {
             .field("consensus_header", &self.consensus_header())
             .field("commit_qc", &self.commit_qc())
             .field("result_preimage", &self.result_preimage())
+            .field("availability", &self.availability())
             .finish()
     }
 }
@@ -370,6 +400,7 @@ struct BinaryRef<'a> {
     consensus_header: ByteSequence<'a>,
     commit_qc: ByteSequence<'a>,
     result_preimage: ByteSequence<'a>,
+    availability: ByteSequence<'a>,
 }
 #[derive(DeriveJsonSerialize)]
 struct JsonRef<'a> {
@@ -388,6 +419,11 @@ struct JsonRef<'a> {
         bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
     )]
     result_preimage: &'a [u8],
+    #[norito(
+        with = "crate::json_helpers::base64_vec",
+        bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
+    )]
+    availability: &'a [u8],
 }
 impl ncore::SerializePayload for CommitCertificate {
     fn serialize(&self, encoder: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
@@ -406,7 +442,7 @@ impl<'de> ncore::DeserializePayload<'de> for CommitCertificate {
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         // Archived<T> is an opaque address marker; the sole accepted payload is the
-        // canonical three-field record, never the private runtime Storage representation.
+        // canonical four-field record, never the private runtime Storage representation.
         Self::from_decoded(
             <CanonicalParts as ncore::DeserializePayload>::try_deserialize(archived.cast())?,
         )
@@ -434,13 +470,18 @@ impl IntoSchema for CommitCertificate {
     fn update_schema_map(map: &mut MetaMap) {
         if !map.contains_key::<Self>() {
             map.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
-                declarations: ["consensus_header", "commit_qc", "result_preimage"]
-                    .into_iter()
-                    .map(|name| Declaration {
-                        name: name.to_owned(),
-                        ty: std::any::TypeId::of::<Vec<u8>>(),
-                    })
-                    .collect(),
+                declarations: [
+                    "consensus_header",
+                    "commit_qc",
+                    "result_preimage",
+                    "availability",
+                ]
+                .into_iter()
+                .map(|name| Declaration {
+                    name: name.to_owned(),
+                    ty: std::any::TypeId::of::<Vec<u8>>(),
+                })
+                .collect(),
             }));
             Vec::<u8>::update_schema_map(map);
         }
@@ -448,7 +489,12 @@ impl IntoSchema for CommitCertificate {
 }
 impl norito::json::FastJsonWrite for CommitCertificate {
     fn json_object_field_order() -> Option<&'static [&'static str]> {
-        Some(&["consensus_header", "commit_qc", "result_preimage"])
+        Some(&[
+            "consensus_header",
+            "commit_qc",
+            "result_preimage",
+            "availability",
+        ])
     }
     fn write_json(&self, out: &mut String) {
         norito::json::FastJsonWrite::write_json(&self.json(), out);
@@ -479,7 +525,7 @@ mod tests {
     use norito::codec::DecodeAll as _;
 
     fn sample() -> CommitCertificate {
-        CommitCertificate::from_untrusted_parts(vec![1, 2, 3], vec![4, 5], vec![6; 40])
+        CommitCertificate::from_untrusted_parts(vec![1, 2, 3], vec![4, 5], vec![6; 40], vec![7; 4])
     }
     fn buffer(bytes: &[u8], budget: &AllocationBudget) -> ChargedBuffer<u8> {
         let mut value = ChargedBuffer::new(bytes.len(), budget).unwrap();
@@ -491,6 +537,7 @@ mod tests {
             consensus_header: buffer(&[1, 2, 3], budget),
             commit_qc: buffer(&[4, 5], budget),
             result_preimage: buffer(&[6; 40], budget),
+            availability: buffer(&[7; 4], budget),
         }
     }
     fn control_size() -> usize {
@@ -503,6 +550,7 @@ mod tests {
         assert_eq!(cert.consensus_header(), &[1, 2, 3]);
         assert_eq!(cert.commit_qc(), &[4, 5]);
         assert_eq!(cert.result_preimage(), &[6; 40]);
+        assert_eq!(cert.availability(), &[7; 4]);
         assert!(!cert.admitted_to(&AllocationBudget::new(usize::MAX)));
         let clone = cert.clone();
         assert_eq!(
@@ -512,48 +560,51 @@ mod tests {
     }
     #[test]
     fn payload_len_sums_all_parts() {
-        assert_eq!(sample().payload_len(), 45);
+        assert_eq!(sample().payload_len(), 49);
         assert_eq!(
-            CommitCertificate::from_untrusted_parts(Vec::new(), Vec::new(), Vec::new())
+            CommitCertificate::from_untrusted_parts(Vec::new(), Vec::new(), Vec::new(), Vec::new())
                 .payload_len(),
             0
         );
     }
     #[test]
     fn shared_charged_constructor_keeps_original_pointers_until_last_clone() {
-        let budget = AllocationBudget::new(45 + control_size());
+        let budget = AllocationBudget::new(49 + control_size());
         let owner = parts(&budget);
         let pointers = (
             owner.consensus_header.as_slice().as_ptr(),
             owner.commit_qc.as_slice().as_ptr(),
             owner.result_preimage.as_slice().as_ptr(),
+            owner.availability.as_slice().as_ptr(),
         );
         let cert = CommitCertificate::from_charged_owner(owner, &budget).unwrap();
         assert_eq!(
             (
                 cert.consensus_header().as_ptr(),
                 cert.commit_qc().as_ptr(),
-                cert.result_preimage().as_ptr()
+                cert.result_preimage().as_ptr(),
+                cert.availability().as_ptr()
             ),
             pointers
         );
         assert!(cert.admitted_to(&budget.clone()));
-        assert_eq!(budget.reserved_bytes(), 45 + control_size());
+        assert_eq!(budget.reserved_bytes(), 49 + control_size());
         let clone = cert.clone();
         let shared = cert.admit(&budget).unwrap();
         assert_eq!(clone.result_preimage().as_ptr(), pointers.2);
         assert_eq!(shared.result_preimage().as_ptr(), pointers.2);
         drop(cert);
         drop(clone);
-        assert_eq!(budget.reserved_bytes(), 45 + control_size());
+        assert_eq!(budget.reserved_bytes(), 49 + control_size());
         drop(shared);
         assert_eq!(budget.reserved_bytes(), 0);
     }
     #[test]
     fn control_refusal_returns_original_parts_for_retry_without_refund() {
-        let budget = AllocationBudget::new(45 + control_size());
+        let budget = AllocationBudget::new(49 + control_size());
         let owner = parts(&budget);
         let pointer = owner.result_preimage.as_slice().as_ptr();
+        let availability_pointer = owner.availability.as_slice().as_ptr();
         let occupied = buffer(&[7], &budget);
         let (returned, error) = CommitCertificate::from_charged_owner(owner, &budget).unwrap_err();
         assert!(matches!(
@@ -562,10 +613,15 @@ mod tests {
         ));
         assert!(error.is_local_refusal());
         assert_eq!(returned.result_preimage.as_slice().as_ptr(), pointer);
-        assert_eq!(budget.reserved_bytes(), 46);
+        assert_eq!(
+            returned.availability.as_slice().as_ptr(),
+            availability_pointer
+        );
+        assert_eq!(budget.reserved_bytes(), 50);
         drop(occupied);
         let cert = CommitCertificate::from_charged_owner(returned, &budget).unwrap();
         assert_eq!(cert.result_preimage().as_ptr(), pointer);
+        assert_eq!(cert.availability().as_ptr(), availability_pointer);
         drop(cert);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -579,7 +635,7 @@ mod tests {
             CommitCertificate::from_charged_owner(owner, &budget).unwrap_err();
         assert!(matches!(error, CertificateAdmissionError::ForeignBudget));
         assert!(!error.is_local_refusal());
-        assert_eq!(budget.reserved_bytes(), 45);
+        assert_eq!(budget.reserved_bytes(), 49);
         returned.commit_qc = original;
         assert_eq!(foreign.reserved_bytes(), 0);
         let cert = CommitCertificate::from_charged_owner(returned, &budget).unwrap();
@@ -592,7 +648,7 @@ mod tests {
     }
     #[test]
     fn explicit_untrusted_admission_copies_to_charged_immutable_storage() {
-        let budget = AllocationBudget::new(45 + control_size());
+        let budget = AllocationBudget::new(49 + control_size());
         let decoded = sample();
         let admitted = decoded.admit(&budget).unwrap();
         assert_eq!(admitted, decoded);
@@ -607,7 +663,7 @@ mod tests {
     }
     #[test]
     fn untrusted_admission_refusal_preserves_source_and_refunds_partial_copy() {
-        let budget = AllocationBudget::new(44);
+        let budget = AllocationBudget::new(48);
         let decoded = sample();
         let pointer = decoded.result_preimage().as_ptr();
         assert!(matches!(
@@ -618,7 +674,7 @@ mod tests {
         assert_eq!(decoded.result_preimage().as_ptr(), pointer);
     }
     #[test]
-    fn codec_round_trip_decodes_untrusted_and_has_one_three_field_layout() {
+    fn codec_round_trip_decodes_untrusted_and_has_one_four_field_layout() {
         let cert = sample();
         let bytes = cert.encode();
         let decoded = CommitCertificate::decode_all(&mut bytes.as_slice()).expect("decode");
@@ -635,6 +691,7 @@ mod tests {
             consensus_header: vec![1, 2, 3],
             commit_qc: vec![4, 5],
             result_preimage: vec![6; 40],
+            availability: vec![7; 4],
         };
         assert_eq!(bytes, reference.encode());
         assert_eq!(framed, norito::to_bytes(&reference).unwrap());
@@ -660,7 +717,7 @@ mod tests {
         let json = norito::json::to_json(&cert).expect("json");
         assert_eq!(
             json,
-            r#"{"consensus_header":"AQID","commit_qc":"BAU=","result_preimage":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg=="}"#
+            r#"{"consensus_header":"AQID","commit_qc":"BAU=","result_preimage":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg==","availability":"BwcHBw=="}"#
         );
         assert_eq!(
             norito::json::to_json_bounded(&cert, json.len()).unwrap(),
@@ -671,7 +728,7 @@ mod tests {
         assert_eq!(parsed, cert);
         assert!(
             norito::json::from_str::<CommitCertificate>(
-                r#"{"consensus_header":"","commit_qc":"","result_preimage":"","extra":1}"#
+                r#"{"consensus_header":"","commit_qc":"","result_preimage":"","availability":"","extra":1}"#
             )
             .is_err()
         );
@@ -684,7 +741,14 @@ mod tests {
         );
         assert_eq!(
             <CommitCertificate as norito::json::FastJsonWrite>::json_object_field_order(),
-            Some(&["consensus_header", "commit_qc", "result_preimage"][..])
+            Some(
+                &[
+                    "consensus_header",
+                    "commit_qc",
+                    "result_preimage",
+                    "availability"
+                ][..]
+            )
         );
     }
     #[test]
@@ -693,6 +757,7 @@ mod tests {
             consensus_header: Vec::new(),
             commit_qc: Vec::new(),
             result_preimage: Vec::new(),
+            availability: Vec::new(),
         };
         let control = ncore::owned_arc_allocation_bytes::<CanonicalParts>().unwrap();
         let refusal = ncore::with_decode_limits(
@@ -720,7 +785,7 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_and_arc_clones_keep_original_certificate_custody() {
-        let budget = AllocationBudget::new(45 + control_size());
+        let budget = AllocationBudget::new(49 + control_size());
         let certificate = CommitCertificate::from_charged_owner(parts(&budget), &budget).unwrap();
         let pointer = certificate.result_preimage().as_ptr();
         let mut block = crate::block::output_test_support::proposal(1);
@@ -738,7 +803,7 @@ mod tests {
         );
         drop(retained);
         drop(independently_cloned_block);
-        assert_eq!(budget.reserved_bytes(), 45 + control_size());
+        assert_eq!(budget.reserved_bytes(), 49 + control_size());
         assert!(kura_copy.commit_certificate().unwrap().admitted_to(&budget));
         drop(kura_copy);
         assert_eq!(budget.reserved_bytes(), 0);
@@ -757,6 +822,51 @@ mod tests {
         assert_eq!(hash(&untrusted), hash(&admitted));
         assert_eq!(format!("{untrusted:?}"), format!("{admitted:?}"));
     }
+    #[test]
+    fn availability_owner_from_another_pool_is_rejected_without_replacement() {
+        let budget = AllocationBudget::new(4096);
+        let foreign = AllocationBudget::new(4096);
+        let mut original = parts(&budget);
+        original.availability = buffer(&[7; 4], &foreign);
+        let pointer = original.availability.as_slice().as_ptr();
+        let (returned, error) = CommitCertificate::from_charged_owner(original, &budget)
+            .expect_err("foreign availability cannot confer publication custody");
+        assert!(matches!(error, CertificateAdmissionError::ForeignBudget));
+        assert_eq!(returned.availability.as_slice().as_ptr(), pointer);
+        assert_eq!(foreign.reserved_bytes(), 4);
+        assert_eq!(budget.reserved_bytes(), 45);
+        drop(returned);
+        assert_eq!(foreign.reserved_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn missing_availability_field_is_rejected_in_binary_and_json() {
+        #[derive(Encode, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::block::commit_certificate::CommitCertificate")]
+        struct MissingAvailability {
+            consensus_header: Vec<u8>,
+            commit_qc: Vec<u8>,
+            result_preimage: Vec<u8>,
+        }
+        let incomplete = MissingAvailability {
+            consensus_header: vec![1, 2, 3],
+            commit_qc: vec![4, 5],
+            result_preimage: vec![6; 40],
+        };
+        assert!(CommitCertificate::decode_all(&mut incomplete.encode().as_slice()).is_err());
+        assert!(
+            norito::decode_canonical::<CommitCertificate>(
+                &norito::encode_canonical(&incomplete).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            norito::json::from_str::<CommitCertificate>(
+                r#"{"consensus_header":"AQID","commit_qc":"BAU=","result_preimage":"Bg=="}"#
+            )
+            .is_err()
+        );
+    }
     mod wire {
         use super::*;
         #[derive(Encode, IntoSchema, norito::NoritoSchema)]
@@ -765,6 +875,7 @@ mod tests {
             pub(super) consensus_header: Vec<u8>,
             pub(super) commit_qc: Vec<u8>,
             pub(super) result_preimage: Vec<u8>,
+            pub(super) availability: Vec<u8>,
         }
     }
 }

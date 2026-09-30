@@ -20,7 +20,7 @@ fn tree() -> Tree {
     // SAFETY: the new unique tree is immediately installed in its original owner.
     LinCowCell::new(unsafe { SuperBlock::new() })
 }
-fn pending(wait: &mut crate::release::ReleaseFuture) -> bool {
+fn pending(wait: &mut iroha_allocation::release::ReleaseFuture) -> bool {
     Pin::new(wait)
         .poll(&mut Context::from_waker(Waker::noop()))
         .is_pending()

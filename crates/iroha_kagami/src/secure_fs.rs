@@ -299,10 +299,6 @@ mod unix {
         harden_empty_private_directory(&path)?;
         Ok(path)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "keep the security-audited stat/open/stat root walk as one linear flow"
-    )]
     fn open_private_tree_root(path: &Path) -> Result<OpenPrivateTreeRoot> {
         let raw_path = path.as_os_str().as_bytes();
         if raw_path.is_empty()
@@ -1174,8 +1170,8 @@ mod unix {
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 pub use unix::{
-    harden_private_tree_with_owner_executables, prepare_empty_private_directory,
-    read_private_file, write_private_file_atomic,
+    harden_private_tree_with_owner_executables, prepare_empty_private_directory, read_private_file,
+    write_private_file_atomic,
 };
 #[cfg(any(
     not(unix),

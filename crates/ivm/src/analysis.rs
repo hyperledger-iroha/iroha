@@ -1076,7 +1076,7 @@ seiyaku StaticMapAnalysis {
   kotoage fn write_one() authorize("CanWrite") { Counters[1] = 10; }
 }
 "#;
-        let (program, manifest) = crate::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile literal StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
@@ -1108,7 +1108,7 @@ seiyaku HelperMapAnalysis {
   kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
 }
 "#;
-        let program = crate::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .expect("compile helper-hidden StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
@@ -1126,7 +1126,7 @@ seiyaku IndirectStateAnalysis {
   kotoage fn run() authorize("CanRun") {}
 }
 "#;
-        let program = crate::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .expect("compile direct control-flow fixture");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))

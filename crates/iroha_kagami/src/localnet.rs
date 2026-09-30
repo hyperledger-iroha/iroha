@@ -17,7 +17,8 @@ use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
 };
-use iroha_core::{state::derive_committee_key_id, zk::confidential_v2};
+use iroha_core::state::derive_committee_key_id;
+use iroha_core_zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
@@ -1441,7 +1442,8 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path = write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
+    let alias_setup_intent_path =
+        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
@@ -1965,10 +1967,6 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
     hex.push_str("000000000000000000000000000000000000000000000000");
     hex
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the canonical lane matrices stay together so profile ordering remains auditable"
-)]
 fn localnet_lane_catalog(
     sora_profile: Option<SoraProfile>,
     taira: bool,
@@ -2105,10 +2103,6 @@ fn localnet_lane_catalog(
     Some((lane_count, catalog))
 }
 #[allow(clippy::items_after_statements)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the canonical routing matrices stay together so first-match ordering remains auditable"
-)]
 fn localnet_routing_policy(sora_profile: Option<SoraProfile>, taira: bool) -> Option<toml::Table> {
     use toml::{Table, Value};
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
@@ -3316,7 +3310,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     let validators = peers
         .into_iter()
         .map(|peer| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &peer.mint_finality_seed,
                 0,
                 PeerId::new(peer.public_key.clone()),
@@ -3334,7 +3328,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     parameters
         .validate()
         .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;
@@ -3349,23 +3343,47 @@ fn extend_genesis(
 ) -> Result<RawGenesisTransaction> {
     let taira = genesis.chain_id().to_string() == PUBLIC_TAIRA_CHAIN_ID;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
-    let mut builder = genesis.into_builder().next_transaction();
+    let extended_batch =
+        genesis.transactions().len().checked_sub(1).ok_or_else(|| {
+            eyre!("localnet asset extension requires a bootstrap permission phase")
+        })?;
+    let bootstrap = &genesis.transactions()[extended_batch];
+    ensure!(
+        !bootstrap.instructions().is_empty()
+            && bootstrap.instructions().iter().all(|instruction| {
+                matches!(
+                    instruction.as_any().downcast_ref::<GrantBox>(),
+                    Some(GrantBox::Permission(grant))
+                        if grant.destination() == genesis_account_id
+                )
+            }),
+        "localnet asset extension requires the generated authority's bootstrap permission phase"
+    );
+    // generate_default leaves its global permission phase open. Continue it with
+    // global account/asset custody, separating scoped domain registration below.
+    // The lower owner refuses structured parameters, topology, and IVM triggers.
+    let mut current_length = bootstrap.instructions().len();
+    let mut builder = genesis.into_builder();
+    let mut lengths = Vec::new();
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes())
             .wrap_err_with(|| format!("failed to generate localnet extra account key {idx}"))?;
         let account_id = AccountId::new(pk.clone());
         if registrations.accounts.insert(account_id.clone()) {
             builder = builder.append_instruction(Register::account(Account::new(account_id)));
+            current_length += 1;
         }
     }
     for asset in assets {
         if registrations.accounts.insert(asset.owned_by.clone()) {
             builder =
                 builder.append_instruction(Register::account(Account::new(asset.owned_by.clone())));
+            current_length += 1;
         }
         if registrations.accounts.insert(asset.mint_to.clone()) {
             builder =
                 builder.append_instruction(Register::account(Account::new(asset.mint_to.clone())));
+            current_length += 1;
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
@@ -3398,16 +3416,27 @@ fn extend_genesis(
         )
         .with_metadata(metadata);
         builder = builder.append_instruction(Register::asset_definition(definition));
+        current_length += 1;
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
                 .parse::<AssetDefinitionAlias>()
                 .wrap_err("invalid asset definition alias")?;
+            let scoped = alias.dataspace_segment() != "universal";
             // Alias binding resolves its namespace during genesis execution.
             // Materialize only the explicitly requested namespace before binding.
             if let Some(domain_name) = alias.domain_segment() {
                 let domain = DomainId::try_new(domain_name, alias.dataspace_segment())?;
                 if registrations.domains.insert(domain.clone()) {
+                    if scoped && current_length > 0 {
+                        lengths.push(current_length);
+                        current_length = 0;
+                    }
                     builder = builder.append_instruction(Register::domain(Domain::new(domain)));
+                    current_length += 1;
+                    if scoped {
+                        lengths.push(current_length);
+                        current_length = 0;
+                    }
                 }
             }
             builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
@@ -3415,12 +3444,18 @@ fn extend_genesis(
                 alias,
                 None,
             ));
+            current_length += 1;
+            // Routing authenticates this input against its original World: the
+            // newly registered global definition has no alias there. Binding,
+            // global balance minting and ownership transfer form this atomic
+            // global phase after the scoped domain has been committed.
         }
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_quantity(
                 asset.quantity,
                 AssetId::new(asset_def.clone(), asset.mint_to.clone()),
             ));
+            current_length += 1;
         }
         if asset.owned_by != *genesis_account_id {
             builder = builder.append_instruction(Transfer::asset_definition(
@@ -3428,9 +3463,20 @@ fn extend_genesis(
                 asset_def,
                 asset.owned_by.clone(),
             ));
+            current_length += 1;
         }
     }
-    builder.build_raw()
+    if current_length > 0 {
+        lengths.push(current_length);
+    }
+    let manifest = builder.build_raw()?;
+    if lengths.is_empty() {
+        return Ok(manifest);
+    }
+    // This global bootstrap phase can mix asset custody with scoped domain
+    // registration. Separate only these instructions before staging, preserving every
+    // other bootstrap phase, including atomic temporary-role alias setup.
+    manifest.partition_instruction_only_transaction(extended_batch, &lengths)
 }
 fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     let mut epoch_seed: [u8; 32] =
@@ -3570,7 +3616,6 @@ fn apply_parameter_overrides(
     }
     let pending_parameters = parameters.parameters().collect::<Vec<_>>();
     if !pending_parameters.is_empty() {
-        builder = builder.next_transaction();
         for parameter in pending_parameters {
             builder = builder.append_parameter(parameter);
         }
@@ -3647,7 +3692,9 @@ fn append_localnet_service_accounts(
             Some(register.object.id.clone())
         })
         .collect::<BTreeSet<_>>();
-    let mut builder = genesis.into_builder().next_transaction();
+    // Generated account/asset custody leaves its global phase open. Service
+    // registration and its following fee/contract grants share that authority.
+    let mut builder = genesis.into_builder();
     for account_id in service_accounts {
         if registered.insert((*account_id).clone()) {
             builder =
@@ -3966,10 +4013,6 @@ struct LocalnetNposBootstrapContext<'a> {
     onboarding_account_id: &'a AccountId,
     taira: bool,
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered NPoS bootstrap matrix stays linear so transaction ordering remains auditable"
-)]
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     context: &LocalnetNposBootstrapContext<'_>,
@@ -4143,12 +4186,10 @@ fn append_localnet_npos_bootstrap(
     {
         // The same physical peers serve global and participant lanes. Publish
         // both purpose-specific key records before the participant registrations.
-        builder = builder
-            .next_transaction()
-            .append_instruction(Grant::account_permission(
-                CanManageConsensusKeys,
-                genesis_account_id.clone(),
-            ));
+        builder = builder.append_instruction(Grant::account_permission(
+            CanManageConsensusKeys,
+            genesis_account_id.clone(),
+        ));
         for peer in peers {
             let id = derive_committee_key_id(&peer.public_key);
             builder = builder.append_instruction(RegisterConsensusKey {
@@ -4217,7 +4258,11 @@ fn append_public_lane_validator_registrations(
     taira: bool,
 ) -> GenesisBuilder {
     for &lane_id in lanes {
-        builder = builder.next_transaction();
+        // Universal registrations continue the universal funding/key bootstrap;
+        // each non-universal participant retains a separate physical input.
+        if lane_id != LaneId::SINGLE {
+            builder = builder.next_transaction();
+        }
         for peer in peers {
             let validator_id = peer.validator_account_id(taira);
             builder = builder.append_instruction(RegisterPublicLaneValidator {
@@ -4838,6 +4883,7 @@ done
 
 const ORDINARY_MINT_FINALITY_LAUNCH_PY: &str = r#"
 import errno
+import os
 import stat
 import subprocess
 import time

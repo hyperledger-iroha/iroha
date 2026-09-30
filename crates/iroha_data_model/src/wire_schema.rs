@@ -1,78 +1,121 @@
 //! Compiled wire-schema identity shared by release manifests and `/status.build`.
 //!
 //! The identity hashes a canonical rendering of the compiled [`iroha_schema`]
-//! description of the block wire ([`SignedBlock`]), together with the IVM ABI
-//! hash. Two binaries that report equal hashes decode the same block layouts and
-//! admit the same contract ABI. Consensus messages are not covered yet; their
-//! frames carry their own Norito schema hash. The value is independent of the
-//! compilation target and of process-local `TypeId` values, but it depends on
-//! the enabled features: for example `PublicKey`'s `Algorithm` lists its `bls`,
-//! `gost` and `sm` variants only when those features are compiled in. Release
-//! tooling must read it from a build with the release feature set.
+//! descriptions of the covered wire roots, together with the IVM ABI hash. Two
+//! binaries that report equal hashes decode the same wire layouts and admit the
+//! same contract ABI. This module renders and hashes the roots and supplies the
+//! block wire root ([`covered_wire_schema`], rooted at [`SignedBlock`]);
+//! `iroha_core::release_identity::wire_schema_hash` adds the consensus wire root
+//! (`iroha_sumeragi::message::WireMessage` and native `Evidence` frames), then the
+//! canonical `ExecutionResultCommitment` payload root. Executables report that
+//! combined identity.
+//! The value is independent of the compilation target and of process-local
+//! `TypeId` values, but it depends on the enabled features: for example
+//! `PublicKey`'s `Algorithm` lists its `bls`, `gost` and `sm` variants only when
+//! those features are compiled in. Release tooling must read it from a build with
+//! the release feature set.
 //!
 //! `ivm_abi` depends on this crate, so the IVM ABI hash is an explicit input
 //! rather than computed here. Executables obtain it from
 //! `ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_schema::{IntoSchema, MetaMap, Metadata};
+use iroha_schema::{IntoSchema, MetaMap, MetaMapEntry, Metadata};
 
 use crate::block::SignedBlock;
 
 /// Domain separator of the first-release wire-schema identity.
 pub const WIRE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"iroha.wire_schema.v1\0";
 
-/// Compiled schema of every type reachable from the covered wire roots.
+/// Compiled schema of the block wire root: [`SignedBlock`] and every type it reaches.
 #[must_use]
 pub fn covered_wire_schema() -> MetaMap {
-    let mut schema = MetaMap::new();
-    // TODO(sumeragi): cover the live consensus wire (`iroha_sumeragi::message::WireMessage`)
-    // again. The retired `ConsensusMessageV2` root was removed with the old runtime; the new
-    // core's message derives only `norito::NoritoSchema` (its frames carry
-    // `norito::schema::identity::frame_hash::<WireMessage>()`), not `iroha_schema::IntoSchema`,
-    // so it must gain a compiled schema description (or its Norito schema identity must be bound
-    // into this preimage) before this identity covers consensus messages.
-    <SignedBlock as IntoSchema>::update_schema_map(&mut schema);
-    schema
+    <SignedBlock as IntoSchema>::schema()
 }
 
-/// Deterministic 32-byte identity of the compiled block wire plus the IVM ABI.
+/// Deterministic 32-byte identity of compiled wire roots plus the IVM ABI.
 ///
-/// Pass the IVM ABI hash of the policy this binary executes
+/// `roots` holds the closed compiled schema of each covered wire root, in the
+/// fixed order of the identity. Each root is rendered against its own types, so
+/// two roots may describe different types under one schema identifier without
+/// making a reference ambiguous. Within a root every type reference is rendered
+/// through its schema identifier, and the rendered entries are ordered by
+/// identifier and then by their complete rendering, which keeps the result
+/// independent of process-local `TypeId` values and map iteration order even when
+/// two entries share an identifier. The identity is meaningful only for roots for
+/// which [`wire_root_defects`] reports nothing.
+///
+/// Pass the IVM ABI hash of the policy the binary executes
 /// (`ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`).
 #[must_use]
-pub fn wire_schema_hash(ivm_abi_hash: [u8; 32]) -> [u8; 32] {
-    wire_schema_hash_of(&covered_wire_schema(), ivm_abi_hash)
-}
-
-/// Hash an explicit compiled schema together with an IVM ABI hash.
-///
-/// Every type reference is rendered through its schema identifier, and the
-/// rendered entries are ordered by identifier and then by their complete
-/// rendering. Schema identifiers are not guaranteed unique (derived ids are bare
-/// type names), so the tie-break keeps the order, and the result, independent of
-/// process-local `TypeId` values and map iteration order even when two entries
-/// share an identifier.
-#[must_use]
-pub fn wire_schema_hash_of(schema: &MetaMap, ivm_abi_hash: [u8; 32]) -> [u8; 32] {
-    let names: BTreeMap<core::any::TypeId, &str> = schema
-        .iter()
-        .map(|(type_id, entry)| (*type_id, entry.type_id.as_str()))
-        .collect();
-    hash_rendered_entries(
-        schema
-            .iter()
-            .map(|(_, entry)| render_entry(&names, entry))
-            .collect(),
+pub fn wire_schema_hash_of(roots: &[&MetaMap], ivm_abi_hash: [u8; 32]) -> [u8; 32] {
+    hash_rendered_roots(
+        roots.iter().copied().map(render_root).collect(),
         ivm_abi_hash,
     )
+}
+
+/// Why [`wire_schema_hash_of`] cannot identify one compiled root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WireRootDefect {
+    /// The entry with this schema identifier references a type the root does not describe.
+    UnregisteredReference(String),
+    /// Entries with different descriptions share this schema identifier.
+    AmbiguousIdentifier(String),
+}
+
+/// Every defect of one compiled wire root, ordered and without duplicates.
+///
+/// A root must describe every type its entries reference, and entries that share
+/// a schema identifier must render identically. References are rendered through
+/// identifiers, so an unregistered reference hashes deterministically but never
+/// equals a closed schema, and an ambiguous identifier cannot tell which of its
+/// types a reference names.
+#[must_use]
+pub fn wire_root_defects(schema: &MetaMap) -> Vec<WireRootDefect> {
+    let names = type_names(schema);
+    let mut renderings = BTreeMap::new();
+    let mut defects = BTreeSet::new();
+    for (_, entry) in schema.iter() {
+        if references(&entry.metadata)
+            .iter()
+            .any(|reference| !names.contains_key(reference))
+        {
+            defects.insert(WireRootDefect::UnregisteredReference(entry.type_id.clone()));
+        }
+        let (id, rendered) = render_entry(&names, entry);
+        if renderings
+            .insert(id, rendered.clone())
+            .is_some_and(|previous| previous != rendered)
+        {
+            defects.insert(WireRootDefect::AmbiguousIdentifier(id.to_owned()));
+        }
+    }
+    defects.into_iter().collect()
+}
+
+/// The schema identifier of every type one root describes.
+fn type_names(schema: &MetaMap) -> BTreeMap<core::any::TypeId, &str> {
+    schema
+        .iter()
+        .map(|(type_id, entry)| (*type_id, entry.type_id.as_str()))
+        .collect()
+}
+
+/// The rendered entries of one root against its own types.
+fn render_root(schema: &MetaMap) -> Vec<(&str, Vec<u8>)> {
+    let names = type_names(schema);
+    schema
+        .iter()
+        .map(|(_, entry)| render_entry(&names, entry))
+        .collect()
 }
 
 /// One entry's identifier and its canonical rendering (identifier, name, metadata).
 fn render_entry<'a>(
     names: &BTreeMap<core::any::TypeId, &str>,
-    entry: &'a iroha_schema::MetaMapEntry,
+    entry: &'a MetaMapEntry,
 ) -> (&'a str, Vec<u8>) {
     let mut rendered = CanonicalPreimage::default();
     rendered.text(&entry.type_id);
@@ -81,17 +124,42 @@ fn render_entry<'a>(
     (entry.type_id.as_str(), rendered.0)
 }
 
-/// Order rendered entries by `(identifier, rendering)` and hash them after the domain and ABI.
-fn hash_rendered_entries(mut entries: Vec<(&str, Vec<u8>)>, ivm_abi_hash: [u8; 32]) -> [u8; 32] {
-    entries.sort_unstable();
+/// Hash rendered roots in order after the domain and ABI; each root's entries are
+/// ordered by `(identifier, rendering)`.
+fn hash_rendered_roots(roots: Vec<Vec<(&str, Vec<u8>)>>, ivm_abi_hash: [u8; 32]) -> [u8; 32] {
     let mut preimage = CanonicalPreimage::default();
     preimage.bytes(WIRE_SCHEMA_HASH_DOMAIN_V1);
     preimage.bytes(&ivm_abi_hash);
-    preimage.count(entries.len());
-    for (_, rendered) in entries {
-        preimage.0.extend_from_slice(&rendered);
+    preimage.count(roots.len());
+    for mut entries in roots {
+        entries.sort_unstable();
+        preimage.count(entries.len());
+        for (_, rendered) in entries {
+            preimage.0.extend_from_slice(&rendered);
+        }
     }
     iroha_crypto::Hash::new(preimage.0).into()
+}
+
+/// The types one compiled description references.
+fn references(metadata: &Metadata) -> Vec<core::any::TypeId> {
+    match metadata {
+        Metadata::Struct(fields) => fields.declarations.iter().map(|field| field.ty).collect(),
+        Metadata::Tuple(fields) => fields.types.clone(),
+        Metadata::Enum(variants) => variants
+            .variants
+            .iter()
+            .filter_map(|variant| variant.ty)
+            .collect(),
+        Metadata::FixedPoint(fixed) => vec![fixed.base],
+        Metadata::Array(array) => vec![array.ty],
+        Metadata::Vec(vector) => vec![vector.ty],
+        Metadata::Map(map) => vec![map.key, map.value],
+        Metadata::Option(inner) => vec![*inner],
+        Metadata::Result(result) => vec![result.ok, result.err],
+        Metadata::Bitmap(bitmap) => vec![bitmap.repr],
+        Metadata::Int(_) | Metadata::Float(_) | Metadata::String | Metadata::Bool => Vec::new(),
+    }
 }
 
 /// Length-prefixed canonical byte stream; every item is self-delimiting.
@@ -113,8 +181,8 @@ impl CanonicalPreimage {
         self.text(value);
     }
     fn reference(&mut self, names: &BTreeMap<core::any::TypeId, &str>, id: core::any::TypeId) {
-        // `IntoSchema` registers every referenced type; an unregistered edge
-        // still hashes deterministically but can never equal a closed schema.
+        // `wire_root_defects` reports an unregistered edge; it still hashes
+        // deterministically but can never equal a closed schema.
         self.text(names.get(&id).copied().unwrap_or("\0unregistered"));
     }
 }
@@ -207,63 +275,89 @@ fn render_metadata(
 
 #[cfg(test)]
 mod tests {
-    use iroha_schema::{Declaration, NamedFieldsMeta};
+    use iroha_schema::{Declaration, NamedFieldsMeta, VecMeta};
 
     use super::*;
     use crate::{block::BlockHeader, sumeragi::SumeragiStatus};
 
     const ABI: [u8; 32] = [0xA1; 32];
 
-    fn references(metadata: &Metadata) -> Vec<core::any::TypeId> {
-        match metadata {
-            Metadata::Struct(fields) => fields.declarations.iter().map(|field| field.ty).collect(),
-            Metadata::Tuple(fields) => fields.types.clone(),
-            Metadata::Enum(variants) => variants
-                .variants
-                .iter()
-                .filter_map(|variant| variant.ty)
-                .collect(),
-            Metadata::FixedPoint(fixed) => vec![fixed.base],
-            Metadata::Array(array) => vec![array.ty],
-            Metadata::Vec(vector) => vec![vector.ty],
-            Metadata::Map(map) => vec![map.key, map.value],
-            Metadata::Option(inner) => vec![*inner],
-            Metadata::Result(result) => vec![result.ok, result.err],
-            Metadata::Bitmap(bitmap) => vec![bitmap.repr],
-            Metadata::Int(_) | Metadata::Float(_) | Metadata::String | Metadata::Bool => Vec::new(),
-        }
+    fn block_hash(ivm_abi_hash: [u8; 32]) -> [u8; 32] {
+        wire_schema_hash_of(&[&covered_wire_schema()], ivm_abi_hash)
+    }
+
+    /// Two closed roots that describe different types under the schema identifier
+    /// `String`: `Box<str>` shares `String`'s identifier, and the second root gives it a
+    /// different description.
+    fn roots_sharing_an_identifier() -> (MetaMap, MetaMap) {
+        let first = <Option<String> as IntoSchema>::schema();
+        let mut second = MetaMap::new();
+        second.insert::<Box<str>>(Metadata::Bool);
+        second.insert::<Option<Box<str>>>(Metadata::Option(core::any::TypeId::of::<Box<str>>()));
+        (first, second)
     }
 
     #[test]
     fn wire_schema_hash_is_stable_across_calls_and_schema_rebuilds() {
-        let first = wire_schema_hash(ABI);
-        assert_eq!(first, wire_schema_hash(ABI));
-        assert_eq!(first, wire_schema_hash_of(&covered_wire_schema(), ABI));
+        let schema = covered_wire_schema();
+        let first = wire_schema_hash_of(&[&schema], ABI);
+        assert_eq!(first, wire_schema_hash_of(&[&schema], ABI));
+        assert_eq!(
+            first,
+            block_hash(ABI),
+            "a rebuilt schema hashes identically"
+        );
         assert_ne!(first, [0; 32]);
     }
 
+    /// The block root is closed, and no two of its entries share a schema identifier with
+    /// different content, so nothing in the identity relies on the tie-break today.
     #[test]
-    fn covered_schema_is_closed_over_consensus_and_block_wire() {
+    fn covered_schema_is_a_closed_unambiguous_block_root() {
         let schema = covered_wire_schema();
         assert!(schema.contains_key::<SignedBlock>());
         assert!(schema.contains_key::<BlockHeader>());
-        let registered: std::collections::BTreeSet<_> = schema.iter().map(|(id, _)| *id).collect();
-        for (_, entry) in schema.iter() {
-            for reference in references(&entry.metadata) {
-                assert!(
-                    registered.contains(&reference),
-                    "{} references an unregistered type",
-                    entry.type_id
-                );
-            }
-        }
+        let defects = wire_root_defects(&schema);
+        assert!(defects.is_empty(), "{defects:?}");
+    }
+
+    #[test]
+    fn wire_root_defects_report_open_references_and_ambiguous_identifiers() {
+        let mut open = MetaMap::new();
+        open.insert::<Vec<u8>>(Metadata::Vec(VecMeta {
+            ty: core::any::TypeId::of::<u8>(),
+        }));
+        assert_eq!(
+            wire_root_defects(&open),
+            [WireRootDefect::UnregisteredReference("Vec<u8>".to_owned())]
+        );
+        <u8 as IntoSchema>::update_schema_map(&mut open);
+        assert!(
+            wire_root_defects(&open).is_empty(),
+            "registering the target closes the root"
+        );
+
+        let (first, second) = roots_sharing_an_identifier();
+        assert!(wire_root_defects(&first).is_empty());
+        assert!(wire_root_defects(&second).is_empty());
+        let mut merged = first;
+        <Option<Box<str>> as IntoSchema>::update_schema_map(&mut merged);
+        assert!(
+            wire_root_defects(&merged).is_empty(),
+            "entries that share an identifier with one rendering are not ambiguous"
+        );
+        merged.insert::<Box<str>>(Metadata::Bool);
+        assert_eq!(
+            wire_root_defects(&merged),
+            [WireRootDefect::AmbiguousIdentifier("String".to_owned())]
+        );
     }
 
     /// Entries that share a schema identifier are ordered by their rendering, so the identity
     /// never depends on which `TypeId` each entry happens to have in this build.
     #[test]
     fn shared_identifiers_are_ordered_by_rendering_not_type_id() {
-        let entry = |type_name: &str, metadata: Metadata| iroha_schema::MetaMapEntry {
+        let entry = |type_name: &str, metadata: Metadata| MetaMapEntry {
             type_id: "Shared".to_owned(),
             type_name: type_name.to_owned(),
             metadata,
@@ -271,54 +365,73 @@ mod tests {
         let names = BTreeMap::new();
         let first = entry("First", Metadata::Bool);
         let second = entry("Second", Metadata::String);
-        let forward = hash_rendered_entries(
-            vec![render_entry(&names, &first), render_entry(&names, &second)],
+        let forward = hash_rendered_roots(
+            vec![vec![
+                render_entry(&names, &first),
+                render_entry(&names, &second),
+            ]],
             ABI,
         );
-        let reverse = hash_rendered_entries(
-            vec![render_entry(&names, &second), render_entry(&names, &first)],
+        let reverse = hash_rendered_roots(
+            vec![vec![
+                render_entry(&names, &second),
+                render_entry(&names, &first),
+            ]],
             ABI,
         );
         assert_eq!(forward, reverse);
-        let other = hash_rendered_entries(
-            vec![render_entry(&names, &first), render_entry(&names, &first)],
+        let other = hash_rendered_roots(
+            vec![vec![
+                render_entry(&names, &first),
+                render_entry(&names, &first),
+            ]],
             ABI,
         );
         assert_ne!(forward, other, "the content of each entry is bound");
+        let split = hash_rendered_roots(
+            vec![
+                vec![render_entry(&names, &first)],
+                vec![render_entry(&names, &second)],
+            ],
+            ABI,
+        );
+        assert_ne!(forward, split, "the root of each entry is bound");
+        let renamed = entry("First<0..=1>", Metadata::Bool);
+        assert_ne!(
+            hash_rendered_roots(vec![vec![render_entry(&names, &first)]], ABI),
+            hash_rendered_roots(vec![vec![render_entry(&names, &renamed)]], ABI),
+            "the name of each entry is bound, including the length bounds a byte domain names"
+        );
     }
 
-    /// The covered schema has no two entries with the same identifier and different content, so
-    /// nothing in the identity relies on the tie-break today.
+    /// Roots that describe different types under one identifier stay distinguishable, the
+    /// order of the roots is bound, and every root counts.
     #[test]
-    fn covered_schema_identifiers_have_one_rendering() {
-        let schema = covered_wire_schema();
-        let names: BTreeMap<core::any::TypeId, &str> = schema
-            .iter()
-            .map(|(type_id, entry)| (*type_id, entry.type_id.as_str()))
-            .collect();
-        let mut renderings: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
-        for (_, entry) in schema.iter() {
-            let (id, rendered) = render_entry(&names, entry);
-            if let Some(existing) = renderings.insert(id, rendered.clone()) {
-                assert_eq!(
-                    existing, rendered,
-                    "two covered types share the schema identifier `{id}` with different content"
-                );
-            }
-        }
+    fn roots_are_rendered_against_their_own_types() {
+        let (first, second) = roots_sharing_an_identifier();
+        let both = wire_schema_hash_of(&[&first, &second], ABI);
+        assert_eq!(both, wire_schema_hash_of(&[&first, &second], ABI));
+        assert_ne!(both, wire_schema_hash_of(&[&second, &first], ABI));
+        assert_ne!(both, wire_schema_hash_of(&[&first], ABI));
+        assert_ne!(both, wire_schema_hash_of(&[&first, &first], ABI));
+        assert_ne!(
+            wire_schema_hash_of(&[], ABI),
+            wire_schema_hash_of(&[&MetaMap::new()], ABI),
+            "an empty root still counts"
+        );
     }
 
     #[test]
     fn wire_schema_hash_binds_the_ivm_abi_hash() {
         let mut other = ABI;
         other[31] ^= 1;
-        assert_ne!(wire_schema_hash(ABI), wire_schema_hash(other));
+        assert_ne!(block_hash(ABI), block_hash(other));
     }
 
     #[test]
     fn wire_schema_hash_changes_when_a_covered_type_changes() {
         let baseline = covered_wire_schema();
-        let expected = wire_schema_hash_of(&baseline, ABI);
+        let expected = wire_schema_hash_of(&[&baseline], ABI);
 
         let Some(Metadata::Struct(fields)) = baseline.get::<BlockHeader>().cloned() else {
             panic!("BlockHeader is a named-field structure");
@@ -331,7 +444,7 @@ mod tests {
         });
         widened.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
-            wire_schema_hash_of(&widened, ABI),
+            wire_schema_hash_of(&[&widened], ABI),
             expected,
             "adding a field changes the identity"
         );
@@ -341,7 +454,7 @@ mod tests {
         declarations[0].name.push('_');
         renamed.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
-            wire_schema_hash_of(&renamed, ABI),
+            wire_schema_hash_of(&[&renamed], ABI),
             expected,
             "renaming a field changes the identity"
         );
@@ -351,7 +464,7 @@ mod tests {
         declarations.swap(0, 1);
         reordered.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
-            wire_schema_hash_of(&reordered, ABI),
+            wire_schema_hash_of(&[&reordered], ABI),
             expected,
             "reordering fields changes the identity"
         );
@@ -359,14 +472,14 @@ mod tests {
         let mut extended = baseline;
         <SumeragiStatus as IntoSchema>::update_schema_map(&mut extended);
         assert_ne!(
-            wire_schema_hash_of(&extended, ABI),
+            wire_schema_hash_of(&[&extended], ABI),
             expected,
             "the identity covers exactly the supplied compiled schema"
         );
         assert_eq!(
-            wire_schema_hash(ABI),
+            block_hash(ABI),
             expected,
-            "the production roots do not include diagnostics-only types"
+            "the block root does not include diagnostics-only types"
         );
     }
 }

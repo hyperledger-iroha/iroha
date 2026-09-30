@@ -10,7 +10,7 @@ use iroha_accel::{
     DeviceIdentity, PtxArtifact,
     cuda::{CudaDevice, CudaFailure, CudaProcess},
 };
-use mv::allocation::{ChargedBuffer, ChargedShared};
+use iroha_allocation::{ChargedBuffer, ChargedShared};
 use parking_lot::Mutex;
 use std::{
     alloc::Layout,

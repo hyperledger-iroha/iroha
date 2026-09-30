@@ -4,9 +4,8 @@ use iroha_core::smartcontracts::ivm::cache::IvmCache;
 use iroha_crypto::Hash;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric_abi::IntValueV1};
-use ivm::{
-    ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,
-};
+use ivm::{ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
+use kotodama_lang::compiler::Compiler;
 use std::collections::BTreeMap;
 // Timing the cache path must not be coupled to the evolving deterministic
 // instruction/syscall schedule; gas behavior has separate golden tests.
@@ -85,7 +84,11 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
         runtime.set_host(host.clone());
         runtime.run().expect("execute cold benchmark invocation");
         let result = runtime
-            .validate_tlv(runtime.register(10))
+            .validate_tlv(
+                runtime
+                    .public_call_result_word(0)
+                    .expect("benchmark completed with an int result"),
+            )
             .expect("validate benchmark int result");
         assert_eq!(result.type_id, PointerType::Int);
         assert_eq!(

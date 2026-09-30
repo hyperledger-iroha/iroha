@@ -9,7 +9,7 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPublicInputPreimageV1, SenderPublicInputsV1, SenderRecoverySelectorV1, SenderReplyBodyV1,
     SenderReplyV1, SenderTerminalReceiptV1, terminal_envelope_digest_v1,
 };
-use iroha_core::zk::{
+use iroha_core_zk::{
     kagemusha_v1_recursion::{KagemushaOperationV1, KagemushaStateRelationPublicInputsV1},
     kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1,
 };

@@ -1,5 +1,6 @@
 //! Tests for user-defined function calls in Kotodama.
-use ivm::{IVM, KotodamaCompiler};
+use ivm::IVM;
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn user_defined_call_returns_42() {

@@ -1,7 +1,3 @@
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 operation-to-payload matrix stays explicit for wire auditability"
-)]
 fn validate_operation_payload(
     request: &OperationRequestV1,
     session_chain_id: Option<&str>,

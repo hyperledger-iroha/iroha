@@ -114,7 +114,7 @@ pub(super) fn encode_verified_envelope(
 ) -> napi::Result<Vec<u8>> {
     let encoded = norito::encode_canonical(envelope).map_err(failure)?;
     let proof = ProofBox::new(VK_BACKEND.to_owned(), encoded.clone());
-    if !iroha_core::zk::verify_backend(VK_BACKEND, &proof, Some(key)) {
+    if !iroha_core_zk::verify_backend(VK_BACKEND, &proof, Some(key)) {
         return Err(failure(
             "generated Kaigi proof failed canonical native verification",
         ));
@@ -163,7 +163,7 @@ pub(super) fn prove<C: Circuit<Scalar>>(
         &OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
             circuit_id: circuit_id.to_owned(),
-            vk_hash: iroha_core::zk::hash_vk(&material.key),
+            vk_hash: iroha_core_zk::hash_vk(&material.key),
             public_inputs: schema.to_vec(),
             proof_bytes: proof,
             aux: Vec::new(),

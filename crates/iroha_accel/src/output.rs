@@ -1,7 +1,7 @@
 //! Escaping host outputs retain the original exact allocation charge.
 
-use mv::allocation::ChargedBuffer;
-use mv::allocation::{AllocationReservation, PrepaidBufferError};
+use iroha_allocation::ChargedBuffer;
+use iroha_allocation::{AllocationReservation, PrepaidBufferError};
 use std::ops::{Deref, DerefMut};
 
 /// Local refusal while reserving or allocating a caller-owned native result.
@@ -92,7 +92,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for HostOutput<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
 
     #[test]
     fn escaped_output_keeps_original_charge_after_parent_refund_and_shrink() {

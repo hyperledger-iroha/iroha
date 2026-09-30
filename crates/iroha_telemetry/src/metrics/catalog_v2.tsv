@@ -8,10 +8,6 @@ block_height_non_empty	block_height_non_empty	Current count of non-empty blocks	
 last_commit_time_ms	last_commit_time_ms	Time (since block creation) it took for the latest block to be committed by this peer	registered
 last_block_committed_at_ms	last_block_committed_at_ms	Millisecond UNIX timestamp when this peer last processed a committed block	registered
 last_non_empty_block_committed_at_ms	last_non_empty_block_committed_at_ms	Millisecond UNIX timestamp when this peer last processed a committed non-empty block	registered
-commit_time_ms	commit_time_ms	Average block commit time on this peer	registered
-slot_duration_ms	iroha_slot_duration_ms	Slot duration distribution in milliseconds (NX-18 finality SLO).	registered
-slot_duration_ms_latest	iroha_slot_duration_ms_latest	Latest observed slot duration (ms) for NX-18 finality tracking.	registered
-da_quorum_ratio	iroha_da_quorum_ratio	Rolling fraction of slots that satisfied the DA quorum (0-1).	registered
 sm_syscall_total	iroha_sm_syscall_total	SM helper syscalls observed (labels: kind, mode)	registered
 sm_openssl_preview	iroha_sm_openssl_preview	Whether the OpenSSL-backed SM preview helpers are enabled (0/1).	registered
 zk_halo2_enabled	iroha_zk_halo2_enabled	Whether Halo2 verification is enabled for the host (0/1).	registered
@@ -96,7 +92,7 @@ p2p_peer_churn_total	p2p_peer_churn_total	Peer churn events observed by this nod
 uptime_since_genesis_ms	uptime_since_genesis_ms	Network up-time, from creation of the genesis block	registered
 domains	domains	Total number of domains	registered
 accounts	accounts	User accounts registered at this time	registered
-view_changes	view_changes	Number of view changes in the current round	registered
+view_changes	view_changes	View changes at the current height of the global Sumeragi instance	registered
 queue_size	queue_size	Transactions tracked by the queue (queued + in-flight)	registered
 queue_queued	queue_queued	Transactions still queued for selection	registered
 queue_inflight	queue_inflight	Transactions in-flight after selection	registered
@@ -126,16 +122,6 @@ sumeragi_tx_queue_saturated_by_count	sumeragi_tx_queue_saturated_by_count	Transa
 sumeragi_tx_queue_saturated_by_bytes	sumeragi_tx_queue_saturated_by_bytes	Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active)	registered
 sumeragi_tx_queue_saturated_by_age	sumeragi_tx_queue_saturated_by_age	Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active)	registered
 sumeragi_tx_queue_oldest_queued_age_ms	sumeragi_tx_queue_oldest_queued_age_ms	Oldest queued transaction age in milliseconds observed by consensus	registered
-sumeragi_pending_blocks_total	sumeragi_pending_blocks_total	Total pending blocks tracked by consensus	registered
-sumeragi_pending_blocks_blocking	sumeragi_pending_blocks_blocking	Pending blocks currently gating proposals/view changes	registered
-sumeragi_commit_inflight_queue_depth	sumeragi_commit_inflight_queue_depth	Commit inflight queue depth (inflight + queued commit work)	registered
-sumeragi_missing_block_requests	sumeragi_missing_block_requests	Outstanding missing-block requests observed locally	registered
-sumeragi_missing_block_oldest_ms	sumeragi_missing_block_oldest_ms	Age in milliseconds of the oldest missing-block request	registered
-sumeragi_missing_block_retry_window_ms	sumeragi_missing_block_retry_window_ms	Retry window for missing-block fetches in milliseconds	registered
-sumeragi_missing_block_dwell_ms	sumeragi_missing_block_dwell_ms	Dwell time from first QC arrival until block payload observation (milliseconds)	registered
-sumeragi_epoch_length_blocks	sumeragi_epoch_length_blocks	Epoch length in blocks for NPoS scheduling (0 when not applicable)	registered
-sumeragi_epoch_commit_deadline_offset	sumeragi_epoch_commit_deadline_offset	Commit window deadline offset from epoch start (blocks)	registered
-sumeragi_epoch_reveal_deadline_offset	sumeragi_epoch_reveal_deadline_offset	Reveal window deadline offset from epoch start (blocks)	registered
 state_tiered_hot_entries	state_tiered_hot_entries	Entries retained in the tiered-state hot tier after the latest snapshot	registered
 state_tiered_hot_bytes	state_tiered_hot_bytes	Deterministic key-plus-value hot budget weight after the latest tiered-state snapshot	registered
 state_tiered_cold_entries	state_tiered_cold_entries	Entries spilled to the tiered-state cold tier after the latest snapshot	registered
@@ -222,9 +208,6 @@ kaigi_relay_failover_hop_count	kaigi_relay_failover_hop_count	Kaigi relay failov
 kaigi_relay_health_reports_total	kaigi_relay_health_reports_total	Kaigi relay health reports grouped by domain and status	registered
 kaigi_relay_health_reports_by_domain_total	kaigi_relay_health_reports_by_domain_total	Kaigi relay health reports grouped only by domain for bounded diagnostics	registered
 kaigi_relay_health_state	kaigi_relay_health_state	Kaigi relay health status (0=healthy,1=degraded,2=unavailable)	registered
-dropped_messages	dropped_messages	Sumeragi dropped messages	registered
-sumeragi_dropped_block_messages_total	sumeragi_dropped_block_messages_total	Dropped Sumeragi block messages due to full channel	registered
-sumeragi_dropped_control_messages_total	sumeragi_dropped_control_messages_total	Dropped Sumeragi control messages due to full channel	registered
 p2p_dropped_posts	p2p_dropped_posts	Number of p2p post messages dropped due to backpressure	registered
 p2p_dropped_broadcasts	p2p_dropped_broadcasts	Number of p2p broadcast messages dropped due to backpressure	registered
 p2p_subscriber_queue_full_total	p2p_subscriber_queue_full_total	Number of inbound messages dropped because subscriber queues were full	registered
@@ -236,7 +219,6 @@ p2p_low_post_throttled_total	p2p_low_post_throttled_total	Number of low-priority
 p2p_low_broadcast_throttled_total	p2p_low_broadcast_throttled_total	Number of low-priority broadcast deliveries throttled	registered
 p2p_post_overflow_total	p2p_post_overflow_total	Number of per-peer post channel overflows (bounded per-topic)	registered
 p2p_post_overflow_by_topic	p2p_post_overflow_by_topic	Per-topic per-peer post channel overflows (bounded per-topic)	registered
-consensus_ingress_drop_total	consensus_ingress_drop_total	Consensus ingress drops grouped by topic and reason	registered
 p2p_dns_refresh_total	p2p_dns_refresh_total	Number of DNS interval-based refresh cycles performed	registered
 p2p_dns_ttl_refresh_total	p2p_dns_ttl_refresh_total	Number of DNS TTL-based refresh cycles performed	registered
 p2p_dns_resolution_fail_total	p2p_dns_resolution_fail_total	Number of DNS resolution/connection failures for hostname peers	registered
@@ -263,59 +245,14 @@ p2p_scion_outbound_total	p2p_scion_outbound_total	Successful outbound SCION P2P 
 tx_gossip_sent_total	tx_gossip_sent_total	Transaction gossip batches sent grouped by plane and dataspace	registered
 tx_gossip_dropped_total	tx_gossip_dropped_total	Transaction gossip batches dropped grouped by plane, dataspace, and reason	registered
 tx_gossip_targets	tx_gossip_targets	Latest transaction gossip target count grouped by plane and dataspace	registered
-tx_gossip_fallback_total	tx_gossip_fallback_total	Restricted transaction gossip fallback attempts grouped by plane, dataspace, and surface	registered
 tx_gossip_frame_cap_bytes	tx_gossip_frame_cap_bytes	Configured maximum frame size for transaction gossip payloads (bytes)	registered
 tx_gossip_public_target_cap	tx_gossip_public_target_cap	Configured cap on public transaction gossip targets (0 = broadcast)	registered
-tx_gossip_restricted_target_cap	tx_gossip_restricted_target_cap	Configured cap on restricted transaction gossip targets (0 = commit topology)	registered
+tx_gossip_restricted_target_cap	tx_gossip_restricted_target_cap	Configured cap on restricted transaction gossip targets (0 = all authorized native lane validators)	registered
 tx_gossip_public_target_reshuffle_ms	tx_gossip_public_target_reshuffle_ms	Public-plane target reshuffle interval in milliseconds	registered
 tx_gossip_restricted_target_reshuffle_ms	tx_gossip_restricted_target_reshuffle_ms	Restricted-plane target reshuffle interval in milliseconds	registered
 tx_gossip_drop_unknown_dataspace	tx_gossip_drop_unknown_dataspace	Whether transaction gossip drops unknown dataspaces (1 = drop, 0 = route via restricted plane)	registered
-tx_gossip_restricted_fallback	tx_gossip_restricted_fallback	Restricted gossip fallback policy (0 = drop, 1 = public overlay)	registered
-tx_gossip_restricted_public_policy	tx_gossip_restricted_public_policy	Policy for restricted gossip when only the public overlay is available (0 = refuse, 1 = forward)	registered
-sumeragi_new_view_receipts_by_hv	sumeragi_new_view_receipts_by_hv	NEW_VIEW receipt counts labeled by (height, view)	registered
-sumeragi_post_to_peer_total	sumeragi_post_to_peer_total	Sumeragi post attempts to peers (collector routing; cumulative)	registered
-sumeragi_bg_post_enqueued_total	sumeragi_bg_post_enqueued_total	Sumeragi background-post enqueued tasks (cumulative)	registered
-sumeragi_bg_post_overflow_total	sumeragi_bg_post_overflow_total	Sumeragi background-post queue full events (backpressure applied)	registered
-sumeragi_bg_post_drop_total	sumeragi_bg_post_drop_total	Sumeragi background-post drops when the worker queue is unavailable	registered
-sumeragi_bg_post_queue_depth	sumeragi_bg_post_queue_depth	Sumeragi background-post queue depth (global)	registered
-sumeragi_bg_post_queue_depth_by_peer	sumeragi_bg_post_queue_depth_by_peer	Sumeragi background-post queue depth by peer id	registered
-sumeragi_bg_post_age_ms	sumeragi_bg_post_age_ms	Sumeragi background-post age in milliseconds by kind	registered
-sumeragi_new_view_publish_total	sumeragi_new_view_publish_total	Sumeragi NEW_VIEW messages published (cumulative)	registered
-sumeragi_new_view_recv_total	sumeragi_new_view_recv_total	Sumeragi NEW_VIEW messages received and accepted (cumulative)	registered
-sumeragi_new_view_dropped_by_lock_total	sumeragi_new_view_dropped_by_lock_total	Sumeragi NEW_VIEW messages rejected because HighestQC is behind the locked QC	registered
-sumeragi_commit_conflict_detected_total	sumeragi_commit_conflict_detected_total	Sumeragi commit-conflict detections (cumulative)	registered
-sumeragi_missing_block_fetch_total	sumeragi_missing_block_fetch_total	Sumeragi missing-block fetch planning outcomes (requested|backoff|no_targets)	registered
-sumeragi_missing_block_fetch_target_total	sumeragi_missing_block_fetch_target_total	Sumeragi missing-block fetch target kind (signers|topology|none)	registered
-sumeragi_missing_block_fetch_dwell_ms	sumeragi_missing_block_fetch_dwell_ms	Elapsed milliseconds between first-seen certificate and missing-block fetch request	registered
-sumeragi_missing_block_fetch_targets	sumeragi_missing_block_fetch_targets	Target peers selected when requesting a missing block payload	registered
-blocksync_qc_quarantine_total	blocksync_qc_quarantine_total	Block-sync QCs quarantined while missing context is unresolved (cumulative)	registered
-blocksync_qc_revalidated_total	blocksync_qc_revalidated_total	Quarantined block-sync QCs revalidated successfully (cumulative)	registered
-blocksync_qc_final_drop_total	blocksync_qc_final_drop_total	Block-sync QCs dropped permanently after bounded quarantine (labeled by reason)	registered
-qc_deferred_missing_payload_total	qc_deferred_missing_payload_total	QCs deferred because payload was not available locally (cumulative)	registered
-qc_deferred_resolved_total	qc_deferred_resolved_total	Deferred QCs resolved after payload arrival (cumulative)	registered
-qc_deferred_expired_total	qc_deferred_expired_total	Deferred QCs expired after bounded retries/escalation (cumulative)	registered
-consensus_empty_commit_topology_defer_total	consensus_empty_commit_topology_defer_total	Consensus deferrals caused by empty commit topology (cumulative)	registered
-consensus_empty_commit_topology_escalation_total	consensus_empty_commit_topology_escalation_total	Empty-topology recoveries escalated to forced view changes (cumulative)	registered
-consensus_recovery_state_transitions_total	consensus_recovery_state_transitions_total	Consensus recovery state transitions (labeled by state)	registered
-consensus_missing_block_height_escalation_total	consensus_missing_block_height_escalation_total	Height-scoped missing-block recoveries escalated via deterministic hard cap (cumulative)	registered
-consensus_sidecar_quarantine_total	consensus_sidecar_quarantine_total	Sidecar mismatches quarantined in fail-closed mode (cumulative)	registered
-consensus_sidecar_final_drop_total	consensus_sidecar_final_drop_total	Sidecar mismatch entries final-dropped after retry/TTL bounds (cumulative)	registered
-blocksync_range_pull_escalation_total	blocksync_range_pull_escalation_total	Block-sync range-pull escalations requested by recovery logic (cumulative)	registered
-blocksync_range_pull_success_total	blocksync_range_pull_success_total	Block-sync range-pull recoveries that succeeded (cumulative)	registered
-blocksync_range_pull_failure_total	blocksync_range_pull_failure_total	Block-sync range-pull recoveries that expired without progress (cumulative)	registered
-consensus_recovery_stuck_round_seconds	consensus_recovery_stuck_round_seconds	Observed seconds spent in empty-topology/missing-dependency recovery rounds	registered
-sumeragi_qc_assembly_latency_ms	sumeragi_qc_assembly_latency_ms	Latency from first vote to QC assembly (ms) labeled by kind	registered
-sumeragi_qc_last_latency_ms	sumeragi_qc_last_latency_ms	Last observed QC assembly latency (ms) labeled by kind	registered
-sumeragi_kura_store_failures_total	sumeragi_kura_store_failures_total	Sumeragi kura persistence failures (outcome=retry|abort)	registered
-sumeragi_kura_store_last_retry_attempt	sumeragi_kura_store_last_retry_attempt	Most recent kura persistence retry attempt (gauge)	registered
-sumeragi_kura_store_last_retry_backoff_ms	sumeragi_kura_store_last_retry_backoff_ms	Most recent kura persistence retry backoff in milliseconds (gauge)	registered
 state_commit_write_lock_wait_ms	state_commit_write_lock_wait_ms	State commit state_write_lock wait duration histogram (ms)	registered
 state_commit_write_lock_hold_ms	state_commit_write_lock_hold_ms	State commit state_write_lock hold duration histogram (ms)	registered
-sumeragi_membership_mismatch_total	sumeragi_membership_mismatch_total	Sumeragi consensus membership mismatches detected	registered
-sumeragi_membership_mismatch_active	sumeragi_membership_mismatch_active	Peers currently flagged for consensus membership mismatches	registered
-sumeragi_highest_qc_height	sumeragi_highest_qc_height	Sumeragi highest QC height (gauge)	registered
-sumeragi_locked_qc_height	sumeragi_locked_qc_height	Sumeragi locked QC height (gauge)	registered
-sumeragi_locked_qc_view	sumeragi_locked_qc_view	Sumeragi locked QC view (gauge)	registered
 p2p_queue_depth	p2p_queue_depth	Network message queue depth by priority (High/Low)	registered
 p2p_queue_dropped_total	p2p_queue_dropped_total	Network message queue drops by priority (High/Low) and kind (Post/Broadcast)	registered
 p2p_handshake_ms_bucket	p2p_handshake_ms_bucket	P2P handshake latency histogram buckets (ms)	registered
@@ -326,50 +263,26 @@ p2p_frame_cap_violations_total	p2p_frame_cap_violations_total	Inbound per-topic 
 runtime_upgrade_events_total	runtime_upgrade_events_total	Runtime upgrade lifecycle events total labeled by kind	registered
 runtime_upgrade_provenance_rejections_total	runtime_upgrade_provenance_rejections_total	Runtime upgrade provenance rejections total labeled by reason	registered
 runtime_abi_version	runtime_abi_version	ABI version allowed by runtime	registered
-sumeragi_tail_votes_total	sumeragi_tail_votes_total	Votes accepted at proxy tail	registered
-sumeragi_votes_sent_total	sumeragi_votes_sent_total	Consensus votes sent grouped by phase	registered
-sumeragi_votes_received_total	sumeragi_votes_received_total	Consensus votes received grouped by phase	registered
-sumeragi_qc_sent_total	sumeragi_qc_sent_total	Quorum certificates sent grouped by kind	registered
-sumeragi_qc_received_total	sumeragi_qc_received_total	Quorum certificates received grouped by kind	registered
-sumeragi_qc_validation_errors_total	sumeragi_qc_validation_errors_total	QC validation errors grouped by reason	registered
-sumeragi_qc_signer_counts	sumeragi_qc_signer_counts	QC signer tallies grouped by phase (prevote/precommit/available) and kind (present|counted)	registered
-sumeragi_invalid_signature_total	sumeragi_invalid_signature_total	Invalid signatures dropped grouped by message kind and throttle outcome	registered
-sumeragi_validation_reject_total	sumeragi_validation_reject_total	Blocks rejected by validation gate before voting, grouped by reason	registered
-sumeragi_validation_reject_last_reason	sumeragi_validation_reject_last_reason	Sumeragi validation gate last reject reason code (0=none,1=stateless,2=execution,3=prev_hash,4=prev_height,5=topology)	registered
-sumeragi_validation_reject_last_height	sumeragi_validation_reject_last_height	Sumeragi validation gate last reject block height (0 when unset)	registered
-sumeragi_validation_reject_last_view	sumeragi_validation_reject_last_view	Sumeragi validation gate last reject block view (0 when unset)	registered
-sumeragi_validation_reject_last_timestamp_ms	sumeragi_validation_reject_last_timestamp_ms	Sumeragi validation gate last reject timestamp in milliseconds since unix epoch (0 when unset)	registered
-sumeragi_block_sync_share_blocks_unsolicited_total	sumeragi_block_sync_share_blocks_unsolicited_total	Block-sync ShareBlocks dropped because no matching request was tracked	registered
-sumeragi_consensus_message_handling_total	sumeragi_consensus_message_handling_total	Consensus message drops/deferrals grouped by kind, outcome, and reason	registered
-sumeragi_view_change_cause_total	sumeragi_view_change_cause_total	View-change triggers grouped by cause	registered
-sumeragi_view_change_cause_last_timestamp_ms	sumeragi_view_change_cause_last_timestamp_ms	Unix timestamp (ms) of the last view-change trigger grouped by cause	registered
-sumeragi_widen_before_rotate_total	sumeragi_widen_before_rotate_total	Widen-before-rotate events	registered
-sumeragi_view_change_suggest_total	sumeragi_view_change_suggest_total	View-change suggestions emitted	registered
-sumeragi_view_change_install_total	sumeragi_view_change_install_total	View-change installs observed	registered
-sumeragi_proposal_gap_total	sumeragi_proposal_gap_total	View-change rotations after no proposal observed before cutoff	registered
-sumeragi_view_change_proof_total	sumeragi_view_change_proof_total	View-change proof outcomes observed locally	registered
-sumeragi_wa_qc_assembled_total	sumeragi_wa_qc_assembled_total	Witness-availability QC assembled (cumulative)	unregistered
-sumeragi_cert_size	sumeragi_cert_size	Certificate size (signatures) per committed block	registered
-sumeragi_commit_signatures_present	sumeragi_commit_signatures_present	Block signatures observed during commit validation (all roles)	registered
-sumeragi_commit_signatures_counted	sumeragi_commit_signatures_counted	Commit-quorum signatures counted toward the threshold	registered
-sumeragi_commit_signatures_set_b	sumeragi_commit_signatures_set_b	Set B validator signatures present during commit validation	registered
-sumeragi_commit_signatures_required	sumeragi_commit_signatures_required	Commit-quorum size required by the active topology	registered
-sumeragi_commit_qc_height	sumeragi_commit_qc_height	Latest commit certificate height (best-effort)	registered
-sumeragi_commit_qc_view	sumeragi_commit_qc_view	Latest commit certificate view (best-effort)	registered
-sumeragi_commit_qc_epoch	sumeragi_commit_qc_epoch	Latest commit certificate epoch (best-effort)	registered
-sumeragi_commit_qc_signatures_total	sumeragi_commit_qc_signatures_total	Signatures attached to the latest commit certificate	registered
-sumeragi_commit_qc_validator_set_len	sumeragi_commit_qc_validator_set_len	Validator-set size for the latest commit certificate	registered
-sumeragi_block_created_dropped_by_lock_total	sumeragi_block_created_dropped_by_lock_total	BlockCreated messages dropped because they violate the locked QC gate	unregistered
-sumeragi_block_created_hint_mismatch_total	sumeragi_block_created_hint_mismatch_total	BlockCreated messages rejected due to hint mismatch (height/view/parent)	unregistered
-sumeragi_block_created_proposal_mismatch_total	sumeragi_block_created_proposal_mismatch_total	BlockCreated messages rejected due to proposal mismatch (header/payload)	unregistered
-lane_relay_invalid_total	lane_relay_invalid_total	Lane relay envelopes rejected during validation (labeled by error kind)	registered
-sumeragi_prf_height	sumeragi_prf_height	Height associated with the PRF context	unregistered
-sumeragi_prf_view	sumeragi_prf_view	View associated with the PRF context	unregistered
-sumeragi_membership_view_hash	sumeragi_membership_view_hash	Deterministic membership view hash (truncated to u64)	unregistered
-sumeragi_membership_height	sumeragi_membership_height	Height associated with the latest membership view hash snapshot	unregistered
-sumeragi_membership_view	sumeragi_membership_view	View associated with the latest membership view hash snapshot	unregistered
-sumeragi_membership_epoch	sumeragi_membership_epoch	Epoch associated with the latest membership view hash snapshot	unregistered
-sumeragi_leader_index	sumeragi_leader_index	Current leader index	registered
+sumeragi_round_height	sumeragi_round_height	Height of the current Sumeragi round per instance	registered
+sumeragi_round_view	sumeragi_round_view	View of the current Sumeragi round per instance	registered
+sumeragi_round_stage	sumeragi_round_stage	Routing stage (0, 1 or 2) of the current Sumeragi round per instance	registered
+sumeragi_pacemaker_level	sumeragi_pacemaker_level	Sumeragi pacemaker level of the current view per instance	registered
+sumeragi_pacemaker_start_level	sumeragi_pacemaker_start_level	Sumeragi pacemaker start level of the current height per instance	registered
+sumeragi_retransmit_interval_ms	sumeragi_retransmit_interval_ms	Sumeragi retransmission interval t_retx in milliseconds per instance	registered
+sumeragi_committed_height	sumeragi_committed_height	Sumeragi committed tip height per instance	registered
+sumeragi_applied_height	sumeragi_applied_height	Sumeragi highest applied height per instance	registered
+sumeragi_awaiting_configuration	sumeragi_awaiting_configuration	Sumeragi instance committed and waiting for the next height configuration (0/1)	registered
+sumeragi_signer_present	sumeragi_signer_present	Sumeragi instance signs at its current height (0/1)	registered
+sumeragi_abstaining	sumeragi_abstaining	Sumeragi instance is not a signing member at its height (0/1)	registered
+sumeragi_unanchored	sumeragi_unanchored	Sumeragi instance holds an unanchored key (0/1)	registered
+sumeragi_halted	sumeragi_halted	Sumeragi instance halt flag grouped by reason (0/1)	registered
+sumeragi_commits_total	sumeragi_commits_total	Blocks committed by a Sumeragi instance	registered
+sumeragi_view_changes_total	sumeragi_view_changes_total	Views advanced by a Sumeragi instance at its heights	registered
+sumeragi_timeout_votes_total	sumeragi_timeout_votes_total	Timeout votes signed by this node per Sumeragi instance	registered
+sumeragi_fetch_requests_total	sumeragi_fetch_requests_total	Sumeragi catch-up and block-body fetch requests grouped by kind	registered
+sumeragi_dropped_total	sumeragi_dropped_total	Messages, held effects and serving requests dropped by the Sumeragi driver bounds grouped by queue	registered
+sumeragi_commit_latency_ms	sumeragi_commit_latency_ms	Milliseconds from the first execution of a proposal at a height to its CommitQC per instance	registered
+sumeragi_apply_latency_ms	sumeragi_apply_latency_ms	Milliseconds from a CommitQC to the durable apply of its block per instance	registered
 ivm_cache_hits	ivm_cache_hits	IVM opcode pre-decode cache hits (cumulative)	registered
 ivm_cache_misses	ivm_cache_misses	IVM opcode pre-decode cache misses (cumulative)	registered
 ivm_cache_evictions	ivm_cache_evictions	IVM opcode pre-decode cache evictions (cumulative)	registered
@@ -447,8 +360,6 @@ pipeline_detached_prepared	pipeline_detached_prepared	Detached pipeline: prepare
 pipeline_detached_merged	pipeline_detached_merged	Detached pipeline: successfully merged tx deltas in the latest validated block	registered
 pipeline_detached_fallback	pipeline_detached_fallback	Detached pipeline: txs that fell back to direct apply in the latest validated block	registered
 pipeline_detached_fallback_reason	pipeline_detached_fallback_reason	Detached pipeline: fallback count by reason in the latest validated block	registered
-merge_ledger_entries_total	merge_ledger_entries_total	Total merge-ledger entries appended on this node	registered
-merge_ledger_latest_epoch	merge_ledger_latest_epoch	Latest merge-ledger epoch committed on this node	registered
 torii_filter_depth	torii_filter_depth	Torii filter expression depth by endpoint	registered
 torii_filter_match_count	torii_filter_match_count	Torii filter match count (items) by endpoint	registered
 torii_scan_ms	torii_scan_ms	Torii scan time in milliseconds by endpoint	registered

@@ -199,7 +199,7 @@ fn collect_private_settlement_availability_shares_v1(
     authority: &PrivateSettlementCommitteeAuthorityV1,
     mut request: impl FnMut(usize) -> Result<PrivateSettlementAvailabilityShareResponseV1>,
 ) -> Result<Vec<PrivateSettlementAvailabilityShareV1>> {
-    let roster_len = usize::from(PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1);
+    let roster_len = PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1;
     if authority.validators.len() != roster_len {
         return Err(eyre!(
             "private-settlement availability requires the four-validator roster"
@@ -245,7 +245,7 @@ where
     T: Send,
     F: Fn(usize) -> Result<T> + Sync,
 {
-    const REQUESTS: usize = PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1 as usize;
+    const REQUESTS: usize = PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1;
     std::thread::scope(|scope| {
         let request = &request;
         let children: [_; REQUESTS] = std::array::from_fn(|index| {
@@ -256,13 +256,19 @@ where
         // Array::map completes every join before Result collection can return
         // the first roster-ordered orchestration error. Do not fuse these into
         // an iterator that could short-circuit and discard an initiated owner.
-        let joined = children.map(|child| match child {
-            Ok(child) => child
-                .join()
-                .map_err(|_| eyre!("private-settlement Prepare request worker panicked")),
-            Err(_) => Err(eyre!(
-                "private-settlement Prepare request worker could not start"
-            )),
+        let joined = children.map(|child| {
+            child.map_or_else(
+                |_| {
+                    Err(eyre!(
+                        "private-settlement Prepare request worker could not start"
+                    ))
+                },
+                |child| {
+                    child
+                        .join()
+                        .map_err(|_| eyre!("private-settlement Prepare request worker panicked"))
+                },
+            )
         });
         joined.into_iter().collect()
     })

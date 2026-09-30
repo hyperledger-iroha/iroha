@@ -1,72 +1,41 @@
-//! Serving and body fetching off the event loop (`specs/sumeragi.md` §6.9, §12.2, §12.3 O5,
-//! O6): `ServeBlocks` answers from the block store (consecutive heights, stopping at the first
-//! missing one, within the byte budget; an empty `SyncResponse` means "nothing held at
-//! `from_height`"), `ServeBody` from the body store or the block store (or not at all), and
-//! `FetchBody` looks in the local stores first and otherwise asks the given peers.
-//!
-//! [`ServeSched`] decides what the serve thread does next, one request at a time: the node's own
-//! `FetchBody`s first (so its body recovery never waits behind serving others), then the peers'
-//! requests round-robin — at most one `ServeBlocks` and one `ServeBody` pending per peer, a newer
-//! one replacing it — each peer within a token bucket of response bytes (§12.2 per-peer rate
-//! limits). Requests beyond those bounds are dropped (O6: the requester retries), so a peer
-//! streaming `SyncRequest`s costs a bounded queue and its own byte quota, nothing more.
+//! Bounded serving and retained signed-payload work, off the consensus event loop.
+//! Payload phases keep their original owners across resource refusal. Every storage error
+//! stays distinct from absence. A worker failure stops the instance instead of inventing data.
 
-use std::{
-    collections::{BTreeMap, VecDeque},
-    panic::{AssertUnwindSafe, catch_unwind},
+use super::{
+    payload_worker::{PayloadWork, PayloadWorker},
+    traits::{BlockStore, BodyStore, Frame, Net, PendingSend, SendOutcome},
 };
-
 use iroha_sumeragi::{
     api::{Action, Event},
-    message::{Block, BlockRequest, BlockResponse, SyncEntry, SyncResponse, WireMessage},
+    message::{SyncEntry, SyncResponse, WireMessage},
     types::{Hash32, Millis, PublicKey},
 };
-
-use super::traits::{BlockStore, BodyStore, Frame, Net};
-
-/// Bytes a sync entry adds to a response beyond its own encoding (length prefixes), counted
-/// generously; the frame header fits in the 64 KiB the receiver allows above its byte cap.
+use std::{
+    collections::{BTreeMap, VecDeque},
+    io,
+};
 const ENTRY_FRAMING: usize = 16;
 
-/// A serving request (a gated action released by the O2 barrier).
+/// One bounded worker turn selected by the instance scheduler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServeRequest {
-    /// `ServeBlocks`.
+    /// Consecutive signed manifests and CommitQCs from the committed store.
     Blocks {
-        /// Requester.
+        /// Authenticated requesting peer.
         to: PublicKey,
-        /// First height.
+        /// First requested committed height.
         from_height: u64,
-        /// Entry limit.
+        /// Maximum number of consecutive metadata entries.
         max_count: u16,
-        /// Byte limit.
+        /// Response byte bound; one oversized first entry is permitted.
         max_bytes: u32,
     },
-    /// `ServeBody`.
-    Body {
-        /// Requester.
-        to: PublicKey,
-        /// Height.
-        height: u64,
-        /// Block hash.
-        block_hash: Hash32,
-    },
-    /// `FetchBody`.
-    Fetch {
-        /// Height.
-        height: u64,
-        /// Block hash.
-        block_hash: Hash32,
-        /// Peers to ask when no local store holds it.
-        peers: Vec<PublicKey>,
-    },
+    /// Retained author, acquisition, restoration or row-dissemination work.
+    Payload(Box<PayloadWork>),
 }
-
 impl ServeRequest {
-    /// The request of a serving action; the action itself otherwise.
-    ///
-    /// # Errors
-    /// The action, when it is not a serving action.
+    /// Convert a released Core action, returning unrelated actions unchanged.
     pub fn from_action(action: Action) -> Result<Self, Action> {
         match action {
             Action::ServeBlocks {
@@ -80,76 +49,22 @@ impl ServeRequest {
                 max_count,
                 max_bytes,
             }),
-            Action::ServeBody {
-                to,
-                height,
-                block_hash,
-            } => Ok(Self::Body {
-                to,
-                height,
-                block_hash,
-            }),
-            Action::FetchBody {
-                height,
-                block_hash,
-                peers,
-            } => Ok(Self::Fetch {
-                height,
-                block_hash,
-                peers,
-            }),
-            other => Err(other),
-        }
-    }
-
-    /// The core action this request came from.
-    pub fn into_action(self) -> Action {
-        match self {
-            Self::Blocks {
-                to,
-                from_height,
-                max_count,
-                max_bytes,
-            } => Action::ServeBlocks {
-                to,
-                from_height,
-                max_count,
-                max_bytes,
-            },
-            Self::Body {
-                to,
-                height,
-                block_hash,
-            } => Action::ServeBody {
-                to,
-                height,
-                block_hash,
-            },
-            Self::Fetch {
-                height,
-                block_hash,
-                peers,
-            } => Action::FetchBody {
-                height,
-                block_hash,
-                peers,
-            },
+            other => PayloadWork::from_action(other).map(|work| Self::Payload(Box::new(work))),
         }
     }
 }
 
-/// Per-peer serving limits (§12.2 per-peer rate limits).
+/// Per-peer response limits and finite retained job/command count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServeLimits {
-    /// Response bytes a peer is served per second on average (its token bucket's refill).
+    /// Response bytes permitted per second.
     pub bytes_per_sec: u64,
-    /// Response bytes a peer may be served in a burst (its bucket's size).
+    /// Initial and maximum response credit.
     pub burst_bytes: u64,
-    /// Peers tracked at once (with a pending request or a bucket not yet refilled); a request
-    /// of a further peer is dropped.
+    /// Bound per purpose: proactive streams, historical responses, local fetches, and metadata.
+    /// These classes share the allocation budget; queued commands have the same finite bound.
     pub max_peers: usize,
 }
-
 impl Default for ServeLimits {
     fn default() -> Self {
         Self {
@@ -159,244 +74,280 @@ impl Default for ServeLimits {
         }
     }
 }
-
-/// The pending requests and the token bucket of one requesting peer.
 #[derive(Debug)]
 struct PeerServe {
     body: Option<ServeRequest>,
     blocks: Option<ServeRequest>,
-    /// Response bytes the peer may still be served (negative: the debt of a large response).
     tokens: i64,
-    /// Local time of the last refill.
     at: Millis,
-    /// In the round-robin order.
     queued: bool,
 }
-
+fn burst(l: ServeLimits) -> i64 {
+    i64::try_from(l.burst_bytes).unwrap_or(i64::MAX)
+}
 impl PeerServe {
-    fn refill(&mut self, limits: ServeLimits, now: Millis) {
+    fn refill(&mut self, l: ServeLimits, now: Millis) {
         let elapsed = now.saturating_sub(self.at);
         self.at = self.at.max(now);
-        let gained = u128::from(elapsed) * u128::from(limits.bytes_per_sec) / 1_000;
-        let gained = i64::try_from(gained).unwrap_or(i64::MAX);
-        self.tokens = self.tokens.saturating_add(gained).min(burst(limits));
+        let gain = i64::try_from(u128::from(elapsed) * u128::from(l.bytes_per_sec) / 1_000)
+            .unwrap_or(i64::MAX);
+        self.tokens = self.tokens.saturating_add(gain).min(burst(l));
     }
-
     fn pending(&self) -> usize {
         usize::from(self.body.is_some()) + usize::from(self.blocks.is_some())
     }
 }
 
-fn burst(limits: ServeLimits) -> i64 {
-    i64::try_from(limits.burst_bytes).unwrap_or(i64::MAX)
-}
-
-/// The serving scheduler of one instance (see the module documentation): what the serve
-/// thread does next, one request at a time.
+/// Pure scheduler. Waiting for remote rows creates no polling work; temporary local refusal
+/// uses backoff, and ready output rows get another immediate bounded turn.
 #[derive(Debug)]
 pub struct ServeSched {
     limits: ServeLimits,
-    /// The node's own `FetchBody`s, one per wanted body (the latest), served first.
-    fetch: VecDeque<ServeRequest>,
+    work: VecDeque<PayloadWork>,
+    author: Option<PayloadWork>,
+    applied: Option<u64>,
+    retain: Option<(u64, Vec<Hash32>)>,
     peers: BTreeMap<PublicKey, PeerServe>,
-    /// Peers with a pending request, in round-robin order.
     order: VecDeque<PublicKey>,
-    /// The request in flight: `Some(None)` for a fetch, `Some(Some(peer))` for serving `peer`.
-    in_flight: Option<Option<PublicKey>>,
+    in_flight: bool,
+    retry_at: Option<Millis>,
+    failed: Option<(Millis, ServeRequest)>,
     dropped: u64,
 }
-
 impl ServeSched {
-    /// An empty scheduler with `limits`.
+    /// Empty scheduler with independent per-instance bounds.
     pub fn new(limits: ServeLimits) -> Self {
         Self {
             limits,
-            fetch: VecDeque::new(),
+            work: VecDeque::new(),
+            author: None,
+            applied: None,
+            retain: None,
             peers: BTreeMap::new(),
             order: VecDeque::new(),
-            in_flight: None,
+            in_flight: false,
+            retry_at: None,
+            failed: None,
             dropped: 0,
         }
     }
-
-    /// Queue a request at local time `now`; returns whether it was kept. A `FetchBody`
-    /// replaces a pending one of the same body and is never dropped (the core bounds its
-    /// wants). A peer's `ServeBlocks` or `ServeBody` replaces its pending one of the same kind
-    /// (the older is dropped); it is dropped if the peer's bucket is empty or too many peers
-    /// are tracked.
+    /// Queue local work or one request of each kind per remote peer.
     pub fn push(&mut self, request: ServeRequest, now: Millis) -> bool {
         let to = match &request {
-            ServeRequest::Fetch { block_hash, .. } => {
-                let hash = *block_hash;
-                self.fetch.retain(
-                    |r| !matches!(r, ServeRequest::Fetch { block_hash, .. } if *block_hash == hash),
-                );
-                self.fetch.push_back(request);
-                return true;
-            }
-            ServeRequest::Blocks { to, .. } | ServeRequest::Body { to, .. } => to.clone(),
+            ServeRequest::Blocks { to, .. } => to.clone(),
+            ServeRequest::Payload(work) => match &**work {
+                PayloadWork::Serve { to, .. } => to.clone(),
+                _ => {
+                    let ServeRequest::Payload(work) = request else {
+                        unreachable!()
+                    };
+                    if matches!(&*work, PayloadWork::Poll) {
+                        self.retry_at = Some(now);
+                        return true;
+                    }
+                    // These local commands cannot be lost to peer-controlled queue
+                    // pressure. Each has one bounded slot; a newer round/application supersedes
+                    // the previous one without retaining another payload owner.
+                    if matches!(&*work, PayloadWork::Author { .. }) {
+                        self.author = Some(*work);
+                        return true;
+                    }
+                    if let PayloadWork::Retain { height, keep } = &*work {
+                        if self.retain.as_ref().is_none_or(|(old, _)| *old <= *height) {
+                            self.retain = Some((*height, keep.clone()));
+                            self.work.retain(|work| !matches!(work, PayloadWork::Disseminate { body, .. }
+                                if body.source().height() == *height && !keep.contains(&body.source().block_hash())));
+                        }
+                        return true;
+                    }
+                    if let PayloadWork::Applied(height) = &*work {
+                        self.applied = Some(self.applied.map_or(*height, |old| old.max(*height)));
+                        return true;
+                    }
+                    if self.work.contains(&work) {
+                        return true;
+                    }
+                    if self.work.len() >= self.limits.max_peers.max(1) {
+                        // Fetch/acquisition/dissemination requests are retried by Core's
+                        // existing body and proposal timers. Refuse only this new command.
+                        self.dropped += 1;
+                        return false;
+                    }
+                    self.work.push_back(*work);
+                    return true;
+                }
+            },
         };
         if !self.peers.contains_key(&to) && self.peers.len() >= self.limits.max_peers {
-            self.evict_idle(now);
+            let limits = self.limits;
+            self.peers.retain(|_, p| {
+                p.refill(limits, now);
+                p.queued || p.tokens < burst(limits)
+            });
             if self.peers.len() >= self.limits.max_peers {
                 self.dropped += 1;
                 return false;
             }
         }
-        let limits = self.limits;
-        let peer = self.peers.entry(to.clone()).or_insert_with(|| PeerServe {
+        let p = self.peers.entry(to.clone()).or_insert(PeerServe {
             body: None,
             blocks: None,
-            tokens: burst(limits),
+            tokens: burst(self.limits),
             at: now,
             queued: false,
         });
-        peer.refill(limits, now);
-        if peer.tokens <= 0 {
+        p.refill(self.limits, now);
+        if p.tokens <= 0 {
             self.dropped += 1;
             return false;
         }
         let slot = if matches!(request, ServeRequest::Blocks { .. }) {
-            &mut peer.blocks
+            &mut p.blocks
         } else {
-            &mut peer.body
+            &mut p.body
         };
         if slot.replace(request).is_some() {
             self.dropped += 1;
         }
-        if !peer.queued {
-            peer.queued = true;
+        if !p.queued {
+            p.queued = true;
             self.order.push_back(to);
         }
         true
     }
-
-    /// Forget the peers that have nothing pending or in flight and a full bucket (nothing is
-    /// lost with them).
-    fn evict_idle(&mut self, now: Millis) {
-        let limits = self.limits;
-        let busy = self.in_flight.clone().flatten();
-        self.peers.retain(|key, peer| {
-            peer.refill(limits, now);
-            peer.queued || busy.as_ref() == Some(key) || peer.tokens < burst(limits)
-        });
-    }
-
-    /// The next request for the serve thread at local time `now`, if it is idle: a pending
-    /// `FetchBody` first, then the next peer in round-robin order whose bucket is not empty (a
-    /// body before a block range). The pending requests of a peer whose bucket ran empty are
-    /// dropped.
+    /// One operation, never another while the worker owns the previous turn.
     pub fn next(&mut self, now: Millis) -> Option<ServeRequest> {
-        if self.in_flight.is_some() {
+        if self.in_flight {
             return None;
         }
-        if let Some(fetch) = self.fetch.pop_front() {
-            self.in_flight = Some(None);
-            return Some(fetch);
+        let work = self
+            .applied
+            .take()
+            .map(PayloadWork::Applied)
+            .or_else(|| {
+                self.retain
+                    .take()
+                    .map(|(height, keep)| PayloadWork::Retain { height, keep })
+            })
+            .or_else(|| self.author.take())
+            .or_else(|| self.work.pop_front());
+        if let Some(work) = work {
+            self.in_flight = true;
+            return Some(ServeRequest::Payload(Box::new(work)));
+        }
+        if self.failed.as_ref().is_some_and(|(at, _)| *at <= now) {
+            let (_, request) = self
+                .failed
+                .take()
+                .expect("retained refused metadata request");
+            self.in_flight = true;
+            return Some(request);
+        }
+        if self.retry_at.is_some_and(|at| at <= now) {
+            self.retry_at = None;
+            self.in_flight = true;
+            return Some(ServeRequest::Payload(Box::new(PayloadWork::Poll)));
         }
         while let Some(key) = self.order.pop_front() {
-            let Some(peer) = self.peers.get_mut(&key) else {
+            let Some(p) = self.peers.get_mut(&key) else {
                 continue;
             };
-            peer.refill(self.limits, now);
-            if peer.tokens <= 0 {
-                self.dropped += u64::try_from(peer.pending()).unwrap_or(u64::MAX);
-                peer.body = None;
-                peer.blocks = None;
-                peer.queued = false;
+            p.refill(self.limits, now);
+            if p.tokens <= 0 {
+                self.dropped += p.pending() as u64;
+                p.body = None;
+                p.blocks = None;
+                p.queued = false;
                 continue;
             }
-            let Some(request) = peer.body.take().or_else(|| peer.blocks.take()) else {
-                peer.queued = false;
+            let Some(request) = p.body.take().or_else(|| p.blocks.take()) else {
+                p.queued = false;
                 continue;
             };
-            if peer.pending() > 0 {
-                self.order.push_back(key.clone());
+            if p.pending() > 0 {
+                self.order.push_back(key);
             } else {
-                peer.queued = false;
+                p.queued = false;
             }
-            self.in_flight = Some(Some(key));
+            self.in_flight = true;
             return Some(request);
         }
         None
     }
-
-    /// The serve thread finished the request in flight at local time `now`, having sent
-    /// `bytes` of responses: charged to the requester's bucket.
-    pub fn done(&mut self, now: Millis, bytes: u64) {
-        let Some(Some(key)) = self.in_flight.take() else {
-            return;
-        };
-        if let Some(peer) = self.peers.get_mut(&key) {
-            peer.refill(self.limits, now);
-            let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);
-            peer.tokens = peer.tokens.saturating_sub(bytes);
+    /// Release this turn, charge actual responses and schedule only actual retained work.
+    pub fn done(&mut self, now: Millis, served: &Served) {
+        self.in_flight = false;
+        for (key, bytes) in &served.charges {
+            if let Some(p) = self.peers.get_mut(key) {
+                p.refill(self.limits, now);
+                p.tokens = p
+                    .tokens
+                    .saturating_sub(i64::try_from(*bytes).unwrap_or(i64::MAX));
+            }
+        }
+        if served.payload {
+            self.retry_at = served
+                .retry
+                .then_some(now.saturating_add(if served.refused { 10 } else { 0 }));
+        }
+        if let Some(request) = &served.retry_request {
+            self.failed = Some((now.saturating_add(10), request.clone()));
         }
     }
-
-    /// Requests pending (not in flight).
-    pub fn len(&self) -> usize {
-        self.fetch.len() + self.peers.values().map(PeerServe::pending).sum::<usize>()
+    /// Earliest retained-job retry; no timer for jobs awaiting remote rows.
+    pub fn wakeup(&self) -> Millis {
+        self.retry_at
+            .unwrap_or(Millis::MAX)
+            .min(self.failed.as_ref().map_or(Millis::MAX, |(at, _)| *at))
     }
-
-    /// Whether nothing is pending.
+    /// Pending commands, excluding worker-owned retained jobs.
+    pub fn len(&self) -> usize {
+        usize::from(self.author.is_some())
+            + usize::from(self.applied.is_some())
+            + usize::from(self.retain.is_some())
+            + self.work.len()
+            + self.peers.values().map(PeerServe::pending).sum::<usize>()
+    }
+    /// No pending commands.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Whether a request is in flight.
+    /// The worker owns a turn.
     pub fn busy(&self) -> bool {
-        self.in_flight.is_some()
+        self.in_flight
     }
-
-    /// Requests dropped by the bounds so far (replaced, over a bucket or over the peer limit).
+    /// Requests dropped by queue or per-peer bounds.
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
 }
 
-/// Committed entries from `from_height` on: consecutive, at most `max_count`, stopping at the
-/// first missing height, and within `max_bytes` (encoded sizes; a single entry may exceed it,
-/// §3.5).
+/// Consecutive metadata entries, including an oversized first entry as the protocol permits.
+/// Read errors are propagated; they never produce an empty successful response.
 pub fn entries(
     blocks: &(impl BlockStore + ?Sized),
     from_height: u64,
     max_count: u16,
     max_bytes: u32,
-) -> Vec<SyncEntry> {
-    let mut out = Vec::new();
-    let mut bytes = 0usize;
-    let limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
-    for height in (from_height..).take(usize::from(max_count)) {
-        let Some(entry) = blocks.entry(height) else {
+) -> io::Result<Vec<SyncEntry>> {
+    let (mut out, mut bytes) = (Vec::new(), 0usize);
+    for offset in 0..u64::from(max_count) {
+        let Some(height) = from_height.checked_add(offset) else {
+            break;
+        };
+        let Some(entry) = blocks.entry(height)? else {
             break;
         };
         let size = norito::codec::Encode::encoded_len(&entry).saturating_add(ENTRY_FRAMING);
-        if !out.is_empty() && bytes.saturating_add(size) > limit {
+        if !out.is_empty() && bytes.saturating_add(size) > max_bytes as usize {
             break;
         }
         bytes = bytes.saturating_add(size);
         out.push(entry);
     }
-    out
+    Ok(out)
 }
-
-/// The body of `(height, block_hash)` from the body store, else from the block store.
-pub fn local_body(
-    bodies: &(impl BodyStore + ?Sized),
-    blocks: &(impl BlockStore + ?Sized),
-    height: u64,
-    block_hash: &Hash32,
-) -> Option<Block> {
-    bodies.get(height, block_hash).or_else(|| {
-        blocks
-            .entry(height)
-            .filter(|entry| entry.commit_qc.block_hash == *block_hash)
-            .map(|entry| entry.block)
-    })
-}
-
-/// Encode `msg` once for the transport (`None`: it cannot be encoded, a local bug; logged).
+/// Encode once for all recipients. Encoding failure is reported to the caller.
 pub fn frame(msg: &WireMessage) -> Option<Frame> {
     match msg.encode() {
         Ok(bytes) => Some(Frame {
@@ -405,459 +356,237 @@ pub fn frame(msg: &WireMessage) -> Option<Frame> {
             bytes: bytes.into(),
         }),
         Err(error) => {
-            iroha_logger::error!(%error, "sumeragi message does not encode");
+            iroha_logger::error!(%error,"sumeragi message does not encode");
             None
         }
     }
 }
-
-/// What the serve thread did for one request.
+/// Actual worker completion; no successful default is substituted on panic or corruption.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Served {
-    /// `BodyAvailable` for a `FetchBody` satisfied from the local stores.
-    pub event: Option<Event>,
-    /// Bytes of responses sent (charged to the requester's bucket).
-    pub bytes: u64,
+    /// This turn progressed the retained payload worker.
+    pub payload: bool,
+    /// Exact metadata request retained after local resource refusal.
+    pub retry_request: Option<ServeRequest>,
+    /// Verified events in order.
+    pub events: Vec<Event>,
+    /// Actual bytes sent per requesting peer, including continued rows from later turns.
+    pub charges: Vec<(PublicKey, u64)>,
+    /// Another retained phase can make progress.
+    pub retry: bool,
+    /// Resource refusal needs backoff.
+    pub refused: bool,
 }
-
-/// `f`, or `None` if it panicked (a store read that panics fails like a missing entry).
-fn guarded<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
-    catch_unwind(AssertUnwindSafe(f))
-        .map_err(|_| iroha_logger::error!(what, "sumeragi store read panicked"))
-        .ok()
+/// One bounded encoded output batch. Each peer retains its own original admission receipt;
+/// a refused peer does not prevent the other peers from admitting this same batch.
+pub(super) struct DeliveryBatch {
+    frames: Vec<Frame>,
+    recipients: Vec<Recipient>,
 }
-
-/// Send `msg` to `to`; returns the frame size.
-fn send(net: &(impl Net + ?Sized), to: &PublicKey, msg: &WireMessage) -> u64 {
-    frame(msg).map_or(0, |frame| {
-        net.send(to, &frame);
-        u64::try_from(frame.bytes.len()).unwrap_or(u64::MAX)
-    })
+struct Recipient {
+    peer: PublicKey,
+    frames: Vec<usize>,
+    next: usize,
+    pending: Option<Box<dyn PendingSend>>,
+    metered: bool,
 }
-
-/// Carry out one serving request: responses and body requests go to `net`; a body found locally
-/// for `FetchBody` is returned as `BodyAvailable`. A store read that panics is a missing entry:
-/// no response, or for `FetchBody` the requests to the peers.
+impl DeliveryBatch {
+    pub(super) fn new(
+        outputs: Vec<(Vec<PublicKey>, Frame)>,
+        metered: &[PublicKey],
+    ) -> io::Result<Self> {
+        // A worker turn emits at most a fetch request, a manifest and one row.
+        if outputs.len() > 3 {
+            return Err(io::Error::other(
+                "availability output batch exceeds turn bound",
+            ));
+        }
+        let mut frames = Vec::with_capacity(outputs.len());
+        let mut recipients = BTreeMap::<PublicKey, Vec<usize>>::new();
+        for (peers, frame) in outputs {
+            let index = frames.len();
+            frames.push(frame);
+            for peer in peers {
+                let indices = recipients.entry(peer).or_default();
+                if indices.last() != Some(&index) {
+                    indices.push(index);
+                }
+            }
+        }
+        Ok(Self {
+            frames,
+            recipients: recipients
+                .into_iter()
+                .map(|(peer, frames)| Recipient {
+                    metered: metered.contains(&peer),
+                    peer,
+                    frames,
+                    next: 0,
+                    pending: None,
+                })
+                .collect(),
+        })
+    }
+    /// Core may rotate the destinations of the same source-bound fetch. Intersection peers
+    /// keep their exact original occurrence; removed peers explicitly cancel their receipt.
+    pub(super) fn retarget(&mut self, peers: &[PublicKey]) {
+        self.recipients
+            .retain(|recipient| peers.contains(&recipient.peer));
+        for peer in peers {
+            if !self
+                .recipients
+                .iter()
+                .any(|recipient| &recipient.peer == peer)
+            {
+                self.recipients.push(Recipient {
+                    peer: peer.clone(),
+                    frames: (0..self.frames.len()).collect(),
+                    next: 0,
+                    pending: None,
+                    metered: false,
+                });
+            }
+        }
+    }
+    pub(super) fn poll(&mut self, net: &dyn Net) -> io::Result<Vec<(PublicKey, u64)>> {
+        let mut charges = Vec::new();
+        for recipient in &mut self.recipients {
+            let mut bytes = 0u64;
+            while let Some(&index) = recipient.frames.get(recipient.next) {
+                let outcome = match recipient.pending.take() {
+                    Some(pending) => pending.retry(),
+                    None => net.send(&recipient.peer, &self.frames[index]),
+                };
+                match outcome {
+                    SendOutcome::Admitted => {
+                        recipient.next += 1;
+                        if recipient.metered {
+                            bytes += self.frames[index].bytes.len() as u64;
+                        }
+                    }
+                    SendOutcome::Backpressured(pending) => {
+                        recipient.pending = Some(pending);
+                        break;
+                    }
+                    SendOutcome::Closed => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "availability transport closed",
+                        ));
+                    }
+                    SendOutcome::Rejected => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "availability transport rejected exact frame",
+                        ));
+                    }
+                }
+            }
+            if bytes != 0 {
+                charges.push((recipient.peer.clone(), bytes));
+            }
+        }
+        Ok(charges)
+    }
+    pub(super) fn complete(&self) -> bool {
+        self.recipients
+            .iter()
+            .all(|peer| peer.next == peer.frames.len())
+    }
+}
+fn deliver(worker: &mut PayloadWorker, net: &dyn Net, served: &mut Served) -> io::Result<()> {
+    // Every retained metadata recipient gets one bounded attempt; none gates row streams.
+    let count = worker.metadata.len();
+    for _ in 0..count {
+        let (peer, mut batch) = worker.metadata.pop_front().expect("bounded metadata slot");
+        served.charges.extend(batch.poll(net)?);
+        if !batch.complete() {
+            worker.metadata.push_back((peer, batch));
+            served.retry = true;
+            served.refused = true;
+        }
+    }
+    Ok(())
+}
+/// Run one bounded serving turn with the same retained worker across requests.
+/// Exact encoded frames and recoverable post receipts survive every pressure retry.
 pub fn serve(
     request: ServeRequest,
     instance: Hash32,
-    bodies: &(impl BodyStore + ?Sized),
-    blocks: &(impl BlockStore + ?Sized),
-    net: &(impl Net + ?Sized),
-) -> Served {
-    match request {
-        ServeRequest::Blocks {
-            to,
-            from_height,
-            max_count,
-            max_bytes,
-        } => {
-            let Some(entries) = guarded("sync entries", || {
-                entries(blocks, from_height, max_count, max_bytes)
-            }) else {
-                return Served::default();
-            };
-            let msg = WireMessage::SyncResponse(SyncResponse {
-                instance,
-                blocks: entries,
-            });
-            Served {
-                event: None,
-                bytes: send(net, &to, &msg),
-            }
-        }
-        ServeRequest::Body {
-            to,
-            height,
-            block_hash,
-        } => {
-            let found = guarded("body", || local_body(bodies, blocks, height, &block_hash));
-            let Some(block) = found.flatten() else {
-                return Served::default();
-            };
-            let msg = WireMessage::BlockResponse(BlockResponse { instance, block });
-            Served {
-                event: None,
-                bytes: send(net, &to, &msg),
-            }
-        }
-        ServeRequest::Fetch {
-            height,
-            block_hash,
-            peers,
-        } => {
-            let found = guarded("body", || local_body(bodies, blocks, height, &block_hash));
-            if let Some(block) = found.flatten() {
-                return Served {
-                    event: Some(Event::BodyAvailable { block }),
-                    bytes: 0,
+    bodies: &dyn BodyStore,
+    blocks: &dyn BlockStore,
+    net: &dyn Net,
+    worker: &mut PayloadWorker,
+) -> io::Result<Served> {
+    let result = (|| {
+        let mut served = Served {
+            payload: true,
+            ..Served::default()
+        };
+        deliver(worker, net, &mut served)?;
+        match request {
+            ServeRequest::Blocks {
+                to,
+                from_height,
+                max_count,
+                max_bytes,
+            } => {
+                let original = ServeRequest::Blocks {
+                    to: to.clone(),
+                    from_height,
+                    max_count,
+                    max_bytes,
                 };
+                let entries = match entries(blocks, from_height, max_count, max_bytes) {
+                    Ok(entries) => entries,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        served.retry_request = Some(original);
+                        return Ok(served);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let msg = WireMessage::SyncResponse(SyncResponse {
+                    instance,
+                    blocks: entries,
+                });
+                let frame = frame(&msg).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "sync metadata encoding")
+                })?;
+                worker.retain_metadata(
+                    to.clone(),
+                    DeliveryBatch::new(vec![(vec![to.clone()], frame)], &[to])?,
+                );
             }
-            let msg = WireMessage::BlockRequest(BlockRequest {
-                instance,
-                height,
-                block_hash,
-            });
-            for peer in &peers {
-                send(net, peer, &msg);
+            ServeRequest::Payload(work) => {
+                let progress = worker.step(*work, bodies, blocks, net)?;
+                served.events = progress.events;
+                served.charges.extend(progress.charges);
+                served.retry |= progress.retry;
+                served.refused |= progress.refused;
             }
-            Served::default()
         }
-    }
+        // Newly queued metadata waits for the next bounded turn when another recipient
+        // already refused above; no transport occurrence is attempted twice in one turn.
+        if !served.refused {
+            deliver(worker, net, &mut served)?;
+        }
+        Ok(served)
+    })();
+    result.map(|mut served| {
+        served.retry |= worker.has_runnable();
+        served
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use iroha_sumeragi::message::TrafficClass;
+#[path = "serve_tests.rs"]
+mod tests;
 
-    use super::{
-        super::tests::{
-            block, commit_qc,
-            fakes::{FakeBlocks, FakeBodies, FakeNet},
-            hash,
-        },
-        *,
-    };
-
-    fn key(byte: u8) -> PublicKey {
-        PublicKey::new(vec![byte; 32]).unwrap()
-    }
-
-    /// A chain of `n` blocks with 1000-byte payloads in a block store.
-    fn chain(n: u64) -> (FakeBlocks, Vec<Block>) {
-        let blocks = FakeBlocks::default();
-        let mut out = Vec::new();
-        let (mut parent, mut result) = (Hash32([1; 32]), Hash32([2; 32]));
-        for h in 1..=n {
-            let b = block(h, parent, result, vec![7; 1000]);
-            let r = Hash32([u8::try_from(h).unwrap(); 32]);
-            blocks.append(&b, &commit_qc(&b, r)).unwrap();
-            (parent, result) = (hash(&b), r);
-            out.push(b);
-        }
-        (blocks, out)
-    }
-
-    /// Consecutive entries within the count and byte budgets (the first always), stopping at
-    /// the first missing height.
-    #[test]
-    fn entries_respect_count_bytes_and_gaps() {
-        let (blocks, _) = chain(5);
-        assert_eq!(entries(&blocks, 1, 3, u32::MAX).len(), 3);
-        assert_eq!(
-            entries(&blocks, 2, 64, u32::MAX).len(),
-            4,
-            "stops at the tip"
-        );
-        assert_eq!(
-            entries(&blocks, 1, 64, 1).len(),
-            1,
-            "a single entry may exceed"
-        );
-        let two = norito::codec::Encode::encoded_len(&blocks.entry(1).unwrap()) * 2 + 40;
-        assert_eq!(
-            entries(&blocks, 1, 64, u32::try_from(two).unwrap()).len(),
-            2
-        );
-        assert!(entries(&blocks, 6, 64, u32::MAX).is_empty());
-        assert!(
-            entries(&blocks, 0, 64, u32::MAX).is_empty(),
-            "no genesis entry"
-        );
-    }
-
-    /// Bodies come from the body store first, then from the block store if the hash matches.
-    #[test]
-    fn local_body_from_either_store() {
-        let (blocks, chain) = chain(2);
-        let bodies = FakeBodies::default();
-        let fresh = block(3, hash(&chain[1]), Hash32([2; 32]), vec![1]);
-        bodies.put(&hash(&fresh), &fresh).unwrap();
-        assert_eq!(local_body(&bodies, &blocks, 3, &hash(&fresh)), Some(fresh));
-        assert_eq!(
-            local_body(&bodies, &blocks, 2, &hash(&chain[1])),
-            Some(chain[1].clone())
-        );
-        assert_eq!(local_body(&bodies, &blocks, 2, &Hash32([9; 32])), None);
-    }
-
-    /// Each request produces its response: a (possibly empty) sync response, a body response
-    /// only if held, and for a fetch the local body or requests to every peer; the bytes sent
-    /// are reported (a fetch is the node's own request and costs nothing).
-    #[test]
-    fn serve_requests() {
-        let (blocks, chain) = chain(2);
-        let bodies = FakeBodies::default();
-        let net = FakeNet::default();
-        let instance = Hash32([5; 32]);
-        let blocks_req = ServeRequest::Blocks {
-            to: key(1),
-            from_height: 1,
-            max_count: 8,
-            max_bytes: u32::MAX,
-        };
-        let served = serve(blocks_req, instance, &bodies, &blocks, &net);
-        assert!(served.event.is_none() && served.bytes > 2_000, "{served:?}");
-        let body = ServeRequest::Body {
-            to: key(2),
-            height: 2,
-            block_hash: hash(&chain[1]),
-        };
-        let served = serve(body, instance, &bodies, &blocks, &net);
-        assert!(served.event.is_none() && served.bytes > 1_000, "{served:?}");
-        let missing = ServeRequest::Body {
-            to: key(2),
-            height: 9,
-            block_hash: Hash32::ZERO,
-        };
-        assert_eq!(
-            serve(missing, instance, &bodies, &blocks, &net),
-            Served::default()
-        );
-        let fetch_local = ServeRequest::Fetch {
-            height: 1,
-            block_hash: hash(&chain[0]),
-            peers: vec![key(3)],
-        };
-        assert_eq!(
-            serve(fetch_local, instance, &bodies, &blocks, &net).event,
-            Some(Event::BodyAvailable {
-                block: chain[0].clone()
-            })
-        );
-        let fetch_remote = ServeRequest::Fetch {
-            height: 5,
-            block_hash: Hash32::ZERO,
-            peers: vec![key(3), key(4)],
-        };
-        assert_eq!(
-            serve(fetch_remote, instance, &bodies, &blocks, &net),
-            Served::default()
-        );
-        let sent = net.sent();
-        assert_eq!(sent.len(), 4, "{sent:?}");
-        assert!(
-            matches!(&sent[0], (to, WireMessage::SyncResponse(r)) if *to == key(1) && r.blocks.len() == 2)
-        );
-        assert!(
-            matches!(&sent[1], (to, WireMessage::BlockResponse(r)) if *to == key(2) && r.block == chain[1])
-        );
-        assert!(
-            matches!(&sent[2], (to, WireMessage::BlockRequest(r)) if *to == key(3) && r.height == 5)
-        );
-        assert!(matches!(&sent[3], (to, WireMessage::BlockRequest(_)) if *to == key(4)));
-    }
-
-    /// A block store whose reads panic fails like a missing entry: no response to a peer, and
-    /// a fetch still asks the peers (the serve thread survives, §12.5).
-    #[test]
-    fn panicking_reads_are_missing_entries() {
-        let (blocks, chain) = chain(2);
-        let bodies = FakeBodies::default();
-        let net = FakeNet::default();
-        let instance = Hash32([5; 32]);
-        blocks.panic_reads(3);
-        let sync = ServeRequest::Blocks {
-            to: key(1),
-            from_height: 1,
-            max_count: 8,
-            max_bytes: u32::MAX,
-        };
-        assert_eq!(
-            serve(sync, instance, &bodies, &blocks, &net),
-            Served::default()
-        );
-        let body = ServeRequest::Body {
-            to: key(1),
-            height: 1,
-            block_hash: hash(&chain[0]),
-        };
-        assert_eq!(
-            serve(body, instance, &bodies, &blocks, &net),
-            Served::default()
-        );
-        let fetch = ServeRequest::Fetch {
-            height: 1,
-            block_hash: hash(&chain[0]),
-            peers: vec![key(3)],
-        };
-        assert_eq!(
-            serve(fetch, instance, &bodies, &blocks, &net),
-            Served::default()
-        );
-        let sent = net.sent();
-        assert!(
-            matches!(&sent[..], [(to, WireMessage::BlockRequest(_))] if *to == key(3)),
-            "{sent:?}"
-        );
-    }
-
-    fn sync_req(to: u8, from_height: u64) -> ServeRequest {
-        ServeRequest::Blocks {
-            to: key(to),
-            from_height,
-            max_count: 64,
-            max_bytes: u32::MAX,
-        }
-    }
-
-    fn body_req(to: u8, height: u64) -> ServeRequest {
-        ServeRequest::Body {
-            to: key(to),
-            height,
-            block_hash: Hash32::ZERO,
-        }
-    }
-
-    fn fetch_req(tag: u8, peer: u8) -> ServeRequest {
-        ServeRequest::Fetch {
-            height: 1,
-            block_hash: Hash32([tag; 32]),
-            peers: vec![key(peer)],
-        }
-    }
-
-    /// The node's own fetches go first, one per body (the latest); a flooding peer keeps one
-    /// pending request per kind (the latest) and is served round-robin with the others; one
-    /// request is in flight at a time.
-    #[test]
-    fn fetch_first_and_one_request_per_peer_and_kind() {
-        let mut sched = ServeSched::new(ServeLimits::default());
-        for h in 0..10_000 {
-            assert!(sched.push(sync_req(1, h), 0));
-        }
-        sched.push(body_req(1, 3), 0);
-        sched.push(sync_req(2, 7), 0);
-        sched.push(fetch_req(9, 1), 0);
-        sched.push(fetch_req(8, 1), 0);
-        sched.push(fetch_req(9, 2), 0);
-        assert_eq!(
-            sched.len(),
-            3 + 2,
-            "bounded: two fetches and three peer requests"
-        );
-        assert_eq!(
-            sched.dropped(),
-            9_999,
-            "the older sync requests were replaced"
-        );
-        let mut order = Vec::new();
-        while let Some(request) = sched.next(0) {
-            assert!(sched.next(0).is_none(), "one request in flight");
-            order.push(request);
-            sched.done(0, 0);
-        }
-        assert_eq!(
-            order,
-            vec![
-                fetch_req(8, 1),
-                fetch_req(9, 2),
-                body_req(1, 3),
-                sync_req(2, 7),
-                sync_req(1, 9_999),
-            ]
-        );
-        assert!(sched.is_empty() && !sched.busy());
-    }
-
-    /// A peer's token bucket: served while it holds tokens, then its requests are dropped until
-    /// the refill; other peers are unaffected; the debt of a large response is paid first.
-    #[test]
-    fn token_bucket_per_peer() {
-        let limits = ServeLimits {
-            bytes_per_sec: 1_000,
-            burst_bytes: 2_000,
-            max_peers: 16,
-        };
-        let mut sched = ServeSched::new(limits);
-        assert!(sched.push(sync_req(1, 1), 0));
-        assert_eq!(sched.next(0), Some(sync_req(1, 1)));
-        sched.done(0, 5_000);
-        assert!(
-            !sched.push(sync_req(1, 2), 1_000),
-            "3 000 bytes of debt, 1 000 repaid"
-        );
-        assert!(sched.push(sync_req(2, 1), 1_000), "another peer is served");
-        assert_eq!(sched.next(1_000), Some(sync_req(2, 1)));
-        sched.done(1_000, 10);
-        assert!(!sched.push(sync_req(1, 3), 3_000));
-        assert!(sched.push(sync_req(1, 4), 3_001), "debt repaid");
-        // A request queued with tokens left is dropped at its turn once the bucket ran empty.
-        assert!(sched.push(body_req(1, 5), 3_001));
-        assert_eq!(sched.next(3_001), Some(body_req(1, 5)));
-        sched.done(3_001, 4_000);
-        assert_eq!(
-            sched.next(3_002),
-            None,
-            "the pending sync request is dropped"
-        );
-        assert!(sched.is_empty());
-        assert_eq!(sched.dropped(), 3);
-    }
-
-    /// Past `max_peers` tracked peers a new peer's request is dropped, unless an idle peer
-    /// with a full bucket can be forgotten.
-    #[test]
-    fn tracked_peers_are_bounded() {
-        let limits = ServeLimits {
-            bytes_per_sec: 1_000,
-            burst_bytes: 1_000,
-            max_peers: 2,
-        };
-        let mut sched = ServeSched::new(limits);
-        assert!(sched.push(sync_req(1, 1), 0));
-        assert!(sched.push(sync_req(2, 1), 0));
-        assert!(!sched.push(sync_req(3, 1), 0), "two peers pending");
-        assert_eq!(sched.next(0), Some(sync_req(1, 1)));
-        sched.done(0, 500);
-        assert!(!sched.push(sync_req(3, 1), 0), "peer 1 still owes a refill");
-        assert!(
-            sched.push(sync_req(3, 1), 500),
-            "peer 1 is idle and refilled"
-        );
-        assert_eq!(sched.len(), 2);
-    }
-
-    /// Serving actions and requests convert both ways; other actions are refused.
-    #[test]
-    fn requests_from_and_into_actions() {
-        let actions = [
-            Action::ServeBlocks {
-                to: key(1),
-                from_height: 3,
-                max_count: 2,
-                max_bytes: 9,
-            },
-            Action::ServeBody {
-                to: key(1),
-                height: 3,
-                block_hash: Hash32::ZERO,
-            },
-            Action::FetchBody {
-                height: 3,
-                block_hash: Hash32::ZERO,
-                peers: vec![key(2)],
-            },
-        ];
-        for action in actions {
-            let request = ServeRequest::from_action(action.clone()).unwrap();
-            assert_eq!(request.into_action(), action);
-        }
-        let other = Action::LocalFault(iroha_sumeragi::api::LocalFault::RecordMissing);
-        assert_eq!(ServeRequest::from_action(other.clone()), Err(other));
-    }
-
-    /// A frame carries the exact encoding, the instance and the class.
-    #[test]
-    fn frames_carry_instance_and_class() {
-        let msg = WireMessage::BlockRequest(BlockRequest {
-            instance: Hash32([5; 32]),
-            height: 1,
-            block_hash: Hash32::ZERO,
-        });
-        let frame = frame(&msg).unwrap();
-        assert_eq!(frame.instance, Hash32([5; 32]));
-        assert_eq!(frame.class, TrafficClass::Control);
-        assert_eq!(WireMessage::decode(&frame.bytes, usize::MAX).unwrap(), msg);
-    }
-}
+#[cfg(test)]
+#[path = "delivery_tests.rs"]
+mod delivery_tests;

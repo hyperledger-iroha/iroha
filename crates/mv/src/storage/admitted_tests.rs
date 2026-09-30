@@ -1,11 +1,11 @@
 //! Joint publication keeps both original maps and identity ahead of cleanup.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge, AllocationReservation};
 use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeCloning, NodeFunding, PlanningError,
     Prepaid,
 };
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation};
 use std::{
     alloc::Layout,
     future::Future,

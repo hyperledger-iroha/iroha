@@ -6,8 +6,8 @@ use crate::sumeragi::attestation::{
     NativePastaVerifier, attest_original,
 };
 use crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
-use iroha_sumeragi::message::{ResultWitness, WitnessAdmissionError};
-use mv::allocation::{ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{ChargedBuffer, ChargedBufferError};
+use iroha_sumeragi::message::{ByteAdmissionError, ResultWitness};
 
 const _: () = assert!(
     super::super::commitment::MAX_RESULT_PREIMAGE_BYTES
@@ -25,7 +25,7 @@ pub(super) enum Progress {
     WaitingBacking(Option<ChargedBufferError>),
     WaitingControl {
         bytes: ChargedBuffer<u8>,
-        refusal: Option<WitnessAdmissionError>,
+        refusal: Option<ByteAdmissionError>,
     },
     Signing(ResultWitness),
     Publishing(LocalCommitAttestation),
@@ -209,7 +209,11 @@ impl Worker<'_> {
 
     /// Reconstruct authority from the independently authenticated committed source even
     /// during startup replay, before a local signer or mailbox has been attached.
-    pub(super) fn verify_prepared_certificate(&self, block: &Block, qc: &Qc) -> Result<(), String> {
+    pub(super) fn verify_prepared_certificate(
+        &self,
+        block: &AvailableBody,
+        qc: &Qc,
+    ) -> Result<(), String> {
         let view = self
             .state
             .try_view_once()
@@ -222,11 +226,16 @@ impl Worker<'_> {
         let scheduled = view
             .world()
             .consensus_schedule()
-            .ready(block.header.height)
+            .ready(block.header().height)
             .map_err(|error| error.to_string())?;
         let config = scheduled
             .height_config()
             .map_err(|error| error.to_string())?;
+        if block.source().instance() != instance || block.source().config() != &config {
+            return Err(
+                "available body does not bind the independently authenticated authority".into(),
+            );
+        }
         let crypto = self
             .context
             .crypto

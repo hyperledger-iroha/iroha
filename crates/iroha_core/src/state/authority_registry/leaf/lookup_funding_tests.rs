@@ -1,8 +1,8 @@
 //! Funded lookup refusal preserves semantic priority, old roots and proof checks.
 
 use super::*;
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_data_model::consensus::{ConsensusKeyId, ConsensusKeyRole};
-use mv::allocation::{AllocationBudget, AllocationRefusal};
 
 #[test]
 fn lookup_admission_is_local_and_verification_requires_no_resident_owner() {

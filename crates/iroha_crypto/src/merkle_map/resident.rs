@@ -1,6 +1,6 @@
 //! Exact prepaid immutable replacement paths for the resident commitment owner.
 
-use mv::allocation::AllocationReservation;
+use iroha_allocation::AllocationReservation;
 
 use super::{
     AllocationBudget, AllocationRefusal, ChargedShared, Hash, MerkleMapError, Node, NodeKind,

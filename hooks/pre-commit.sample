@@ -40,9 +40,8 @@ bash scripts/tests/consistency.sh --update schema
 # Validate live Iroha help and update Kagami's checked-in compact snapshot.
 cargo run --bin iroha -- tools markdown-help > /dev/null
 cargo run --bin kagami -- advanced markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
-# update docker compose files
-cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
-cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
-cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
+# Regenerate the development Compose snapshots from the `Iroha` seed. The script renders them
+# against a disposable `kagami localnet` genesis, so no complete manifest is read from `defaults/`.
+bash scripts/tests/consistency.sh --update docker-compose
 # stage updates
 git add ./specs/references/schema.json ./crates/iroha_kagami/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

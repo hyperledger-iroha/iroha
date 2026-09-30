@@ -15,7 +15,7 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, World},
     sumeragi::{
-        block_store::commit_certificate,
+        block_store::{commit_certificate, decode_certificate},
         test_chain::{CertifiedTestChain, Signers, TestChainConfig},
     },
 };
@@ -57,11 +57,9 @@ fn with_parts(
     let (mut header, mut qc) = decode_certificate(certificate).expect("parts");
     let mut preimage = certificate.result_preimage().to_vec();
     edit(&mut header, &mut qc, &mut preimage);
-    Arc::new(
-        frame
-            .clone()
-            .with_commit_certificate(Some(commit_certificate(&header, &qc, preimage).unwrap())),
-    )
+    Arc::new(frame.clone().with_commit_certificate(Some(
+        commit_certificate(&header, &qc, preimage, certificate.availability().to_vec()).unwrap(),
+    )))
 }
 
 #[test]
@@ -212,6 +210,7 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
             vec![1],
             Vec::new(),
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         ),
     )));
     assert!(matches!(
@@ -291,6 +290,45 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
         Err(ChainReadError::Certificate { height: 4, .. })
     ));
     assert_eq!(header.height, 4);
+}
+
+/// A genuine exact-quorum QC cannot replace the original signed availability table.
+#[test]
+fn certified_reader_rejects_missing_foreign_and_corrupt_signed_availability() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let original = frame(&chain, 3);
+    let certificate = original.commit_certificate().unwrap();
+    reader
+        .check_certificate(read_frame(original.clone(), 3).unwrap())
+        .expect("original signed rows and exact quorum verify together");
+    let other = frame(&chain, 4);
+    let mut corrupted = certificate.availability().to_vec();
+    let last = corrupted
+        .last_mut()
+        .expect("signed availability is present");
+    *last ^= 1;
+    for availability in [
+        Vec::new(),
+        other.commit_certificate().unwrap().availability().to_vec(),
+        corrupted,
+    ] {
+        let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
+            CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                certificate.commit_qc().to_vec(),
+                certificate.result_preimage().to_vec(),
+                availability,
+            ),
+        )));
+        assert!(
+            read_frame(changed, 3)
+                .and_then(|frame| reader.check_certificate(frame))
+                .is_err(),
+            "table custody is independently mandatory even under the unchanged valid QC",
+        );
+    }
 }
 
 /// Certificates are per node: another valid `CommitQC` of the same block (other signers) gives
@@ -508,44 +546,64 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
     let mut history = vec![frame(&chain, 1)];
     let mut parent = read_frame(Arc::clone(&history[0]), 1).unwrap();
     for height in 2..=3 {
-        let changed = with_parts(&frame(&chain, height), |header, qc, preimage| {
-            header.parent_hash = parent.core_hash();
-            header.parent_result = parent.result();
-            header.attest = height == 2;
-            *qc = chain.commit_qc(
-                height,
-                header.hash(&BlsCrypto::new()),
-                result_of_preimage(preimage),
-                false,
-                Signers::Quorum,
+        let original = frame(&chain, height);
+        let certificate = original.commit_certificate().unwrap();
+        let (mut header, _) = decode_certificate(certificate).unwrap();
+        header.parent_hash = parent.core_hash();
+        header.parent_result = parent.result();
+        header.attest = height == 2;
+        // Authenticate the changed header with original proposer custody and actual RS16 rows.
+        let payload = original
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
+            .encode_wire()
+            .unwrap();
+        let body = chain.author_payload(header, payload);
+        let mut qc = chain.commit_qc(
+            height,
+            body.hash(&BlsCrypto::new()),
+            result_of_preimage(certificate.result_preimage()),
+            false,
+            Signers::Quorum,
+        );
+        if body.header().attest {
+            qc.attest = true;
+            let mut keys = (0xC1..=0xC4)
+                .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            keys.sort_by_key(|key| core_key(key.public_key()).unwrap());
+            let signatures = keys
+                .iter()
+                .take(3)
+                .map(|key| {
+                    use iroha_sumeragi::crypto::Signer as _;
+                    crate::sumeragi::crypto::KeyPairSigner::new(key)
+                        .unwrap()
+                        .sign(&qc.preimage())
+                })
+                .collect::<Vec<_>>();
+            qc.agg_sig = iroha_sumeragi::crypto::Crypto::aggregate(&BlsCrypto::new(), &signatures);
+            let invalid_signature =
+                iroha_sumeragi::message::AttestationSignature::try_from_slice(&[0x42]).unwrap();
+            qc.attestations = vec![invalid_signature; 3];
+            qc.attestation_witness = Some(
+                iroha_sumeragi::message::ResultWitness::from_untrusted(
+                    certificate.result_preimage().to_vec(),
+                )
+                .unwrap(),
             );
-            if header.attest {
-                qc.attest = true;
-                let mut keys = (0xC1..=0xC4)
-                    .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-                    .collect::<Vec<_>>();
-                keys.sort_by_key(|key| core_key(key.public_key()).unwrap());
-                let signatures = keys
-                    .iter()
-                    .take(3)
-                    .map(|key| {
-                        use iroha_sumeragi::crypto::Signer as _;
-                        crate::sumeragi::crypto::KeyPairSigner::new(key)
-                            .unwrap()
-                            .sign(&qc.preimage())
-                    })
-                    .collect::<Vec<_>>();
-                qc.agg_sig =
-                    iroha_sumeragi::crypto::Crypto::aggregate(&BlsCrypto::new(), &signatures);
-                let invalid_signature =
-                    iroha_sumeragi::message::AttestationSignature::try_from_slice(&[0x42]).unwrap();
-                qc.attestations = vec![invalid_signature; 3];
-                qc.attestation_witness = Some(
-                    iroha_sumeragi::message::ResultWitness::from_untrusted(preimage.clone())
-                        .unwrap(),
-                );
-            }
-        });
+        }
+        let changed = Arc::new(
+            original.as_ref().clone().with_commit_certificate(Some(
+                commit_certificate(
+                    body.header(),
+                    &qc,
+                    certificate.result_preimage().to_vec(),
+                    norito::encode_canonical(body.availability()).unwrap(),
+                )
+                .unwrap(),
+            )),
+        );
         parent = read_frame(Arc::clone(&changed), height).unwrap();
         history.push(changed);
     }
@@ -688,6 +746,7 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
             certificate.consensus_header().to_vec(),
             certificate.commit_qc().to_vec(),
             result.preimage().unwrap(),
+            certificate.availability().to_vec(),
         ),
     )));
     assert_eq!(changed.hash(), genesis.hash());
@@ -753,7 +812,7 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
         CertifiedChain::from_frames(&chain_id, &foreign, &hashes, &frames).err(),
         Some(ChainReadError::ForeignGenesis)
     );
-    let other_chain = ChainId::from("foreign instance");
+    let other_chain = ChainId::from("foreign-instance");
     let reader = CertifiedChain::from_frames(&other_chain, &network, &hashes, &frames).unwrap();
     assert_eq!(
         reader.certified(3).err(),

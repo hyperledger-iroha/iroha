@@ -27,7 +27,7 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
-    sumeragi::{PROTOCOL_VERSION, SumeragiStatus},
+    sumeragi::SumeragiStatus,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -703,7 +703,7 @@ mod tests {
                         .public_key()
                         .clone(),
                 );
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0xA0_u8.wrapping_add(seed); 32],
                     0,
                     validator,

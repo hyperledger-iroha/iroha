@@ -1,8 +1,8 @@
 //! Kotodama domain demo: register, transfer, and unregister a domain on a mock WSV.
 use ivm::{
-    AccountId, IVM, MockWorldStateView, PermissionToken, ProgramMetadata,
-    kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
+    AccountId, IVM, MockWorldStateView, PermissionToken, ProgramMetadata, mock_wsv::WsvHost,
 };
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn fixture_account(hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }

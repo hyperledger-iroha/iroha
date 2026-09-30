@@ -177,7 +177,7 @@ fn contract_argument_record_requires_the_selected_account_prefix() {
         let expected = {
             let _selected = ChainDiscriminantGuard::enter(prefix);
             let payload: Json = json::from_value(value).unwrap();
-            iroha_core::encode_argument_record_from_json(&schema, &payload).unwrap()
+            ivm::encode_argument_record_from_json(&schema, &payload).unwrap()
         };
         let record = encode_contract_argument_record_json(
             schema_json.clone(),

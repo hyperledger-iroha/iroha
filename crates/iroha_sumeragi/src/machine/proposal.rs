@@ -3,7 +3,8 @@
 use super::{Core, EvKey, ExecState, Held};
 use crate::{
     api::{Action, ExecOutcome, LocalFault},
-    message::{Block, Defect, Evidence, Proposal, VoteKind, WireMessage},
+    availability::{AvailabilityFrame, AvailabilitySource, AvailableBody},
+    message::{Defect, Evidence, PayloadManifest, Proposal, VoteKind},
     pacemaker::exec_retry_delay,
     safety::RecordedVote,
     types::{Hash32, PublicKey},
@@ -18,7 +19,12 @@ const NO_TC_RULE: bool = cfg!(any(
 
 impl Core {
     /// §6.2 for a proposal of the current height (not awaiting).
-    pub(super) fn on_proposal(&mut self, from: &PublicKey, p: Proposal) {
+    pub(super) fn on_proposal(
+        &mut self,
+        from: &PublicKey,
+        p: Proposal,
+        availability: AvailabilityFrame,
+    ) {
         let w = p.view;
         let bh = p.block_hash(&*self.crypto);
         let ad = p.att_digest(&*self.crypto);
@@ -54,6 +60,12 @@ impl Core {
         }
         // Step 2: duplicates and equivocation.
         if self.check_held(&p, bh, ad) {
+            if exact {
+                self.on_manifest(PayloadManifest {
+                    header: p.header,
+                    availability,
+                });
+            }
             return;
         }
         // Step 3: justify (runs the TC handler, which may advance the view to w).
@@ -61,15 +73,29 @@ impl Core {
         if let Some(defect) = self.check_justify(&p) {
             return self.signed_defect(p, defect);
         }
-        if !self.same_height(h0) || self.check_held(&p, bh, ad) {
+        if !self.same_height(h0) {
+            return;
+        }
+        if self.check_held(&p, bh, ad) {
+            if self
+                .proposal
+                .as_ref()
+                .is_some_and(|held| held.bh == bh && held.ad == ad)
+            {
+                self.on_manifest(PayloadManifest {
+                    header: p.header,
+                    availability,
+                });
+            }
             return;
         }
         // Step 4: view.
         if w < self.view {
-            if self.wants.contains_key(&bh)
-                && let Some(block) = p.block()
-            {
-                self.on_body(block, false);
+            if self.wants.contains_key(&bh) {
+                self.on_manifest(PayloadManifest {
+                    header: p.header.clone(),
+                    availability,
+                });
             }
             return;
         }
@@ -80,7 +106,12 @@ impl Core {
         if let Some(defect) = self.check_parent(&p).or_else(|| self.check_header(&p, bh)) {
             return self.signed_defect(p, defect);
         }
-        self.accept_proposal(from, p, bh, ad);
+        let manifest = PayloadManifest {
+            header: p.header.clone(),
+            availability,
+        };
+        self.accept_proposal(Some(from), p, bh, ad);
+        self.on_manifest(manifest);
     }
 
     /// Step 2: `true` if a proposal for `(h, p.view)` is already held (the duplicate may supply
@@ -92,18 +123,10 @@ impl Core {
             return false;
         };
         if held.bh == bh && held.ad == ad {
-            if !self.blocks.contains_key(&bh)
-                && let Some(block) = p.block()
-                && block.body_ok(&*self.crypto)
-            {
-                self.put_body(bh, block, false);
-                self.after_body(bh);
-            }
             return true;
         }
         let first = Box::new(held.p.clone());
-        let mut second = Box::new(p.clone());
-        second.payload = None;
+        let second = Box::new(p.clone());
         self.report(
             EvKey::Proposal(p.view),
             Evidence::ProposalEquivocation(first, second),
@@ -161,9 +184,8 @@ impl Core {
 
     /// Step 7: evidence for a signed defect (payload stripped) and an early timeout if it is the
     /// current view's proposal (SR35).
-    fn signed_defect(&mut self, mut p: Proposal, defect: Defect) {
+    fn signed_defect(&mut self, p: Proposal, defect: Defect) {
         let w = p.view;
-        p.payload = None;
         self.report(
             EvKey::Invalid(w),
             Evidence::InvalidProposal {
@@ -176,80 +198,58 @@ impl Core {
         }
     }
 
-    /// Step 8: accept; take the body or want it; then step 9.
-    fn accept_proposal(&mut self, from: &PublicKey, p: Proposal, bh: Hash32, ad: Hash32) {
-        #[cfg(sumeragi_mutation = "MS35")]
-        if p.block().is_some_and(|block| !block.body_ok(&*self.crypto)) {
-            return self.signed_defect(p, Defect::PayloadTooLarge);
-        }
-        let block = p.block().filter(|block| block.body_ok(&*self.crypto));
+    /// Accepted remote or locally recorded proposal: install the same held state, acquire
+    /// its body if needed, then execute. `from` adds only the optional transport relay to
+    /// body sources; it grants no signature, header, eligibility or storage exemption.
+    pub(super) fn accept_proposal(
+        &mut self,
+        from: Option<&PublicKey>,
+        p: Proposal,
+        bh: Hash32,
+        ad: Hash32,
+    ) {
         let q = p
             .justify
             .as_ref()
-            .and_then(|tc| tc.high_pqc.clone())
-            .filter(|_| p.view > 0 && !NO_TC_RULE);
-        let mut stripped = p;
-        stripped.payload = None;
-        let leader = self.member_key(self.topo.leader(stripped.view));
-        self.proposal = Some(Held {
-            p: stripped,
-            bh,
-            ad,
-            expected: q.as_ref().map(|q| q.result),
-        });
-        self.t_prop = Some(self.now);
-        match block {
-            #[cfg(not(sumeragi_mutation = "ML10"))]
-            Some(block) => self.put_body(bh, block, false),
-            #[cfg(sumeragi_mutation = "ML10")]
-            Some(block) => self.put_body(bh, block, true),
-            None if !self.blocks.contains_key(&bh) => {
-                // SPEC: besides §6.2 step 8's sources, the relaying peer is asked too (it held
-                // the proposal a moment ago; bodies are self-verifying, so this is harmless).
-                // (Appendix E, E27)
-                let mut sources: Vec<PublicKey> = leader.into_iter().collect();
-                sources.push(from.clone());
-                if let Some(q) = &q {
-                    sources.extend(self.signer_keys(q));
-                }
-                self.want(bh, self.height, sources);
-            }
-            None => {}
-        }
-        self.maybe_execute();
-    }
-
-    /// Accept this node's own proposal (§6.10 rule 3, then §6.2 steps 8–9).
-    pub(super) fn accept_own(&mut self, p: Proposal, bh: Hash32, ad: Hash32) {
-        let expected = p
-            .justify
-            .as_ref()
             .and_then(|tc| tc.high_pqc.as_ref())
-            .filter(|_| !NO_TC_RULE)
-            .map(|q| q.result);
-        let mut stripped = p;
-        stripped.payload = None;
+            .filter(|_| p.view > 0 && !NO_TC_RULE);
+        let expected = q.map(|q| q.result);
+        let sources = (!self.blocks.contains_key(&bh)).then(|| {
+            // SPEC: besides §6.2 step 8's sources, ask the transport relay (Appendix E, E27).
+            // A local proposal already holds its body; no relay authority is invented.
+            let mut sources: Vec<PublicKey> = self
+                .member_key(self.topo.leader(p.view))
+                .into_iter()
+                .collect();
+            sources.extend(from.cloned());
+            if let Some(q) = q {
+                sources.extend(self.signer_keys(q));
+            }
+            sources
+        });
         self.proposal = Some(Held {
-            p: stripped,
+            p,
             bh,
             ad,
             expected,
         });
         self.t_prop = Some(self.now);
+        if let Some(sources) = sources {
+            self.want(bh, self.height, sources);
+        }
         self.maybe_execute();
     }
 
     /// Store a body in memory (`StoreBody` unless it came from the local stores). A held body
     /// is never replaced. Callers checked `body_ok` (SR20).
-    pub(super) fn put_body(&mut self, bh: Hash32, block: Block, from_store: bool) {
+    pub(super) fn put_body(&mut self, bh: Hash32, block: AvailableBody) {
         if self.blocks.contains_key(&bh) {
             return;
         }
-        if !from_store {
-            self.out.push(Action::StoreBody {
-                block: block.clone(),
-            });
-        }
+        #[cfg(not(sumeragi_mutation = "ML10"))]
+        self.out.push(Action::StoreBody {
+            block: block.clone(),
+        });
         self.wants.remove(&bh);
         self.blocks.insert(bh, block);
     }
@@ -519,26 +519,35 @@ impl Core {
         self.persist();
     }
 
-    /// `on_block_request` (§6.9 rule 4): answer from memory, else ask the driver to answer from
-    /// its body store or block store (any height).
+    /// `on_block_request` (§6.9 rule 4): every requested response uses the driver's
+    /// bounded, per-requester serving path and original authenticated body stores.
     pub(super) fn on_block_request(&mut self, to: PublicKey, height: u64, bh: Hash32) {
         #[cfg(sumeragi_mutation = "ML11")]
         if height <= self.tip.height {
             return;
         }
-        match self.blocks.get(&bh).filter(|b| b.header.height == height) {
-            Some(block) => {
-                let msg = WireMessage::BlockResponse(crate::message::BlockResponse {
-                    instance: self.instance,
-                    block: block.clone(),
-                });
-                self.send(to, msg);
-            }
-            None => self.out.push(Action::ServeBody {
-                to,
-                height,
-                block_hash: bh,
-            }),
+        self.out.push(Action::ServePayload {
+            to,
+            height,
+            block_hash: bh,
+        });
+    }
+    pub(super) fn on_manifest(&mut self, manifest: PayloadManifest) {
+        let bh = manifest.hash(&*self.crypto);
+        let Some(want) = self.wants.get(&bh) else {
+            return;
+        };
+        if manifest.header.height != want.height
+            || !manifest.availability.admitted_to(&self.body_budget)
+        {
+            return;
         }
+        let Some(config) = self.config(want.height).cloned() else {
+            return;
+        };
+        let Ok(source) = AvailabilitySource::new(self.instance, want.height, bh, config) else {
+            return;
+        };
+        self.out.push(Action::AcquirePayload { source, manifest });
     }
 }

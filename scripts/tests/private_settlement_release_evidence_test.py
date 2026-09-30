@@ -495,7 +495,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "run": seed,
                 "validators_per_dataspace": 4,
                 "quorum": "3-of-4",
-                "mandatory_signed_rs16_da_rbc": True,
+                "mandatory_signed_rs16_da": True,
                 "authenticated_private_settlement_route_control": True,
                 **payload,
             }
@@ -759,7 +759,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "seeds": [0, 1],
                         "validators_per_dataspace": 4,
                         "quorum": "3-of-4",
-                        "mandatory_signed_rs16_da_rbc": True,
+                        "mandatory_signed_rs16_da": True,
                         "max_unavailable_per_committee": 1,
                         "partial_visibility_observations": 0,
                         "partial_spendable_observations": 0,
@@ -1254,7 +1254,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "real_network_participants": list(MODULE.REQUIRED_PARTICIPANTS),
                 "validators_per_dataspace": 4,
                 "quorum": "3-of-4",
-                "mandatory_signed_rs16_da_rbc": True,
+                "mandatory_signed_rs16_da": True,
                 "max_unavailable_per_committee": 1,
                 "loss_percentages": list(MODULE.REQUIRED_LOSS_PERCENTAGES),
                 "crash_boundaries": list(MODULE.REQUIRED_CRASH_BOUNDARIES),
@@ -1529,7 +1529,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             )
             report_path = root / artifact["path"]
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["configurations"][2]["mandatory_signed_rs16_da_rbc"] = False
+            report["configurations"][2]["mandatory_signed_rs16_da"] = False
             payload = (json.dumps(report, sort_keys=True) + "\n").encode()
             report_path.write_bytes(payload)
             artifact["bytes"] = len(payload)
@@ -3052,6 +3052,87 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 MODULE.EvidenceError, "public grouped statistics differ from exact retained replay"
             ):
                 verify_fixture_bundle(manifest_path)
+
+
+class ConfigurationProfileConsensusTests(unittest.TestCase):
+    """Archived runner profiles bind exactly the current signed RS16 consensus requirements."""
+
+    @staticmethod
+    def validate(mutate=None) -> dict[int, str]:
+        """Archive the runner's canonical profiles and replay the release reader over them."""
+        import private_settlement_release_runner as runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts: dict[PurePosixPath, Any] = {}
+            rows = []
+            for participants in MODULE.REQUIRED_PARTICIPANTS:
+                configuration = runner.build_configuration(
+                    participants, seeds=tuple(range(10)), warmups=5, measured=30
+                )
+                if mutate is not None and participants == 3:
+                    mutate(configuration)
+                payload = (json.dumps(configuration, sort_keys=True) + "\n").encode()
+                relative = PurePosixPath("configurations") / f"n{participants}.json"
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(payload)
+                digest = hashlib.sha256(payload).hexdigest()
+                artifacts[relative] = MODULE.Artifact(
+                    "configuration", relative, digest, len(payload)
+                )
+                rows.append(
+                    {
+                        "participants": participants,
+                        "validators_per_dataspace": 4,
+                        "quorum": "3-of-4",
+                        "mandatory_signed_rs16_da": True,
+                        "path": relative.as_posix(),
+                        "sha256": digest,
+                        "bytes": len(payload),
+                    }
+                )
+            manifest = root / "configuration-manifest-v1.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "protocol": MODULE.PROTOCOL,
+                        "commit": RELEASE_COMMIT,
+                        "configurations": rows,
+                        "passed": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return MODULE._validate_configuration_manifest(
+                manifest, root=root, commit=RELEASE_COMMIT, artifacts_by_path=artifacts
+            )
+
+    def test_runner_profiles_carry_exactly_the_consensus_bindings(self) -> None:
+        self.assertEqual(sorted(self.validate()), list(MODULE.REQUIRED_PARTICIPANTS))
+
+    def test_consensus_profile_rejects_extra_missing_or_weakened_bindings(self) -> None:
+        mutations = {
+            "availability bypass knob": lambda configuration: configuration[
+                "consensus"
+            ].update(signed_rs16_da_bypass_permitted=False),
+            "missing availability": lambda configuration: configuration[
+                "consensus"
+            ].pop("mandatory_signed_rs16_da"),
+            "optional availability": lambda configuration: configuration[
+                "consensus"
+            ].update(mandatory_signed_rs16_da=False),
+            "unauthenticated route control": lambda configuration: configuration[
+                "consensus"
+            ].update(authenticated_private_settlement_route_control=False),
+            "partial observation floor": lambda configuration: configuration[
+                "consensus"
+            ].update(minimum_signed_rs16_da_observations_per_run=1),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name), self.assertRaises(MODULE.EvidenceError):
+                self.validate(mutate)
 
 
 if __name__ == "__main__":

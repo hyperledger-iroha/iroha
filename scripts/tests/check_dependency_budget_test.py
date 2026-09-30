@@ -589,6 +589,32 @@ def test_foundation_model_selections_reject_upper_layer_dependencies() -> None:
             assert not result["within_boundary"], package
 
 
+@pytest.mark.parametrize("owner", ["iroha_core_privacy", "iroha_core_timed_ovn"])
+def test_extracted_native_owners_remain_forbidden_from_lower_layer_selections(owner: str) -> None:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))
+    assert owner in policy["layers"]["node_execution"]
+    selections = [
+        selection for selection in policy["configurations"].values()
+        if "node_execution" in selection["forbidden_layers"]
+    ]
+    assert {selection["package"] for selection in selections} >= {
+        "iroha", "iroha_model_base", "iroha_data_model",
+    }
+    for selection in selections:
+        root = selection["package"]
+        baseline = f"0|{root} v1.0.0|\n1|norito v1.0.0|\n"
+        assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
+        leaked = MODULE.evaluate_boundary_tree(
+            policy, selection, baseline + f"2|{owner} v1.0.0|\n",
+        )
+        assert leaked["violations"] == [{
+            "package": owner,
+            "forbidden_layer": "node_execution",
+            "path": [root, "norito", owner],
+        }]
+
+
 def test_aggregate_model_test_boundary_retains_protocol_ownership_and_denials() -> None:
     path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
     policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))

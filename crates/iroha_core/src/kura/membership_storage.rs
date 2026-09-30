@@ -7,11 +7,11 @@
 //! reclamation, rollover, or production membership publication. Existing segment
 //! files deliberately require recovery instead of being adopted from their length.
 
-use concread::release::{DeferredRelease, ReleaseGuard, ReleaseNotification, ReleaseWait};
+use iroha_allocation::release::{DeferredRelease, ReleaseGuard, ReleaseNotification, ReleaseWait};
 use std::{alloc::Layout, cell::RefCell, fs::File, io, num::NonZeroU64};
 
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use iroha_config::parameters::actual::KuraMembershipStoragePolicy;
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use parking_lot::Mutex;
 
 use super::Kura;
@@ -28,7 +28,7 @@ pub enum MembershipStorageError {
     Allocation(#[from] AllocationRefusal),
     /// An original prepaid control reservation could not supply its exact layout.
     #[error(transparent)]
-    Reservation(#[from] mv::allocation::InsufficientReservation),
+    Reservation(#[from] iroha_allocation::InsufficientReservation),
     /// Native positioned I/O or durability failure; the range remains owned.
     #[error(transparent)]
     Io(#[from] io::Error),

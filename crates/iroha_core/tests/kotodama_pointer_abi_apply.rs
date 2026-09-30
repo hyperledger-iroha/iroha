@@ -11,10 +11,9 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use ivm::{
-    IVM, KotodamaCompiler, ProgramMetadata,
-    kotodama::compiler::{CompilerMode, CompilerOptions},
-};
+use ivm::{IVM, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
 fn pointer_abi_test_compiler() -> KotodamaCompiler {

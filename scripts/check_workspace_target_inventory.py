@@ -28,7 +28,7 @@ EXPECTED_DEFAULT_BINS = frozenset(
         ("irohad", "iroha3d_taira"),
         ("irohad", "sorafs_governance_dag"),
         ("irohad", "taira_bootle_lantern_broker"),
-        ("ivm", "koto"),
+        ("kotodama_toolchain", "koto"),
         ("izanami", "izanami"),
         ("mochi-ui", "mochi"),
         ("musubi", "musubi"),
@@ -63,9 +63,8 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("iroha_cli", "gov_instruction"),
         ("iroha_cli", "taira_fee_sponsor_program"),
         ("iroha_core", "fastpq_fixture_capture"),
-        ("iroha_core", "kagemusha_real_proof"),
-        ("iroha_core", "pk2_bridge_finality_verify"),
         ("iroha_core", "privacy_exact12_action_driver"),
+        ("iroha_core_zk", "kagemusha_real_proof"),
         ("iroha_crypto", "gost_perf_check"),
         ("iroha_crypto", "sm_perf_check"),
         ("iroha_crypto", "soranet_handshake_check"),
@@ -81,7 +80,6 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("iroha_kagami", "iroha_authenticated_tool_controller"),
         ("irohad", "iroha_test_runtime_provider_broker"),
         ("irohad", "sorafs_external_software_signer"),
-        ("ivm", "dump_program"),
         ("ivm", "gas_probe"),
         ("ivm", "gen_abi_hash_doc"),
         ("ivm", "gen_header_doc"),
@@ -91,6 +89,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("ivm", "ivm_prebuild"),
         ("ivm", "ivm_predecoder_export"),
         ("kotlin-fixture-gen", "kotlin-fixture-gen"),
+        ("kotodama_toolchain", "dump_program"),
         ("mochi-integration", "kagami_mock"),
         ("norito", "norito_regen_goldens"),
         ("norito_codegen_exporter", "norito-schema-inventory"),
@@ -131,7 +130,7 @@ FORBIDDEN_COMPATIBILITY_BINS = frozenset(
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 98
+EXPECTED_DECLARED_BIN_COUNT = 97
 
 
 def load_metadata(root: Path) -> dict[str, Any]:

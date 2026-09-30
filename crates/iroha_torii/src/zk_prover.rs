@@ -51,11 +51,12 @@ use iroha_core::{
         State as CoreState, StateQueryView, StateReadOnly, WorldReadOnly,
         compute_zk_consensus_policy_hash,
     },
-    zk::{
-        hash_proof, hash_vk, is_developer_only_backend_label, is_production_claim_backend_label,
-        is_trusted_setup_backend_label, is_verifier_backend_registry_label_v1,
-        production_verify_backend_tag, verify_backend_with_timing_checked,
-    },
+    zk_guardrails::verify_backend_with_timing_checked,
+};
+use iroha_core_zk::{
+    hash_proof, hash_vk, is_developer_only_backend_label, is_production_claim_backend_label,
+    is_trusted_setup_backend_label, is_verifier_backend_registry_label_v1,
+    production_verify_backend_tag,
 };
 #[cfg(test)]
 use iroha_crypto::Hash;
@@ -2772,11 +2773,11 @@ pub(crate) fn start_worker(
 mod tests {
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-    use iroha_core::zk::test_utils::FixtureEnvelope;
-    use iroha_core::zk_stark::{
+    use iroha_core_zk::stark::{
         STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
         STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1,
     };
+    use iroha_core_zk::test_utils::FixtureEnvelope;
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
@@ -3348,7 +3349,7 @@ mod tests {
                 let vk_bytes = norito::encode_canonical(&vk).expect("worker fixture verifying key");
                 let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
                 let public_inputs = b"torii:worker:schema:v1".to_vec();
-                let proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+                let proof = iroha_core_zk::prove_stark_fri_open_verify_envelope(
                     backend,
                     &circuit_id,
                     &vk_box,

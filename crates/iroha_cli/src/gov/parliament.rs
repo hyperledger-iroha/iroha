@@ -21,14 +21,14 @@ use iroha::{
         isi::InstructionBox,
     },
 };
-use iroha_core::{
-    governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
-    tle_release::{
-        AuthorizedTleReleaseProjectionV1, TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1,
-        TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1, TleAdaptiveDealerCommitmentV1,
-        TleAdaptivePublicShareV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
-    },
-};
+use iroha_core_timed_ovn::evidence::TimedOvnReleaseIdentityPublicV1;
+use iroha_core_timed_ovn::tle::AuthorizedTleReleaseProjectionV1;
+use iroha_core_timed_ovn::tle::TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1;
+use iroha_core_timed_ovn::tle::TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1;
+use iroha_core_timed_ovn::tle::TleAdaptiveDealerCommitmentV1;
+use iroha_core_timed_ovn::tle::TleAdaptivePublicShareV1;
+use iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1;
+use iroha_core_timed_ovn::tle::TlePartialReleaseShareV1;
 use iroha_data_model::isi::governance::{
     ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
     ParliamentTleFinalReleaseSignatureV1, SubmitParliamentLifecycleTransitionV1,
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn verified_partial_deduplication_rejects_conflicting_signatures() {
         let partial = TlePartialReleaseShareV1 {
-            key_session_id: iroha_core::tle_release::TleKeySessionId::new([1; 32]),
+            key_session_id: iroha_data_model::governance::types::TleKeySessionId::new([1; 32]),
             identity_digest: [2; 32],
             participant_index: 1,
             sigma: [3; 48],

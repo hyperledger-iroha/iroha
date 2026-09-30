@@ -194,8 +194,7 @@ erasure and whole-attempt resource rejection. Three separately selected actual
 Metal tests pass leaf/parent parity and required-device readiness, including
 1024-job batches. Eleven external API tests and one public usage doctest also
 pass. The current Python
-geometry, hiding and source-budget selection passes 37 tests. See the
-[source-scoped validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+geometry, hiding and source-budget selection passes 37 tests.
 
 `deep_prover` joins the actual owners: whole-attempt preflight,
 explicit entropy, row root, full quotient, quotient/R root, OOD identity,

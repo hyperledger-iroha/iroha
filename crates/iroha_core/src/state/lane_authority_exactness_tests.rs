@@ -55,12 +55,55 @@ fn seed_committee_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) 
     world.commit();
 }
 
-fn exact_private_settlement_authority_fixture(
-    fault_tolerance: u32,
-    validator_count: u8,
-) -> (State, Vec<KeyPair>) {
-    let (state, keypairs) = exact_manifest_authority_fixture(fault_tolerance, validator_count);
+fn private_settlement_native_members(
+    keypairs: &[KeyPair],
+) -> Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneMember> {
+    crate::sumeragi::schedule::canonical_committee(
+        keypairs
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone())),
+    )
+    .expect("native canonical committee")
+    .into_iter()
+    .map(|peer| {
+        let key = keypairs
+            .iter()
+            .find(|key| key.public_key() == peer.public_key())
+            .expect("native committee key");
+        iroha_data_model::sumeragi_lanes::SumeragiLaneMember {
+            peer,
+            pop: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("native committee PoP"),
+        }
+    })
+    .collect()
+}
+
+fn exact_private_settlement_authority_fixture(validator_count: u8) -> (State, Vec<KeyPair>) {
+    use iroha_data_model::sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneRecord};
+    let state = blank_test_state();
+    let keypairs = (1..=validator_count)
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        .collect::<Vec<_>>();
+    seed_consensus_keys_with_pops(&state, &keypairs);
     seed_committee_consensus_keys_with_pops(&state, &keypairs);
+    let mut world = state.world.block();
+    world.sumeragi_lanes.get_mut().upsert(SumeragiLaneRecord {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+        lane: LaneId::new(1),
+        dataspace: DataSpaceId::new(1),
+        incarnation: Hash::new(b"private settlement native incarnation").into(),
+        params: Default::default(),
+        committee: private_settlement_native_members(&keypairs),
+        created_at: 1,
+        active_from: 3,
+        closing: None,
+        anchor_freshness: 16,
+        merged: SumeragiLaneFrontier::default(),
+        merged_at: 3,
+        rescued: 0,
+    });
+    world.commit();
     (state, keypairs)
 }
 
@@ -147,61 +190,52 @@ fn resolve_universal_committee(
 
 fn private_settlement_authority_for_keys(
     state: &State,
-    authority_height: u64,
     keypairs: &[KeyPair],
 ) -> iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1 {
-    let mut validator_rows = keypairs
+    let members = private_settlement_native_members(keypairs);
+    let validators = members
         .iter()
-        .map(|keypair| {
-            (
-                AccountId::new(keypair.public_key().clone()),
-                PeerId::new(keypair.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                    .expect("private-settlement authority PoP"),
-            )
-        })
+        .map(|member| member.peer.clone())
         .collect::<Vec<_>>();
-    validator_rows.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    let validators = validator_rows
-        .iter()
-        .map(|(_, validator, _)| validator.clone())
-        .collect::<Vec<_>>();
-    let validator_pops = validator_rows
-        .into_iter()
-        .map(|(_, _, pop)| pop)
-        .collect::<Vec<_>>();
+    let view = state.view();
+    let native = view
+        .world()
+        .sumeragi_lanes()
+        .lane(LaneId::new(1))
+        .expect("native fixture");
     iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1 {
         route: iroha_data_model::nexus::PrivateSettlementRouteV1 {
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_id: LaneId::SINGLE,
-            lane_incarnation: state
-                .lane_incarnation_at_height(LaneId::SINGLE, authority_height)
-                .expect("fixture lane incarnation is active"),
+            dataspace_id: native.dataspace,
+            lane_id: native.lane,
+            lane_incarnation: Hash::from_marked_bytes(native.incarnation)
+                .expect("marked incarnation"),
         },
         validator_set_hash: HashOf::new(&validators),
         validators,
-        validator_pops,
+        validator_pops: members.into_iter().map(|member| member.pop).collect(),
     }
 }
 
 #[test]
-fn private_settlement_authority_accepts_exact_state_anchored_f1_roster() {
-    let (state, keypairs) = exact_private_settlement_authority_fixture(1, 4);
-    let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
-
+fn private_settlement_authority_accepts_exact_native_f1_roster_without_physical_lane() {
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+    let authority = private_settlement_authority_for_keys(&state, &keypairs);
+    assert!(
+        state
+            .lane_incarnation_at_height(authority.route.lane_id, 3)
+            .is_none()
+    );
     crate::private_settlement::validate_private_settlement_committee_authority_v1(
         &state.view(),
-        1,
+        3,
         &authority,
     )
-    .expect("exact four-validator f=1 authority must be accepted");
+    .expect("exact native four-validator authority without a physical catalog entry");
 }
 
 #[test]
 fn private_settlement_authority_rejects_validator_only_state_authority() {
-    let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
-    // The shared lane fixture registers both consensus roles. Remove only the
-    // Committee keys so this case retains live Validator authority alone.
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
     let mut world = state.world.block();
     for keypair in &keypairs {
         let validator_id = derive_validator_key_id(keypair.public_key());
@@ -214,41 +248,89 @@ fn private_settlement_authority_rejects_validator_only_state_authority() {
             .insert(keypair.public_key().to_string(), vec![validator_id]);
     }
     world.commit();
-    let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
-
+    let authority = private_settlement_authority_for_keys(&state, &keypairs);
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
+            3,
             &authority,
         )
         .is_err(),
-        "private settlement must reject global Validator-only authority"
+        "global Validator-only authority cannot authorize private settlement"
+    );
+}
+
+#[test]
+fn private_settlement_authority_requires_live_committee_keys_at_its_anchor() {
+    for (activation, expiry, status, accepted) in [
+        (4, None, ConsensusKeyStatus::Active, false),
+        (0, Some(3), ConsensusKeyStatus::Active, false),
+        (0, None, ConsensusKeyStatus::Disabled, false),
+        (3, Some(4), ConsensusKeyStatus::Active, true),
+    ] {
+        let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+        let authority = private_settlement_authority_for_keys(&state, &keypairs);
+        let mut world = state.world.block();
+        let id = derive_committee_key_id(keypairs[0].public_key());
+        let mut record = world.consensus_keys.get(&id).unwrap().clone();
+        record.activation_height = activation;
+        record.expiry_height = expiry;
+        record.status = status;
+        world.consensus_keys.insert(id, record);
+        world.commit();
+        assert_eq!(
+            crate::private_settlement::validate_private_settlement_committee_authority_v1(
+                &state.view(),
+                3,
+                &authority,
+            )
+            .is_ok(),
+            accepted,
+            "Committee key must be live at the exact authority anchor"
+        );
+    }
+}
+
+#[test]
+fn private_settlement_authority_rejects_unmarked_native_incarnation() {
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+    let authority = private_settlement_authority_for_keys(&state, &keypairs);
+    let mut world = state.world.block();
+    world
+        .sumeragi_lanes
+        .get_mut()
+        .lane_mut(authority.route.lane_id)
+        .unwrap()
+        .incarnation[Hash::LENGTH - 1] &= !1;
+    world.commit();
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            3,
+            &authority,
+        )
+        .is_err(),
+        "authority must not normalize malformed native incarnation bytes"
     );
 }
 
 #[test]
 fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
-    let (state, keypairs) = exact_private_settlement_authority_fixture(1, 4);
-    let valid = private_settlement_authority_for_keys(&state, 1, &keypairs);
-
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+    let valid = private_settlement_authority_for_keys(&state, &keypairs);
     let forged_keys = (0x41_u8..=0x44)
-        .map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("forged test BLS key")
-        })
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
         .collect::<Vec<_>>();
-    let forged = private_settlement_authority_for_keys(&state, 1, &forged_keys);
+    let forged = private_settlement_authority_for_keys(&state, &forged_keys);
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
+            3,
             &forged,
         )
         .is_err(),
-        "four attacker-owned BLS keys must not become lane authority"
+        "four attacker-owned BLS keys are not the pinned native authority"
     );
-
     let mut reordered = valid;
     reordered.validators.swap(0, 1);
     reordered.validator_pops.swap(0, 1);
@@ -256,70 +338,185 @@ fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
+            3,
             &reordered,
         )
         .is_err(),
-        "the receipt roster must preserve canonical state order"
+        "receipt roster must preserve native canonical order"
     );
 }
 
 #[test]
-fn private_settlement_authority_rejects_rotated_roster_and_stale_incarnation() {
-    let (state, original_keys) = exact_private_settlement_authority_fixture(1, 4);
-    let original = private_settlement_authority_for_keys(&state, 1, &original_keys);
+fn private_settlement_authority_rejects_recreated_roster_and_stale_incarnation() {
+    let (state, original_keys) = exact_private_settlement_authority_fixture(4);
+    let original = private_settlement_authority_for_keys(&state, &original_keys);
     let replacement_keys = (0x51_u8..=0x54)
-        .map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("replacement test BLS key")
-        })
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
         .collect::<Vec<_>>();
-    seed_consensus_keys_with_pops(&state, &replacement_keys);
     seed_committee_consensus_keys_with_pops(&state, &replacement_keys);
-    install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE], &replacement_keys);
+    let mut world = state.world.block();
+    let record = world
+        .sumeragi_lanes
+        .get_mut()
+        .lane_mut(original.route.lane_id)
+        .unwrap();
+    record.incarnation = Hash::new(b"recreated native lane").into();
+    record.committee = private_settlement_native_members(&replacement_keys);
+    record.created_at = 5;
+    record.active_from = 7;
+    record.merged_at = 7;
+    world.commit();
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
+            7,
             &original,
         )
         .is_err(),
-        "a roster retired from the state authority source must be rejected"
+        "retired incarnation cannot authorize its replacement"
     );
-    let replacement = private_settlement_authority_for_keys(&state, 1, &replacement_keys);
+    let replacement = private_settlement_authority_for_keys(&state, &replacement_keys);
     crate::private_settlement::validate_private_settlement_committee_authority_v1(
         &state.view(),
-        1,
+        7,
         &replacement,
     )
-    .expect("the replacement authoritative roster must be accepted");
-
-    let mut stale_incarnation = replacement;
-    stale_incarnation.route.lane_incarnation = Hash::new(b"retired lane incarnation");
+    .expect("new incarnation's exact pinned roster");
+    let mut stale = replacement;
+    stale.route.lane_incarnation = original.route.lane_incarnation;
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
-            &stale_incarnation,
+            7,
+            &stale,
         )
         .is_err(),
-        "authority from another lane incarnation must be rejected"
+        "current members cannot authorize an old incarnation"
     );
 }
 
 #[test]
 fn private_settlement_authority_rejects_non_f1_committee_geometry() {
-    let (state, keypairs) = exact_private_settlement_authority_fixture(2, 7);
-    let four_key_claim = private_settlement_authority_for_keys(&state, 1, &keypairs[..4]);
-
+    let (state, keypairs) = exact_private_settlement_authority_fixture(7);
+    let subset = private_settlement_authority_for_keys(&state, &keypairs[..4]);
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
             &state.view(),
-            1,
-            &four_key_claim,
+            3,
+            &subset,
         )
         .is_err(),
-        "V1 must not accept a four-key subset of an f=2/seven-validator committee"
+        "a seven-validator native committee cannot supply a four-key subset"
+    );
+}
+
+#[test]
+fn private_settlement_authority_uses_native_activation_and_closing_boundaries() {
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+    let authority = private_settlement_authority_for_keys(&state, &keypairs);
+    let mut world = state.world.block();
+    world
+        .sumeragi_lanes
+        .get_mut()
+        .lane_mut(authority.route.lane_id)
+        .unwrap()
+        .closing = Some(9);
+    world.commit();
+    for (height, authority_accepted, mutation_accepted) in [
+        (0, false, false),
+        (2, false, false),
+        (3, true, false),
+        (4, true, true),
+        (8, true, true),
+        (9, false, true),
+        (10, false, false),
+    ] {
+        let result = crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            height,
+            &authority,
+        );
+        assert_eq!(
+            result.is_ok(),
+            authority_accepted,
+            "authority height {height}"
+        );
+        if height != 0 {
+            let mut block = state.block(BlockHeader::new(
+                height.try_into().unwrap(),
+                None,
+                None,
+                0,
+                0,
+            ));
+            let transaction = block.transaction();
+            assert_eq!(
+                transaction
+                    .ensure_private_settlement_route_active_v1(authority.route)
+                    .is_ok(),
+                mutation_accepted,
+                "pool mutation height {height}"
+            );
+        }
+    }
+}
+
+#[test]
+fn private_settlement_authority_rejects_wrong_dataspace_and_missing_native_record() {
+    let (state, keypairs) = exact_private_settlement_authority_fixture(4);
+    let mut authority = private_settlement_authority_for_keys(&state, &keypairs);
+    let original_route = authority.route;
+    authority.route.dataspace_id = DataSpaceId::new(2);
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            3,
+            &authority,
+        )
+        .is_err()
+    );
+    authority.route = original_route;
+    let mut world = state.world.block();
+    world.sumeragi_lanes.get_mut().lanes.clear();
+    world.commit();
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            3,
+            &authority,
+        )
+        .is_err(),
+        "live Committee keys alone do not admit a native lane"
+    );
+}
+
+#[test]
+fn private_settlement_authority_rejects_physical_manifest_as_native_authority() {
+    let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    let members = private_settlement_native_members(&keypairs);
+    let validators = members
+        .iter()
+        .map(|member| member.peer.clone())
+        .collect::<Vec<_>>();
+    let authority = iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1 {
+        route: iroha_data_model::nexus::PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation: state.lane_incarnation_at_height(LaneId::SINGLE, 3).unwrap(),
+        },
+        validator_set_hash: HashOf::new(&validators),
+        validators,
+        validator_pops: members.into_iter().map(|member| member.pop).collect(),
+    };
+    assert!(resolve_universal_committee_at(&state, 3).is_ok());
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            3,
+            &authority,
+        )
+        .is_err(),
+        "physical manifests do not grant private-settlement native authority"
     );
 }
 

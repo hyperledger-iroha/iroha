@@ -776,6 +776,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
 }
 fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let world = World::default();

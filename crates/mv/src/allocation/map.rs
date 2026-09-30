@@ -12,8 +12,10 @@ use concread::bptree::{
     Prepaid,
 };
 
-use super::{AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation};
 use crate::{Key, Value};
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
+};
 
 /// Stable nested-copy policy for values stored under an original allocation pool.
 ///

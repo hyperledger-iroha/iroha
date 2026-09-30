@@ -9,8 +9,8 @@ use crate::{
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::zeroize_value_for_confidential_discard as erase;
-use mv::allocation::AllocationBudget;
 use std::ops::Range;
 
 /// Borrowed register records supplied to a detached diagnostic capture.

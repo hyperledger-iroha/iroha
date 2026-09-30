@@ -109,7 +109,7 @@ pub enum ScheduleError {
     Epoch(String),
     /// The original finite resource pool refused this local attempt.
     #[error(transparent)]
-    Admission(#[from] mv::allocation::AllocationRefusal),
+    Admission(#[from] iroha_allocation::AllocationRefusal),
     /// Physical allocation failed after the exact original pool admitted its layout.
     #[error("native schedule allocator refused {requested_bytes} prepaid bytes")]
     Allocator {

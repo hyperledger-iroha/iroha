@@ -20,6 +20,7 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+import release_evidence_crypto as EVIDENCE_CRYPTO  # noqa: E402
 import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
 import sorafs_l1_lane_inventory_test_support as INVENTORY_SUPPORT  # noqa: E402
 import sorafs_foundational_receipt_test_support as RECEIPT_SUPPORT  # noqa: E402
@@ -191,30 +192,17 @@ def test_reference_sdk_supply_chain_inventory_contracts_are_schema_closed() -> N
 
 
 FOUNDATIONAL_SIGNER_PUBLIC_KEY = ed25519_public_key_from_seed(FOUNDATIONAL_SIGNING_SEED)
-ORIGINAL_VERIFY_ED25519 = MODULE.verify_ed25519
-FOUNDATIONAL_SIGNATURE_VERIFICATION_CACHE: dict[
-    tuple[bytes, bytes, bytes], bool
-] = {}
+def test_foundational_fixture_retains_actual_signature_verifier() -> None:
+    """Every repeated evidence check uses the maintained verifier directly."""
 
-
-def cached_verify_ed25519(
-    public_key: bytes,
-    signature: bytes,
-    message: bytes,
-) -> bool:
-    """Avoid repeating the same expensive pure-Python verification in fixtures."""
-
-    key = (public_key, signature, hashlib.sha256(message).digest())
-    if key not in FOUNDATIONAL_SIGNATURE_VERIFICATION_CACHE:
-        FOUNDATIONAL_SIGNATURE_VERIFICATION_CACHE[key] = ORIGINAL_VERIFY_ED25519(
-            public_key,
-            signature,
-            message,
+    assert MODULE.verify_ed25519 is EVIDENCE_CRYPTO.verify_ed25519
+    message = b"current foundational evidence fixture verifier"
+    signature = ed25519_sign(FOUNDATIONAL_SIGNING_SEED, message)
+    for _ in range(2):
+        assert MODULE.verify_ed25519(FOUNDATIONAL_SIGNER_PUBLIC_KEY, signature, message)
+        assert not MODULE.verify_ed25519(
+            FOUNDATIONAL_SIGNER_PUBLIC_KEY, signature, message + b"changed"
         )
-    return FOUNDATIONAL_SIGNATURE_VERIFICATION_CACHE[key]
-
-
-MODULE.verify_ed25519 = cached_verify_ed25519
 
 
 def resign_foundational_summary(payload: dict, *, seed: bytes = FOUNDATIONAL_SIGNING_SEED) -> None:

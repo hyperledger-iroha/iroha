@@ -9,6 +9,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -33,6 +34,12 @@ class SecurityCorporaReplayTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.runner = load_runner()
+        # CLI resource limits belong to the replay process. Calling its entry
+        # point in this process must not permanently constrain the test runner.
+        if self.runner.resource is not None:
+            limits = mock.patch.object(self.runner.resource, "setrlimit")
+            self.resource_limits = limits.start()
+            self.addCleanup(limits.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.payload = self.root / "seed.bin"
@@ -91,6 +98,28 @@ class SecurityCorporaReplayTests(unittest.TestCase):
         row["path"] = linked.name
         with self.assertRaisesRegex(ValueError, "must not be a symlink"):
             self.runner.corpus_path(row, self.root)
+
+    def test_replay_applies_requested_process_resource_limits(self) -> None:
+        """The isolated CLI requests both explicit bounds before reading seeds."""
+
+        if self.runner.resource is None:
+            self.skipTest("process resource limits are unavailable on this host")
+        metadata = self.write_metadata([self.entry()])
+        with (
+            mock.patch.object(self.runner, "DEFAULT_CPU_SECS", 7),
+            mock.patch.object(self.runner, "DEFAULT_MEM_MB", 16),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(
+                self.runner.main([
+                    "--metadata", str(metadata),
+                ]),
+                0,
+            )
+        self.assertEqual(self.resource_limits.call_args_list, [
+            mock.call(self.runner.resource.RLIMIT_CPU, (7, 7)),
+            mock.call(self.runner.resource.RLIMIT_AS, (16 * 1024 * 1024,) * 2),
+        ])
 
     def test_update_mode_can_initialize_a_new_fingerprint(self) -> None:
         """Corpus onboarding can calculate a missing fingerprint without weakening checks."""

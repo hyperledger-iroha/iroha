@@ -1,15 +1,15 @@
 //! Original reader notices retained through State views and enclosing physical owners.
 
 use super::*;
-use concread::release::DeferredReleaseBatch;
+use iroha_allocation::release::DeferredReleaseBatch;
 
 impl State {
     /// Original physical history pools whose refunds must outlive an outer fence.
     pub(crate) fn history_allocation_budgets(
         &self,
     ) -> (
-        mv::allocation::AllocationBudget,
-        mv::allocation::AllocationBudget,
+        iroha_allocation::AllocationBudget,
+        iroha_allocation::AllocationBudget,
     ) {
         (
             self.block_hashes.budget.clone(),

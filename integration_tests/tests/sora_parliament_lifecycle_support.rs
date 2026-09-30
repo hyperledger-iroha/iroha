@@ -7,6 +7,7 @@ use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
 };
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 use std::{
     collections::BTreeMap,
     num::NonZeroU64,
@@ -26,7 +27,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{SignedBlock, consensus::recommended_data_availability_layout},
+        block::SignedBlock,
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
@@ -78,34 +79,31 @@ use iroha::{
         sumeragi::SumeragiStatus,
     },
 };
-use iroha_core::{
-    beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_governance_seed_v1,
-        global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_roster_hash_v1,
-        parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
-        validate_global_threshold_beacon_session_v1,
-        verify_finalized_global_threshold_beacon_pulse_v1,
-    },
-    governance::{
-        parliament::ParliamentAttemptStateV1,
-        timed_ovn::{TIMED_OVN_BALLOT_RECORD_BYTES_V1, TimedOvnReleaseIdentityPublicV1},
-    },
-    state::{
-        THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-        threshold_key_lifecycle_certificate_preimage_v1,
-        verify_threshold_key_lifecycle_certificate_v1,
-    },
-    tle_release::{
-        AuthorizedTleReleaseProjectionV1,
-        PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
-        ParliamentTimedOvnCastingContextArchiveV1, ParliamentTimedOvnCastingPhaseV1,
-        TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1,
-        TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1, TleAdaptiveDealerCommitmentV1,
-        TleAdaptivePublicShareV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
-        parliament_test_network_signer::deterministic_parliament_tle_key_public_state_v1,
-    },
-};
+use iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1;
+use iroha_core::beacon::global_threshold_beacon_governance_seed_v1;
+use iroha_core::beacon::global_threshold_beacon_npos_successor_seed_v1;
+use iroha_core::beacon::global_threshold_beacon_roster_hash_v1;
+use iroha_core::beacon::parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1;
+use iroha_core::beacon::validate_global_threshold_beacon_session_v1;
+use iroha_core::beacon::verify_finalized_global_threshold_beacon_pulse_v1;
+use iroha_core::governance::parliament::ParliamentAttemptStateV1;
+use iroha_core::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1;
+use iroha_core::state::threshold_key_lifecycle_certificate_preimage_v1;
+use iroha_core::state::verify_threshold_key_lifecycle_certificate_v1;
+use iroha_core::tle_release::parliament_test_network_signer::deterministic_parliament_tle_key_public_state_v1;
+use iroha_core_timed_ovn::casting::PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1;
+use iroha_core_timed_ovn::casting::ParliamentTimedOvnCastingContextArchiveV1;
+use iroha_core_timed_ovn::casting::ParliamentTimedOvnCastingPhaseV1;
+use iroha_core_timed_ovn::evidence::TimedOvnReleaseIdentityPublicV1;
+use iroha_core_timed_ovn::tle::AuthorizedTleReleaseProjectionV1;
+use iroha_core_timed_ovn::tle::TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1;
+use iroha_core_timed_ovn::tle::TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1;
+use iroha_core_timed_ovn::tle::TleAdaptiveDealerCommitmentV1;
+use iroha_core_timed_ovn::tle::TleAdaptivePublicShareV1;
+use iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1;
+use iroha_core_timed_ovn::tle::TlePartialReleaseShareV1;
 use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
+use iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 as TIMED_OVN_BALLOT_RECORD_BYTES_V1;
 use iroha_executor_data_model::permission::{
     governance::CanProposeContractDeployment, smart_contract::CanManageSmartContractCode,
 };

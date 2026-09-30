@@ -3840,10 +3840,6 @@ private_key = "{}"
             chunk_count: 4,
         }
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture constructs one cryptographically coherent publication request and intent"
-    )]
     fn publication_fixture() -> (
         PublicationRequestV1,
         KeyPair,

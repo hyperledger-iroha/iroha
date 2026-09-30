@@ -1,8 +1,8 @@
 //! Exact original physical EBR backing before acquiring either Cell writer.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge};
 use concread::ebrcell::ReservedEbrCell;
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use std::fmt;
 
 /// Local refusal before any original Cell writer is acquired.

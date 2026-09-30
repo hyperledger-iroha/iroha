@@ -56,22 +56,6 @@
   },
   "sumeragi": {
     "mode_tag": "iroha3-consensus::permissioned-sumeragi@v1",
-    "leader_index": 1,
-    "highest_qc_height": 10,
-    "locked_qc_height": 9,
-    "locked_qc_view": 3,
-    "commit_signatures_present": 6,
-    "commit_signatures_counted": 5,
-    "commit_signatures_set_b": 2,
-    "commit_signatures_required": 5,
-    "commit_qc_height": 12,
-    "commit_qc_view": 4,
-    "commit_qc_epoch": 1,
-    "commit_qc_signatures_total": 5,
-    "commit_qc_validator_set_len": 7,
-    "block_created_dropped_by_lock_total": 1,
-    "block_created_hint_mismatch_total": 0,
-    "block_created_proposal_mismatch_total": 0,
     "tx_queue_depth": 5,
     "tx_queue_capacity": 20,
     "tx_queue_retained_bytes": 1024,
@@ -81,17 +65,6 @@
     "tx_queue_saturated_by_bytes": false,
     "tx_queue_saturated_by_age": false,
     "tx_queue_oldest_queued_age_ms": 250,
-    "epoch_length_blocks": 0,
-    "epoch_commit_deadline_offset": 0,
-    "epoch_reveal_deadline_offset": 0,
-    "prf_epoch_seed": "cafebabe42",
-    "prf_height": 11,
-    "prf_view": 2,
-    "view_change_proof_accepted_total": 4,
-    "view_change_proof_stale_total": 1,
-    "view_change_proof_rejected_total": 0,
-    "view_change_suggest_total": 0,
-    "view_change_install_total": 0,
     "lane_governance_sealed_total": 0,
     "lane_governance_sealed_aliases": []
   },
@@ -140,9 +113,7 @@
   "tx_gossip": {
     "caps": {
       "frame_cap_bytes": 0,
-      "drop_unknown_dataspace": false,
-      "restricted_fallback": "drop",
-      "restricted_public_policy": "refuse"
+      "drop_unknown_dataspace": false
     }
   }
 }

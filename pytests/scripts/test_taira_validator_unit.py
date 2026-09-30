@@ -1,8 +1,11 @@
-"""Exercise rendered native signer-descriptor custody with disposable byte fixtures."""
+"""Exercise rendered native signer-descriptor custody and the one-shot first boot with disposable fixtures."""
+import ast
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +18,8 @@ SCRIPT = ROOT / "scripts/taira_validator_unit.py"
 SPEC = importlib.util.spec_from_file_location("taira_validator_unit_under_test", SCRIPT)
 unit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(unit)
+
+FRESH_KEY = "--sumeragi-assert-fresh-key"
 
 
 class ValidatorUnitTests(unittest.TestCase):
@@ -31,15 +36,35 @@ class ValidatorUnitTests(unittest.TestCase):
             self.fixture(directory, "beacon.norito", 257),
         )
 
-    def execute(self, paths, *, beacon=True, reached_exec=True, occupy=False, config_file="config.toml"):
+    def state(self, paths):
+        # Disposable stand-in for /var/lib/taira/ROLE beside the fixture signers.
+        root = Path(paths[0]).parent / "state"
+        if not root.exists():
+            root.mkdir(mode=0o700)
+        return root
+
+    def arm(self, paths):
+        return Path(unit.arm_first_boot("taira-validator-1", state_root=str(self.state(paths))))
+
+    def place_token(self, path):
+        path.touch(mode=0o600)
+        path.chmod(0o600)
+        return path
+
+    def execute(self, paths, *, beacon=True, reached_exec=True, occupy=False, config_file="config.toml",
+                fresh_key=False, exec_outcome="fail", during_staging=None):
         runtime, mint, credential = paths
+        state_root = self.state(paths)
         code = unit.launcher(
             "taira-validator-1", str(runtime), str(mint),
-            str(credential) if beacon else None, config_file=config_file,
+            str(credential) if beacon else None, config_file=config_file, state_root=str(state_root),
         )
         # Execute the actual generated custody body in an isolated process.
-        # The exec boundary observes inherited files, then raises to exercise
-        # production cleanup. Fixture bytes never enter test output.
+        # The exec boundary observes inherited files, then either raises to
+        # exercise production cleanup or ends the process like a real exec,
+        # which never returns to the launcher. Fixture bytes never enter output.
+        # `during_staging` changes the state root at the first signer read,
+        # after the launcher's initial first-boot check and before its exec.
         driver = r'''
 import json, os, sys
 request = json.load(sys.stdin)
@@ -48,13 +73,33 @@ owned = None
 if request["occupy"]:
     owned = os.open(request["paths"][0], os.O_RDONLY)
     os.dup2(owned, 200, inheritable=True)
+if request["during_staging"] is not None:
+    signer_read = os.readv
+    mutated = []
+    def mutate_then_read(descriptor, buffers):
+        if not mutated:
+            mutated.append(request["during_staging"])
+            if request["during_staging"] == "replace-token":
+                # A new inode created beside the old one, then renamed over it.
+                replacement = request["token"] + ".replacement"
+                os.close(os.open(replacement, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+                os.rename(replacement, request["token"])
+            else:
+                os.mkdir(os.path.join(request["state_root"], "sumeragi-records"), 0o700)
+        return signer_read(descriptor, buffers)
+    os.readv = mutate_then_read
 def observe_exec(executable, argv):
     global seen
     seen = True
     assert executable == argv[0]
-    assert argv == ["/srv/taira/taira-validator-1/current/bin/iroha3d_taira",
-                    "--config", "/srv/taira/taira-validator-1/current/config/" + request["config_file"],
-                    "--sora"]
+    expected_argv = ["/srv/taira/taira-validator-1/current/bin/iroha3d_taira",
+                     "--config", "/srv/taira/taira-validator-1/current/config/" + request["config_file"],
+                     "--sora"]
+    if request["fresh_key"]:
+        expected_argv.append("--sumeragi-assert-fresh-key")
+    assert argv == expected_argv, argv
+    # A first-boot token never survives into the daemon's lifetime.
+    assert not os.path.lexists(request["token"])
     expected = [(198, request["paths"][0]), (199, request["paths"][1])]
     if request["beacon"]:
         expected.append((200, request["paths"][2]))
@@ -69,31 +114,46 @@ def observe_exec(executable, argv):
         with open(source, "rb") as file:
             assert os.read(descriptor, info.st_size + 1) == file.read()
         assert info.st_ino != os.stat(source).st_ino
+    if request["exec_outcome"] == "replace":
+        sys.stdout.write(json.dumps({"exec": argv}))
+        sys.stdout.flush()
+        os._exit(0)
     raise RuntimeError("simulated exec failure")
 os.execv = observe_exec
+failure = None
 try:
     exec(compile(request["code"], "<rendered-unit>", "exec"), {})
-except (OSError, RuntimeError):
-    pass
-assert seen == request["reached_exec"]
+except (OSError, RuntimeError) as error:
+    failure = str(error)
+assert seen == request["reached_exec"], failure
 if owned is not None:
     assert os.fstat(200).st_ino == os.stat(request["paths"][0]).st_ino
     os.close(200)
     os.close(owned)
+sys.stdout.write(json.dumps({"failure": failure}))
 '''
         result = subprocess.run(
             [sys.executable, "-c", driver],
             input=json.dumps({"code": code, "paths": list(map(str, paths)),
                               "beacon": beacon, "reached_exec": reached_exec,
-                              "occupy": occupy, "config_file": config_file}),
+                              "occupy": occupy, "config_file": config_file,
+                              "fresh_key": fresh_key, "exec_outcome": exec_outcome,
+                              "during_staging": during_staging, "state_root": str(state_root),
+                              "token": str(state_root / "sumeragi-first-boot")}),
             text=True, capture_output=True, timeout=10, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        return result
+        return json.loads(result.stdout)
 
     def assert_no_launch_copies(self, paths):
         for descriptor, path in zip((198, 199, 200), paths):
             self.assertFalse(Path(str(path) + f".fd{descriptor}").exists())
+
+    def assert_token(self, token):
+        info = token.lstat()
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual((stat.S_IMODE(info.st_mode), info.st_nlink, info.st_size, info.st_uid),
+                         (0o600, 1, 0, os.geteuid()))
 
     def test_beacon_stage_uses_independent_inherited_copy_and_cleans_failed_exec(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -161,7 +221,8 @@ if owned is not None:
             rendered = unit.render("taira-validator-2", "/private/runtime/a", "/private/runtime/b", "/private/runtime/c")
         self.assertIn("Type=exec", rendered)
         self.assertIn(".fd", unit.CUSTODY)
-        for credential in ("relative", "/private/runtime/a", "/private/runtime/b.fd199"):
+        for credential in ("relative", "/private/runtime/a", "/private/runtime/b.fd199",
+                           "/var/lib/taira/taira-validator-2/sumeragi-first-boot"):
             with self.subTest(credential=credential), self.assertRaises(ValueError):
                 unit.render("taira-validator-2", "/private/runtime/a", "/private/runtime/b", credential)
         for config_file in ("", "/etc/other.toml", "../beacon.toml", "config.toml/../beacon.toml",
@@ -197,6 +258,233 @@ if owned is not None:
                     rejected = subprocess.run(command + ["--config-file", invalid], capture_output=True, text=True, timeout=10)
                     self.assertEqual(rejected.returncode, 2)
                     self.assertEqual(output.read_bytes(), original)
+
+    def test_first_boot_asserts_the_fresh_key_once_and_no_restart_repeats_it(self):
+        # Initial and beacon units carry the same one-shot first boot.
+        for config_file in unit.CONFIG_FILES:
+            beacon = config_file == "beacon.toml"
+            with self.subTest(config_file=config_file), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                originals = [path.read_bytes() for path in paths]
+                token = self.arm(paths)
+                self.assert_token(token)
+                root = token.parent
+                first = self.execute(paths, beacon=beacon, config_file=config_file,
+                                     fresh_key=True, exec_outcome="replace")
+                self.assertEqual(first["exec"][-1], FRESH_KEY)
+                self.assertFalse(os.path.lexists(token))
+                # The daemon's installation event writes the configured safety history.
+                (root / "sumeragi-records").mkdir(mode=0o700)
+                (root / "sumeragi-installation.log").write_bytes(b"installation entries")
+                restart = self.execute(paths, beacon=beacon, config_file=config_file, exec_outcome="replace")
+                self.assertNotIn(FRESH_KEY, restart["exec"])
+                # A lost record store and log look fresh but never renew the assertion.
+                shutil.rmtree(root / "sumeragi-records")
+                (root / "sumeragi-installation.log").unlink()
+                after_loss = self.execute(paths, beacon=beacon, config_file=config_file, exec_outcome="replace")
+                self.assertNotIn(FRESH_KEY, after_loss["exec"])
+                self.execute(paths, beacon=beacon, config_file=config_file)
+                self.assert_no_launch_copies(paths)
+                self.assertFalse(os.path.lexists(token))
+                self.assertEqual([path.read_bytes() for path in paths], originals)
+
+    def test_first_boot_is_refused_while_safety_history_exists(self):
+        for history in ("records", "log", "both", "dangling-records-link"):
+            with self.subTest(history=history), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                originals = [path.read_bytes() for path in paths]
+                root = self.state(paths)
+                records, log = root / "sumeragi-records", root / "sumeragi-installation.log"
+                if history in ("records", "both"):
+                    records.mkdir(mode=0o700)
+                if history in ("log", "both"):
+                    log.write_bytes(b"installation entries")
+                if history == "dangling-records-link":
+                    records.symlink_to(root / "absent")
+                token = root / "sumeragi-first-boot"
+                with self.assertRaisesRegex(RuntimeError, "safety history already exists"):
+                    unit.arm_first_boot("taira-validator-1", state_root=str(root))
+                self.assertFalse(os.path.lexists(token))
+                # A token beside existing history (placed by hand, or restored
+                # with a key store) never starts the daemon and is never consumed.
+                self.place_token(token)
+                for _ in range(2):
+                    refused = self.execute(paths, reached_exec=False)
+                    self.assertIn("safety history already exists", refused["failure"])
+                    self.assert_token(token)
+                    self.assert_no_launch_copies(paths)
+                self.assertEqual([path.read_bytes() for path in paths], originals)
+
+    def test_untrusted_first_boot_token_or_state_root_never_starts_the_daemon(self):
+        for mutation in ("mode", "hardlink", "symlink", "nonempty", "directory", "writable-state-root"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                root = self.state(paths)
+                token = root / "sumeragi-first-boot"
+                if mutation == "symlink":
+                    token.symlink_to(self.place_token(root / "retained-token"))
+                elif mutation == "directory":
+                    token.mkdir(mode=0o700)
+                else:
+                    self.place_token(token)
+                if mutation == "mode":
+                    token.chmod(0o640)
+                elif mutation == "hardlink":
+                    os.link(token, root / "second-link")
+                elif mutation == "nonempty":
+                    token.write_bytes(b"x")
+                elif mutation == "writable-state-root":
+                    root.chmod(0o730)
+                refused = self.execute(paths, reached_exec=False)
+                self.assertRegex(refused["failure"], "untrusted Taira (first-boot token|validator state root)")
+                self.assertTrue(os.path.lexists(token))
+                self.assert_no_launch_copies(paths)
+
+    def test_failed_first_boot_exec_restores_the_unused_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.inputs(directory)
+            token = self.arm(paths)
+            # The driver checks that the token is gone when exec is attempted.
+            self.execute(paths, fresh_key=True)
+            self.assert_token(token)
+            self.assert_no_launch_copies(paths)
+            retried = self.execute(paths, fresh_key=True, exec_outcome="replace")
+            self.assertEqual(retried["exec"][-1], FRESH_KEY)
+            self.assertFalse(os.path.lexists(token))
+
+    def test_first_boot_changed_during_staging_never_asserts_or_consumes_the_token(self):
+        for change, failure in (("replace-token", "first-boot token changed while staging"),
+                                ("create-records", "safety history already exists")):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                originals = [path.read_bytes() for path in paths]
+                token = self.arm(paths)
+                armed = token.lstat()
+                refused = self.execute(paths, reached_exec=False, during_staging=change)
+                self.assertIn(failure, refused["failure"])
+                # The launcher never removes a token it did not use.
+                self.assert_token(token)
+                if change == "replace-token":
+                    self.assertNotEqual(token.lstat().st_ino, armed.st_ino)
+                else:
+                    self.assertEqual(token.lstat().st_ino, armed.st_ino)
+                self.assert_no_launch_copies(paths)
+                self.assertEqual([path.read_bytes() for path in paths], originals)
+
+    def test_first_boot_refusal_precedes_any_signer_access(self):
+        for mutation, failure in (("records", "safety history already exists"),
+                                  ("log", "safety history already exists"),
+                                  ("mode", "untrusted Taira first-boot token")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                root = self.state(paths)
+                token = self.place_token(root / "sumeragi-first-boot")
+                if mutation == "records":
+                    (root / "sumeragi-records").mkdir(mode=0o700)
+                elif mutation == "log":
+                    (root / "sumeragi-installation.log").write_bytes(b"installation entries")
+                else:
+                    token.chmod(0o640)
+                # Without signers, only a check that runs before staging can report the token.
+                for path in paths:
+                    path.unlink()
+                refused = self.execute(paths, reached_exec=False)
+                self.assertIn(failure, refused["failure"])
+                self.assertTrue(os.path.lexists(token))
+                self.assert_no_launch_copies(paths)
+
+    def test_arming_requires_a_private_state_root_and_never_replaces_a_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            with self.assertRaises(FileNotFoundError):
+                unit.arm_first_boot("taira-validator-2", state_root=str(root))
+            target = Path(directory) / "real-state"
+            target.mkdir(mode=0o700)
+            root.symlink_to(target)
+            with self.assertRaisesRegex(RuntimeError, "state root"):
+                unit.arm_first_boot("taira-validator-2", state_root=str(root))
+            self.assertEqual(list(target.iterdir()), [])
+            root.unlink()
+            root.mkdir(mode=0o700)
+            root.chmod(0o770)
+            with self.assertRaisesRegex(RuntimeError, "state root"):
+                unit.arm_first_boot("taira-validator-2", state_root=str(root))
+            root.chmod(0o700)
+            token = Path(unit.arm_first_boot("taira-validator-2", state_root=str(root)))
+            self.assertEqual(token, root / "sumeragi-first-boot")
+            self.assert_token(token)
+            before = token.lstat()
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                unit.arm_first_boot("taira-validator-2", state_root=str(root))
+            after = token.lstat()
+            self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+            token.unlink()
+            token.symlink_to(target / "absent")
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                unit.arm_first_boot("taira-validator-2", state_root=str(root))
+            self.assertEqual(list(target.iterdir()), [])
+            for invalid in ("relative", "/private/../state", "//state", "/state/"):
+                with self.subTest(state_root=invalid), self.assertRaises(ValueError):
+                    unit.arm_first_boot("taira-validator-2", state_root=invalid)
+            with self.assertRaises(ValueError):
+                unit.arm_first_boot("taira-validator-5", state_root=str(root))
+
+    def test_cli_arming_takes_only_a_role(self):
+        base = [sys.executable, str(SCRIPT), "--arm-first-boot"]
+        self.assertEqual(subprocess.run(base, capture_output=True, text=True, timeout=10).returncode, 2)
+        for extra in (["--output", "/absent/iroha3d-taira-validator-1.service"], ["--runtime-key", "/absent/runtime"],
+                      ["--mint-finality-seed", "/absent/mint"], ["--global-beacon-credential", "/absent/beacon"],
+                      ["--config-file", "config.toml"]):
+            with self.subTest(extra=extra):
+                rejected = subprocess.run(base + ["--role", "taira-validator-1", *extra],
+                                          capture_output=True, text=True, timeout=10)
+                self.assertEqual(rejected.returncode, 2)
+                self.assertIn("--arm-first-boot takes only --role", rejected.stderr)
+        render_without_inputs = subprocess.run(
+            [sys.executable, str(SCRIPT), "--role", "taira-validator-1", "--output", "/absent/iroha3d-taira-validator-1.service"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(render_without_inputs.returncode, 2)
+        self.assertIn("--runtime-key, --mint-finality-seed", render_without_inputs.stderr)
+
+    @unittest.skipIf(os.path.lexists("/var/lib/taira/taira-validator-4"), "host has a real Taira validator state root")
+    def test_cli_arming_refuses_without_the_canonical_state_root(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "--arm-first-boot", "--role", "taira-validator-4"],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("first boot not armed", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(os.path.lexists("/var/lib/taira/taira-validator-4"))
+
+    def test_rendered_launcher_keeps_one_daemon_argv_and_the_role_first_boot_paths(self):
+        for role in unit.ROLES:
+            for config_file in unit.CONFIG_FILES:
+                with self.subTest(role=role, config_file=config_file):
+                    arguments = (role, "/private/runtime/a", "/private/runtime/b", "/private/runtime/c")
+                    code = unit.launcher(*arguments, config_file=config_file)
+                    rendered = unit.render(*arguments, config_file=config_file)
+                    bindings = {}
+                    for node in ast.parse(code).body:
+                        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                                and isinstance(node.targets[0], ast.Name)):
+                            bindings.setdefault(node.targets[0].id, []).append(node.value)
+                    literal = {name: [ast.literal_eval(value) for value in bindings[name]]
+                               for name in ("runtime_key", "mint_finality_seed", "cmd", "state_root",
+                                            "first_boot_token", "sumeragi_history")}
+                    root = "/var/lib/taira/" + role
+                    current = "/srv/taira/" + role + "/current"
+                    # Unit capture and daemon updates parse exactly one literal daemon argv.
+                    self.assertEqual(literal["cmd"], [[current + "/bin/iroha3d_taira", "--config",
+                                                       current + "/config/" + config_file, "--sora"]])
+                    self.assertEqual(literal["runtime_key"], ["/private/runtime/a"])
+                    self.assertEqual(literal["mint_finality_seed"], ["/private/runtime/b"])
+                    self.assertEqual(literal["state_root"], [root])
+                    self.assertEqual(literal["first_boot_token"], [root + "/sumeragi-first-boot"])
+                    self.assertEqual(literal["sumeragi_history"],
+                                     [(root + "/sumeragi-records", root + "/sumeragi-installation.log")])
+                    self.assertIn("WorkingDirectory=" + root + "\n", rendered)
+                    self.assertEqual(len([line for line in rendered.split("\\n") if line.startswith("cmd = ['")]), 1)
+                    self.assertEqual(code.count(FRESH_KEY), 1)
+                    self.assertIn("launch_argv = cmd + ['" + FRESH_KEY + "']", code)
 
 
 if __name__ == "__main__":

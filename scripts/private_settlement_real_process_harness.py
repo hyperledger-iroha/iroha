@@ -54,7 +54,7 @@ REQUEST_FIELDS = {
     "validators_per_dataspace",
     "global_validators",
     "quorum",
-    "mandatory_signed_rs16_da_rbc",
+    "mandatory_signed_rs16_da",
     "minimum_signed_rs16_da_observations",
     "authenticated_private_settlement_route_control",
     "seed",
@@ -90,7 +90,7 @@ RUST_RESULT_FIELDS = {
     "request_sha256",
     "commit",
     "participants",
-    "mandatory_signed_rs16_da_rbc",
+    "mandatory_signed_rs16_da",
     "signed_rs16_da_observations",
     "authenticated_private_settlement_route_control",
     "process_inventory",
@@ -405,7 +405,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         request["validators_per_dataspace"] != runner.VALIDATORS_PER_DATASPACE
         or request["global_validators"] != runner.GLOBAL_VALIDATORS
         or request["quorum"] != runner.QUORUM
-        or request["mandatory_signed_rs16_da_rbc"] is not True
+        or request["mandatory_signed_rs16_da"] is not True
         or request["authenticated_private_settlement_route_control"] is not True
         or request["minimum_signed_rs16_da_observations"]
         != runner.minimum_signed_rs16_da_observations(participants)
@@ -1246,7 +1246,7 @@ def validate_rust_result(
         or result["request_sha256"] != request_sha
         or result["commit"] != request["commit"]
         or result["participants"] != request["participants"]
-        or result["mandatory_signed_rs16_da_rbc"] is not True
+        or result["mandatory_signed_rs16_da"] is not True
         or result["authenticated_private_settlement_route_control"] is not True
     ):
         raise HarnessError("Rust result does not bind the exact invocation")
@@ -1349,8 +1349,8 @@ def build_response(
         "configuration_sha256": request["configuration_sha256"],
         "participants": request["participants"],
         "passed": True,
-        "mandatory_signed_rs16_da_rbc": rust_result[
-            "mandatory_signed_rs16_da_rbc"
+        "mandatory_signed_rs16_da": rust_result[
+            "mandatory_signed_rs16_da"
         ],
         "signed_rs16_da_observations": rust_result[
             "signed_rs16_da_observations"

@@ -5,9 +5,11 @@
 
 pub mod account_bootstrap;
 pub mod configuration;
+pub mod consensus;
 pub mod data_availability;
 pub mod funding;
 pub mod musubi;
+pub mod nexus;
 pub mod sccp;
 pub mod status;
 pub mod streams;
@@ -252,17 +254,6 @@ impl Client {
             inner: self.inner.operator_client(key_pair)?,
             runtime: Arc::clone(&self.runtime),
         })
-    }
-
-    /// Read operator-signed diagnostics with the asynchronous client's strict evidence decoder.
-    ///
-    /// # Errors
-    /// Returns signing, transport, evidence-validation or [`BlockingCallError`] failures.
-    pub fn get_sumeragi_diagnostics(
-        &self,
-    ) -> Result<iroha_data_model::block::consensus::SumeragiDiagnosticsStatus> {
-        self.runtime
-            .block_on(self.inner.get_sumeragi_diagnostics())?
     }
 
     /// Submit one signed transaction and return after Torii accepts it.
@@ -987,21 +978,6 @@ mod tests {
         dropped_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("shutdown drops the pending task and releases its resources");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn blocking_diagnostics_reject_async_runtime_before_io() {
-        let (client, sends, _) = accepting_client();
-        let error = client
-            .get_sumeragi_diagnostics()
-            .expect_err("explicit blocking call must reject Tokio");
-        assert!(matches!(
-            error.downcast_ref::<BlockingCallError>(),
-            Some(BlockingCallError::AsyncRuntime {
-                flavor: AsyncRuntimeFlavor::MultiThread
-            })
-        ));
-        assert_eq!(sends.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

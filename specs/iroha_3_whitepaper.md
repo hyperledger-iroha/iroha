@@ -16,26 +16,25 @@ mandatory **Nexus** runtime:
 - A single product implementation: every deployment uses Nexus, including
   deployments configured with one lane. Kotodama contracts and IVM bytecode use
   the same execution environment throughout the product.
-- Multi-lane block production to process independent workloads in parallel.
+- Lanes: additional consensus instances that order independent workloads in parallel; the global chain
+  merges their certified blocks.
 - Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
 - The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- One deterministic consensus protocol (Sumeragi, execute before vote) for the global chain and every lane.
 
-Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
+Refer to `nexus.md`, `sumeragi.md`, `sumeragi_lanes.md`, and `new_pipeline.md` for
 engineering-level detail.
 
 ## 2. Multi-lane architecture
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- **Lanes:** Each lane is a Sumeragi instance with a committee pinned at creation. The global chain merges
+  certified lane blocks and executes their transactions in one canonical order (`sumeragi_lanes.md`).
+- **Routing:** Governed explicit routes select a lane; otherwise transactions are sharded by authority. The
+  merge re-evaluates each route; a transaction routed just before a lane opened or closed is dropped without
+  effect and re-routed.
+- **Autoscale:** Deterministic rules in the global chain open and close elastic lanes from committed load
+  samples.
+- **Telemetry:** `/v1/sumeragi/lanes` reports each lane's record and this node's lane instance.
 
 ## 3. Data spaces (Nexus)
 
@@ -70,27 +69,27 @@ engineering-level detail.
 - **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
   handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 5. Consensus and data availability
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Authenticated Sumeragi status and bounded transaction,
-  ingress, and P2P queue metrics diagnose stalled lanes without a second RBC path.
+- **Consensus:** One Sumeragi protocol orders the global chain and every lane; each certificate carries exactly
+  `2f + 1` equal votes from a `3f + 1` committee (`sumeragi.md`).
+- **Data availability:** Signed RS16 payload availability is a first-release requirement
+  (`sumeragi_goals.md`).
+- **Diagnostics:** Authenticated `/v1/sumeragi/status` and `/v1/sumeragi/lanes`, plus bounded transaction,
+  ingress and P2P queue metrics, diagnose stalled lanes.
 
 ## 6. Operations and migration
 
-- **Operational invariants:** `nexus_transition_notes.md` records mandatory
-  Nexus configuration for one-lane and multi-lane deployments.
+- **Operational invariants:** `references/configuration.md` records the mandatory Nexus configuration;
+  lanes come from the governed lane policy (`sumeragi_lanes.md`).
 - **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
   creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
 - **Configuration:** Config knobs cover lane budgets, proof deadlines, AXT quotas,
   and data-space metadata. Nexus mode is mandatory.
 - **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
   (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput
+  and proof budgets.
 
 ## 7. Roadmap
 

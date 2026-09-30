@@ -1,0 +1,54 @@
+groups:
+  - name: sumeragi-consensus
+    interval: 1m
+    rules:
+      - alert: SumeragiInstanceHalted
+        expr: max by (instance, lane, reason) (sumeragi_halted) == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sumeragi instance halted"
+          description: |
+            The Sumeragi instance lane={{ $labels.lane }} on {{ $labels.instance }}
+            halted with reason={{ $labels.reason }} and signs nothing further.
+            Preserve its safety records, logs and /v1/sumeragi/status before
+            restarting the node.
+      - alert: SumeragiCommitStalled
+        expr: |
+          sum by (instance) (increase(sumeragi_commits_total{lane="global"}[10m])) == 0
+          and on (instance) min_over_time(sumeragi_tx_queue_depth[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Global Sumeragi commits stalled while transactions are queued"
+          description: |
+            {{ $labels.instance }} committed no global block for 10 minutes while
+            its transaction queue held work. Compare committed heights, views and
+            halt flags across validators and confirm that at least 2f + 1 members
+            are reachable.
+      - alert: SumeragiAwaitingApply
+        expr: max by (instance, lane) (sumeragi_awaiting_configuration) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sumeragi instance waits for application"
+          description: |
+            The Sumeragi instance lane={{ $labels.lane }} on {{ $labels.instance }}
+            committed its height but has waited 5 minutes for the next height's
+            configuration from block application. Inspect the executor and
+            storage of the node.
+      - alert: SumeragiKeyUnanchored
+        expr: max by (instance, lane) (sumeragi_unanchored) == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sumeragi signing key unanchored"
+          description: |
+            A consensus key of the Sumeragi instance lane={{ $labels.lane }} on
+            {{ $labels.instance }} has stayed unanchored for 15 minutes; the node
+            probes and signs nothing with it. Check the node's safety records and
+            its peers' reachability.

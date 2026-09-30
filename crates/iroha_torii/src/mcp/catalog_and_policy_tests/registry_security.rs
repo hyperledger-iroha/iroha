@@ -865,10 +865,6 @@ fn musubi_mcp_guide_lists_the_exact_curated_tool_inventory() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "all curated Musubi schemas and both shared fixture inventories stay in one contract check"
-)]
 fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
     fn assert_closed_and_inlined(schema: &Value, tool_name: &str) {
         let mut pending = vec![schema];
@@ -1009,10 +1005,6 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixture contract and cache-retention tooling route stay visible in one matrix"
-)]
 fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     let fixture: Value = json::from_str(include_str!("../../../../../fixtures/musubi/sdk_v1.json"))
         .expect("Musubi SDK V1 fixture must parse");

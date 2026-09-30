@@ -50,7 +50,7 @@ pub(in crate::state) struct TypedPairedTableBuilder<'budget, K, V> {
     key_schema: Schema,
     value_schema: Schema,
     limits: LeafLimits,
-    budget: &'budget mv::allocation::AllocationBudget,
+    budget: &'budget iroha_allocation::AllocationBudget,
     retained_bytes: usize,
     streamed_bytes: u64,
     types: PhantomData<fn(&K, &V)>,
@@ -63,7 +63,7 @@ impl<'budget, K: Encode + NoritoSchema, V: Encode + NoritoSchema>
     pub(in crate::state) fn new(
         table: &str,
         limits: LeafLimits,
-        budget: &'budget mv::allocation::AllocationBudget,
+        budget: &'budget iroha_allocation::AllocationBudget,
     ) -> Result<Self, LeafError> {
         let selection = CanonicalTableLeafSet::new(&[table], limits, budget)?;
         let Some((table, (key_schema, value_schema))) = selection.selection.table(table) else {

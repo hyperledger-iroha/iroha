@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::publication::{IdentityRetirement, PreparedIdentity};
-use concread::{
-    bptree::{BptreeMapCommitRetirement, BptreeMapCommitSlot},
-    release::DeferredRelease,
-};
+use concread::bptree::{BptreeMapCommitRetirement, BptreeMapCommitSlot};
+use iroha_allocation::release::DeferredRelease;
 
 /// A refused reacquisition: the unchanged owner, its refusal, and the release
 /// notification of a writer that was acquired and then aborted.

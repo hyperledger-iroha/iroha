@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eyre::{Result, WrapErr as _, eyre};
 use hex::{decode, encode};
 use iroha_crypto::{HybridPublicKey, HybridSuite};
-use ivm::kotodama::{
+use kotodama_lang::{
     driver::{BuildDriver, PublishLayout, PublishMode, SourceBuildRequest},
     session::CompilerSession,
 };
@@ -787,7 +787,7 @@ mod tests {
         };
         let mut context = TestContext::new();
         let expected = CompilerSession::default()
-            .build(ivm::kotodama::session::CompileRequest {
+            .build(kotodama_lang::session::CompileRequest {
                 source: SOURCE,
                 source_name: source.to_str(),
             })
@@ -837,7 +837,7 @@ mod tests {
             args.bytecode_out.display().to_string()
         );
         let expected = CompilerSession::default()
-            .build(ivm::kotodama::session::CompileRequest {
+            .build(kotodama_lang::session::CompileRequest {
                 source: SOURCE,
                 source_name: Some("<stdin>"),
             })

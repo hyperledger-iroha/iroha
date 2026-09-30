@@ -780,21 +780,16 @@
       },
       {
         "discriminant": 1,
-        "tag": "HashOnlyBodyUnavailable",
-        "type": "CanonicalHistoryHeightHashSchema"
-      },
-      {
-        "discriminant": 2,
         "tag": "BodyUnavailable",
         "type": "CanonicalHistoryHeightHashSchema"
       },
       {
-        "discriminant": 3,
+        "discriminant": 2,
         "tag": "BlockHashMismatch",
         "type": "CanonicalHistoryHashMismatchSchema"
       },
       {
-        "discriminant": 4,
+        "discriminant": 3,
         "tag": "BlockHeightMismatch",
         "type": "CanonicalHistoryHeightMismatchSchema"
       }
@@ -2382,14 +2377,6 @@
       }
     ]
   },
-  "MergeLedgerEventFilter": {
-    "Struct": [
-      {
-        "name": "epoch_id",
-        "type": "Option<u64>"
-      }
-    ]
-  },
   "MintabilityError": {
     "Enum": [
       {
@@ -2953,11 +2940,6 @@
       },
       {
         "discriminant": 2,
-        "tag": "Merge",
-        "type": "MergeLedgerEventFilter"
-      },
-      {
-        "discriminant": 3,
         "tag": "Witness",
         "type": "WitnessEventFilter"
       }
@@ -3129,8 +3111,8 @@
         "type": "Option<ConsensusFingerprint>"
       },
       {
-        "name": "sumeragi_v2",
-        "type": "SumeragiV2GenesisContextParameters"
+        "name": "sumeragi_context",
+        "type": "SumeragiGenesisContextParameters"
       },
       {
         "name": "kagemusha_mint_finality",
@@ -3805,6 +3787,22 @@
       }
     ]
   },
+  "SumeragiGenesisContextParameters": {
+    "Struct": [
+      {
+        "name": "da_layout",
+        "type": "DataAvailabilityLayout"
+      },
+      {
+        "name": "nexus_amx_context_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "execution_policy_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "SumeragiParameters": {
     "Struct": [
       {
@@ -3854,22 +3852,6 @@
       {
         "name": "demotion_window",
         "type": "NonZero<u64>"
-      }
-    ]
-  },
-  "SumeragiV2GenesisContextParameters": {
-    "Struct": [
-      {
-        "name": "da_layout",
-        "type": "DataAvailabilityLayout"
-      },
-      {
-        "name": "nexus_amx_context_hash",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "execution_policy_hash",
-        "type": "Array<u8, 32>"
       }
     ]
   },

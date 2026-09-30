@@ -10,6 +10,7 @@ use iroha_config::base::{env::std_env, read::ConfigReader};
 use iroha_logger::Config;
 use validate_blocks::StateValidateBlocks;
 fn main() {
+    // The logger handle's actor task runs on this runtime; the chain does not need it.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -24,6 +25,6 @@ fn main() {
         let _ = iroha_logger::init_global(config).expect("Failed to initialize logger");
     }
     iroha_logger::info!("Starting...");
-    let bench = StateValidateBlocks::setup(rt.handle());
-    StateValidateBlocks::measure(bench);
+    let mut bench = StateValidateBlocks::setup();
+    bench.measure();
 }

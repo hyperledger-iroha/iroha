@@ -262,8 +262,8 @@ bootstrap test remains selected. The current census covers authenticated genesis
 and rotation seats, bounded proof frames, one-shot attempt custody, exact provider
 inputs, and consumed configuration descriptors.
 
-The combined native test build selects the exact `iroha_cli --bin iroha`
-and `irohad --lib` test harnesses. The daemon cases execute signed genesis
+The combined native test build selects the exact `iroha_cli_lib --lib`
+and `irohad_lib --lib` test harnesses. The daemon cases execute signed genesis
 and check the deployment account in its final staged state, including role and
 revocation semantics; the deployment flag is restricted to offline `--check-config`. The genesis fixtures share the canonical daemon configuration and production staging setup; all affected unconditional manifest/crypto consumers are selected with them. A single Cargo invocation unifies the selected packages and their
 default/dev-dependency features; it does not add feature overrides. The CLI test
@@ -523,21 +523,27 @@ The active journaled restart path waits for all four Torii `/readyz` responses
 before onboarding, using the deadline captured before its one restart submission.
 The endpoint rejects pending Queue reconciliation and restart-required admission;
 a responsive `/status` alone does not establish write readiness.
-<!-- TODO: the convergence wording below uses retired status vocabulary
-(successor context, re-proposal rounds). Rewrite it to the `SumeragiStatus`
-fields (`committed_height`, `applied_height`, one CommitQC per height) when the
-updater convergence check is ported to them. -->
-Signed convergence uses its own bounded phase and requires an opened successor
-context above a positive committed frontier, without requiring an empty block.
-A CommitQC or an `Applied` body at the same height
-can still precede the durable application anchor needed by onboarding. Tests keep
-both intermediate states out of retained proof; identity mismatches and restart
-requirements remain immediate failures, with public progress in deadline errors.
-Converged certificates use Core's committed-decision comparison, allowing
-different re-proposal rounds for the same subject and execution commitment while
-retaining each validator's actual certificate. A higher committed height is
-required only after each restart wave's three Applied canaries. Iroha does not
-create empty blocks; HTTP restart readiness does not require idle tip growth.
+Signed convergence uses its own bounded phase. Each validator's
+`SumeragiStatus.committed_height` names the tip it must attest, and its
+node-signed attestation answers a fresh challenge with the status captured for
+that tip: no halt reason, the current protocol version, a signer (if any) equal to
+the node key, `committed_height` equal to the attested CommitQC height and
+`applied_height` equal to `committed_height`. A committed block whose body is not
+yet applied therefore never authorizes onboarding, and an unsigned status read
+never counts. All four validators must attest one height under two distinct
+challenges, and each attested proof must carry the same decision as the contiguous
+finality chain verified from the signed genesis. Different valid CommitQC
+witnesses for one block are accepted; a different block or genesis hash at that
+height is rejected. Node, build, configuration or consensus-instance mismatches
+are immediate failures. A zero committed height, a tip that moves during its
+challenge and validators at different heights keep polling, and the deadline
+error reports each validator's last public progress. Wave zero accepts the
+first common committed height, genesis included; each restart wave then
+requires a strictly higher committed height, produced by that wave's three
+journaled canaries (onboarding, faucet, write). A retained wave receipt is
+reauthenticated under the signed genesis and rejects unknown fields and omitted
+nullable status fields. Iroha does not create empty blocks; HTTP restart
+readiness does not require idle tip growth.
 Candidate tests exercise the real HTTP producer and strict host receipt consumer,
 direct signed probe origins, private signer descriptor lifetime, ordered recovery
 and failure before edge cutover. Prepared-envelope tests cross the actual typed
@@ -567,7 +573,7 @@ The selected toolchain's Cargo executes this command from `/` with the isolated
 environment and selected `CARGO_TARGET_DIR`:
 
 ```sh
-cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
+cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli_lib --lib --no-run --message-format=json-render-diagnostics
 ```
 
 Only existing disposable test fixtures are used. The gate accepts no live

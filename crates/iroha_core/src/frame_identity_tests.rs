@@ -132,3 +132,21 @@ where
 fn captured_original_core_health_frames() {
     shapes("network_message", "health", &crate::NetworkMessage::Health);
 }
+
+#[cfg(feature = "zk-stark")]
+#[test]
+fn captured_original_core_fp4_frames() {
+    use crate::zk_stark::GoldilocksFp4V1;
+    use fastpq_prover::GOLDILOCKS_MODULUS_V1;
+    for (variant, coefficients) in [
+        ("zero", [0; 4]),
+        ("edge", [1, GOLDILOCKS_MODULUS_V1 - 1, 3, 4]),
+    ] {
+        let value =
+            GoldilocksFp4V1::new(coefficients).expect("existing canonical coefficient fixture");
+        let shared = fastpq_prover::GoldilocksFp4V1::new(coefficients).unwrap();
+        assert_eq!(norito::codec::Encode::encode(&value), shared.to_le_bytes());
+        assert_eq!(norito::codec::Encode::encode(&value).len(), 32);
+        shapes("core_goldilocks_fp4", variant, &value);
+    }
+}

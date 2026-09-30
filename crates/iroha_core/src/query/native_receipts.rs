@@ -28,7 +28,7 @@ type CastingBinding =
 
 struct OriginalReceiptSource {
     finality: SumeragiFinalityProof,
-    witness: mv::allocation::RetainedPayload<ExecWitness>,
+    witness: iroha_allocation::RetainedPayload<ExecWitness>,
     casting_bindings: ordinary_writes::CastingOwner,
 }
 
@@ -366,7 +366,8 @@ mod tests {
         assert!(kagemusha_finality_source(&view, 3).is_err());
         assert!(original_source(&view, 3).is_err());
         drop(view);
-        chain.commit_with(None, Vec::new(), Signers::BelowQuorum);
+        chain.commit(Vec::new());
+        chain.corrupt_local_quorum_for_test(3, Signers::BelowQuorum);
         assert!(original_source(&chain.state().view(), 3).is_err());
     }
 

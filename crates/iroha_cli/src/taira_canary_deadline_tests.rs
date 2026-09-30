@@ -2,6 +2,7 @@
 // The server only simulates ledger responses; no daemon or deployment is used.
 
 fn exercise_final_canary_deadline(applied: bool) {
+    let _fixture = mock_http_fixture_guard();
     use iroha::data_model::{
         query::CommittedTransaction,
         transaction::{DataTriggerSequence, TransactionPayload, TransactionResult},

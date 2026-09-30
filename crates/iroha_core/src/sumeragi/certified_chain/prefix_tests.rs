@@ -45,7 +45,12 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
     result.execution.ordinary_writes_root = Hash::new(b"unsigned genesis result replacement");
     let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
-        CommitCertificate::from_untrusted_parts(Vec::new(), Vec::new(), result.preimage().unwrap()),
+        CommitCertificate::from_untrusted_parts(
+            Vec::new(),
+            Vec::new(),
+            result.preimage().unwrap(),
+            Vec::new(),
+        ),
     )));
     assert_eq!(changed.hash(), original.hash());
     let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), changed).unwrap();
@@ -54,7 +59,7 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
         Err(ChainReadError::Discontinuous { height: 2 })
     ));
     let mut foreign = CertifiedPrefix::new(
-        &ChainId::from("foreign instance"),
+        &ChainId::from("foreign-instance"),
         chain.network_id(),
         original,
     )

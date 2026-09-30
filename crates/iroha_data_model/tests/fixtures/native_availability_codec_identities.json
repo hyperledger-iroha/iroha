@@ -1,0 +1,18 @@
+{
+  "owner": "iroha_data_model::block::consensus::captured_consensus_schema_tests",
+  "rows": [
+    {
+      "deserialize_hash": "6ff06208e0b019eb0e3aab9c5d9d8ef5",
+      "nominal": "iroha_sumeragi::availability::DataAvailabilityLayout",
+      "root": "iroha_sumeragi::availability::DataAvailabilityLayout",
+      "serialize_hash": "6ff06208e0b019eb0e3aab9c5d9d8ef5"
+    },
+    {
+      "deserialize_hash": "e21f4b5a98481acab33d58d6f7215d9a",
+      "nominal": "iroha_sumeragi::availability::PayloadEncoding",
+      "root": "iroha_sumeragi::availability::PayloadEncoding",
+      "serialize_hash": "e21f4b5a98481acab33d58d6f7215d9a"
+    }
+  ],
+  "schema": 1
+}

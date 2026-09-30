@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::state::authority_registry::leaf::CanonicalTableLeafSet;
+use iroha_allocation::AllocationRefusal;
 use iroha_crypto::Hash;
-use mv::allocation::AllocationRefusal;
 use std::{
     future::Future,
     num::NonZeroUsize,

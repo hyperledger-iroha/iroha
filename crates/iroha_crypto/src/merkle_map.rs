@@ -13,7 +13,7 @@
 //! the retained original pool before allocation. Refusal preserves the old version.
 //! Keys and tree shape are public: lookup is intentionally not constant-time.
 
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedShared, PrepaidSharedError};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedShared, PrepaidSharedError};
 
 use crate::Hash;
 use iroha_schema::IntoSchema;

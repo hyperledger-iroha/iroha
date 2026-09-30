@@ -8,7 +8,7 @@ These guidelines apply to the `crates/irohad` daemon (node binary).
 
 ## Development workflow
 - Keep changes deterministic and side-effect free under test; avoid time- and network-dependent behavior in unit tests.
-- Test: `cargo test -p irohad` and optionally run a subset: `cargo test -p irohad <name> -- --nocapture`.
+- Runtime library tests: `cargo test -p irohad_lib`; focused subsets: `cargo test -p irohad_lib <name> -- --nocapture`. The `irohad` package owns the thin executables.
 - Follow root/crates `AGENTS.md` for formatting, linting, and dependency policy.
 
 ## Notes

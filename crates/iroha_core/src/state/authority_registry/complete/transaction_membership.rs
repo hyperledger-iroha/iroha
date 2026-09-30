@@ -23,9 +23,9 @@ use crate::state::{
         },
     },
 };
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::TransactionEntrypoint;
-use mv::allocation::AllocationBudget;
 
 const CURRENT: &str = "state.transactions.current";
 const ROLLBACK: &str = "state.transactions.rollback";

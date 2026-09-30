@@ -360,6 +360,7 @@ mod tests {
             parent_hash: Hash32::ZERO,
             parent_result: Hash32::ZERO,
             payload_hash: Hash32::ZERO,
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 0,
             proposer: 0,
             skipped_leaders: skipped.to_vec(),

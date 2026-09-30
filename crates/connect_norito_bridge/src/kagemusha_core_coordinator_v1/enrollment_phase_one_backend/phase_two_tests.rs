@@ -121,6 +121,7 @@ impl KagemushaQualifiedEnrollmentDelegateV1 for Delegate {
         _: u64,
         live_selection: KagemushaEnrollmentLiveSelectionV1,
         request_frame: &[u8],
+        _: Option<&super::super::KagemushaVerifiedPreEnrollmentQualificationV1>,
     ) -> Result<AcceptedIssuerChallengeV1, KagemushaCoreCoordinatorBackendErrorV1> {
         self.challenges.fetch_add(1, Ordering::SeqCst);
         let selected = live_selection

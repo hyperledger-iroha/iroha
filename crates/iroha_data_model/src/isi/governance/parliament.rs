@@ -729,10 +729,6 @@ impl ParliamentLifecycleTransitionV1 {
     ///
     /// Returns a stable message when an identifier, commitment, height, derived
     /// binding, batch, or fixed-width cryptographic record is structurally invalid.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the closed V1 transition table stays auditable as one exhaustive match"
-    )]
     pub fn validate_static(&self) -> Result<(), &'static str> {
         match self {
             Self::EscalateRisk(_)
@@ -1257,10 +1253,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one table verifies every closed transition variant remains decodable"
-    )]
     fn lifecycle_transition_instruction_roundtrips_every_variant() {
         let beacon_session_id = BeaconSessionId::new([0x44; 32]);
         let pulse_id = BeaconPulseId::new([0x45; 32]);
@@ -1564,10 +1556,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the table covers every transition payload and each shared structural bound"
-    )]
     fn lifecycle_transition_static_validation_rejects_impossible_payloads() {
         let body_instance_id = BodyInstanceId::new([0x32; 32]);
         let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
@@ -2043,10 +2031,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "each replayable private-evidence field has an explicit digest mutation case"
-    )]
     fn lifecycle_digest_is_domain_separated_and_commits_to_all_private_evidence() {
         let ballot_attempt_id = BallotAttemptId::new([0x61; 32]);
         let domain_probe = ParliamentLifecycleTransitionV1::RegisterBallotParticipant(

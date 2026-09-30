@@ -5,8 +5,8 @@
 //! dynamic scratch allocation from the original execution pool.
 
 use crate::{NetworkId, block::consensus::ExecWitness};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_crypto::Hash;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use norito::{Decode, Encode};
 use thiserror::Error;
 
@@ -25,7 +25,9 @@ const COMMITMENT_BYTES: usize = 512;
 /// native execution result at the exact network and carrier height. All fields have fixed size;
 /// the 256 siblings use eight fixed groups of 32, preserving the existing 96-item
 /// decoder bound without a sibling vector or fallback layout.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema, iroha_schema::IntoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::NativeLaneStateProof")]
 pub struct NativeLaneStateProof {
     commitment: SumeragiLaneStateCommitment,
@@ -52,7 +54,7 @@ impl NativeLaneStateProofError {
         matches!(
             self,
             Self::Scratch(
-                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
                     | ChargedBufferError::Allocator { .. }
             )
         )

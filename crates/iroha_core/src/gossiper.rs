@@ -14,8 +14,8 @@ use crate::{
 };
 use iroha_config::parameters::{
     actual::{
-        DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry,
-        Network as NetworkConfig, Nexus, RestrictedPublicPayload, TransactionGossiper as Config,
+        DataspaceGossip, LaneConfig as LaneGeometry, Network as NetworkConfig, Nexus,
+        TransactionGossiper as Config,
     },
     defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
 };
@@ -44,38 +44,15 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+mod restricted;
 mod worker;
-/// Grouped gossip entries and the lanes they originated from.
-#[derive(Default)]
-struct DataspaceBatch {
-    entries: Vec<GossipBatchEntry>,
-    lanes: BTreeSet<LaneId>,
-}
-#[derive(Debug, PartialEq, Eq)]
-enum RestrictedTargetPlan {
-    Send {
-        targets: Vec<PeerId>,
-        fallback_used: bool,
-        fallback_surface: Option<&'static str>,
-        reason: Option<&'static str>,
-    },
-    Drop {
-        reason: &'static str,
-        fallback_used: bool,
-        fallback_surface: Option<&'static str>,
-        targets: Vec<PeerId>,
-    },
-}
 type EntrypointHash = HashOf<TransactionEntrypoint>;
 const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
-const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
 const DROP_REASON_NONCANONICAL_ROUTING_PLAN: &str = "noncanonical_routing_plan";
 const DROP_REASON_INACTIVE_LANE: &str = "inactive_lane";
 const DROP_REASON_PEER_RECENT_SUPPRESSION: &str = "peer_recent_suppression";
 const OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY: &str = "peer_recent_suppression_replay";
-const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
-const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
@@ -345,6 +322,7 @@ pub struct TransactionGossiper {
     /// Timestamp of the last observed relay drop.
     last_drop_at: Option<Instant>,
     network: IrohaNetwork,
+    self_peer_id: PeerId,
     queue: Arc<Queue>,
     state: Arc<State>,
     tx_frame_cap: usize,
@@ -437,6 +415,7 @@ impl TransactionGossiper {
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network,
+            self_peer_id,
             queue,
             state,
             tx_frame_cap,
@@ -693,14 +672,7 @@ impl TransactionGossiper {
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
-        let (
-            entries,
-            lane_config,
-            lane_catalog,
-            dataspace_catalog,
-            active_lane_ids,
-            commit_topology,
-        ) = {
+        let (entries, lane_config, lane_catalog, dataspace_catalog, active_lane_ids) = {
             let nexus = self.state.nexus_snapshot();
             let lane_config = nexus.lane_config.clone();
             let lane_catalog = nexus.lane_catalog.clone();
@@ -709,14 +681,12 @@ impl TransactionGossiper {
             let entries = self
                 .queue
                 .gossip_batch_with_state(self.gossip_size.get(), &self.state);
-            let commit_topology = self.state.commit_topology_snapshot();
             (
                 entries,
                 lane_config,
                 lane_catalog,
                 dataspace_catalog,
                 active_lane_ids,
-                commit_topology,
             )
         };
         if entries.is_empty() {
@@ -729,7 +699,7 @@ impl TransactionGossiper {
         {
             self.record_gossip_caps();
         }
-        let mut grouped: BTreeMap<DataSpaceId, DataspaceBatch> = BTreeMap::new();
+        let mut validated = Vec::with_capacity(entries.len());
         for entry in entries {
             let route = GossipRoute {
                 lane_id: entry.routing.lane_id,
@@ -751,8 +721,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     reason,
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     0,
@@ -760,14 +728,10 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            let entry_slot = grouped.entry(entry.routing.dataspace_id).or_default();
-            entry_slot.lanes.insert(route.lane_id);
-            entry_slot.entries.push(entry);
+            validated.push(entry);
         }
-        for (dataspace_id, batch) in grouped {
-            let mut lane_ids = Vec::with_capacity(batch.lanes.len());
-            lane_ids.extend(batch.lanes.iter().copied());
-            let entries = batch.entries;
+        for ((dataspace_id, lane_id), entries) in restricted::group_by_route(validated) {
+            let lane_ids = [lane_id];
             let plane = dataspace_plane(&lane_config, dataspace_id).or({
                 if self.dataspace_cfg.drop_unknown_dataspace {
                     None
@@ -786,8 +750,6 @@ impl TransactionGossiper {
                     dataspace_id,
                     &lane_ids,
                     "unknown_dataspace",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(GossipPlane::Restricted),
                     entries.len(),
@@ -799,13 +761,9 @@ impl TransactionGossiper {
                 GossipPlane::Public => {
                     self.gossip_public(dataspace_id, &lane_ids, entries, public_seed);
                 }
-                GossipPlane::Restricted => self.gossip_restricted(
-                    dataspace_id,
-                    &lane_ids,
-                    entries,
-                    &commit_topology,
-                    restricted_seed,
-                ),
+                GossipPlane::Restricted => {
+                    self.gossip_restricted(dataspace_id, lane_id, entries, restricted_seed)
+                }
             }
         }
         self.advance_gossip_tick();
@@ -852,8 +810,6 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 "frame_cap_too_small",
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(GossipPlane::Public),
                 0,
@@ -901,8 +857,6 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 DROP_REASON_PEER_RECENT_SUPPRESSION,
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(GossipPlane::Public),
                 batch_txs,
@@ -939,8 +893,6 @@ impl TransactionGossiper {
                         public_target_cap,
                         sent_count,
                         sent_bytes,
-                        false,
-                        None,
                         replaying_suppressed_targets
                             .then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
                     );
@@ -978,8 +930,6 @@ impl TransactionGossiper {
                         public_target_cap,
                         batch_txs,
                         frame_bytes,
-                        false,
-                        None,
                         None,
                     );
                     self.remember_peer_recent_sends(&targets, &sent_keys, frame_bytes);
@@ -1012,8 +962,6 @@ impl TransactionGossiper {
                             public_target_cap,
                             sent_count,
                             sent_bytes,
-                            false,
-                            None,
                             replaying_suppressed_targets
                                 .then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
                         );
@@ -1029,11 +977,11 @@ impl TransactionGossiper {
     fn gossip_restricted(
         &mut self,
         dataspace_id: DataSpaceId,
-        lane_ids: &[LaneId],
+        lane_id: LaneId,
         entries: Vec<GossipBatchEntry>,
-        commit_topology: &[PeerId],
         gossip_seed: u64,
     ) {
+        let lane_ids = &[lane_id];
         if entries.is_empty() {
             return;
         }
@@ -1061,8 +1009,6 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 "frame_cap_too_small",
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(GossipPlane::Restricted),
                 0,
@@ -1080,34 +1026,23 @@ impl TransactionGossiper {
         }
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
         let priority = { self.gossip_priority() };
-        let plan = self.restricted_target_plan(
-            commit_topology,
-            batch_txs,
+        let targets = match self.restricted_target_plan(
+            GossipRoute {
+                lane_id,
+                dataspace_id,
+            },
             seed,
             matches!(priority, Priority::High),
-        );
-        let (targets, fallback_used, fallback_surface, reason) = match plan {
-            RestrictedTargetPlan::Send {
-                targets,
-                fallback_used,
-                fallback_surface,
-                reason,
-            } => (targets, fallback_used, fallback_surface, reason),
-            RestrictedTargetPlan::Drop {
-                reason,
-                fallback_used,
-                fallback_surface,
-                targets,
-            } => {
+        ) {
+            Ok(targets) => targets,
+            Err(reason) => {
                 self.defer_gossip_hashes(sent_hashes);
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
                     lane_ids,
                     reason,
-                    fallback_used,
-                    fallback_surface,
-                    &targets,
+                    &[],
                     self.target_cap_for_plane(GossipPlane::Restricted),
                     batch_txs,
                     encoded_len,
@@ -1124,8 +1059,6 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 DROP_REASON_PEER_RECENT_SUPPRESSION,
-                fallback_used,
-                fallback_surface,
                 &[],
                 self.target_cap_for_plane(GossipPlane::Restricted),
                 batch_txs,
@@ -1150,12 +1083,10 @@ impl TransactionGossiper {
                     self.dataspace_cfg.restricted_target_cap,
                     sent_count,
                     sent_bytes,
-                    fallback_used,
-                    fallback_surface,
                     if replaying_suppressed_targets {
                         Some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY)
                     } else {
-                        reason
+                        None
                     },
                 );
             }
@@ -1168,7 +1099,7 @@ impl TransactionGossiper {
             suppressed_targets,
             replaying_suppressed_targets,
             %dataspace_id,
-            "gossiping restricted transactions to online commit topology"
+            "gossiping restricted transactions to the committed native lane committee"
         );
         self.defer_gossip_hashes(sent_hashes);
     }
@@ -1181,8 +1112,6 @@ impl TransactionGossiper {
         dataspace: DataSpaceId,
         lane_ids: &[LaneId],
         reason: &str,
-        fallback_used: bool,
-        fallback_surface: Option<&str>,
         targets: &[PeerId],
         target_cap: Option<NonZeroUsize>,
         batch_txs: usize,
@@ -1192,19 +1121,12 @@ impl TransactionGossiper {
             %dataspace,
             reason,
             plane = gossip_plane_label(plane),
-            fallback_used,
             lanes = ?lane_ids,
             "transaction gossip drop recorded for dataspace"
         );
         #[cfg(not(feature = "telemetry"))]
         {
-            let _ = (
-                fallback_surface,
-                targets,
-                target_cap,
-                batch_txs,
-                frame_bytes,
-            );
+            let _ = (targets, target_cap, batch_txs, frame_bytes);
         }
         #[cfg(feature = "telemetry")]
         {
@@ -1216,8 +1138,6 @@ impl TransactionGossiper {
                 target_cap,
                 false,
                 Some(reason),
-                fallback_used,
-                fallback_surface,
                 batch_txs,
                 frame_bytes,
             );
@@ -1235,21 +1155,18 @@ impl TransactionGossiper {
         target_cap: Option<NonZeroUsize>,
         batch_txs: usize,
         frame_bytes: usize,
-        fallback_used: bool,
-        fallback_surface: Option<&str>,
         reason: Option<&str>,
     ) {
         iroha_logger::debug!(
             %dataspace,
             targets = targets.len(),
             plane = gossip_plane_label(plane),
-            fallback_used,
             lanes = ?lane_ids,
             "transaction gossip sent metric recorded"
         );
         #[cfg(not(feature = "telemetry"))]
         {
-            let _ = (target_cap, batch_txs, frame_bytes, fallback_surface, reason);
+            let _ = (target_cap, batch_txs, frame_bytes, reason);
         }
         #[cfg(feature = "telemetry")]
         {
@@ -1261,8 +1178,6 @@ impl TransactionGossiper {
                 target_cap,
                 true,
                 reason,
-                fallback_used,
-                fallback_surface,
                 batch_txs,
                 frame_bytes,
             );
@@ -1277,8 +1192,6 @@ impl TransactionGossiper {
                 .restricted_target_cap
                 .map(NonZeroUsize::get),
             self.dataspace_cfg.drop_unknown_dataspace,
-            self.dataspace_cfg.restricted_fallback,
-            self.dataspace_cfg.restricted_public_payload,
             self.dataspace_cfg.public_target_reshuffle,
             self.dataspace_cfg.restricted_target_reshuffle,
         );
@@ -1400,63 +1313,41 @@ impl TransactionGossiper {
         }
         splitmix64(state)
     }
-    fn restricted_target_plan_with_targets(
-        commit_topology: Vec<PeerId>,
-        fallback_targets: Vec<PeerId>,
-        target_cap: Option<NonZeroUsize>,
-        fallback_policy: DataspaceGossipFallback,
-        payload_policy: RestrictedPublicPayload,
-        tx_count: usize,
-        seed: u64,
-    ) -> RestrictedTargetPlan {
-        let online: BTreeSet<_> = fallback_targets.iter().cloned().collect();
-        let mut filtered_commit = Vec::with_capacity(commit_topology.len());
-        for peer in commit_topology {
-            if online.contains(&peer) {
-                filtered_commit.push(peer);
-            }
-        }
-        let commit_topology = filtered_commit;
-        let (capped_commit, _) = Self::select_targets_with_seed(commit_topology, target_cap, seed);
-        if !capped_commit.is_empty() {
-            return RestrictedTargetPlan::Send {
-                targets: capped_commit,
-                fallback_used: false,
-                fallback_surface: None,
-                reason: None,
-            };
-        }
-        let (capped_fallback, _) =
-            Self::select_targets_with_seed(fallback_targets, target_cap, seed);
-        decide_restricted_target_plan(capped_fallback, fallback_policy, payload_policy, tx_count)
-    }
     fn restricted_target_plan(
         &self,
-        commit_topology: &[PeerId],
-        tx_count: usize,
+        route: GossipRoute,
         seed: u64,
         urgent_gossip: bool,
-    ) -> RestrictedTargetPlan {
-        let fallback_targets: Vec<PeerId> = self.network.online_peers(|online| {
-            let mut peers = Vec::with_capacity(online.len());
-            for peer in online {
-                peers.push(peer.id().clone());
-            }
-            peers
-        });
-        Self::restricted_target_plan_with_targets(
-            commit_topology.to_vec(),
-            fallback_targets,
+    ) -> Result<Vec<PeerId>, &'static str> {
+        let online = self
+            .network
+            .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
+        let view = self.state.view();
+        restricted::targets(
+            &view.world,
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            route,
+            &online,
             if urgent_gossip {
                 None
             } else {
                 self.dataspace_cfg.restricted_target_cap
             },
-            self.dataspace_cfg.restricted_fallback,
-            self.dataspace_cfg.restricted_public_payload,
-            tx_count,
             seed,
         )
+    }
+    fn validate_restricted_recipient(&self, route: GossipRoute) -> Result<(), &'static str> {
+        let view = self.state.view();
+        let members = restricted::committee(
+            &view.world,
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            route,
+        )?;
+        if members.contains(&self.self_peer_id) {
+            Ok(())
+        } else {
+            Err("not_native_lane_member")
+        }
     }
     fn is_transaction_known_locally(
         &self,
@@ -1516,8 +1407,6 @@ impl TransactionGossiper {
             DataSpaceId::UNIVERSAL,
             &[],
             "transaction_count_limit",
-            false,
-            None,
             &[],
             self.target_cap_for_plane(plane),
             transaction_count,
@@ -1547,8 +1436,6 @@ impl TransactionGossiper {
                 DataSpaceId::UNIVERSAL,
                 &[],
                 "missing_routes",
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(plane),
                 batch_txs,
@@ -1577,8 +1464,6 @@ impl TransactionGossiper {
                 DataSpaceId::UNIVERSAL,
                 &[],
                 reason,
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(plane),
                 batch_txs,
@@ -1635,8 +1520,6 @@ impl TransactionGossiper {
                     DataSpaceId::UNIVERSAL,
                     &[],
                     "missing_route_entry",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1651,8 +1534,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "missing_plan_entry",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1675,8 +1556,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "route_plan_mismatch",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1698,8 +1577,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     reason,
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1724,8 +1601,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     reason,
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1751,8 +1626,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "unknown_dataspace",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1770,8 +1643,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "restricted_universal_dataspace",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1792,8 +1663,21 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "plane_mismatch",
-                    false,
-                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if plane == GossipPlane::Restricted
+                && let Err(reason) = self.validate_restricted_recipient(route)
+            {
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -1823,8 +1707,6 @@ impl TransactionGossiper {
                         route.dataspace_id,
                         &[route.lane_id],
                         "entrypoint_decode",
-                        false,
-                        None,
                         &[],
                         self.target_cap_for_plane(plane),
                         1,
@@ -2016,8 +1898,6 @@ impl TransactionGossiper {
                                     route.dataspace_id,
                                     &[route.lane_id],
                                     "route_unresolved",
-                                    false,
-                                    None,
                                     &[],
                                     self.target_cap_for_plane(plane),
                                     1,
@@ -2042,8 +1922,6 @@ impl TransactionGossiper {
                             local_route.dataspace_id,
                             &[local_route.lane_id],
                             DROP_REASON_ROUTE_MISMATCH,
-                            false,
-                            None,
                             &[],
                             self.target_cap_for_plane(plane),
                             1,
@@ -2063,8 +1941,6 @@ impl TransactionGossiper {
                             local_route.dataspace_id,
                             &[local_route.lane_id],
                             DROP_REASON_ROUTE_MISMATCH,
-                            false,
-                            None,
                             &[],
                             self.target_cap_for_plane(plane),
                             1,
@@ -2115,8 +1991,6 @@ impl TransactionGossiper {
                                 local_route.dataspace_id,
                                 &[local_route.lane_id],
                                 "nexus_fee_rejected",
-                                false,
-                                None,
                                 &[],
                                 self.target_cap_for_plane(plane),
                                 1,
@@ -2139,8 +2013,6 @@ impl TransactionGossiper {
                                 local_route.dataspace_id,
                                 &[local_route.lane_id],
                                 "nexus_fee_config_invalid",
-                                false,
-                                None,
                                 &[],
                                 self.target_cap_for_plane(plane),
                                 1,
@@ -2185,8 +2057,6 @@ impl TransactionGossiper {
                 DataSpaceId::UNIVERSAL,
                 &[],
                 "missing_routes",
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(plane),
                 batch_txs,
@@ -2215,8 +2085,6 @@ impl TransactionGossiper {
                 DataSpaceId::UNIVERSAL,
                 &[],
                 reason,
-                false,
-                None,
                 &[],
                 self.target_cap_for_plane(plane),
                 batch_txs,
@@ -2260,8 +2128,6 @@ impl TransactionGossiper {
                     DataSpaceId::UNIVERSAL,
                     &[],
                     "missing_route_entry",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2276,8 +2142,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "missing_plan_entry",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2302,8 +2166,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "route_plan_mismatch",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2326,8 +2188,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     reason,
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2352,8 +2212,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     reason,
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2379,8 +2237,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "unknown_dataspace",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2398,8 +2254,6 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "restricted_universal_dataspace",
-                    false,
-                    None,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2420,8 +2274,21 @@ impl TransactionGossiper {
                     route.dataspace_id,
                     &[route.lane_id],
                     "plane_mismatch",
-                    false,
-                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if plane == GossipPlane::Restricted
+                && let Err(reason) = self.validate_restricted_recipient(route)
+            {
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
                     &[],
                     self.target_cap_for_plane(plane),
                     1,
@@ -2451,8 +2318,6 @@ impl TransactionGossiper {
                         route.dataspace_id,
                         &[route.lane_id],
                         "invalid_entrypoint_payload",
-                        false,
-                        None,
                         &[],
                         self.target_cap_for_plane(plane),
                         1,
@@ -2492,8 +2357,6 @@ impl TransactionGossiper {
                                     route.dataspace_id,
                                     &[route.lane_id],
                                     "route_unresolved",
-                                    false,
-                                    None,
                                     &[],
                                     self.target_cap_for_plane(plane),
                                     1,
@@ -2518,8 +2381,6 @@ impl TransactionGossiper {
                             local_route.dataspace_id,
                             &[local_route.lane_id],
                             DROP_REASON_ROUTE_MISMATCH,
-                            false,
-                            None,
                             &[],
                             self.target_cap_for_plane(plane),
                             1,
@@ -2539,8 +2400,6 @@ impl TransactionGossiper {
                             local_route.dataspace_id,
                             &[local_route.lane_id],
                             DROP_REASON_ROUTE_MISMATCH,
-                            false,
-                            None,
                             &[],
                             self.target_cap_for_plane(plane),
                             1,
@@ -2594,8 +2453,6 @@ impl TransactionGossiper {
                                 local_route.dataspace_id,
                                 &[local_route.lane_id],
                                 "nexus_fee_rejected",
-                                false,
-                                None,
                                 &[],
                                 self.target_cap_for_plane(plane),
                                 1,
@@ -2618,8 +2475,6 @@ impl TransactionGossiper {
                                 local_route.dataspace_id,
                                 &[local_route.lane_id],
                                 "nexus_fee_config_invalid",
-                                false,
-                                None,
                                 &[],
                                 self.target_cap_for_plane(plane),
                                 1,
@@ -2643,60 +2498,6 @@ impl TransactionGossiper {
                     }
                 }
                 Err(err) => iroha_logger::error!(%err, "Transaction rejected"),
-            }
-        }
-    }
-}
-fn decide_restricted_target_plan(
-    fallback_targets: Vec<PeerId>,
-    fallback_policy: DataspaceGossipFallback,
-    payload_policy: RestrictedPublicPayload,
-    tx_count: usize,
-) -> RestrictedTargetPlan {
-    match fallback_policy {
-        DataspaceGossipFallback::Drop => RestrictedTargetPlan::Drop {
-            reason: DROP_REASON_NO_RESTRICTED_TARGETS,
-            fallback_used: false,
-            fallback_surface: None,
-            targets: fallback_targets,
-        },
-        DataspaceGossipFallback::UsePublicOverlay => {
-            if fallback_targets.is_empty() {
-                iroha_logger::warn!(tx_count, "restricted gossip fallback found no online peers");
-                return RestrictedTargetPlan::Drop {
-                    reason: DROP_REASON_NO_RESTRICTED_TARGETS,
-                    fallback_used: true,
-                    fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-                    targets: fallback_targets,
-                };
-            }
-            match payload_policy {
-                RestrictedPublicPayload::Forward => {
-                    iroha_logger::warn!(
-                        tx_count,
-                        targets = fallback_targets.len(),
-                        "restricted gossip forwarded to public overlay per configuration"
-                    );
-                    RestrictedTargetPlan::Send {
-                        targets: fallback_targets,
-                        fallback_used: true,
-                        fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-                        reason: Some(OUTCOME_PUBLIC_OVERLAY_FORWARD),
-                    }
-                }
-                RestrictedPublicPayload::Refuse => {
-                    iroha_logger::warn!(
-                        tx_count,
-                        targets = fallback_targets.len(),
-                        "restricted gossip fallback refused due to overlay policy"
-                    );
-                    RestrictedTargetPlan::Drop {
-                        reason: DROP_REASON_PUBLIC_OVERLAY_REFUSED,
-                        fallback_used: true,
-                        fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-                        targets: fallback_targets,
-                    }
-                }
             }
         }
     }
@@ -3495,7 +3296,6 @@ mod tests {
     use super::*;
     use crate::NetworkMessage;
     use crate::{
-        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{LaneRouter, RoutingDecision},
@@ -3505,9 +3305,8 @@ mod tests {
         kura::FsyncMode,
         parameters::{
             actual::{
-                DataspaceGossipFallback, Kura as KuraConfig, LaneConfig as LaneGeometry,
-                LaneProfile, Queue as QueueConfig, RelayMode, RestrictedPublicPayload,
-                SoranetHandshake, SoranetPrivacy, SoranetVpn,
+                Kura as KuraConfig, LaneConfig as LaneGeometry, LaneProfile, Queue as QueueConfig,
+                RelayMode, SoranetHandshake, SoranetPrivacy, SoranetVpn,
             },
             defaults,
         },
@@ -3516,9 +3315,8 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Level,
-        account::{AccountDetails, AccountId, AccountValue},
-        domain::Domain,
-        isi::{InstructionBox, Log, Register},
+        account::{AccountDetails, AccountValue},
+        isi::{InstructionBox, Log},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
         transaction::{
             TransactionBuilder,
@@ -3528,7 +3326,6 @@ mod tests {
             },
         },
     };
-    use iroha_model_base::domain::DomainId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
     use iroha_test_samples::{
@@ -3542,13 +3339,15 @@ mod tests {
         sync::Arc,
         time::Duration,
     };
-    use tempfile::{TempDir, tempdir};
+    use tempfile::tempdir;
     fn test_network_id() -> NetworkId {
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("valid default test network id")
     }
-    fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
+    pub(super) fn build_transaction(
+        message: &str,
+    ) -> (SignedTransaction, AcceptedTransaction<'static>) {
         let authority = (*ALICE_ID).clone();
         let signed = TransactionBuilder::new(
             test_network_id(),
@@ -3585,7 +3384,7 @@ mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
-    fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
+    pub(super) fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
         Arc::new(encode_transaction_entrypoint(
             &TransactionEntrypoint::External(tx.clone()),
         ))
@@ -3950,7 +3749,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             quic_max_idle_timeout: None,
         }
     }
-    fn closed_test_gossiper(resend_ticks: NonZeroU32) -> TransactionGossiper {
+    pub(super) fn closed_test_gossiper(resend_ticks: NonZeroU32) -> TransactionGossiper {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
             init_mode: iroha_config::kura::InitMode::Strict,
@@ -3991,6 +3790,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue,
             state,
             tx_frame_cap: 1024,
@@ -4185,6 +3985,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue: Arc::clone(&queue),
             state: Arc::clone(&state),
             tx_frame_cap: 1024,
@@ -4296,6 +4097,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: u64::MAX,
             last_drop_at: Some(now),
             network: IrohaNetwork::closed_for_tests(),
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue,
             state,
             tx_frame_cap: 1024,
@@ -4611,81 +4413,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(dataspace_label(dataspace), "42");
     }
     #[test]
-    fn restricted_plan_refuses_public_overlay_policy() {
-        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
-        let plan = decide_restricted_target_plan(
-            vec![peer.clone()],
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Refuse,
-            2,
-        );
-        assert_eq!(
-            plan,
-            RestrictedTargetPlan::Drop {
-                reason: DROP_REASON_PUBLIC_OVERLAY_REFUSED,
-                fallback_used: true,
-                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-                targets: vec![peer.clone()],
-            }
-        );
-    }
-    #[test]
-    fn restricted_plan_drops_when_fallback_policy_is_drop() {
-        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
-        let plan = decide_restricted_target_plan(
-            vec![peer.clone()],
-            DataspaceGossipFallback::Drop,
-            RestrictedPublicPayload::Forward,
-            3,
-        );
-        assert_eq!(
-            plan,
-            RestrictedTargetPlan::Drop {
-                reason: DROP_REASON_NO_RESTRICTED_TARGETS,
-                fallback_used: false,
-                fallback_surface: None,
-                targets: vec![peer],
-            }
-        );
-    }
-    #[test]
-    fn restricted_plan_drops_when_no_fallback_targets() {
-        let plan = decide_restricted_target_plan(
-            Vec::new(),
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            1,
-        );
-        assert_eq!(
-            plan,
-            RestrictedTargetPlan::Drop {
-                reason: DROP_REASON_NO_RESTRICTED_TARGETS,
-                fallback_used: true,
-                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-                targets: Vec::new(),
-            }
-        );
-    }
-    #[test]
-    fn restricted_plan_forwards_public_overlay_when_allowed() {
-        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
-        let plan = decide_restricted_target_plan(
-            vec![peer.clone()],
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            1,
-        );
-        assert_eq!(
-            plan,
-            RestrictedTargetPlan::Send {
-                targets: vec![peer],
-                fallback_used: true,
-                reason: Some(OUTCOME_PUBLIC_OVERLAY_FORWARD),
-                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
-            }
-        );
-    }
-    #[test]
     fn select_targets_dedups_and_caps_with_seed() {
         let targets = vec![
             (*ALICE_KEYPAIR).public_key().clone().into(),
@@ -4785,130 +4512,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             "seed should advance on reshuffle"
         );
     }
-    #[test]
-    fn restricted_plan_caps_commit_topology() {
-        let commit = vec![
-            (*ALICE_KEYPAIR).public_key().clone().into(),
-            (*BOB_KEYPAIR).public_key().clone().into(),
-            (*PEER_KEYPAIR).public_key().clone().into(),
-        ];
-        let cap = NonZeroUsize::new(2);
-        let seed = 0x5A5A_0F0F;
-        let plan = TransactionGossiper::restricted_target_plan_with_targets(
-            commit.clone(),
-            commit.clone(),
-            cap,
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            3,
-            seed,
-        );
-        match plan {
-            RestrictedTargetPlan::Send {
-                targets,
-                fallback_used,
-                fallback_surface,
-                reason,
-            } => {
-                let unique: BTreeSet<_> = commit.into_iter().collect();
-                assert_eq!(targets.len(), cap.unwrap().get());
-                assert!(
-                    targets.iter().all(|peer| unique.contains(peer)),
-                    "targets must be drawn from the commit topology"
-                );
-                assert!(!fallback_used);
-                assert!(fallback_surface.is_none());
-                assert!(reason.is_none());
-            }
-            other => panic!("expected capped commit plan, got {other:?}"),
-        }
-    }
-    #[test]
-    fn restricted_plan_dedups_commit_topology() {
-        let duplicated = vec![
-            (*ALICE_KEYPAIR).public_key().clone().into(),
-            (*BOB_KEYPAIR).public_key().clone().into(),
-            (*ALICE_KEYPAIR).public_key().clone().into(),
-        ];
-        let seed = 0x0102_0304;
-        let plan = TransactionGossiper::restricted_target_plan_with_targets(
-            duplicated.clone(),
-            duplicated.clone(),
-            None,
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            1,
-            seed,
-        );
-        match plan {
-            RestrictedTargetPlan::Send { targets, .. } => {
-                let mut expected = duplicated;
-                expected.sort();
-                expected.dedup();
-                assert_eq!(targets, expected, "duplicates should be removed");
-            }
-            other => panic!("expected deduped commit plan, got {other:?}"),
-        }
-    }
-    #[test]
-    fn restricted_plan_filters_commit_topology_to_online_peers() {
-        let online_peer: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
-        let offline_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
-        let seed = 0xDEC0_1DED;
-        let plan = TransactionGossiper::restricted_target_plan_with_targets(
-            vec![online_peer.clone(), offline_peer],
-            vec![online_peer.clone()],
-            None,
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            1,
-            seed,
-        );
-        match plan {
-            RestrictedTargetPlan::Send { targets, .. } => {
-                assert_eq!(targets, vec![online_peer]);
-            }
-            other => panic!("expected filtered commit plan, got {other:?}"),
-        }
-    }
-    #[test]
-    fn restricted_plan_caps_fallback_targets() {
-        let fallback = vec![
-            (*PEER_KEYPAIR).public_key().clone().into(),
-            (*BOB_KEYPAIR).public_key().clone().into(),
-            (*ALICE_KEYPAIR).public_key().clone().into(),
-        ];
-        let cap = NonZeroUsize::new(2);
-        let seed = 0x0BAD_F00D;
-        let plan = TransactionGossiper::restricted_target_plan_with_targets(
-            Vec::new(),
-            fallback.clone(),
-            cap,
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Forward,
-            2,
-            seed,
-        );
-        match plan {
-            RestrictedTargetPlan::Send {
-                targets,
-                fallback_used,
-                fallback_surface,
-                reason,
-            } => {
-                let unique: BTreeSet<_> = fallback.into_iter().collect();
-                assert_eq!(targets.len(), cap.unwrap().get());
-                assert!(
-                    targets.iter().all(|peer| unique.contains(peer)),
-                    "fallback targets must be drawn from available peers"
-                );
-                assert!(fallback_used);
-                assert_eq!(fallback_surface, Some(SURFACE_PUBLIC_OVERLAY));
-                assert_eq!(reason, Some(OUTCOME_PUBLIC_OVERLAY_FORWARD));
-            }
-            other => panic!("expected capped fallback plan, got {other:?}"),
-        }
-    }
     #[tokio::test(flavor = "current_thread")]
     async fn gossip_accepts_valid_entries_with_invalid_routes_present() {
         let temp_dir = tempdir().expect("temp dir");
@@ -4954,6 +4557,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue: Arc::clone(&queue),
             state: Arc::clone(&state),
             tx_frame_cap: 1024,
@@ -5539,6 +5143,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network,
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue: Arc::clone(&queue),
             state,
             tx_frame_cap: 1024,
@@ -5639,6 +5244,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
+            self_peer_id: PeerId::new(PEER_KEYPAIR.public_key().clone()),
             queue: Arc::clone(&queue),
             state,
             tx_frame_cap: 1024,

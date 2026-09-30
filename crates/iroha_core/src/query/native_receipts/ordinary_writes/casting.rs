@@ -6,6 +6,7 @@
 //! comparison in the parent keeps this materializer tied to the canonical model encoder.
 
 use super::{WriteDecodeError, count, field, fields};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     parliament_casting::{
@@ -19,7 +20,6 @@ use iroha_data_model::{
         BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId, TleKeySessionId,
     },
 };
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
 use norito::Error;
 
 /// Immutable backing owner; each leaf has no heap-bearing fields. Field order frees values

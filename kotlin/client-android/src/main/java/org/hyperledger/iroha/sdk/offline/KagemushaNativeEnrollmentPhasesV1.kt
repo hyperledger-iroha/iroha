@@ -80,6 +80,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     private var beginInvoked = false
     private var begunAccountI105: String? = null
     private var selected: Selection? = null
+    private var preparationRequest: List<ByteArray>? = null
     private var challengeRequest: List<ByteArray>? = null
     private var accepted: AcceptedChallenge? = null
     private var proofRequest: List<ByteArray>? = null
@@ -99,6 +100,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         begunAccountI105 = null
         accepted = null
         proof = null
+        preparationRequest = null
         challengeRequest = null
         proofRequest = null
         finishRequest = null
@@ -121,7 +123,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
             .also { selected = it }
     }
 
-    /** Recheck the exact live native selection, including after a lost phase-1 response. */
+    /** Recheck the exact selection while its native owner remains live; transport failure revokes it. */
     @Synchronized
     fun recoverExactSelection(accountI105: String): Selection? {
         val canonical = requireCanonicalI105Address(accountI105, "enrollment account")
@@ -137,6 +139,19 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
             return original
         }
         return candidate.also { selected = it }
+    }
+
+    /** Verify the original signed issuer preparation in native phase 8 before any KeyMint access. */
+    @Synchronized
+    fun verifySignedPreparation(selection: Selection, signedPreparation: ByteArray): ByteArray {
+        requireSelection(selection)
+        require(signedPreparation.size == 273) { "Signed issuer preparation has an invalid length" }
+        val fields = listOf(u32(8), selection.ticket(), signedPreparation.copyOf())
+        sameOrRemember(preparationRequest, fields, "Signed issuer preparation")
+        if (preparationRequest == null) preparationRequest = copyFields(fields)
+        // Native independently authenticates issuer, lifetime and original ticket pins; this
+        // method never interprets the frame shape or cached nonce as signature authority.
+        return bridge.invoke(METHOD, fields).single().copyOf()
     }
 
     /**
@@ -195,7 +210,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         return checkedProof(accepted, bridge.invoke(METHOD, fields))
     }
 
-    /** Phase 4 reads only the original native proof after an uncertain phase-3 dispatch. */
+    /** Phase 4 reads only the original native proof through the same live native owner. */
     @Synchronized
     fun recoverExactProof(accepted: AcceptedChallenge): Proof {
         requireAccepted(accepted)
@@ -220,7 +235,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         return response[1].copyOf().also { enrollmentId = it.copyOf() }
     }
 
-    /** Revoke the original ticket, including after local response poisoning; only exact retry follows. */
+    /** Revoke the original ticket after local response poisoning; retry only successful dispatches. */
     @Synchronized
     fun cancel(selection: Selection) {
         check(selected === selection && (!cancelled || cancelledSelection === selection)) {

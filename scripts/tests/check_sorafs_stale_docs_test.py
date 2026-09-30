@@ -188,9 +188,12 @@ def test_stream_token_docs_use_the_runtime_signer_hard_cut() -> None:
     assert set(signer) == {
         "runtime_handle", "key_handle", "service_id", "administrator_id", "public_key",
         "key_revision", "policy_revision", "policy_digest", "attester", "observer",
+        "clock_uncertainty_ms", "native",
     }
     assert signer["attester"] == "SorafsStreamTokenAttesterConfig"
     assert signer["observer"] == "SorafsStreamTokenObserverConfig"
+    assert signer["native"] == "Option<SorafsStreamTokenNativeConfig>"
+    assert signer["clock_uncertainty_ms"] == "u64"
     user = _rust_struct_fields("crates/iroha_config/src/parameters/user.rs", "SorafsStreamTokenConfig")
     assert user["signer"] == "SorafsStreamTokenSignerConfig"
     assert "key_version" not in user
@@ -204,11 +207,13 @@ def test_stream_token_template_names_every_required_independent_signer_pin() -> 
     signer = tokens["signer"]
     child = "crates/iroha_config/src/parameters/user/stream_token_signer.rs"
     names = {"signer": "SorafsStreamTokenSignerConfig", "attester": "SorafsStreamTokenAttesterConfig",
-             "observer": "SorafsStreamTokenObserverConfig"}
+             "observer": "SorafsStreamTokenObserverConfig", "native": "SorafsStreamTokenNativeConfig"}
     assert set(signer) == set(_rust_struct_fields(child, names["signer"]))
-    for role in ("attester", "observer"):
+    for role in ("attester", "observer", "native"):
         assert set(signer[role]) == set(_rust_struct_fields(child, names[role]))
-    assert len(signer) - 2 + len(signer["attester"]) + len(signer["observer"]) == 28
+    assert len(signer) - 3 + sum(len(signer[role]) for role in ("attester", "observer", "native")) == 37
+    assert signer["clock_uncertainty_ms"] == 250
+    assert signer["native"]["timeout_ms"] == 30000
     assert "provider_id_hex" in storage and "provider_id_hex" not in signer
     assert "key_version" not in tokens
     identities = [role[field] for role in (signer, signer["attester"], signer["observer"])
@@ -265,7 +270,13 @@ def test_stream_token_runtime_has_separate_trust_and_one_body_recovery_owners() 
     assert "block.block_hash().as_ref() != block_hash" in core_finality
     assert "canonical_block_by_height(index)" in certified_chain
     assert "index.get() <= view.block_hashes().len()" in certified_chain
-    assert "verify_qc_signatures" in certified_chain and "verify_qc(" in certified_chain
+    for contract in (
+        "iroha_sumeragi::crypto::Verifier::new(",
+        "&authority.crypto", "&authority.committee", ".verify_qc(verifier, &commit_qc)",
+        "commit_qc.height != height", "commit_qc.block_hash != committed.core_hash",
+        "verify_availability(&committed, config, &authority.crypto)?",
+    ):
+        assert contract in certified_chain
     assert "v2_finality_artifact(" not in core_finality
     assert "view.block_hashes()" in finality
     assert "stream_token_binding_digest_v1(&binding)" in pins

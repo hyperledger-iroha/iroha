@@ -135,13 +135,37 @@ def test_descriptor_census_bound_refuses_before_spawn(tmp_path, monkeypatch):
         _run(tmp_path, FRAME)
 
 
+def test_inheritable_pipe_refuses_before_spawn_and_closes_every_end(tmp_path, monkeypatch):
+    original_pipe = os.pipe
+    created = []
+
+    def inheritable_pipe():
+        pair = original_pipe()
+        created.extend(pair)
+        for fd in pair:
+            os.set_inheritable(fd, True)
+        return pair
+
+    def forbidden_spawn(*args, **kwargs):
+        raise AssertionError("inheritable pipe reached child spawn")
+
+    monkeypatch.setattr(process.os, "pipe", inheritable_pipe)
+    monkeypatch.setattr(process.os, "posix_spawn", forbidden_spawn)
+    with pytest.raises(process.ChildProcessError, match="must be non-inheritable"):
+        _run(tmp_path, FRAME)
+    assert len(created) == 4
+    for fd in created:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
 def test_selector_cleanup_failure_still_attempts_every_pipe_close(tmp_path, monkeypatch):
-    original_pipe = os.pipe2
+    original_pipe = os.pipe
     original_selector = process.selectors.DefaultSelector
     created = []
 
-    def observed_pipe(flags):
-        pair = original_pipe(flags)
+    def observed_pipe():
+        pair = original_pipe()
         created.extend(pair)
         return pair
 
@@ -156,7 +180,7 @@ def test_selector_cleanup_failure_still_attempts_every_pipe_close(tmp_path, monk
             self.inner.close()
             raise OSError("inert selector cleanup failure")
 
-    monkeypatch.setattr(process.os, "pipe2", observed_pipe)
+    monkeypatch.setattr(process.os, "pipe", observed_pipe)
     monkeypatch.setattr(process.selectors, "DefaultSelector", FailingSelector)
     with pytest.raises(process.ChildProcessError, match="cleanup failed") as raised:
         _run(tmp_path, FRAME)
@@ -168,13 +192,13 @@ def test_selector_cleanup_failure_still_attempts_every_pipe_close(tmp_path, monk
 
 
 def test_write_pipe_close_failure_retains_all_ends_for_final_cleanup(tmp_path, monkeypatch):
-    original_pipe = os.pipe2
+    original_pipe = os.pipe
     original_close = os.close
     created = []
     failed = False
 
-    def observed_pipe(flags):
-        pair = original_pipe(flags)
+    def observed_pipe():
+        pair = original_pipe()
         created.extend(pair)
         return pair
 
@@ -185,7 +209,7 @@ def test_write_pipe_close_failure_retains_all_ends_for_final_cleanup(tmp_path, m
             raise OSError("inert first write-close failure")
         return original_close(fd)
 
-    monkeypatch.setattr(process.os, "pipe2", observed_pipe)
+    monkeypatch.setattr(process.os, "pipe", observed_pipe)
     monkeypatch.setattr(process.os, "close", fail_one_close)
     with pytest.raises(OSError, match="inert first write-close failure"):
         _run(tmp_path, FRAME)

@@ -196,8 +196,14 @@ fn certified_floor(
     crate::sumeragi::test_chain::CertifiedTestChain,
     StreamTokenFinalityFloorV1,
 ) {
+    use crate::sumeragi::test_chain::Signers;
     let mut chain = crate::query::signer_check::fixture::chain(World::new());
-    chain.commit_with(Some(1_500), Vec::new(), signers);
+    if matches!(signers, Signers::BelowQuorum | Signers::All) {
+        chain.commit_at(1_500, Vec::new());
+        chain.corrupt_local_quorum_for_test(2, signers);
+    } else {
+        chain.commit_with(Some(1_500), Vec::new(), signers);
+    }
     let committed = chain.committed(2);
     let floor = StreamTokenFinalityFloorV1 {
         height: 2,

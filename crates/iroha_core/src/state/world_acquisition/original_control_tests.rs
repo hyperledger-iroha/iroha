@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::state::World;
-use mv::{
-    allocation::{AllocationBudget, AllocationRefusal},
-    cell::{Cell, CellPublicationSuccessor},
-};
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
+use mv::cell::{Cell, CellPublicationSuccessor};
 use std::{
     sync::{Arc, mpsc},
     time::Duration,
@@ -19,6 +17,27 @@ macro_rules! count_world_successors {
         $(count += usize::from($world.$suffix.successor_layout().is_some());)*
         count
     }};
+}
+
+#[test]
+fn per_store_control_demand_counts_exact_layouts_and_rejects_overflow() {
+    let source = Cell::new(11_u64);
+    let mut demand = 17;
+    super::add_original_control_demand(&source, &mut demand).unwrap();
+    assert_eq!(
+        demand,
+        17 + CellPublicationSuccessor::allocation_layout().size()
+    );
+    let mut overflow = usize::MAX;
+    assert!(matches!(
+        super::add_original_control_demand(&source, &mut overflow),
+        Err(AdmittedStorageError::Allocation(
+            AllocationRefusal::DemandOverflow
+        ))
+    ));
+    assert_eq!(overflow, usize::MAX);
+    // Accounting is read-only, even when the requested total cannot fit.
+    drop(source.block());
 }
 
 #[test]
@@ -156,21 +175,20 @@ fn original_charged_shell_outlives_capture_until_all_enclosing_writers_are_relea
         WorldJournalCapture, resources::WorldJournalShellReservation,
     };
     let world = World::default();
-    let count = with_world_overlay_fields!(count_world_successors, world);
-    let successor_bytes = count * CellPublicationSuccessor::allocation_layout().size();
+    let field_control_bytes = super::original_world_cell_control_bytes(&world);
     let shell_bytes = OriginalWorldFields::layout().size();
-    let source = AllocationBudget::new(shell_bytes + successor_bytes);
+    let source = AllocationBudget::new(shell_bytes + field_control_bytes);
     let original = world.try_block(&source).unwrap();
     let mut capture = original.capture_slot(WorldJournalShellReservation::for_test());
     assert_eq!(
         source.reserved_bytes(),
-        shell_bytes + successor_bytes,
+        shell_bytes + field_control_bytes,
         "moving original writers must not refund the emptied shell"
     );
     capture.capture().unwrap();
     assert_eq!(
         source.reserved_bytes(),
-        shell_bytes + successor_bytes,
+        shell_bytes + field_control_bytes,
         "capture retains charge until caller releases all enclosing writers"
     );
     // Actual original writers are free, although their capture cleanup remains.
@@ -178,7 +196,7 @@ fn original_charged_shell_outlives_capture_until_all_enclosing_writers_are_relea
     let journals = capture.into_journals(());
     assert_eq!(
         source.reserved_bytes(),
-        successor_bytes,
+        field_control_bytes,
         "only the physically freed empty shell is refunded"
     );
     assert!(journals.matches_current(&world));

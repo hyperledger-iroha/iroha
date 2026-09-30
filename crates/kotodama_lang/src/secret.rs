@@ -7,12 +7,12 @@
 //! a rejected secret flow into an accepted one.
 use crate::{
     ast::FunctionKind,
-    builtins::{Builtin, BuiltinAccess},
     semantic::{
         ExprKind, SemanticError, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem,
         TypedProgram, TypedStatement,
     },
 };
+use kotodama_surface::builtins::{Builtin, BuiltinAccess};
 use std::collections::HashSet;
 fn error(code: &'static str, message: impl Into<String>) -> SemanticError {
     SemanticError {

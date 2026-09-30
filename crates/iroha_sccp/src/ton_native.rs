@@ -973,10 +973,6 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
 }
 
 /// Parse a bounded `BoC` header and cell table, or `None` when it is malformed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one linear canonical BoC header and cell-table parser"
-)]
 /// Parse a bounded TON bag of cells, rejecting malformed headers, cells and references.
 pub fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
@@ -1323,10 +1319,6 @@ fn ton_boc_child_for_hash_level(
 }
 
 /// Compute every cell's level mask, per-level hashes and depths bottom-up.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one bottom-up pass computing every level hash and depth per cell"
-)]
 /// Compute the level hashes and depths of every cell, rejecting invalid cell structure.
 pub fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {

@@ -257,7 +257,7 @@ fn row_growth_refund_notifies_only_after_memory_releases_its_log_lock() {
     let next = 8 * std::mem::size_of::<WriteLogEntry>() + 1;
     budget.set_limit_bytes(occupied + next);
     let refusal = budget.try_reserve_bytes(next + 1).unwrap_err();
-    let mv::allocation::AllocationRefusal::Capacity { release, .. } = refusal else {
+    let iroha_allocation::AllocationRefusal::Capacity { release, .. } = refusal else {
         panic!("actual occupied-pool capacity refusal");
     };
     let probe = Arc::new(Probe {

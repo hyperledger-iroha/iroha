@@ -40,7 +40,7 @@ LAUNCHD_PLIST = (
     / "org.hyperledger.iroha.runtime-provider-broker-v1.plist"
 )
 BROKER_BINARY_SOURCE = (
-    REPO_ROOT / "crates" / "irohad" / "src" / "bin"
+    REPO_ROOT / "crates" / "irohad" / "bins" / "src" / "bin"
     / "sorafs_external_software_signer.rs"
 )
 

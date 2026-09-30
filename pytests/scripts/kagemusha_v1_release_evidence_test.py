@@ -1133,7 +1133,7 @@ def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
     """Pin native requirements without claiming to verify a native profile here."""
 
     native = (
-        ROOT / "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs"
+        ROOT / "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs"
     ).read_text()
     config = (ROOT / "crates/iroha_core/src/smartcontracts/isi/kagemusha.rs").read_text()
     native_profile = native.split(

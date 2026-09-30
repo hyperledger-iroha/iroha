@@ -139,6 +139,28 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
         assert marker in script
 
 
+@pytest.mark.parametrize(
+    ("owner", "source_path"),
+    (
+        ("SoraFsReferenceValidators", "SoraFs/SoraFsReferenceValidators.cs"),
+        (
+            "ValidationFeeHijiriQuoteNative",
+            "Torii/ToriiClient.ValidationFeeHijiriQuote.cs",
+        ),
+    ),
+)
+def test_native_package_consumer_matches_sdk_abi(owner: str, source_path: str) -> None:
+    """The packed consumer must accept the ABI required by its actual SDK owner."""
+
+    source = (
+        ROOT / "csharp/src/Hyperledger.Iroha.Sdk" / source_path
+    ).read_text(encoding="utf-8")
+    versions = re.findall(r"public const uint RequiredBridgeAbiVersion = (\d+);", source)
+    assert len(versions) == 1
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert f"{owner}.RequiredBridgeAbiVersion != {versions[0]}u" in script
+
+
 def test_csharp_sdk_package_consumer_stages_and_uses_pinned_dotnet_sdk(
     tmp_path: Path,
 ) -> None:

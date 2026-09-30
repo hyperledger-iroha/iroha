@@ -13,7 +13,7 @@ use crate::{
     error::ExecutionDeferral,
     execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 mod storage;
 use storage::{Bytes, Rows};

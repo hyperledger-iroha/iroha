@@ -1,7 +1,7 @@
 //! Real allocator controls for the ordered digest tree's private shared owner.
 
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_crypto::{Hash, NoritoKeyDigestRangeTreeV1, NoritoKeyRangeError};
-use mv::allocation::{AllocationBudget, AllocationRefusal};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},

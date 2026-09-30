@@ -31,9 +31,9 @@ settlement routing, XOR conversion, telemetry, and audit evidence. Refer to
   - `xor_dual_fund` for hybrid/confidential lanes that mix shielded + public
     flows.
 - Inspect `specs/nexus_lanes.md` for lane classes and
-  `specs/project_tracker/nexus_config_deltas/*.md` for the latest catalog
-  approvals. `iroha3d --sora --config … --trace-config` prints the effective
-  catalog at runtime for audits.
+  `specs/references/configuration.md` for the catalog keys.
+  `iroha3d --sora --config … --trace-config` prints the effective catalog at
+  runtime for audits.
 
 ### How does the Settlement Router determine conversion rates?
 
@@ -82,7 +82,7 @@ Prometheus.
   tagged object such as `{"bucket":"Stable","state":null}` and shows whether
   the router applied the `Stable`, `Elevated`, or `Dislocated` margin bucket.
   Elevated/dislocated entries must link to the incident log or governance note.
-- Dashboards: `dashboards/grafana/nexus_settlement.json` plus the
+- Dashboards: `dashboards/grafana/settlement_router_overview.json` plus the
   `nexus_lanes.json` overview. Tie alerts to `dashboards/alerts/nexus_audit_rules.yml`.
 - When settlement telemetry degrades, log the incident per the runbook in
   `specs/nexus_operations.md`.
@@ -104,7 +104,7 @@ cargo xtask nexus-lane-audit \
 * `--status` accepts the JSON blob returned by `iroha status --format json`.
 * `--json-out` captures a canonical JSON array per lane (aliases, dataspace,
   block height, finality lag, TEU capacity/utilization, scheduler trigger +
-  utilisation counters, RBC throughput, backlog, governance metadata, etc.).
+  utilisation counters, backlog, governance metadata, etc.).
 * `--parquet-out` writes the same payload as a Parquet file (Arrow schema),
   ready for regulators that require columnar evidence.
 * `--markdown-out` emits a human-readable summary that flags lagging lanes,

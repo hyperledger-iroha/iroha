@@ -57,7 +57,7 @@ impl IVMHost for ObservedVrfHost {
     }
 }
 fn compile_and_run(source: &str, arguments: Option<&Json>) -> (IVM, Result<(), VMError>, [u64; 3]) {
-    let code = ivm::kotodama::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile VRF transport contract");
     let parsed = ProgramMetadata::parse(&code).expect("parse VRF transport metadata");

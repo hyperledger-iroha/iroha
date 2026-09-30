@@ -105,7 +105,14 @@ def deep_frame_bound(sources: dict[str, str], width: int, fp4_bytes: int, digest
     require(sources["deep_row"], r"BYTES: usize = COMMITTED_COLUMN_COUNT \* size_of::<u64>\(\)", "raw retained row bytes")
     require(sources["deep_row"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "raw retained row encoding")
     require(sources["deep_fri"], r"1 \+ arity \* Fp4::BYTES", "raw FRI fiber bytes")
-    require(sources["deep_fri"], r"writer\.write_all\(&\[self\.len\(\) as u8\]\)", "FRI arity encoding")
+    require(
+        sources["deep_fri"],
+        r"const fn arity_byte\(&self\) -> u8 \{\s*match self \{\s*"
+        r"Self::Four\(_\) => 4,\s*Self::Eight\(_\) => 8,\s*"
+        r"Self::Sixteen\(_\) => 16,\s*\}\s*\}",
+        "exhaustive fixed FRI arity tags",
+    )
+    require(sources["deep_fri"], r"writer\.write_all\(&\[self\.arity_byte\(\)\]\)", "FRI arity encoding")
     require(sources["deep_fri"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "raw FRI fiber encoding")
     require(sources["deep"], r"pub\(super\) composition_mask: Fp4,", "authenticated composition mask field")
     retained = width - public

@@ -4,215 +4,166 @@ SPDX-License-Identifier: Apache-2.0
 
 # Bridge finality proofs
 
-This document defines the first-release bridge finality surface. It carries the
-exact durable finality evidence produced by Sumeragi v2. The proof envelope has
-schema version `2`, while the consensus protocol inside it is version `4`.
-There is no Sumeragi-v1 certificate projection, decoder, or fallback path.
+Torii serves public reads of the certified chain for bridges, light clients
+and other off-chain verifiers. Every proof carries the canonical certified
+block with its embedded commit certificate; trust always starts from a signed
+genesis, or a checkpoint, that the caller authenticated independently of the
+response. There is one proof layout and no alternate decoder.
 
-## Exact proof format
+The types live in `iroha_data_model::sumeragi_finality`. Torii builds each
+response from one immutable State view with
+`iroha_core::sumeragi::finality::{build_proof, build_bundle, build_attestation}`,
+which read the chain through the certified-chain reader
+([`sumeragi.md`](sumeragi.md) §12.7).
 
-`BridgeFinalityProof` is encoded with Norito or Norito JSON and has exactly three
-fields:
+## Routes
 
-```text
-{
-  version,
-  block_header,
-  finality_artifact
-}
-```
+| Route | Response |
+| --- | --- |
+| `GET /v1/bridge/finality/{height}` | `SumeragiFinalityProof` |
+| `GET /v1/bridge/finality/bundle/{height}` | `SumeragiFinalityBundle` |
+| `GET /v1/bridge/finality/attestation/{height}` | `SumeragiFinalityAttestation` |
+| `GET /v1/bridge/finality/attestation/latest` | `SumeragiFinalityAttestation` for the durable tip |
 
-- `version` must equal `BRIDGE_FINALITY_PROOF_VERSION_V2` (`2`).
-- `block_header` is the canonical `BlockHeader` selected by the requested
-  height.
-- `finality_artifact` is the exact `V2FinalityArtifact` persisted by the
-  Sumeragi-v2 apply path for that block. It embeds one durable BLS-normal proof
-  of possession for every entry in its height-context roster, in roster order.
+Responses are canonical Norito by default and Norito JSON through `Accept`
+negotiation. A proof or bundle is served only for a height whose certificate
+the certified read verified (genesis: the signed genesis itself), and the node
+checks the proof with `SumeragiFinalityProof::decode_checked` before serving
+it. A height the State view has not committed, or whose frame or certificate
+is missing, returns `NotFound`; every other read or verification failure is an
+internal error. Nothing is served from unverified data.
 
-The durable artifact is the single source of consensus truth in the proof. It
-contains its format and protocol versions, height, complete immutable
-`HeightContext`, exact `BlockSubject`, block hash, Commit quorum certificate,
-and roster-aligned validator PoPs. The height context freezes the exact
-genesis-derived network id,
-epoch bounds, consensus mode, parent CommitQC, ordered `ValidatorPower` roster,
-canonical `DualQuorum`, Nexus/AMX context commitment, data-availability layout,
-and leader seed. At an epoch-ending boundary parent it also embeds the optional
-`next_epoch_snapshot`; because that field is part of the context id, the
-parent's CommitQC authenticates the snapshot before it can authorize a child
-roster. The `FinalizedNextEpochSnapshot` binds its `epoch_end_height` and the
-next roster's aligned `validator_set_pops` as well as the next epoch parameters.
-The subject binds the parent block hash, block hash, and canonical payload hash.
+## Proof
 
-There are deliberately no duplicate proof-level height, network, block hash,
-roster hash, or certificate fields. A malformed sidecar therefore cannot ask a
-verifier to choose between competing copies of the same consensus fact.
+`SumeragiFinalityProof` has exactly three fields (unknown fields are rejected):
 
-## Durable production source
+- `block_header`: the Iroha `BlockHeader` of the requested height.
+- `block_wire`: the canonical result-bearing `SignedBlockWire`, at most
+  `MAX_FINALITY_BLOCK_BYTES` (32 MiB). It embeds the block's
+  `CommitCertificate`: the core header, the `CommitQC`, the signed RS16
+  availability table and the preimage of the execution result `R`. Genesis
+  carries a result-only certificate (no core header, `CommitQC` or
+  availability table).
+- `committee`: the committee of that height as
+  `FinalityValidator { public_key, proof_of_possession }` entries in canonical
+  key order.
 
-The Sumeragi-v2 apply service constructs the artifact from the frozen height
-context, exact decided subject, and exact CommitQC and validates it. Before
-publishing finality, Kura durably creates an immutable retained-block record
-containing the exact canonical header, the proposal-wire hash, and the length
-and hash of the executed block wire. Version 4 also retains the optional compact
-merge-ledger reference extracted from the canonical body for bounded local
-historical-sidecar service; that field is not exported as a standalone
-inclusion proof and requesters revalidate it against their own carrier. The
-same retained record must exist before Kura may evict the historical block
-body. Kura then stores the validated artifact in a separate immutable finality
-record with the same header. Both
-writes are idempotent no-clobber operations; a conflicting record at the same
-height is rejected. Version 4 is the only accepted retained-record layout.
-Any other version, including pre-release versions 2 and 3, fails closed during
-direct reads and startup rather than being promoted or used as partial finality
-evidence.
+Certificates are per node (§12.7): two honest nodes may serve different valid
+`CommitQC`s (any `q` signers) for the same block, header and result.
 
-Application requires its durable manifest, body frame, deterministic validation
-receipt, and execution commitment to match the CommitQC's authenticated
-`proposal_round`. The reducer owner tag may name another process generation and
-the CommitQC may have a later finality view; neither is allowed to relabel the
-block header or application input.
+### Structural check
 
-Before accepting or returning finality, Kura validates the complete
-canonical-header association (height, hash, predecessor, and immutable
-proposal-origin view), then
-verifies every roster-aligned PoP, both quorum thresholds, and the CommitQC
-aggregate signature. Restart inventory also validates the retained header,
-finality record, and durable block-hash association. Recovery can
-finish a missing finality record from the retained header without re-executing
-an already applied block or restoring its body.
+`SumeragiFinalityProof::decode_checked` checks a proof without selecting a
+trust root. It requires:
 
-`build_finality_proof` reads the retained canonical header and verified finality
-record by height. It never reads a historical block body. Historical
-verification reads the PoPs embedded in the artifact; it never substitutes
-keys or PoPs from mutable current world state, reconstructs historical
-consensus evidence, or projects a retired certificate format. Proof
-availability follows the immutable retained-header/finality records and the
-durable canonical hash journal, not body-cache residency or a recent in-memory
-certificate window. Missing, corrupt, conflicting, or unverifiable records fail
-closed.
+1. a non-empty, bounded, canonical block wire that matches `block_header` and
+   carries execution results, with valid proposal commitments and output
+   Merkle cache;
+2. a committee of the exact first-release global geometry (`3f + 1`, 4..=31
+   members) of distinct BLS-normal keys, each with a valid proof of
+   possession, in canonical order;
+3. an `ExecutionResultCommitment` preimage that names the block's height, lists
+   exactly this committee as its current epoch context, and commits the exact
+   executed-wire length and hash and the block's transaction input and output
+   commitments; a beacon pulse in the result must name the block's parent;
+4. at height 1, a result-only certificate; at every later height, a non-empty
+   block and a Commit `CommitQC` of the core header's height, instance, block
+   hash, result `R` and `attest` flag, in the committee's epoch, over the
+   canonical resultless proposal (payload length and hash), with a
+   structurally valid availability table, the attestation count required by
+   the `attest` flag, and an exact-quorum BLS aggregate signature that verifies
+   under the committee.
 
-## Canonical verification
+A successful structural check is not authentication: the committee is the
+proof's own claim. Embedded application attestations (§3.7) are separate
+evidence; a proof grants no attestation capability.
 
-`iroha_data_model::bridge::verify_bridge_finality_proof` performs the stateless
-structural and cryptographic checks:
+### Contiguous verification
 
-1. Require proof schema version `2`, finality-artifact format version `4`, and
-   live Sumeragi protocol version `4` in both the artifact and height context.
-2. Validate the height context, its ordered powered roster, canonical dual
-   quorum, parent certificate rules, DA layout, and epoch bounds.
-3. Require the artifact height, context id, block subject, repeated block hash,
-   CommitQC finality round, authenticated proposal round, and Commit phase to
-   agree exactly. Prepare evidence requires equal proposal and certification
-   rounds; Commit permits only a proposal view at or before its finality view.
-   A `next_epoch_snapshot` in the height context is mandatory for every
-   representable epoch-ending boundary parent and forbidden elsewhere. The
-   terminal `u64::MAX` height carries none because no successor height exists.
-4. Require the artifact network id to equal the caller's expected network id.
-5. Recompute the block-header height, hash, predecessor, and view-change index
-   and require them to match the artifact's height, block hash, subject parent,
-   and CommitQC `proposal_round.view` respectively. The CommitQC's own
-   `round.view` may be later because it is the finality round, not the block's
-   immutable origin.
-6. Require the artifact to embed one BLS-normal PoP per roster entry and verify
-   every PoP against the corresponding public key.
-7. Require strictly increasing, in-range signer indices. The certificate must
-   contain exactly `floor(2n/3) + 1` distinct roster members; because revision 4
-   is equal-vote, this exact count also has signed voting power strictly greater
-   than two thirds of total power. Signer supersets are rejected.
-8. Reconstruct the exact Sumeragi-v2 vote preimage and verify the selected-key
-   BLS aggregate signature.
+`SumeragiFinalityVerifier` is the only constructor of `VerifiedSumeragiBlock`,
+the authenticated receipt that applications consume.
 
-The vote preimage is domain-separated by `iroha:sumeragi:v2:vote` and encodes
-the following Norito payload:
+- `SumeragiFinalityVerifier::new(genesis, chain_id, validators)` takes a signed
+  genesis whose signature the caller has verified and the validators it
+  registers (keys and proofs of possession, equal to the genesis epoch
+  committee). It derives the global consensus instance from the genesis hash
+  and the chain id. It never learns trust from a proof.
+- `verify(proof)` admits only the next height of the authenticated prefix.
+  Height 1 must reproduce the selected genesis: header hash, canonical
+  resultless proposal, committee and epoch context. Every later proof must
+  extend its parent: its schedule is a valid successor of the parent's
+  authenticated schedule, its core header names the verifier's instance and
+  the parent's core hash and result, its Iroha header names the parent block
+  hash, and its committee is the configuration the parent scheduled for this
+  height. At an epoch boundary the selection anchor must be the parent block,
+  and the next leader seed and any frozen election seed must derive from the
+  parent's certified beacon pulse. The signed RS16 availability table and
+  every original row must verify against the canonical proposal under the
+  scheduled height configuration (`verify_payload_availability`).
+- `verify_retained_decision` and `verify_same_decision` re-verify another
+  certificate witness for a height already in the prefix; every decision
+  field must match.
+- `VerifiedSumeragiBlock::verify_committed_transaction` checks that a
+  successful external transaction, with its network, signature and output,
+  is included in the authenticated block. Genesis execution needs a certified
+  successor or independent node statements.
 
-```text
-{
-  protocol_version: 4,
-  round: { context_id, height, view },
-  proposal_round: { context_id, height, view },
-  phase: Commit,
-  subject: { parent_block_hash, block_hash, payload_hash },
-  execution_commitment: {
-    parent_state_root,
-    post_state_root,
-    ordinary_writes_root,
-    kagemusha_top_up_root,
-    kagemusha_top_up_count,
-    native_amx_application_manifest_version,
-    native_amx_application_manifest_root,
-    native_amx_application_manifest_count,
-    merge_carrier,
-    executed_block_wire_len,
-    executed_block_wire_hash
-  }
-}
-```
+## Checkpoints and pages
 
-For Commit, both rounds have the same context and height and the proposal view
-cannot exceed the finality view. Omitting `proposal_round` is not a supported
-legacy encoding. The subject hash authenticates the canonical resultless
-proposal. The execution commitment separately authenticates the exact
-canonical result-bearing block, so replay cannot substitute either proposal
-bytes or deterministic execution results while preserving the other binding.
-The versioned Native AMX application-manifest root additionally authenticates
-the ordered participant-application leaves and their proofs. A zero leaf count
-must use the canonical empty root; a nonzero count must not use that root.
-The `merge_carrier` option is always present in the execution-commitment wire
-layout: it is empty for an ordinary block and otherwise carries the exact V1
-merge-ledger entry hash authenticated by finality. It is followed by the
-mandatory non-zero `executed_block_wire_len` and then `executed_block_wire_hash`,
-binding both the exact byte length and digest of the canonical result-bearing wire.
+`SumeragiFinalityVerifier::export_checkpoint` exports the authenticated tip as
+a `SumeragiFinalityCheckpoint`: network id, chain id, the canonical signed
+genesis, the genesis committee, the retained decisions of the tip and at most
+two predecessors, and the tip proof (canonical encoding at most 68 MiB).
+Importing it with `from_trusted_checkpoint` is an explicit trust-root
+operation: the caller must select the checkpoint independently, and a peer
+response never becomes its own checkpoint. Import re-verifies the tip
+certificate and the genesis bindings.
 
-The signer index and individual signature are not part of the same-message
-preimage. The CommitQC's strictly ordered signer list selects the BLS keys and
-their aligned PoPs. BLS and PoP verification is mandatory in every production
-build; structural validity alone is never finality.
+`verify_checkpoint_page` verifies a page of consecutive proofs that starts at
+the checkpoint height, within caller-chosen bounds of at most 65 536 proofs and
+64 MiB, and returns the page tip with the next checkpoint. Callers persist that checkpoint only
+after their own application checks succeed. `iroha_core::sumeragi::finality::build_checkpoint`
+exports a checkpoint from the node's own history for local self-checks.
 
-## Trust anchor and successor verification
+## Bundle
 
-A standalone proof can establish that its header, artifact, powered roster,
-PoPs, and aggregate signature are internally consistent. It cannot establish
-that a proof-carried roster is the canonical roster for the intended network.
-Callers must supply trust independently.
+`SumeragiFinalityBundle` has exactly two fields: `network_id`, the
+genesis-derived network of the serving node, and `finality_proof`, the proof
+above. Consumers compare `network_id` with the network they selected
+independently before verifying the proof.
 
-`BridgeFinalityVerifier` therefore requires an explicitly trusted
-`HeightContextId` before accepting its first proof; it never learns trust from
-that proof. It also binds every proof to the configured network id. After the
-first proof it accepts only the immediate next height and verifies that:
+## Node attestation
 
-- the child context carries a valid parent CommitQC for the previously accepted
-  committed decision;
-- that parent certificate verifies under the previous frozen roster and PoPs;
-- network, consensus mode, and DA layout obey the v2 transition rules; and
-- within an epoch, the child copies the previous artifact's roster-aligned PoPs;
-  at an epoch boundary, its epoch, roster, dual quorum, leader seed, and PoPs
-  match the previous height context's CommitQC-authenticated
-  `next_epoch_snapshot`, including its authenticated `epoch_end_height`.
+`GET /v1/bridge/finality/attestation/{height}` returns a node-signed statement
+about the node's durable tip. The request carries a fresh nonzero challenge in
+exactly one `X-Iroha-Finality-Challenge` header (64 lowercase hexadecimal
+characters). The requested height must be the node's durable tip; `latest`
+selects the tip of the State view that builds the statement.
 
-Stale and skipped heights, unlinked parents, and unauthorized context
-transitions are rejected. Applications that start from a later checkpoint must
-pin that checkpoint's context id through governance or another authenticated
-channel, then verify every immediate successor.
+`SumeragiFinalityAttestation` is `{ body, signature }`. The body carries the
+challenge, the genesis-derived network id, the node's BLS `PeerId` and its
+fingerprint, the build and configuration fingerprints, the genesis block hash,
+the genesis proof, the node's `SumeragiStatus` at the tip and the tip proof.
+The node signs `H("iroha:sumeragi-finality-attestation:v1\0" ‖ Norito(body))`
+with its BLS-normal node key. `SumeragiFinalityAttestation::verify` checks the
+body's internal bindings (nonzero challenge, node identity and fingerprint,
+genesis-derived network, a non-halted status of the current protocol version
+whose committed and applied heights equal the tip, the status instance, and
+the structural check of both embedded proofs) and the signature. Callers
+select the node independently
+and verify both embedded proofs with their own verifier; a statement from one
+node authenticates only that node's observation.
 
-## Compact commitment bundle
+The failure contract (`bridge_finality_attestation_failure`), status codes and
+retry rules are in [`torii/api_contract.md`](torii/api_contract.md). Every
+attestation response is `no-store`, carries `X-Content-Type-Options: nosniff`
+and varies by `X-Iroha-Finality-Challenge, Accept`. The
+[genesis readiness probe](bridge_genesis_readiness.md) is built on this route.
 
-`BridgeFinalityBundle` has exactly two fields:
+## SDK
 
-- `commitment`: `{ network_id, height_context_id, block_height, block_hash }`;
-- `finality_proof`: the complete proof described above.
-
-The compact commitment duplicates only the exact network, height context, block
-height, and block hash needed to reject bundle drift before verifying the
-embedded proof.
-
-## API surface
-
-- `GET /v1/bridge/finality/{height}` returns `BridgeFinalityProof` as Norito by
-  default or Norito JSON through `Accept` negotiation.
-- `GET /v1/bridge/finality/bundle/{height}` returns `BridgeFinalityBundle`.
-
-Both endpoints fail closed when the retained canonical header or exact durable
-v2 artifact is absent or invalid. Historical block-body eviction does not make
-an otherwise valid proof unavailable. First-release consumers must reject
-unknown fields, unsupported proof/artifact versions, and any retired proof
-shape; there is no compatibility fallback.
+The Rust client reads these routes with `Client::get_sumeragi_finality_proof`
+(structural check only), `Client::get_next_sumeragi_finality_proof` (admits the
+proof into the caller's verifier), `Client::get_sumeragi_finality_attestation`
+and `Client::poll_sumeragi_genesis_readiness`. Successful responses are bounded
+by twice the 32 MiB block bound plus 4 MiB.

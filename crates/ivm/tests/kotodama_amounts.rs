@@ -1,6 +1,7 @@
 //! End-to-end coverage for nominal Kotodama `quantity` lowering and execution.
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
-use ivm::{IVM, KotodamaCompiler, PointerType, ProgramMetadata};
+use ivm::{IVM, PointerType, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn execute_rounded(mode: &str) -> Quantity {
     let source = format!(
         r#"

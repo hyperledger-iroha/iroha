@@ -383,11 +383,11 @@ fn snapshot_restore_dry_run(
         .unwrap_or_else(|| config.common.key_pair.public_key());
     // Mirror startup: restored State owners retain this configured execution pool.
     let execution_budget =
-        mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
     let read_buffer_budget =
-        mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
+        iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
     // The same bounded operation-index pool the node's own startup restore uses.
-    let operation_index_budget = mv::allocation::AllocationBudget::new(
+    let operation_index_budget = iroha_allocation::AllocationBudget::new(
         usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get())
             .map_err(|_| "configured operation-index pool exceeds addressable memory".to_owned())?,
     );

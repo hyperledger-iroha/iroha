@@ -841,7 +841,7 @@ fn active_config_at_view(
     let activation_height = config
         .activation_height
         .ok_or_else(private_settlement_unavailable)?;
-    iroha_core::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
+    iroha_core_privacy::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
         .map_err(|_| private_settlement_unavailable())?;
     let capability = state
         .privacy_capability_snapshot_v1()
@@ -2186,8 +2186,9 @@ mod tests {
             .atomic_private_settlement
             .minimum_activation_notice_blocks = NonZeroU64::new(1).expect("notice");
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let profile = iroha_core::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
-            .expect("compiled profile");
+        let profile =
+            iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+                .expect("compiled profile");
         let mut chain_config =
             iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
         chain_config.nexus = Some(config);

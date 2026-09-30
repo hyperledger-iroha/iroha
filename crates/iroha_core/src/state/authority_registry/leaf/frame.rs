@@ -4,7 +4,7 @@
 //! tree still chooses its existing Vec; funding that API remains separate.
 
 use super::*;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 pub(super) fn buffer_error(error: ChargedBufferError) -> LeafError {
     match error {

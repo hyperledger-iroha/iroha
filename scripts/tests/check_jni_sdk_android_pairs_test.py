@@ -27,7 +27,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(29, result.pair_count)
+        self.assertEqual(31, result.pair_count)
         self.assertEqual(9, result.sdk_only_count)
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
@@ -51,6 +51,18 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
         self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
+
+    def test_multisig_pairs_keep_network_fee_and_signature_binding(self) -> None:
+        for method, old, new in (
+            ("payload", "&mut env, network_id, authority, reporting_account, change, creation_time_ms,",
+             "&mut env, authority, network_id, reporting_account, change, creation_time_ms,"),
+            ("finalize", "fee_payment_json, signature,", "signature, fee_payment_json,"),
+        ):
+            with self.subTest(method=method):
+                mutated = SOURCE.replace(old, new, 1)
+                self.assertNotEqual(SOURCE, mutated)
+                with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
+                    GUARD.audit_source(mutated)
 
     def test_rejects_platform_documentation_drift(self) -> None:
         mutated = SOURCE.replace(

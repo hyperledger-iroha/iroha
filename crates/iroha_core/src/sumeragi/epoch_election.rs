@@ -13,6 +13,7 @@ pub(crate) use owned::{
 };
 use plan::{BoundaryInputs, boundary_inputs};
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     NetworkId,
@@ -24,10 +25,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
-use mv::{
-    allocation::{AllocationBudget, ChargedBuffer},
-    storage::StorageReadOnly,
-};
+use mv::storage::StorageReadOnly;
 
 use crate::{
     beacon::{

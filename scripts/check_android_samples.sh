@@ -14,23 +14,12 @@ if [[ ! -x "$SAMPLES_DIR/gradlew" ]]; then
 fi
 
 ( cd "$SAMPLES_DIR" && ./gradlew \
-    :android-sdk:jar \
+    :kotlin:client-android:assembleDebug \
+    :kotlin:client-android:testDebugUnitTest \
     :operator-console:assembleDebug \
     :operator-console:generateSampleManifest \
     :retail-wallet:assembleDebug \
     :retail-wallet:generateSampleManifest )
-
-echo "==> Building minimal samples-android app (module-local AAR)"
-ANDROID_GRADLE="${ROOT_DIR}/examples/android/gradlew"
-if [[ -x "$ANDROID_GRADLE" ]]; then
-  GRADLE_BIN="$ANDROID_GRADLE"
-else
-  GRADLE_BIN="${GRADLE:-gradle}"
-fi
-if ! "$GRADLE_BIN" -p "$ROOT_DIR/java/iroha_android" :samples-android:assembleDebug; then
-  echo "Failed to build java/iroha_android/samples-android" >&2
-  exit 1
-fi
 
 annotate_manifest_localization() {
   local sample="$1"

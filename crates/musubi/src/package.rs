@@ -928,10 +928,6 @@ fn inherited<T>(value: Option<&Inheritable<T>>) -> bool {
 ///
 /// Effective normal dependencies are retained as canonical registry package/range pairs.
 /// Development dependencies never enter the publication manifest.
-#[expect(
-    clippy::too_many_lines,
-    reason = "manifest rendering keeps canonical field ordering and every first-release publication omission adjacent"
-)]
 pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, PackageError> {
     let mut root = toml::Table::new();
     root.insert("manifest-version".to_owned(), toml::Value::Integer(1));
@@ -1914,10 +1910,6 @@ fn sensitive_assignment(line: &[u8]) -> bool {
             && sensitive_assignment_at(&input[index + 1..])
     })
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the bounded secret-assignment recognizer keeps its explicit cross-shell token grammar in one auditable scanner"
-)]
 fn sensitive_assignment_at(line: &[u8]) -> bool {
     const KEYS: &[&[u8]] = &[
         b"private_key",

@@ -1,208 +1,29 @@
 //! Source-complete commit attestations with one immutable result witness per certificate.
 
-use std::{fmt, sync::Arc};
-
-use crate::bytes::{ByteSequence, ByteStorage, InlineBytes, InlineDomain};
-use mv::allocation::{
-    AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, ChargedShared,
-    PrepaidSharedError,
-};
+use crate::bytes::{ByteDomain, ByteSequence, InlineBytes, SharedBytes, SharedDomain};
 
 /// Largest canonical application result carried once by a flagged certificate.
 pub const MAX_RESULT_WITNESS_BYTES: usize = 64 * 1024;
 /// Largest compact per-member signature; result bytes have their own shared field.
 pub const MAX_ATTESTATION_SIGNATURE_BYTES: usize = 256;
 
-/// A canonical result preimage whose clones share one immutable backing owner.
-///
-/// Decoding creates explicitly untrusted storage. Production retention requires admission to
-/// the original pool, independently of cryptographic validity. No mutable or naked Vec escape
-/// exists; the original charged backing and shared control survive every retained clone.
-pub type ResultWitness = ByteSequence<Storage>;
-
-/// Untrusted or original-pool admitted immutable witness storage.
-pub enum Storage {
-    /// Decoded source and any exact original-pool allocation retained across refusal.
-    Untrusted {
-        /// Immutable decoded source, shared without granting production admission.
-        source: Arc<Vec<u8>>,
-        /// Original backing retained until shared-control admission succeeds.
-        pending: Option<ChargedBuffer<u8>>,
-    },
-    /// Exact admitted backing and shared-control owner.
-    Admitted(ChargedShared<ChargedBuffer<u8>>),
-}
-
-/// Typed refusal to retain a result witness from one exact original pool.
-#[derive(Debug)]
-pub enum WitnessAdmissionError {
-    /// Empty or oversized source bytes cannot be a complete result witness.
-    Length {
-        /// Actual source byte count.
-        length: usize,
-    },
-    /// An existing charged owner belongs to a different original pool.
-    ForeignBudget,
-    /// Exact byte backing could not be admitted or allocated.
-    Buffer(ChargedBufferError),
-    /// Original pool refused the exact shared-control layout.
-    ControlAdmission(AllocationRefusal),
-    /// The already admitted control allocation was refused by the physical allocator.
-    ControlAllocation(PrepaidSharedError),
-}
-impl WitnessAdmissionError {
-    /// Whether retrying the unchanged originals after local resource recovery is meaningful.
-    #[must_use]
-    pub const fn is_local_refusal(&self) -> bool {
-        !matches!(self, Self::Length { .. } | Self::ForeignBudget)
-    }
-}
-impl fmt::Display for WitnessAdmissionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Length { length } => write!(f, "invalid result witness length {length}"),
-            Self::ForeignBudget => f.write_str("result witness belongs to another allocation pool"),
-            Self::Buffer(error) => error.fmt(f),
-            Self::ControlAdmission(error) => error.fmt(f),
-            Self::ControlAllocation(error) => error.fmt(f),
-        }
-    }
-}
-impl std::error::Error for WitnessAdmissionError {}
-
-impl ResultWitness {
-    /// Retain bounded decoded or fixture bytes without granting production admission.
-    ///
-    /// # Errors
-    /// Rejects empty or oversized bytes before allocating a shared control.
-    pub fn from_untrusted(bytes: Vec<u8>) -> Result<Self, WitnessAdmissionError> {
-        Self::check_len(bytes.len())?;
-        Ok(Self {
-            storage: Storage::Untrusted {
-                source: Arc::new(bytes),
-                pending: None,
-            },
-        })
-    }
-    fn check_len(length: usize) -> Result<(), WitnessAdmissionError> {
-        (1..=MAX_RESULT_WITNESS_BYTES)
-            .contains(&length)
-            .then_some(())
-            .ok_or(WitnessAdmissionError::Length { length })
-    }
-    /// Move exact charged backing into an original-pool shared owner.
-    ///
-    /// # Errors
-    /// Every refusal returns the same original buffer, without copying, resizing or dropping it.
-    #[allow(clippy::result_large_err, reason = "a refusal must not allocate")]
-    pub fn from_charged(
-        bytes: ChargedBuffer<u8>,
-        budget: &AllocationBudget,
-    ) -> Result<Self, (ChargedBuffer<u8>, WitnessAdmissionError)> {
-        if let Err(error) = Self::check_len(bytes.as_slice().len()) {
-            return Err((bytes, error));
-        }
-        if !bytes.belongs_to(budget) {
-            return Err((bytes, WitnessAdmissionError::ForeignBudget));
-        }
-        let mut reservation =
-            match budget.try_reserve(ChargedShared::<ChargedBuffer<u8>>::allocation_layout()) {
-                Ok(value) => value,
-                Err(error) => return Err((bytes, WitnessAdmissionError::ControlAdmission(error))),
-            };
-        match ChargedShared::from_reservation(bytes, &mut reservation) {
-            Ok(owner) => Ok(Self {
-                storage: Storage::Admitted(owner),
-            }),
-            Err((bytes, error)) => Err((bytes, WitnessAdmissionError::ControlAllocation(error))),
-        }
-    }
-    /// Admit this decoded witness in place from the supplied original pool.
-    ///
-    /// After backing allocation succeeds, any shared-control refusal retains that exact
-    /// buffer inside this witness. Retry the same owner; `as_slice` already borrows the
-    /// copied backing and keeps the same pointer through final admission. Cloning an
-    /// incompletely admitted witness creates an explicitly untrusted source handle and
-    /// does not duplicate or transfer its pending allocation. Fully admitted clones share.
-    ///
-    /// # Errors
-    /// Foreign pending or admitted storage is rejected without changing its owners. A local
-    /// refusal preserves every allocation already completed inside this original witness.
-    pub fn admit(&mut self, budget: &AllocationBudget) -> Result<(), WitnessAdmissionError> {
-        if let Storage::Admitted(bytes) = &self.storage {
-            return bytes
-                .belongs_to(budget)
-                .then_some(())
-                .ok_or(WitnessAdmissionError::ForeignBudget);
-        }
-        let Storage::Untrusted { source, pending } = &mut self.storage else {
-            unreachable!("admitted owner handled above")
-        };
-        if pending.is_none() {
-            let mut bytes =
-                ChargedBuffer::new(source.len(), budget).map_err(WitnessAdmissionError::Buffer)?;
-            bytes
-                .append(source.as_slice())
-                .expect("exact original-pool byte capacity");
-            *pending = Some(bytes);
-        }
-        let bytes = pending.take().expect("original backing was retained above");
-        match Self::from_charged(bytes, budget) {
-            Ok(admitted) => {
-                self.storage = admitted.storage;
-                Ok(())
-            }
-            Err((bytes, error)) => {
-                *pending = Some(bytes);
-                Err(error)
-            }
-        }
-    }
-    /// Whether backing and shared control belong to this exact original pool.
-    #[must_use]
-    pub fn admitted_to(&self, budget: &AllocationBudget) -> bool {
-        match &self.storage {
-            Storage::Untrusted { .. } => false,
-            Storage::Admitted(bytes) => bytes.belongs_to(budget),
-        }
-    }
-}
-impl Clone for Storage {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Untrusted { source, .. } => Self::Untrusted {
-                source: Arc::clone(source),
-                pending: None,
-            },
-            Self::Admitted(bytes) => Self::Admitted(bytes.clone()),
-        }
-    }
-}
-impl ByteStorage for Storage {
-    const MIN: usize = 1;
-    const MAX: usize = MAX_RESULT_WITNESS_BYTES;
+/// Semantic identity and bound of one original-funded result witness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultDomain {}
+impl ByteDomain for ResultDomain {
     const NAME: &'static str = "ResultWitness";
     const FRAME: &'static str = "iroha_sumeragi::ResultWitness";
-    fn from_bytes(bytes: &[u8]) -> Self {
-        Self::Untrusted {
-            source: Arc::new(bytes.to_vec()),
-            pending: None,
-        }
-    }
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Untrusted { source, pending } => pending
-                .as_ref()
-                .map_or_else(|| source.as_slice(), |bytes| bytes.as_slice()),
-            Self::Admitted(bytes) => bytes.as_slice(),
-        }
-    }
 }
+impl SharedDomain for ResultDomain {
+    const MAX: usize = MAX_RESULT_WITNESS_BYTES;
+}
+/// Source-complete result whose admitted clones share original backing and control.
+pub type ResultWitness = ByteSequence<SharedBytes<ResultDomain>>;
 
 /// Semantic identity of compact per-member attestation signatures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignatureDomain {}
-impl InlineDomain for SignatureDomain {
+impl ByteDomain for SignatureDomain {
     const NAME: &'static str = "AttestationSignature";
     const FRAME: &'static str = "iroha_sumeragi::AttestationSignature";
 }
@@ -211,7 +32,7 @@ pub type AttestationSignature =
     ByteSequence<InlineBytes<MAX_ATTESTATION_SIGNATURE_BYTES, SignatureDomain>>;
 
 /// One source-complete commit share. A certificate keeps its witness only once.
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, iroha_schema::IntoSchema)]
 pub struct CommitAttestation {
     /// Canonical preimage of the exact signed result R.
     pub witness: ResultWitness,
@@ -222,6 +43,8 @@ pub struct CommitAttestation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bytes::ByteAdmissionError;
+    use iroha_allocation::{AllocationBudget, ChargedBuffer};
     use norito::codec::{DecodeAll as _, Encode as _};
 
     #[test]
@@ -243,7 +66,7 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), reserved);
         assert!(matches!(
             clone.admit(&foreign),
-            Err(WitnessAdmissionError::ForeignBudget)
+            Err(ByteAdmissionError::ForeignBudget)
         ));
         drop(value);
         assert_eq!(budget.reserved_bytes(), reserved);
@@ -258,7 +81,7 @@ mod tests {
         bytes.append(&[1, 2, 3]).unwrap();
         let pointer = bytes.as_slice().as_ptr();
         let (bytes, error) = ResultWitness::from_charged(bytes, &budget).unwrap_err();
-        assert!(matches!(error, WitnessAdmissionError::ControlAdmission(_)));
+        assert!(matches!(error, ByteAdmissionError::ControlAdmission(_)));
         assert_eq!(bytes.as_slice().as_ptr(), pointer);
         assert_eq!(budget.reserved_bytes(), 3);
         drop(bytes);
@@ -273,7 +96,7 @@ mod tests {
         let canonical = witness.encode();
         assert!(matches!(
             witness.admit(&budget),
-            Err(WitnessAdmissionError::ControlAdmission(_))
+            Err(ByteAdmissionError::ControlAdmission(_))
         ));
         let original_copy = witness.as_slice().as_ptr();
         assert_ne!(original_copy, source_pointer);
@@ -288,7 +111,7 @@ mod tests {
         let foreign = AllocationBudget::new(4096);
         assert!(matches!(
             witness.admit(&foreign),
-            Err(WitnessAdmissionError::ForeignBudget)
+            Err(ByteAdmissionError::ForeignBudget)
         ));
         assert_eq!(foreign.reserved_bytes(), 0);
         assert_eq!(witness.as_slice().as_ptr(), original_copy);
@@ -316,7 +139,7 @@ mod tests {
         let mut witness = ResultWitness::from_untrusted(vec![1; 200]).unwrap();
         assert!(matches!(
             witness.admit(&budget),
-            Err(WitnessAdmissionError::ControlAdmission(_))
+            Err(ByteAdmissionError::ControlAdmission(_))
         ));
         let clone = witness.clone();
         assert_eq!(budget.reserved_bytes(), 200);

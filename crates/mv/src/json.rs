@@ -237,7 +237,8 @@ where
     /// No default charged decoder can infer or acquire those resources.
     ///
     /// ```compile_fail
-    /// use mv::{allocation::AllocationCharge, cell::Cell};
+    /// use iroha_allocation::{AllocationCharge};
+    /// use mv::{cell::Cell};
     /// fn requires_default_decode<T: norito::json::JsonDeserialize>() {}
     /// requires_default_decode::<Cell<u64, AllocationCharge>>();
     /// ```

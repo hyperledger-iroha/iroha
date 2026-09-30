@@ -29,8 +29,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, StateReadOnly, StateTransaction, WorldReadOnly},
-    zk::hash_vk,
 };
+use iroha_core_zk::hash_vk;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::BlockHeader,

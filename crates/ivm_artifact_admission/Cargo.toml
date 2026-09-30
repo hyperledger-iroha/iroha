@@ -11,14 +11,16 @@ repository.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
+iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance"] }
 ivm_abi = { path = "../ivm_abi" }
-kotodama_lang = { path = "../kotodama_lang" }
+kotodama_surface = { path = "../kotodama_surface" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [dev-dependencies]
+kotodama_lang = { path = "../kotodama_lang" }
 mv = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
 hex = { workspace = true, features = ["alloc"] }

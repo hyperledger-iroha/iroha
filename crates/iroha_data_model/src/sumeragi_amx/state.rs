@@ -179,8 +179,7 @@ impl SumeragiAmxState {
     /// # Errors
     /// The first violated invariant.
     pub fn validate(&self) -> Result<(), AmxError> {
-        if self.dataspaces.len() > MAX_AMX_DATASPACES || self.transactions.len() > MAX_AMX_PENDING
-        {
+        if self.dataspaces.len() > MAX_AMX_DATASPACES || self.transactions.len() > MAX_AMX_PENDING {
             return Err(rejected("state exceeds its bounds"));
         }
         if self
@@ -345,8 +344,7 @@ impl SumeragiAmxState {
                         effects_hash,
                     },
                 );
-                if entry.yes.len() < entry.begin.participants.len()
-                    || height > entry.begin.deadline
+                if entry.yes.len() < entry.begin.participants.len() || height > entry.begin.deadline
                 {
                     return Ok(AmxRelayOutcome::Voted);
                 }

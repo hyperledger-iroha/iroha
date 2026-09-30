@@ -24,16 +24,32 @@ pub(crate) struct NativeExecutionAuthorization {
     state: usize,
     tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
     parent: Option<(Hash32, Hash32)>,
+    telemetry_origin: CommitTelemetryOrigin,
+}
+
+/// Local observations of an authenticated execution; never protocol authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitTelemetryOrigin {
+    /// A newly committed execution emits its transition observations once.
+    Forward,
+    /// Startup re-execution restores gauges without recounting historical transitions.
+    HistoricalReplay,
 }
 impl NativeExecutionAuthorization {
     /// The startup module can transfer only its own original signed-genesis execution.
     pub(super) fn from_genesis(original: super::startup::GenesisExecutionAuthorization) -> Self {
-        let (state, tip) = original.into_parts();
+        let (state, tip, telemetry_origin) = original.into_parts();
         Self {
             state,
             tip,
             parent: None,
+            telemetry_origin,
         }
+    }
+
+    /// Observe the local origin retained beside this exact execution authorization.
+    pub(crate) fn telemetry_origin(&self) -> CommitTelemetryOrigin {
+        self.telemetry_origin
     }
 
     /// Return fixed claims only for the exact State that owns the execution.
@@ -72,7 +88,8 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     api::{ApplicationControlContext, ControlWitnessContext, ExecOutcome},
-    message::{ApplicationControl, Block, Qc},
+    availability::{AvailabilityFrame, AvailableBody, PayloadBytes},
+    message::{ApplicationControl, Qc},
     types::{AppliedConfig, ControlWitness, Hash32, PublicKey},
 };
 
@@ -163,8 +180,11 @@ impl FinalizedArchives {
 
 /// One State publication awaiting durable archive capture and its remaining notifications.
 struct PendingCommit {
+    telemetry_origin: CommitTelemetryOrigin,
     native_contexts: PreparedNativeContext,
     header: iroha_sumeragi::message::BlockHeader,
+    availability: AvailabilityFrame,
+    source: iroha_sumeragi::availability::AvailabilitySource,
     qc: Qc,
     state_hash: iroha_crypto::HashOf<IrohaHeader>,
     next: AppliedConfig,
@@ -173,8 +193,11 @@ struct PendingCommit {
 }
 
 impl PendingCommit {
-    fn matches(&self, block: &Block, qc: &Qc) -> bool {
-        self.header == block.header && self.qc == *qc
+    fn matches(&self, block: &AvailableBody, qc: &Qc) -> bool {
+        self.header == *block.header()
+            && self.availability == *block.availability()
+            && self.source == *block.source()
+            && self.qc == *qc
     }
 }
 
@@ -219,19 +242,25 @@ enum Request {
     InspectPending(Hash32, PendingInspection),
     #[cfg(any(test, feature = "iroha-core-tests"))]
     InspectPrepared(Hash32, PreparedInspection),
-    Execute(Block, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
+    Execute(AvailableBody, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
     Discard(u64, Vec<Hash32>),
     Prepare(
-        Block,
+        AvailableBody,
         Qc,
+        CommitTelemetryOrigin,
         mpsc::SyncSender<Result<Option<Hash32>, PublicationError>>,
     ),
     Commit(
-        Block,
+        AvailableBody,
         Qc,
         mpsc::SyncSender<Result<AppliedConfig, PublicationError>>,
     ),
-    Build(u64, u64, u32, mpsc::SyncSender<(Vec<u8>, bool)>),
+    Build(
+        u64,
+        u64,
+        u32,
+        mpsc::SyncSender<Result<(Option<PayloadBytes>, bool), PublicationError>>,
+    ),
     BuildControl(
         ControlWitnessContext,
         mpsc::SyncSender<Result<(ControlWitness, bool), PublicationError>>,
@@ -269,7 +298,7 @@ enum Request {
 /// Cryptographic validity cannot authorize allocation from another or uncharged pool.
 fn require_qc_witness_admission(
     qc: &Qc,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), PublicationError> {
     if qc
         .attestation_witness
@@ -283,10 +312,23 @@ fn require_qc_witness_admission(
     Ok(())
 }
 
+/// Only the exact verified frame and payload from this State pool may enter execution.
+fn require_body_admission(
+    body: &AvailableBody,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), PublicationError> {
+    if !body.admitted_to(budget) {
+        return Err(PublicationError::RecoveryRequired(
+            "available body belongs to another State pool".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The driver-facing handle of the executor thread.
 pub struct StateExecutor {
     /// The same pool as the worker, checked before retaining a queued certificate.
-    execution_budget: mv::allocation::AllocationBudget,
+    execution_budget: iroha_allocation::AllocationBudget,
     requests: mpsc::SyncSender<Request>,
     _thread: JoinHandle<()>,
 }
@@ -370,10 +412,12 @@ impl StateExecutor {
     }
 
     /// Attach the configured archives once, after replay and before starting the driver.
-    /// This synchronously captures the reconciled tip before the executor acknowledges binding.
+    /// This synchronously captures the reconciled tip before the executor acknowledges binding;
+    /// the replayed tip published by startup replay is that tip, not an execution.
     ///
     /// # Errors
-    /// The executor is unavailable, already bound or executing, or the exact tip cannot be captured.
+    /// The executor is unavailable, already bound, recovering or executing beyond the applied
+    /// tip, or the exact tip cannot be captured.
     pub fn attach_finalized_archives(&self, archives: FinalizedArchives) -> Result<(), String> {
         self.call(|reply| Request::AttachFinalizedArchives(archives, reply))
             .unwrap_or_else(|| Err("executor thread stopped".into()))
@@ -426,9 +470,9 @@ impl StateExecutor {
     ///
     /// # Errors
     /// The block does not re-execute to its certified result, or a local failure.
-    pub fn replay(&mut self, block: &Block, commit_qc: &Qc) -> Result<(), String> {
+    pub fn replay(&mut self, block: &AvailableBody, commit_qc: &Qc) -> Result<(), String> {
         match self
-            .prepare(block, commit_qc)
+            .prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
             .map_err(|error| error.to_string())?
         {
             Some(result) if result == commit_qc.result => {}
@@ -439,12 +483,43 @@ impl StateExecutor {
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
+
+    fn prepare_with_origin(
+        &mut self,
+        block: &AvailableBody,
+        commit_qc: &Qc,
+        origin: CommitTelemetryOrigin,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        require_body_admission(block, &self.execution_budget)?;
+        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
+        self.call(|reply| Request::Prepare(block.clone(), commit_qc.clone(), origin, reply))
+            .unwrap_or_else(|| {
+                Err(PublicationError::RecoveryRequired(
+                    "executor thread stopped".into(),
+                ))
+            })
+    }
 }
 
 impl Executor for StateExecutor {
-    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
-        self.call(|reply| Request::Execute(block.clone(), *block_hash, reply))
-            .unwrap_or_else(|| Some(ExecOutcome::Failed("executor thread stopped".into())))
+    fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome> {
+        let outcome = match require_body_admission(block, &self.execution_budget) {
+            Err(error) => Some(ExecOutcome::Failed(error.to_string())),
+            Ok(()) => self
+                .call(|reply| Request::Execute(block.clone(), *block_hash, reply))
+                .unwrap_or_else(|| Some(ExecOutcome::Failed("executor thread stopped".into()))),
+        };
+        // The core reports only `LocalFault::ExecutorFailed { height }` and retries; the
+        // local reason is logged here, once per failed answer.
+        if let Some(ExecOutcome::Failed(reason)) = &outcome {
+            iroha_logger::warn!(
+                height = block.header().height,
+                view = block.header().origin_view,
+                %reason,
+                "sumeragi: local execution failure"
+            );
+        }
+        outcome
     }
 
     fn discard(&mut self, height: u64, keep: &[Hash32]) {
@@ -453,19 +528,18 @@ impl Executor for StateExecutor {
 
     fn prepare(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
-        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
-        self.call(|reply| Request::Prepare(block.clone(), commit_qc.clone(), reply))
-            .unwrap_or_else(|| {
-                Err(PublicationError::RecoveryRequired(
-                    "executor thread stopped".into(),
-                ))
-            })
+        self.prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::Forward)
     }
 
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<AppliedConfig, PublicationError> {
+    fn commit(
+        &mut self,
+        block: &AvailableBody,
+        commit_qc: &Qc,
+    ) -> Result<AppliedConfig, PublicationError> {
+        require_body_admission(block, &self.execution_budget)?;
         require_qc_witness_admission(commit_qc, &self.execution_budget)?;
         self.call(|reply| Request::Commit(block.clone(), commit_qc.clone(), reply))
             .unwrap_or_else(|| {
@@ -481,9 +555,13 @@ impl Executor for StateExecutor {
         view: u64,
         max_bytes: u32,
         _exec_budget_ms: u32,
-    ) -> (Vec<u8>, bool) {
+    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
         self.call(|reply| Request::Build(height, view, max_bytes, reply))
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                Err(PublicationError::RecoveryRequired(
+                    "payload builder stopped".into(),
+                ))
+            })
     }
 
     fn build_control_witness(
@@ -535,15 +613,15 @@ impl std::ops::Deref for ScheduledAuthority {
 /// Original completed execution inputs advance once through proof and result preparation.
 enum FinishingPhase {
     ContextProof {
-        inputs: mv::allocation::RetainedPayload<NativeExecutionInputs>,
+        inputs: iroha_allocation::RetainedPayload<NativeExecutionInputs>,
         refusal: Option<NativeLaneStateProofError>,
     },
-    Ready(mv::allocation::RetainedPayload<ExecutionResultCommitment>),
+    Ready(iroha_allocation::RetainedPayload<ExecutionResultCommitment>),
     /// A one-shot deterministic transition failed or unwound; only recovery may release it.
     Consuming,
 }
 impl FinishingPhase {
-    fn ready(&self) -> Option<&mv::allocation::RetainedPayload<ExecutionResultCommitment>> {
+    fn ready(&self) -> Option<&iroha_allocation::RetainedPayload<ExecutionResultCommitment>> {
         match self {
             Self::Ready(commitment) => Some(commitment),
             Self::ContextProof { .. } | Self::Consuming => None,
@@ -557,6 +635,8 @@ struct Finishing<'s> {
     block_hash: Hash32,
     height: u64,
     header: iroha_sumeragi::message::BlockHeader,
+    availability: AvailabilityFrame,
+    source: iroha_sumeragi::availability::AvailabilitySource,
     valid: ValidBlock,
     overlay: Box<StateBlock<'s>>,
     witness: iroha_data_model::block::consensus::ExecWitness,
@@ -572,16 +652,19 @@ struct Finishing<'s> {
 
 /// The executed overlay of one block.
 struct Live<'s> {
+    telemetry_origin: Option<CommitTelemetryOrigin>,
     native_contexts: Option<PreparedNativeContext>,
     block_hash: Hash32,
     height: u64,
     header: iroha_sumeragi::message::BlockHeader,
+    availability: AvailabilityFrame,
+    source: iroha_sumeragi::availability::AvailabilitySource,
     phase: PublicationPhase,
     overlay: Option<Box<StateBlock<'s>>>,
     witness: iroha_data_model::block::consensus::ExecWitness,
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
-    commitment: mv::allocation::RetainedPayload<ExecutionResultCommitment>,
+    commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
     /// Exact original witness/signature progress, retained independently of durable encoding.
     attestation: local_attestation::Progress,
     applied_config: AppliedConfig,
@@ -593,18 +676,19 @@ struct Live<'s> {
 enum PublicationPhase {
     Executed {
         valid: ValidBlock,
-        preimage: mv::allocation::ChargedBuffer<u8>,
+        preimage: iroha_allocation::ChargedBuffer<u8>,
     },
     /// Each successful encoding remains owned while a later allocation is refused.
     EncodingCertificate {
         valid: ValidBlock,
-        preimage: mv::allocation::ChargedBuffer<u8>,
-        header_wire: Option<mv::allocation::ChargedBuffer<u8>>,
-        qc_wire: Option<mv::allocation::ChargedBuffer<u8>>,
+        preimage: iroha_allocation::ChargedBuffer<u8>,
+        header_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
+        qc_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
+        availability_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
         qc: Qc,
         refusal: Option<super::commitment::ResultPreimageError>,
     },
-    /// All three original byte allocations await shared-control admission.
+    /// All four original byte allocations await shared-control admission.
     Certifying {
         valid: ValidBlock,
         parts: Option<iroha_data_model::block::ChargedCertificateParts>,
@@ -639,14 +723,34 @@ struct QuarantineContext {
     pulse_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
 }
 
+struct GlobalPayloadSource {
+    block: SignedBlock,
+    attest: bool,
+    hashes: Vec<iroha_crypto::HashOf<TransactionEntrypoint>>,
+}
+
+struct GlobalPayloadBuild {
+    height: u64,
+    view: u64,
+    max_bytes: u32,
+    job: super::driver::payload_build::PayloadBuild<GlobalPayloadSource>,
+}
+
 struct Worker<'s> {
+    payload_build: Option<GlobalPayloadBuild>,
     context: &'s ExecutorContext,
     state: &'s State,
     applied: (u64, Hash32),
     live: Option<Live<'s>>,
     finishing: Option<Finishing<'s>>,
     /// Verdicts of executions whose overlay is gone, by block hash (bounded per height).
-    results: BTreeMap<Hash32, (u64, ExecOutcome)>,
+    results: BTreeMap<
+        Hash32,
+        (
+            iroha_sumeragi::availability::AvailabilitySource,
+            ExecOutcome,
+        ),
+    >,
     /// The transactions of the last payload this node built, for the quarantine.
     last_built: Option<(u64, u64, Vec<iroha_crypto::HashOf<TransactionEntrypoint>>)>,
     queue: Option<Arc<Queue>>,
@@ -665,6 +769,7 @@ struct Worker<'s> {
 fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
     let state = Arc::clone(&context.state);
     let mut worker = Worker {
+        payload_build: None,
         context,
         state: &state,
         applied: context.applied,
@@ -750,8 +855,8 @@ impl<'s> Worker<'s> {
                 let _ = reply.send(self.execute(&block, block_hash));
             }
             Request::Discard(height, keep) => self.discard(height, &keep),
-            Request::Prepare(block, qc, reply) => {
-                let _ = reply.send(self.prepare(&block, &qc));
+            Request::Prepare(block, qc, origin, reply) => {
+                let _ = reply.send(self.prepare_with_origin(&block, &qc, origin));
             }
             Request::Commit(block, qc, reply) => {
                 let _ = reply.send(self.commit(&block, &qc));
@@ -787,24 +892,53 @@ impl<'s> Worker<'s> {
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => self.queue = Some(queue),
             Request::AttachFinalizedArchives(archives, reply) => {
-                let result = if self.archives.is_some()
-                    || self.live.is_some()
-                    || self.pending_commit.is_some()
-                {
-                    Err("finalized archives must be bound once before execution starts".into())
-                } else {
-                    archives
-                        .capture(&self.state.view())
-                        .map(|()| self.archives = Some(archives))
-                };
-                let _ = reply.send(result);
+                let _ = reply.send(self.bind_finalized_archives(archives));
             }
         }
     }
 
+    /// Bind the configured archives once, at the applied tip and before any execution beyond
+    /// it. Startup replay leaves its last block published: that is the applied tip itself, not
+    /// an execution. The binding captures the exact certified tip State (a no-op when startup
+    /// reconciliation already captured it), and every later commit captures its own height, so
+    /// no height is skipped or captured twice.
+    fn bind_finalized_archives(&mut self, archives: FinalizedArchives) -> Result<(), String> {
+        if self.archives.is_some() {
+            return Err("finalized archives are already bound".into());
+        }
+        if let Some(reason) = &self.recovery {
+            return Err(format!(
+                "finalized archives cannot bind during recovery: {reason}"
+            ));
+        }
+        let (height, block_hash) = self.applied;
+        if self.pending_commit.is_some()
+            || self.finishing.is_some()
+            || self.live.as_ref().is_some_and(|live| {
+                (live.height, live.block_hash) != (height, block_hash)
+                    || !matches!(live.phase, PublicationPhase::Published { .. })
+            })
+        {
+            return Err(
+                "finalized archives must be bound before execution beyond the applied tip".into(),
+            );
+        }
+        let view = self.state.view();
+        if u64::try_from(view.height()).ok() != Some(height) {
+            return Err(format!(
+                "committed State height {} differs from the applied tip {height}",
+                view.height()
+            ));
+        }
+        archives.capture(&view)?;
+        drop(view);
+        self.archives = Some(archives);
+        Ok(())
+    }
+
     /// Answer an `Execute` (O4): the live overlay or a remembered verdict, `None` while the
     /// parent is not applied, otherwise a fresh execution.
-    fn execute(&mut self, block: &Block, block_hash: Hash32) -> Option<ExecOutcome> {
+    fn execute(&mut self, block: &AvailableBody, block_hash: Hash32) -> Option<ExecOutcome> {
         if self.pending_commit.is_some() {
             return None;
         }
@@ -813,41 +947,56 @@ impl<'s> Worker<'s> {
         }
         if let Some(live) = &self.live {
             if live.block_hash == block_hash {
-                if live.header != block.header {
+                if live.header != *block.header()
+                    || live.availability != *block.availability()
+                    || live.source != *block.source()
+                {
                     return Some(invalid(
-                        block.header.height,
+                        block.header().height,
                         &"execution retry changes its original header",
                     ));
                 }
                 return Some(self.finish_local_attestation());
             }
         }
-        if let Some((_, outcome)) = self.results.get(&block_hash) {
-            return Some(outcome.clone());
+        if let Some((source, outcome)) = self.results.get(&block_hash) {
+            return Some(if source == block.source() {
+                outcome.clone()
+            } else {
+                invalid(
+                    block.header().height,
+                    &"execution retry changes its original authority",
+                )
+            });
         }
         if !self.parent_applied(block) {
             return None;
         }
         let outcome = self.run_execution(block, block_hash);
         if !matches!(outcome, ExecOutcome::Valid(_) | ExecOutcome::Failed(_)) {
-            self.remember(block.header.height, block_hash, outcome.clone());
+            self.remember(block.source().clone(), block_hash, outcome.clone());
         }
         Some(outcome)
     }
 
-    fn parent_applied(&self, block: &Block) -> bool {
-        block.header.height == self.applied.0.saturating_add(1)
-            && block.header.parent_hash == self.applied.1
+    fn parent_applied(&self, block: &AvailableBody) -> bool {
+        block.header().height == self.applied.0.saturating_add(1)
+            && block.header().parent_hash == self.applied.1
     }
 
-    fn remember(&mut self, height: u64, block_hash: Hash32, outcome: ExecOutcome) {
-        self.results.insert(block_hash, (height, outcome));
+    fn remember(
+        &mut self,
+        source: iroha_sumeragi::availability::AvailabilitySource,
+        block_hash: Hash32,
+        outcome: ExecOutcome,
+    ) {
+        self.results.insert(block_hash, (source, outcome));
         // The core keeps at most a handful of bodies per height (§8.4); stay bounded.
         while self.results.len() > 16 {
             let Some(oldest) = self
                 .results
                 .iter()
-                .min_by_key(|(_, (height, _))| *height)
+                .min_by_key(|(_, (source, _))| source.height())
                 .map(|(hash, _)| *hash)
             else {
                 break;
@@ -857,19 +1006,19 @@ impl<'s> Worker<'s> {
     }
 
     /// Execute `block` on the applied tip, keeping the overlay as the live one.
-    fn run_execution(&mut self, block: &Block, block_hash: Hash32) -> ExecOutcome {
+    fn run_execution(&mut self, block: &AvailableBody, block_hash: Hash32) -> ExecOutcome {
         self.run_execution_with_encoder(block, block_hash, encode_result_preimage)
     }
 
     fn run_execution_with_encoder(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         block_hash: Hash32,
         encode: impl FnOnce(
-            &mv::allocation::RetainedPayload<ExecutionResultCommitment>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> ExecOutcome {
@@ -881,7 +1030,7 @@ impl<'s> Worker<'s> {
     /// The callback receives the sole completed original, before any proof scratch allocation.
     fn run_execution_with_finisher(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         block_hash: Hash32,
         finish: impl FnOnce(&mut Self) -> ExecOutcome,
     ) -> ExecOutcome {
@@ -892,9 +1041,12 @@ impl<'s> Worker<'s> {
         }
         if let Some(original) = &self.finishing {
             if original.block_hash == block_hash {
-                if original.header != block.header {
+                if original.header != *block.header()
+                    || original.availability != *block.availability()
+                    || original.source != *block.source()
+                {
                     return invalid(
-                        block.header.height,
+                        block.header().height,
                         &"result retry changes its original header",
                     );
                 }
@@ -909,16 +1061,11 @@ impl<'s> Worker<'s> {
         self.finishing = None;
         // The state admits one overlay: drop the previous one first.
         if let Some(previous) = self.live.take() {
-            self.remember(
-                previous.height,
-                previous.block_hash,
-                ExecOutcome::Valid(previous.result),
-            );
             // Its overlay is gone; a later `prepare` executes again.
             self.results.remove(&previous.block_hash);
         }
-        let height = block.header.height;
-        let iroha_block = match payload::decode(&block.payload) {
+        let height = block.header().height;
+        let iroha_block = match payload::decode(block.payload().as_slice()) {
             Ok(block) => block,
             Err(error) => return invalid(height, &error),
         };
@@ -932,15 +1079,15 @@ impl<'s> Worker<'s> {
             Ok(config) => config,
             Err(error) => return ExecOutcome::Failed(format!("invalid retained epoch: {error}")),
         };
-        if block.header.epoch != configured.epoch.id {
+        if block.source().config() != &configured || block.header().epoch != configured.epoch.id {
             return invalid(
                 height,
-                &"the proposal does not bind the exact scheduled epoch",
+                &"available custody does not bind the complete scheduled authority",
             );
         }
         self.quarantine_context = None;
         // Decode solely inside the original header/payload validation boundary.
-        let pulse_context = control::pulse_context(&block.header);
+        let pulse_context = control::pulse_context(block.header());
         let boundary_attestation = height == configured.epoch.last_height;
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         if !proposal_matches_header(iroha_block.header(), block) {
@@ -949,7 +1096,7 @@ impl<'s> Worker<'s> {
                 &"the payload's height or view differs from the header",
             );
         }
-        if block.header.attest != (boundary_attestation || attestation_required(&iroha_block)) {
+        if block.header().attest != (boundary_attestation || attestation_required(&iroha_block)) {
             return invalid(
                 height,
                 &"the attestation flag differs from the payload's rule",
@@ -968,6 +1115,16 @@ impl<'s> Worker<'s> {
                 return ExecOutcome::Failed(reason);
             }
             Err(error @ lanes::merge::MergeError::Invalid(_)) => return invalid(height, &error),
+            Err(lanes::merge::MergeError::Storage(error)) => {
+                let reason = format!("lane storage during execution: {error}");
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) {
+                    self.recovery = Some(reason.clone());
+                }
+                return ExecOutcome::Failed(reason);
+            }
         };
         let committee = scheduled
             .epoch
@@ -984,8 +1141,8 @@ impl<'s> Worker<'s> {
                 cadence,
                 self.context.consensus_mode,
                 expansion,
-                &block.header,
-                &block.payload,
+                block.header(),
+                block.payload().as_slice(),
                 self.state,
             )
         }));
@@ -1002,11 +1159,12 @@ impl<'s> Worker<'s> {
                 for event in events {
                     let _ = self.context.events.send(event);
                 }
-                if block.header.control_witness.is_empty() && control::transaction_rejection(&error)
+                if block.header().control_witness.is_empty()
+                    && control::transaction_rejection(&error)
                 {
                     self.quarantine_context = Some(QuarantineContext {
                         height,
-                        view: block.header.origin_view,
+                        view: block.header().origin_view,
                         block_hash,
                         pulse_context,
                     });
@@ -1031,7 +1189,9 @@ impl<'s> Worker<'s> {
         self.finishing = Some(Finishing {
             block_hash,
             height,
-            header: block.header.clone(),
+            header: block.header().clone(),
+            availability: block.availability().clone(),
+            source: block.source().clone(),
             valid,
             overlay,
             witness,
@@ -1083,20 +1243,40 @@ impl<'s> Worker<'s> {
                 return Err(reason);
             }
         };
+        // The complete World state before and after this execution and its emitted events
+        // (§4.1, Appendix E, E51), read from the same sealed original overlay.
+        let transition = match self
+            .finishing
+            .as_ref()
+            .expect("original completed execution")
+            .overlay
+            .world_state_transition()
+        {
+            Ok(transition) => transition,
+            Err(error) => {
+                let reason = format!("original World state transition requires recovery: {error}");
+                self.recovery = Some(reason.clone());
+                return Err(reason);
+            }
+        };
         let original = self.finishing.as_mut().unwrap();
         let FinishingPhase::ContextProof { inputs, .. } =
             std::mem::replace(&mut original.phase, FinishingPhase::Consuming)
         else {
             unreachable!("original proof inputs")
         };
-        let commitment =
-            execution_result(&original.witness, original.valid.as_ref(), inputs, proof).map_err(
-                |error| {
-                    let reason = format!("original result requires recovery: {error}");
-                    self.recovery = Some(reason.clone());
-                    reason
-                },
-            )?;
+        let commitment = execution_result(
+            &original.witness,
+            original.valid.as_ref(),
+            &transition,
+            inputs,
+            proof,
+        )
+        .map_err(|error| {
+            let reason = format!("original result requires recovery: {error}");
+            self.recovery = Some(reason.clone());
+            reason
+        })?;
         if top_ups_without_flag(commitment.get(), original.header.attest) {
             let reason = "executed top-ups without the attestation flag".to_owned();
             self.recovery = Some(reason.clone());
@@ -1144,10 +1324,10 @@ impl<'s> Worker<'s> {
     fn finish_execution_with_encoder(
         &mut self,
         encode: impl FnOnce(
-            &mv::allocation::RetainedPayload<ExecutionResultCommitment>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> ExecOutcome {
@@ -1186,6 +1366,7 @@ impl<'s> Worker<'s> {
             unreachable!("encoded original result")
         };
         self.live = Some(Live {
+            telemetry_origin: None,
             native_contexts: Some(
                 original
                     .native_contexts
@@ -1194,6 +1375,8 @@ impl<'s> Worker<'s> {
             block_hash: original.block_hash,
             height: original.height,
             header: original.header,
+            availability: original.availability,
+            source: original.source,
             phase: PublicationPhase::Executed {
                 valid: original.valid,
                 preimage,
@@ -1257,7 +1440,7 @@ impl<'s> Worker<'s> {
             self.finishing = None;
         }
         self.results
-            .retain(|hash, (at, _)| *at != height || keep.contains(hash));
+            .retain(|hash, (source, _)| source.height() != height || keep.contains(hash));
     }
 
     fn publication_pending(&self) -> bool {
@@ -1274,8 +1457,21 @@ impl<'s> Worker<'s> {
     }
 
     /// Pin the original execution and exactly one certified frame for durable append.
-    fn prepare(&mut self, block: &Block, qc: &Qc) -> Result<Option<Hash32>, PublicationError> {
-        self.prepare_with_encoder(block, qc, |part, budget| {
+    fn prepare(
+        &mut self,
+        block: &AvailableBody,
+        qc: &Qc,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        self.prepare_with_origin(block, qc, CommitTelemetryOrigin::Forward)
+    }
+
+    fn prepare_with_origin(
+        &mut self,
+        block: &AvailableBody,
+        qc: &Qc,
+        origin: CommitTelemetryOrigin,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        self.prepare_with_encoder(block, qc, origin, |part, budget| {
             super::commitment::encode_certificate_part(
                 part,
                 budget,
@@ -1286,13 +1482,14 @@ impl<'s> Worker<'s> {
 
     fn prepare_with_encoder(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         qc: &Qc,
+        origin: CommitTelemetryOrigin,
         mut encode: impl FnMut(
             super::commitment::CertificatePart<'_>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> Result<Option<Hash32>, PublicationError> {
@@ -1301,7 +1498,7 @@ impl<'s> Worker<'s> {
         }
         require_qc_witness_admission(qc, &self.state.ivm_execution_budget())?;
         match catch_unwind(AssertUnwindSafe(|| {
-            self.prepare_inner(block, qc, &mut encode)
+            self.prepare_inner(block, qc, origin, &mut encode)
         })) {
             Ok(result) => result.map_err(|error| match &self.recovery {
                 Some(reason) => PublicationError::RecoveryRequired(reason.clone()),
@@ -1317,18 +1514,19 @@ impl<'s> Worker<'s> {
 
     fn prepare_inner(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         qc: &Qc,
+        origin: CommitTelemetryOrigin,
         encode: &mut impl FnMut(
             super::commitment::CertificatePart<'_>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> Result<Option<Hash32>, String> {
         if let Some(pending) = &self.pending_commit {
-            return if pending.matches(block, qc) {
+            return if pending.matches(block, qc) && pending.telemetry_origin == origin {
                 Ok(Some(pending.qc.result))
             } else {
                 Err("another committed decision is awaiting archive capture".into())
@@ -1336,12 +1534,12 @@ impl<'s> Worker<'s> {
         }
         let block_hash = qc.block_hash;
         if qc.kind != iroha_sumeragi::message::VoteKind::Commit
-            || qc.height != block.header.height
-            || qc.instance != block.header.instance
-            || qc.epoch != block.header.epoch
-            || qc.attest != block.header.attest
+            || qc.height != block.header().height
+            || qc.instance != block.header().instance
+            || qc.epoch != block.header().epoch
+            || qc.attest != block.header().attest
             || super::commitment::chain_hash(&iroha_sumeragi::preimage::block_hash_preimage(
-                &block.header,
+                block.header(),
             )) != block_hash
         {
             return Err("commit certificate does not bind the exact requested block".into());
@@ -1350,7 +1548,9 @@ impl<'s> Worker<'s> {
         // schedule slot may have retired. Every new certificate is checked independently.
         let authenticated = self.live.as_ref().is_some_and(|live| {
             live.block_hash == block_hash
-                && live.header == block.header
+                && live.header == *block.header()
+                && live.availability == *block.availability()
+                && live.source == *block.source()
                 && matches!(&live.phase,
                     PublicationPhase::Prepared { qc: original, .. }
                     | PublicationPhase::Published { qc: original, .. } if original == qc)
@@ -1384,8 +1584,17 @@ impl<'s> Worker<'s> {
             _ => return Err("original attestation did not complete".into()),
         }
         let live = self.live.as_mut().ok_or("no executed overlay to prepare")?;
-        if live.header != block.header {
+        if live.header != *block.header()
+            || live.availability != *block.availability()
+            || live.source != *block.source()
+        {
             return Err("prepared header differs from original execution".into());
+        }
+        if live
+            .telemetry_origin
+            .is_some_and(|original| original != origin)
+        {
+            return Err("prepared execution telemetry origin cannot be replaced".into());
         }
         match &live.phase {
             PublicationPhase::Prepared {
@@ -1425,6 +1634,7 @@ impl<'s> Worker<'s> {
                 .ok_or("original pending overlay was consumed")?
                 .verify_sumeragi_execution_witness(valid.as_ref(), &live.witness)?;
         }
+        live.telemetry_origin = Some(origin);
         if matches!(live.phase, PublicationPhase::Executed { .. }) {
             let PublicationPhase::Executed { valid, preimage } =
                 std::mem::replace(&mut live.phase, PublicationPhase::Consuming)
@@ -1436,6 +1646,7 @@ impl<'s> Worker<'s> {
                 preimage,
                 header_wire: None,
                 qc_wire: None,
+                availability_wire: None,
                 qc: qc.clone(),
                 refusal: None,
             };
@@ -1443,6 +1654,7 @@ impl<'s> Worker<'s> {
         if let PublicationPhase::EncodingCertificate {
             header_wire,
             qc_wire,
+            availability_wire,
             refusal,
             ..
         } = &mut live.phase
@@ -1450,9 +1662,13 @@ impl<'s> Worker<'s> {
             for (slot, part) in [
                 (
                     header_wire,
-                    super::commitment::CertificatePart::Header(&block.header),
+                    super::commitment::CertificatePart::Header(block.header()),
                 ),
                 (qc_wire, super::commitment::CertificatePart::Qc(qc)),
+                (
+                    availability_wire,
+                    super::commitment::CertificatePart::Availability(&live.availability),
+                ),
             ] {
                 if slot.is_some() {
                     continue;
@@ -1478,6 +1694,7 @@ impl<'s> Worker<'s> {
                 preimage,
                 header_wire,
                 qc_wire,
+                availability_wire,
                 qc,
                 ..
             } = std::mem::replace(&mut live.phase, PublicationPhase::Consuming)
@@ -1490,6 +1707,7 @@ impl<'s> Worker<'s> {
                     consensus_header: header_wire.expect("retained original header"),
                     commit_qc: qc_wire.expect("retained original QC"),
                     result_preimage: preimage,
+                    availability: availability_wire.expect("retained original availability frame"),
                 }),
                 qc,
                 refusal: None,
@@ -1543,7 +1761,11 @@ impl<'s> Worker<'s> {
     }
 
     /// Publish the same prepared owner after its exact frame is durable.
-    fn commit(&mut self, block: &Block, qc: &Qc) -> Result<AppliedConfig, PublicationError> {
+    fn commit(
+        &mut self,
+        block: &AvailableBody,
+        qc: &Qc,
+    ) -> Result<AppliedConfig, PublicationError> {
         self.commit_with(block, qc, StateBlock::try_publish)
     }
 
@@ -1551,7 +1773,7 @@ impl<'s> Worker<'s> {
     // without replacing validation, authorization, metadata preparation or its original owner.
     fn commit_with(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         qc: &Qc,
         publish: impl FnOnce(&mut StateBlock<'s>) -> crate::state::StatePublicationOutcome,
     ) -> Result<AppliedConfig, PublicationError> {
@@ -1576,7 +1798,7 @@ impl<'s> Worker<'s> {
 
     fn commit_inner(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         qc: &Qc,
         publish: impl FnOnce(&mut StateBlock<'s>) -> crate::state::StatePublicationOutcome,
     ) -> Result<AppliedConfig, String> {
@@ -1592,7 +1814,9 @@ impl<'s> Worker<'s> {
             .ok_or("commit without its prepared overlay")?;
         if live.block_hash != qc.block_hash
             || live.result != qc.result
-            || live.header != block.header
+            || live.header != *block.header()
+            || live.availability != *block.availability()
+            || live.source != *block.source()
         {
             return Err("commit differs from its original prepared execution".into());
         }
@@ -1628,6 +1852,9 @@ impl<'s> Worker<'s> {
             // A normal authorization refusal retains the same original and can retry
             // after append. Metadata finalization itself is one-shot and may unwind.
             let native_execution = NativeExecutionAuthorization {
+                telemetry_origin: live
+                    .telemetry_origin
+                    .expect("original prepared telemetry origin"),
                 state: std::ptr::from_ref(self.state) as usize,
                 tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                     height: live.header.height,
@@ -1693,11 +1920,16 @@ impl<'s> Worker<'s> {
             unreachable!("original prepared owner")
         };
         self.pending_commit = Some(PendingCommit {
+            telemetry_origin: live
+                .telemetry_origin
+                .expect("original prepared telemetry origin"),
             native_contexts: live
                 .native_contexts
                 .take()
                 .expect("original preapply context projection"),
             header: live.header.clone(),
+            availability: live.availability.clone(),
+            source: live.source.clone(),
             qc: qc.clone(),
             state_hash: committed.as_ref().hash(),
             next: live.applied_config.clone(),
@@ -1750,7 +1982,8 @@ impl<'s> Worker<'s> {
         self.context
             .applied_watch
             .publish(height, pending.state_hash);
-        self.results.retain(|_, (at, _)| *at > height);
+        self.results
+            .retain(|_, (source, _)| source.height() > height);
         if let Some(queue) = &self.queue {
             queue.remove_committed_hashes(pending.hashes, None);
         }
@@ -1763,28 +1996,57 @@ impl<'s> Worker<'s> {
     }
 
     /// Build a payload for `(height, view)` over the applied tip (§6.10).
-    fn build(&mut self, height: u64, view: u64, max_bytes: u32) -> (Vec<u8>, bool) {
+    fn build(
+        &mut self,
+        height: u64,
+        view: u64,
+        max_bytes: u32,
+    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+        if let Some(reason) = &self.recovery {
+            return Err(PublicationError::RecoveryRequired(reason.clone()));
+        }
         if self.pending_commit.is_some()
-            || self.recovery.is_some()
             || self.publication_pending()
             || height != self.applied.0.saturating_add(1)
         {
-            return (Vec::new(), false);
+            return Ok((None, false));
+        }
+        if self.payload_build.as_ref().is_some_and(|build| {
+            (build.height, build.view, build.max_bytes) != (height, view, max_bytes)
+        }) {
+            self.payload_build = None;
+        }
+        if self.payload_build.is_some() {
+            return self.finish_payload_build();
         }
         let Some(parent) = self.state.view().latest_block() else {
-            return (Vec::new(), false);
+            return Ok((None, false));
         };
         let Some(scheduled) = self.scheduled(height) else {
-            return (Vec::new(), false);
+            return Ok((None, false));
         };
         let boundary_attestation = height == scheduled.epoch.authorization.last_height;
         let Some(queue) = &self.queue else {
-            return (Vec::new(), boundary_attestation);
+            return Ok((None, boundary_attestation));
         };
         let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
         // Certified lane blocks come first: they reserve their share of the block's capacity
         // (`specs/sumeragi_lanes.md` §4.2).
-        let merges = lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height);
+        let merges =
+            match lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height) {
+                Ok(merges) => merges,
+                Err(error) => {
+                    let reason = format!("lane storage during payload selection: {error}");
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) {
+                        return Err(PublicationError::Retryable(reason));
+                    }
+                    self.recovery = Some(reason.clone());
+                    return Err(PublicationError::RecoveryRequired(reason));
+                }
+            };
         let mut selected = payload::select(
             self.state,
             queue,
@@ -1793,7 +2055,7 @@ impl<'s> Worker<'s> {
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
-            return (Vec::new(), false);
+            return Ok((None, false));
         }
         let assembly = Assembly {
             parent: &parent,
@@ -1806,27 +2068,81 @@ impl<'s> Worker<'s> {
                     Ok(block) => block,
                     Err(error) => {
                         iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
-                        return (Vec::new(), false);
+                        return Err(PublicationError::Retryable(format!(
+                            "payload assembly: {error}"
+                        )));
                     }
                 };
-            match payload::encode(&block) {
-                Ok(bytes) if bytes.len() <= max_bytes => {
-                    self.last_built = Some((
+            match block.resultless_proposal_wire_len() {
+                Ok(length) if length <= max_bytes => {
+                    let source = GlobalPayloadSource {
+                        attest: boundary_attestation || attestation_required(&block),
+                        hashes: selected.iter().map(|tx| tx.hash_as_entrypoint()).collect(),
+                        block,
+                    };
+                    self.payload_build = Some(GlobalPayloadBuild {
                         height,
                         view,
-                        selected.iter().map(|tx| tx.hash_as_entrypoint()).collect(),
-                    ));
-                    let attest = boundary_attestation || attestation_required(&block);
-                    return (bytes, attest);
+                        max_bytes: max_bytes as u32,
+                        job: super::driver::payload_build::PayloadBuild::new(
+                            source,
+                            self.state.ivm_execution_budget(),
+                            max_bytes,
+                        ),
+                    });
+                    return self.finish_payload_build();
                 }
                 Ok(_) if !selected.is_empty() => {
                     selected.pop();
                 }
-                Ok(_) => return (Vec::new(), false),
-                Err(_) => return (Vec::new(), false),
+                Ok(_) => {
+                    return Err(PublicationError::Retryable(
+                        "mandatory lane merges exceed payload limit".into(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(PublicationError::RecoveryRequired(format!(
+                        "canonical payload length: {error}"
+                    )));
+                }
             }
         }
-        (Vec::new(), boundary_attestation)
+        Ok((None, boundary_attestation))
+    }
+
+    fn finish_payload_build(&mut self) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+        let GlobalPayloadBuild {
+            height,
+            view,
+            max_bytes,
+            job,
+        } = self.payload_build.take().ok_or_else(|| {
+            PublicationError::RecoveryRequired("payload source disappeared".into())
+        })?;
+        match job.finish(
+            |source| source.block.resultless_proposal_wire_len(),
+            |source, writer| source.block.write_resultless_proposal_wire(writer),
+        ) {
+            Ok((source, payload)) => {
+                self.last_built = Some((height, view, source.hashes));
+                Ok((Some(payload), source.attest))
+            }
+            Err((job, error)) => {
+                let retry = error.is_local_refusal();
+                self.payload_build = Some(GlobalPayloadBuild {
+                    height,
+                    view,
+                    max_bytes,
+                    job,
+                });
+                let reason = format!("canonical payload admission: {error:?}");
+                Err(if retry {
+                    PublicationError::Retryable(reason)
+                } else {
+                    PublicationError::RecoveryRequired(reason)
+                })
+            }
+        }
     }
 
     /// Retain queue ownership after a rejected proposal until the offending original
@@ -1847,9 +2163,9 @@ impl<'s> Worker<'s> {
 }
 
 /// The iroha header of a decoded payload must match the certified core header.
-fn proposal_matches_header(header: IrohaHeader, block: &Block) -> bool {
-    header.height().get() == block.header.height
-        && header.view_change_index() == block.header.origin_view
+fn proposal_matches_header(header: IrohaHeader, block: &AvailableBody) -> bool {
+    header.height().get() == block.header().height
+        && header.view_change_index() == block.header().origin_view
 }
 
 /// Whether a block requires commit attestations (§3.7, KAGEMUSHA mint finality): it carries a
@@ -1895,6 +2211,7 @@ fn classify(height: u64, error: &BlockValidationError) -> ExecOutcome {
 /// The local condition behind `error`, if it is one (not a property of the block).
 fn local_failure(error: &BlockValidationError) -> Option<String> {
     match error {
+        BlockValidationError::LaneStorage(error) => Some(format!("lane storage: {error}")),
         BlockValidationError::StateStorageAdmission(reason) => {
             Some(format!("World storage admission: {reason}"))
         }
@@ -1924,82 +2241,79 @@ fn local_failure(error: &BlockValidationError) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Empty input cannot obtain available custody; a genuinely available zero-transaction
+    /// carrier is invalid before any execution overlay or state publication is created.
     #[test]
     fn empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work() {
-        use iroha_sumeragi::message::BlockHeader;
-        use std::{collections::BTreeSet, num::NonZeroU64};
+        use iroha_sumeragi::{
+            availability::{AuthoringError, AvailabilityError},
+            preimage::payload_hash,
+        };
+        use std::collections::BTreeSet;
 
-        let state = Arc::new(State::new_for_testing(
-            crate::state::World::new(),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        ));
-        let parent_hash = Hash32([1; 32]);
-        let mut executor = StateExecutor::spawn(ExecutorContext {
-            state: Arc::clone(&state),
-            native_context_archive: Arc::new(
-                crate::query::native_context_archive::NativeContextArchive::open(
-                    state.kura(),
-                    state.ivm_execution_budget(),
-                    state.kura().native_context_archive_max_bytes(),
+        publication_tests::with_worker(|chain, worker, _blocks, _events| {
+            let original = publication_tests::proposal(chain, worker);
+            let state_height = worker.state.view().height();
+            let before = worker.state.ivm_execution_budget().reserved_bytes();
+            let mut empty_header = original.header().clone();
+            empty_header.payload_len = 0;
+            empty_header.payload_hash =
+                payload_hash(&**worker.context.crypto.as_ref().unwrap(), &[]);
+            let (empty_owner, error) = chain
+                .author_payload_under_test_context(
+                    empty_header,
+                    Vec::new(),
+                    original.source().config(),
                 )
-                .expect("original-pool native context archive"),
-            ),
-            queue: None,
-            staging: Staging::new(),
-            events: tokio::sync::broadcast::channel(16).0,
-            genesis_account: iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-            consensus_mode: ConsensusMode::Permissioned,
-            applied: (1, parent_hash),
-            crypto: None,
-            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
-            lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
-        })
-        .expect("state executor");
-        let zero_transaction_wire = iroha_data_model::block::builder::BlockBuilder::new(
-            IrohaHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0),
-        )
-        .build(BTreeSet::new())
-        .encode_wire()
-        .unwrap();
-        for (index, payload) in [Vec::new(), zero_transaction_wire].into_iter().enumerate() {
-            let block = Block {
-                header: BlockHeader {
-                    instance: Hash32([2; 32]),
-                    epoch: iroha_sumeragi::types::EpochId {
-                        epoch: 0,
-                        context: Hash32([6; 32]),
-                    },
-                    height: 2,
-                    origin_view: 0,
-                    parent_hash,
-                    parent_result: Hash32([3; 32]),
-                    payload_hash: Hash32([4; 32]),
-                    payload_len: u32::try_from(payload.len()).unwrap(),
-                    proposer: 0,
-                    skipped_leaders: Vec::new(),
-                    control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-                    attest: false,
-                },
-                payload,
-            };
-            let hash = Hash32([u8::try_from(index + 5).unwrap(); 32]);
+                .err()
+                .expect("empty payload never obtains available custody");
             assert!(matches!(
-                executor.execute(&block, &hash),
+                error,
+                AuthoringError::Invalid(AvailabilityError::Shape)
+            ));
+            assert_eq!(worker.state.view().height(), state_height);
+            assert!(worker.live.is_none());
+            assert!(worker.finishing.is_none());
+            drop(empty_owner);
+            assert_eq!(worker.state.ivm_execution_budget().reserved_bytes(), before);
+
+            let proposal = payload::decode(original.payload().as_slice()).unwrap();
+            let zero_transaction_wire =
+                iroha_data_model::block::builder::BlockBuilder::new(proposal.header())
+                    .build(BTreeSet::new())
+                    .encode_wire()
+                    .unwrap();
+            let mut header = original.header().clone();
+            header.payload_hash = payload_hash(
+                &**worker.context.crypto.as_ref().unwrap(),
+                &zero_transaction_wire,
+            );
+            header.payload_len = u32::try_from(zero_transaction_wire.len()).unwrap();
+            let block = chain.author_payload(header, zero_transaction_wire);
+            let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+            assert!(matches!(
+                worker.execute(&block, hash),
                 Some(ExecOutcome::Invalid)
             ));
             assert_eq!(
-                state.view().height(),
-                0,
+                worker.state.view().height(),
+                state_height,
                 "no synthesized block or overlay committed"
             );
-        }
+            assert!(worker.live.is_none());
+            assert!(worker.finishing.is_none());
+            assert!(worker.context.staging.get(&hash).is_none());
+        });
     }
 
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.
     #[test]
     fn classification_table() {
         let local = [
+            BlockValidationError::LaneStorage(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "original lane read waits for capacity",
+            )),
             BlockValidationError::StateStorageAdmission(
                 mv::storage::AdmittedStorageError::Changed.into(),
             ),
@@ -2060,6 +2374,7 @@ mod native_execution_authorization_tests {
             LiveQueryStore::start_test(),
         );
         let token = NativeExecutionAuthorization {
+            telemetry_origin: CommitTelemetryOrigin::Forward,
             state: std::ptr::from_ref(&original) as usize,
             tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                 height: 1,

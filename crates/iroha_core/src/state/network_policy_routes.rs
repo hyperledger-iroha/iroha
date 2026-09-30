@@ -18,10 +18,10 @@ use crate::{
     },
     tx::AcceptedTransaction,
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_data_model::{
     block::ExternalExecutionRouteRole, transaction::error::TransactionRejectionReason,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]

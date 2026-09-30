@@ -76,7 +76,6 @@ const IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP: i64 = 16_384;
 const IZANAMI_QUEUE_CAPACITY: i64 = 65_536;
 const IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC: i64 = 1_000_000;
 const IZANAMI_TORII_PREAUTH_BURST_PER_IP: i64 = 2_000_000;
-const IZANAMI_TORII_DISABLED_RATE_LIMIT: i64 = 0;
 const IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE: usize = 32;
 const IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD: f64 = 1_000.0;
 const IZANAMI_HIGH_TPS_ACCOUNT_COUNT: usize = 4_096;
@@ -2468,22 +2467,6 @@ fn make_network_builder_with_sorafs(
             .write(
                 ["torii", "preauth_burst_per_ip"],
                 IZANAMI_TORII_PREAUTH_BURST_PER_IP,
-            )
-            .write(
-                ["torii", "query_rate_per_authority_per_sec"],
-                IZANAMI_TORII_DISABLED_RATE_LIMIT,
-            )
-            .write(
-                ["torii", "query_burst_per_authority"],
-                IZANAMI_TORII_DISABLED_RATE_LIMIT,
-            )
-            .write(
-                ["torii", "tx_rate_per_authority_per_sec"],
-                IZANAMI_TORII_DISABLED_RATE_LIMIT,
-            )
-            .write(
-                ["torii", "tx_burst_per_authority"],
-                IZANAMI_TORII_DISABLED_RATE_LIMIT,
             )
             .write(["torii", "api_high_load_tx_threshold"], queue_capacity)
             .write(
@@ -10900,11 +10883,12 @@ mod tests {
                 .as_ref()
                 .get("nexus")
                 .and_then(toml::Value::as_table)
-                .and_then(|table| table.get("enabled"))
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(false)
+                .is_some_and(|table| {
+                    table.contains_key("lane_catalog") && table.contains_key("dataspace_catalog")
+                })
         });
         assert!(has_nexus_layer, "nexus config layer must be attached");
+        assert!(lookup(&["nexus", "enabled"]).is_none());
         assert!(
             layers.iter().all(|layer| {
                 layer

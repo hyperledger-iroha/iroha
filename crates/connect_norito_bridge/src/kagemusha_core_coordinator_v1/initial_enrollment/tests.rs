@@ -516,6 +516,27 @@ fn journal_challenge_and_proof(
     (fields, proof, certificate, enrollment_id, accepted)
 }
 
+pub(crate) fn journal_qualification_fields(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+) -> Vec<Vec<u8>> {
+    let f = journal_fixture(selected);
+    vec![
+        1_u32.to_le_bytes().to_vec(),
+        f.qualification.release_id.to_vec(),
+        norito::encode_canonical(&f.qualification.profile).unwrap(),
+        norito::encode_canonical(&f.qualification.credential).unwrap(),
+        0xffff_u32.to_le_bytes().to_vec(),
+        f.qualification.hardware_policy_digest.to_vec(),
+    ]
+}
+
+pub(crate) fn journal_qualification_response(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+    nonce: [u8; 32],
+) -> Vec<u8> {
+    journal_fixture(selected).device_response(nonce)
+}
+
 pub(crate) fn journal_challenge_fields(
     selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
 ) -> Vec<Vec<u8>> {

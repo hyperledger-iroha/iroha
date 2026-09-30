@@ -6,7 +6,13 @@ crate. See [Operate Iroha 3 via CLI](https://docs.iroha.tech/get-started/operate
 for the current tutorial.
 
 Within this workspace, `crates/iroha` is the reusable Rust client library and
-`crates/iroha_cli` is the crate that builds the `iroha` command-line binary.
+`crates/iroha_cli` contains the `iroha_cli_lib` implementation package. Its
+`bins` directory contains the `iroha_cli` package that builds the `iroha`
+command-line binary and owns the binary integration tests. Run
+`cargo test -p iroha_cli_lib --lib` for the implementation suite. The library
+always includes its runtime dependencies; its optional flags control bridge
+commands, visual offline codecs and test hooks. The executable owns the `cli`
+and `dev-tools` target-selection flags.
 
 ## Installation
 
@@ -40,7 +46,9 @@ Binding-only IVM proof helpers are removed. Core rejects `IvmProved` until the
 complete native STARK execution relation and State-owned finalized anchor are
 available. Generic proof and verifying-key registry commands remain available.
 
-Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
+Use `iroha taira doctor` for read-only public-testnet diagnostics. Both scopes
+require `/readyz` to return HTTP 200 with the exact plain-text `Ready` response;
+unavailable readiness fails the report with a bounded machine error code. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
 coordinator. Retry the same apply command with the same inventory and authorization;
 the durable journal selects recovery inputs for the interrupted phase. Its low-level `write-canary` child accepts exactly one ordered

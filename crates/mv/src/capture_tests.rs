@@ -2,11 +2,11 @@
 
 use crate::{
     BlockCapture, BlockMode, ReleaseNotification,
-    allocation::{AllocationBudget, AllocationCharge},
     cell::{self, Cell, CellAllocationCharges},
     storage::{self, Storage, StorageReadOnly},
 };
-use concread::release::{ReleaseFuture, ReleaseWait};
+use iroha_allocation::release::{ReleaseFuture, ReleaseWait};
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},

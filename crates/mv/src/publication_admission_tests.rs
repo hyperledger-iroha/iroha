@@ -1,7 +1,7 @@
 //! Exact original publication controls retain admission through release observers.
 
 use super::*;
-use crate::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 #[test]
 fn complete_initial_publication_admission_includes_original_release_control() {

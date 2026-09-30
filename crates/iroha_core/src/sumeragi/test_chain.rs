@@ -12,6 +12,16 @@
 //! block time with a `Log` transaction of its own clock account when the block's transactions do
 //! not.
 
+#[path = "test_chain/lane_authority.rs"]
+mod lane_authority;
+/// Independent committed-State authority used by certified lane fixtures.
+pub use lane_authority::TestLaneStoreAuthorities;
+#[path = "test_chain/availability.rs"]
+mod availability;
+mod genesis_policy;
+mod local_certificate;
+pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};
+
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
@@ -34,14 +44,16 @@ use iroha_model_base::{chain::ChainId, peer::PeerId};
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi::{
     api::ExecOutcome,
+    availability::AvailableBody,
     crypto::{AttestOutcome, Attestor as _, Signer as _, form_qc},
-    message::{Block, BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
+    message::{BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
     preimage::payload_hash,
     types::{Committee, Hash32},
 };
 use mv::storage::StorageReadOnly;
 
 use super::{
+    availability_schedule::AvailabilitySchedule,
     block_store::{KuraBlockStore, Staging},
     certified_chain::{CommittedBlock, committed_block},
     crypto::{BlsCrypto, KeyPairSigner},
@@ -230,6 +242,7 @@ pub struct CertifiedTestChain {
     executor: StateExecutor,
     events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
     blocks: KuraBlockStore,
+    availability: Arc<dyn AvailabilitySchedule>,
     signers: Vec<KeyPairSigner>,
     committee: Committee,
     validators: Vec<(PeerId, Vec<u8>)>,
@@ -511,6 +524,15 @@ impl CertifiedTestChain {
             )
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
+        let instance = global_instance(&genesis, &chain_id.to_string());
+        let availability: Arc<dyn AvailabilitySchedule> = Arc::new(
+            super::runtime_availability::NativeGlobalAvailability::new(
+                Arc::clone(&state),
+                instance,
+                Arc::clone(&crypto),
+            )
+            .map_err(|error| invalid(format!("original availability authority: {error}")))?,
+        );
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             Arc::clone(&kura),
@@ -518,6 +540,11 @@ impl CertifiedTestChain {
             GENESIS_HEIGHT,
             staging.clone(),
             state.ivm_execution_budget(),
+            Arc::clone(&availability),
+            Arc::new(super::attestation::NativePastaVerifier::new(
+                instance,
+                *state.network_id_ref(),
+            )),
         );
         let (events, event_receiver) = tokio::sync::broadcast::channel(4096);
         let executor = StateExecutor::spawn(ExecutorContext {
@@ -555,7 +582,6 @@ impl CertifiedTestChain {
                 .collect(),
         )
         .expect("fixture committee");
-        let instance = global_instance(&genesis, &chain_id.to_string());
         let authority = Arc::new(
             crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
                 generation,
@@ -591,6 +617,7 @@ impl CertifiedTestChain {
             executor,
             events: event_receiver,
             blocks,
+            availability,
             signers,
             committee,
             validators,
@@ -634,11 +661,11 @@ impl CertifiedTestChain {
             self.kura
                 .store_block(Arc::clone(original.committed().block()))
                 .map_err(|error| error.to_string())?;
-            let entry = self
-                .blocks
-                .entry(height)
+            let (body, commit_qc) = self
+                .committed_body(height)
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("original replay frame unavailable at {height}"))?;
-            self.executor.replay(&entry.block, &entry.commit_qc)?;
+            self.executor.replay(&body, &commit_qc)?;
             self.tip = (
                 height,
                 original.committed().core_hash(),
@@ -678,6 +705,11 @@ impl CertifiedTestChain {
             GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconChainAnchorV1,
             GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconPulseContextV1,
         };
+        use iroha_data_model::{
+            asset::{AssetBalancePolicy, AssetDefinition},
+            isi::Register,
+        };
+        use iroha_primitives::numeric::NumericSpec;
         let mut config = TestChainConfig::new(World::new(), 1_000);
         config.consensus_mode = SumeragiConsensusMode::Npos;
         let policy = SumeragiNposParameters {
@@ -688,6 +720,18 @@ impl CertifiedTestChain {
             ..SumeragiNposParameters::default()
         };
         policy.validate().expect("bounded ten-block fixture policy");
+        // A boundary reconciles the signed network currency even when it retains
+        // the incumbent committee without an eligible future candidate pool.
+        config.genesis_instructions.push(
+            Register::asset_definition(AssetDefinition::new(
+                policy.xor_asset_definition_id.clone(),
+                "Network XOR",
+                NumericSpec::fractional(9),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+        );
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 policy.epoch_length_blocks,
@@ -954,7 +998,8 @@ impl CertifiedTestChain {
         let transaction_parameters = view.world().parameters().transaction();
         // The leader merges the lane blocks its lane stores have committed; they may raise the
         // block time (the merge time floor).
-        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height);
+        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height)
+            .expect("original lane store is available while building fixture proposal");
         drop(view);
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         let parent_time = parent.header().creation_time();
@@ -1133,22 +1178,35 @@ impl CertifiedTestChain {
             parent_hash: self.tip.1,
             parent_result: self.tip.2,
             payload_hash: payload_hash(&*self.crypto, &payload_bytes),
+            availability_digest: Hash32::ZERO,
             payload_len: u32::try_from(payload_bytes.len()).expect("payload fits"),
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: attestation_required(&proposal)
                 || height == scheduled.epoch.authorization.last_height,
         };
-        let block = Block {
-            header,
-            payload: payload_bytes,
-        };
+        let block = self.author_payload(header, payload_bytes);
         let block_hash = block.hash(&*self.crypto);
+        let mut diagnostic_events = self.events.resubscribe();
         let result = match self.executor.execute(&block, &block_hash) {
             Some(ExecOutcome::Valid(result)) => result,
             other => {
+                use iroha_data_model::events::{
+                    EventBox,
+                    pipeline::{BlockStatus, PipelineEventBox},
+                };
+                let mut rejection = None;
+                while let Ok(event) = diagnostic_events.try_recv() {
+                    if let EventBox::Pipeline(PipelineEventBox::Block(event)) = event {
+                        if event.header.height().get() == height {
+                            if let BlockStatus::Rejected(reason) = event.status {
+                                rejection = Some(reason);
+                            }
+                        }
+                    }
+                }
                 return Err(format!(
-                    "fixture block {height} does not execute: {other:?}"
+                    "fixture block {height} does not execute: {other:?}; native rejection: {rejection:?}"
                 ));
             }
         };
@@ -1191,17 +1249,11 @@ impl CertifiedTestChain {
         };
         let witness = if attest {
             if height <= self.tip.0 {
-                Some(
-                    ResultWitness::from_untrusted(
-                        self.committed(height)
-                            .block()
-                            .commit_certificate()
-                            .unwrap()
-                            .result_preimage()
-                            .to_vec(),
-                    )
-                    .unwrap(),
-                )
+                self.committed_body(height)
+                    .expect("restore original certified witness into this State pool")
+                    .expect("original committed body exists")
+                    .1
+                    .attestation_witness
             } else {
                 let statement = iroha_sumeragi::preimage::att_preimage(
                     &self.instance,
@@ -1428,7 +1480,7 @@ impl CertifiedTestChain {
 /// use the production path. Dropping an unpublished owner discards only that speculative work.
 pub struct PendingTestExecution<'chain> {
     chain: &'chain mut CertifiedTestChain,
-    block: Block,
+    block: AvailableBody,
     block_hash: Hash32,
     result: Hash32,
     certificate: Option<(Signers, Qc)>,
@@ -1491,10 +1543,10 @@ impl PendingTestExecution<'_> {
             }
         } else {
             let mut qc = self.chain.commit_qc(
-                self.block.header.height,
+                self.block.header().height,
                 self.block_hash,
                 self.result,
-                self.block.header.attest,
+                self.block.header().attest,
                 signers,
             );
             qc.admit_attestation_witness(&self.chain.state.ivm_execution_budget())
@@ -1545,8 +1597,8 @@ impl PendingTestExecution<'_> {
             .executor
             .commit(&self.block, qc)
             .map_err(|error| error.to_string())?;
-        self.chain.tip = (self.block.header.height, self.block_hash, self.result);
-        let published = self.chain.committed(self.block.header.height);
+        self.chain.tip = (self.block.header().height, self.block_hash, self.result);
+        let published = self.chain.committed(self.block.header().height);
         self.published = Some(published.clone());
         Ok(published)
     }
@@ -1555,7 +1607,7 @@ impl PendingTestExecution<'_> {
 impl Drop for PendingTestExecution<'_> {
     fn drop(&mut self) {
         if self.published.is_none() {
-            self.chain.executor.discard(self.block.header.height, &[]);
+            self.chain.executor.discard(self.block.header().height, &[]);
         }
     }
 }
@@ -1750,23 +1802,12 @@ pub(crate) fn signed_genesis_fixture(
     if (mode == ConsensusMode::Npos) != npos.is_some() {
         return Err("fixture NPoS policy must exactly match signed mode".into());
     }
-    let parameters = npos
-        .into_iter()
-        .flat_map(|policy| {
-            [
-                Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
-                    policy.epoch_length_blocks,
-                )),
-                Parameter::Custom(policy.into_custom_parameter()),
-            ]
-        })
-        .collect();
     build_genesis(
         chain_id,
         genesis_key,
         validators,
         instructions,
-        parameters,
+        genesis_policy::npos_genesis_parameters(npos),
         mode.into(),
         genesis_time_ms,
     )
@@ -1835,6 +1876,87 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
+        use iroha_data_model::{
+            asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+        };
+
+        let _logger = iroha_logger::test_logger();
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        let current = {
+            let view = chain.state().view();
+            let policy = view.world().sumeragi_npos_parameters().unwrap();
+            let currency = view
+                .world()
+                .asset_definitions()
+                .get(&policy.xor_asset_definition_id)
+                .expect("original signed genesis currency");
+            assert_eq!(currency.spec().scale(), Some(9));
+            assert_eq!(currency.balance_scope_policy(), AssetBalancePolicy::Global);
+            view.world()
+                .consensus_schedule()
+                .ready(10)
+                .unwrap()
+                .epoch
+                .clone()
+        };
+        chain.commit(Vec::new());
+        let boundary = chain.committed(10);
+        assert!(boundary.header().unwrap().attest);
+        assert_eq!(boundary.commitment().execution.kagemusha_top_up_count, 0);
+        let next = &boundary
+            .commitment()
+            .schedule
+            .boundary
+            .as_ref()
+            .unwrap()
+            .next;
+        assert_eq!(
+            next.authorization.decision,
+            KagemushaMintFinalityEpochDecisionV1::Retain
+        );
+        assert_eq!(next.authority, current.authority);
+        assert_eq!(next.committee, current.committee);
+        chain.commit(Vec::new());
+        assert_eq!(chain.height(), 11);
+    }
+
+    #[test]
+    fn absent_boundary_currency_rejects_execution_without_draining_original_events() {
+        use iroha_data_model::events::{
+            EventBox,
+            pipeline::{BlockStatus, PipelineEventBox},
+        };
+
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        let currency = chain
+            .state()
+            .view()
+            .world()
+            .sumeragi_npos_parameters()
+            .unwrap()
+            .xor_asset_definition_id;
+        chain.setup_world_at(2_000, |transaction| {
+            transaction.world.asset_definitions.remove(currency);
+        });
+        let original = chain.committed(9);
+        let proposal = chain.proposal(None, Vec::new());
+        let error = match chain.begin_proposal(proposal, Default::default()) {
+            Ok(_) => panic!("absent currency cannot authorize the native boundary"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Some(Invalid)"), "{error}");
+        assert!(error.contains("native rejection: Some("), "{error}");
+        assert_eq!(chain.height(), 9);
+        assert_eq!(chain.committed(9).result(), original.result());
+        assert!(chain.take_events().unwrap().iter().any(|event| matches!(
+            event,
+            EventBox::Pipeline(PipelineEventBox::Block(event))
+                if event.header.height().get() == 10 && matches!(event.status, BlockStatus::Rejected(_))
+        )));
+    }
 
     #[test]
     fn custom_genesis_staking_observes_the_original_topology_before_moving_funds() {
@@ -2091,6 +2213,11 @@ mod tests {
         include!("test_chain/native_publication_tests.rs");
     }
 
+    mod world_state_tests {
+        use super::*;
+        include!("test_chain/world_state_tests.rs");
+    }
+
     #[test]
     fn prepared_chain_executes_original_genesis_and_authenticates_its_result_at_h2() {
         let config = prepared_config();
@@ -2109,6 +2236,7 @@ mod tests {
             genesis
                 .block()
                 .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
                 .encode_wire()
                 .unwrap(),
             original,

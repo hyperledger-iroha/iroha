@@ -164,7 +164,7 @@ mod tests {
         let state = blank_state();
         let mut block = state.block(header(5));
         let mut stx = block.transaction();
-        assert_eq!(commit_block(&mut stx, 5), Ok(None));
+        assert_eq!(commit_block(&mut stx, 5).unwrap(), None);
         assert!(store::block_commitments::is_empty(&*stx.world));
         assert_eq!(history_root_and_size(&*stx.world), ([0; 32], 0));
     }

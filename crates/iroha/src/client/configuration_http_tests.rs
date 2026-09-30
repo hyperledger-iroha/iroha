@@ -79,7 +79,8 @@ fn assert_fixture(actual: &NodeConfiguration) {
     );
     assert_eq!(actual.confidential_gas.proof_base, 777_777);
     assert_eq!(actual.queue.capacity.get(), 656_565);
-    assert_eq!(actual.consensus.protocol_version, 4);
+    assert_eq!(actual.consensus.protocol_version, 1);
+    assert_eq!(actual.consensus.role, "validator");
 }
 
 fn header<'a>(request: &'a TransportRequest, name: &str) -> &'a str {

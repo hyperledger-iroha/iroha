@@ -1,7 +1,6 @@
 //! Executable acceptance tests for the final Kotodama V1 language surface.
-use crate::{
-    CoreHost, IVM, VMError, host::IVMHost, kotodama::compiler::Compiler, parallel::StateAccessSet,
-};
+use crate::{CoreHost, IVM, VMError, host::IVMHost, parallel::StateAccessSet};
+use kotodama_lang::compiler::Compiler;
 
 fn compiled_main(source: &str) -> IVM {
     let code = Compiler::new()

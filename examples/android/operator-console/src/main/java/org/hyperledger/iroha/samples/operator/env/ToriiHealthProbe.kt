@@ -1,9 +1,9 @@
 package org.hyperledger.iroha.samples.operator.env
 
 import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
+import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import java.time.Duration
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -17,16 +17,17 @@ data class ToriiStatus(val reachable: Boolean?, val message: String) {
 
 object ToriiHealthProbe {
 
-    suspend fun check(client: HttpClient, endpoint: String): ToriiStatus {
+    suspend fun check(client: HttpTransportExecutor, endpoint: String): ToriiStatus {
         val uri = resolveUri(endpoint)
         return runCatching {
             val request =
-                HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofSeconds(5))
-                    .GET()
+                TransportRequest.builder()
+                    .setUri(uri)
+                    .setTimeout(Duration.ofSeconds(5))
+                    .setMethod("GET")
                     .build()
             val response = client.await(request)
-            val status = response.statusCode()
+            val status = response.statusCode
             val message = "HTTP $status"
             val reachable = status < 500
             ToriiStatus(reachable, message)
@@ -49,12 +50,11 @@ object ToriiHealthProbe {
         }
     }
 
-    private suspend fun <T> HttpClient.await(
-        request: HttpRequest,
-        bodyHandler: HttpResponse.BodyHandler<T> = HttpResponse.BodyHandlers.discarding()
-    ): HttpResponse<T> =
+    private suspend fun HttpTransportExecutor.await(
+        request: TransportRequest
+    ): TransportResponse =
         suspendCancellableCoroutine { continuation ->
-            val future = sendAsync(request, bodyHandler)
+            val future = execute(request)
             continuation.invokeOnCancellation { future.cancel(true) }
             future.whenComplete { response, throwable ->
                 if (throwable != null) {

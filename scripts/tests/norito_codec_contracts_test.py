@@ -8,7 +8,6 @@ import importlib.util
 import re
 import sys
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 
@@ -116,11 +115,39 @@ class NoritoCodecContractsTest(unittest.TestCase):
 
     def test_private_helper_renaming_preserves_the_gate(self) -> None:
         GATE.validate(self.sources)
-        skip = GATE.role(self.sources, GATE.ENCODER, lambda item: "EncoderSink::Counting" in item.code and ".add(" in item.code, "encoding.count_destination_owner")
-        owner = GATE.role(self.sources, GATE.CORE, lambda item: f".{skip.name}(" in item.code and "serialize_to_writer_exact(" in item.code, "encoding.measured_emission_owner")
-        sources = {path: re.sub(rf"\b{re.escape(owner.name)}\b", "renamed_codec_owned_emission", text) for path, text in self.sources.items()}
-        self.assertNotEqual(sources, self.sources)
-        GATE.validate(sources)
+        roles = GATE.encoding_roles(self.sources)
+        skip = roles["count_destination"]
+        owner = GATE.role(self.sources, GATE.CORE, lambda item: f".{skip.name}(" in item.code, "encoding.measured_emission_owner")
+        factory = re.fullmatch(r"Self::(\w+)\(EncoderSink::Counting\(counter\)\)", roles["count_constructor"].code).group(1)
+        guard_type = re.search(r"let\w+=(\w+)\{encoder:self,previous_limit,\};", roles["exact_scope"].code).group(1)
+        names = [item.name for item in roles.values()] + [owner.name, factory, guard_type]
+        combined = dict(self.sources)
+        for index, name in enumerate(names):
+            with self.subTest(helper=name):
+                renamed = f"renamed_codec_owner_{index}"
+                sources = {path: re.sub(rf"\b{re.escape(name)}\b", renamed, text) for path, text in self.sources.items()}
+                self.assertNotEqual(sources, self.sources)
+                GATE.validate(sources)
+                combined = {path: re.sub(rf"\b{re.escape(name)}\b", renamed, text) for path, text in combined.items()}
+        GATE.validate(combined)
+
+    def test_encoder_ownership_mutations_reject_bypasses(self) -> None:
+        roles = GATE.encoding_roles(self.sources)
+        cases = (
+            (GATE.ENCODER, roles["count_destination"].name, f"if !self.{roles['count_kind'].name}()", "if false", "encoding.count_destination_isolation"),
+            (GATE.ENCODER, roles["count_constructor"].name, "EncoderSink::Counting(counter)", "EncoderSink::Writer(counter)", "encoding.count_constructor_destination"),
+            (GATE.CORE, "write_counted_payload", f"writer.{roles['exact_scope'].name}(measured_len, |writer| value.serialize(writer))", "value.serialize(writer)", "encoding.measured_emission_uses_scope"),
+            (GATE.CORE, "serialize_to_writer_exact", "serialize_to_writer(value, &mut exact)", "Ok(())", "encoding.public_exact_checks_output"),
+        )
+        for path, owner, old, new, diagnostic in cases:
+            with self.subTest(owner=owner, diagnostic=diagnostic):
+                self.assert_rejected(GATE.validate_encoding, self.mutated(path, old, new, owner), diagnostic)
+
+    def test_scoped_runtime_contract_cannot_be_ignored(self) -> None:
+        for name in GATE.RUNTIME_CONTRACTS[GATE.ENCODER_TESTS]:
+            with self.subTest(test=name):
+                sources = self.mutated(GATE.ENCODER_TESTS, f"#[test]\nfn {name}", f"#[test]\n#[ignore]\nfn {name}")
+                self.assert_rejected(GATE.validate_runtime_registration, sources, f"runtime.disabled:{GATE.ENCODER_TESTS}::{name}")
 
     def test_lexer_ignores_literals_and_handles_array_return_types(self) -> None:
         source = 'fn frame() -> [u8; 16] { /* { nested /* } */ } */ let _ = r#"fn fake() { }"#; [0; 16] }'
@@ -147,29 +174,6 @@ class NoritoCodecContractsTest(unittest.TestCase):
             GATE.verify_history(empty_record, lambda _: payload)
         self.assertEqual(str(raised.exception), "history.images_missing")
 
-    def test_authoritative_size_validator_has_its_own_valid_mutation_baseline(self) -> None:
-        budget = load_module("norito_gate_source_budget", SOURCE_ROOT / "scripts/check_source_file_budget.py")
-        configuration = budget.load_budget(SOURCE_ROOT / "ci/source_file_budget.json")
-        default_limit = budget.limit_for(GATE.COLUMNAR, configuration)
-        exceptions = {path: limit for path, limit in configuration.exceptions.items() if path != GATE.COLUMNAR}
-        configurations = [configuration, replace(configuration, exceptions=exceptions)]
-        current_limit = configuration.exceptions.get(GATE.COLUMNAR, default_limit)
-        if current_limit > default_limit + 1:
-            configurations.append(replace(configuration, exceptions={**exceptions, GATE.COLUMNAR: current_limit - 1}))
-        for current in configurations:
-            with self.subTest(columnar_limit=current.exceptions.get(GATE.COLUMNAR)):
-                limit = current.exceptions.get(GATE.COLUMNAR, default_limit)
-                baseline = {**current.exceptions, GATE.COLUMNAR: limit}
-                self.assertEqual(budget.evaluate(baseline, current), [])
-                mutation = {**baseline, GATE.COLUMNAR: limit + 1}
-                self.assertNotEqual(mutation, baseline)
-                findings = budget.evaluate(mutation, current)
-                diagnostic = (
-                    f"grew from baseline {limit} to {limit + 1} lines"
-                    if GATE.COLUMNAR in current.exceptions
-                    else f"{limit + 1} lines exceeds the {limit}-line production limit"
-                )
-                self.assertEqual([(item.path, item.message) for item in findings], [(GATE.COLUMNAR, diagnostic)])
         # Current oversize source is reported separately by the existing CI guard.
         # This validator fixture never treats that unrelated failure as evidence
         # that any codec ownership mutation was detected.

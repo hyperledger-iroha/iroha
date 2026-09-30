@@ -68,7 +68,7 @@ def tree(tmp_path, projection):
 
 
 def test_exact_global_projection_preserves_original_bytes_modes_and_nested_owners(projection):
-    assert len(projection.members) == 218
+    assert len(projection.members) == 223
     rows = {row.path: row for row in projection.members}
     for path, owner in (("@noble/hashes/index.js", "node_modules/@noble/hashes"),
                         ("@scure/bip39/node_modules/@noble/hashes/index.js", "node_modules/@scure/bip39/node_modules/@noble/hashes")):

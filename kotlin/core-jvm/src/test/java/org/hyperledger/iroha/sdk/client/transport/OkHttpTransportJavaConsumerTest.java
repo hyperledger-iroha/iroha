@@ -27,7 +27,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import okhttp3.Call;
 import okhttp3.Cache;
+import okhttp3.EventListener;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -159,6 +161,32 @@ final class OkHttpTransportJavaConsumerTest {
         final RecordedRequest reused = server.takeRequest(2, TimeUnit.SECONDS);
         assertNotNull(reused);
         assertEquals(1, reused.getSequenceNumber(), "closing a borrowed adapter must not evict the shared connection");
+      }
+    } finally {
+      closeClient(shared);
+    }
+  }
+
+  @Test
+  void closeSettlesFutureBeforeSynchronousIoCancellationCallback() throws Exception {
+    final AtomicReference<CompletableFuture<TransportResponse>> pending = new AtomicReference<>();
+    final AtomicReference<Boolean> cancelledBeforeIo = new AtomicReference<>();
+    final OkHttpClient shared = new OkHttpClient.Builder().eventListener(new EventListener() {
+      @Override public void canceled(Call call) {
+        cancelledBeforeIo.set(pending.get().isCancelled());
+      }
+    }).build();
+    try {
+      try (MockWebServer server = new MockWebServer();
+           OkHttpTransportExecutor transport = new OkHttpTransportExecutor(shared)) {
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE));
+        pending.set(transport.execute(request(server, "/close-cancellation")));
+        assertNotNull(server.takeRequest(2, TimeUnit.SECONDS));
+        transport.close();
+        assertEquals(Boolean.TRUE, cancelledBeforeIo.get(),
+            "IO cancellation callbacks must observe an already-cancelled public future");
+        assertTrue(pending.get().isCancelled());
+        awaitIdle(shared);
       }
     } finally {
       closeClient(shared);

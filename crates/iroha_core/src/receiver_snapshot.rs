@@ -848,7 +848,7 @@ mod tests {
             let native_lanes =
                 iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
                     &decoded,
-                    &mv::allocation::AllocationBudget::new(64 * 1024),
+                    &iroha_allocation::AllocationBudget::new(64 * 1024),
                 )
                 .expect("actual complete native lane state proof");
             let (fee, fee_root) =

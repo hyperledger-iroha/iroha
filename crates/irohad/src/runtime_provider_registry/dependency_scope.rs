@@ -4,10 +4,6 @@
 //! Shared provider objects remain valid only when every role in their fixed V1 pair was requested.
 use super::*;
 /// Return whether the resolved dependency catalog contains the requested role.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the exhaustive match documents the closed V1 provider-slot dependency projection"
-)]
 pub(super) fn dependency_is_present(
     dependencies: &IrohaRuntimeDeps,
     slot: IrohaRuntimeProviderSlotV1,

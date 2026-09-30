@@ -91,7 +91,7 @@ def test_original_relation_derives_canonical_child_bytes_and_retains_real_descri
         assert hashlib.sha256(raw).hexdigest()==owner.sha256
         value=json.loads(raw)
         assert raw==(json.dumps(value,sort_keys=True,ensure_ascii=True,separators=(',',':'))+'\n').encode('ascii')
-        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==218
+        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==223
         assert value['native']['sha256']==hashlib.sha256(NATIVE).hexdigest()
         assert value['native']['workspaceSourceTreeSha256']==WORKSPACE
         assert value['native']['nativeSourceTreeSha256']==NATIVE_SOURCE

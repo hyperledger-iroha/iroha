@@ -10,7 +10,7 @@ struct Fields<'target, Admission> {
     external_event_buf: Option<Vec<EventBox>>,
     shells: Option<WorldJournalShellReservation>,
     admission: Option<Admission>,
-    operation_index_scope: Option<mv::allocation::OwnedAllocationScope>,
+    operation_index_scope: Option<iroha_allocation::OwnedAllocationScope>,
 }
 
 enum Phase<'target, Admission> {

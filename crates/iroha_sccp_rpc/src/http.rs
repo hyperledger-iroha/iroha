@@ -24,8 +24,10 @@
 //! `id` that answers the request, strict hex) only reject malformed replies;
 //! evidence is verified by `iroha_sccp`.
 //!
-//! A blocking client owns an internal runtime thread, so async callers (the
-//! irohad keeper) drive it from a blocking task.
+//! A blocking client owns an internal runtime thread and waits for it both
+//! while it is built and on every request, so async callers (the irohad
+//! keeper) build and drive transports on blocking threads (`spawn_blocking`),
+//! never on an async worker thread.
 
 use std::{
     error::Error as StdError,
@@ -452,6 +454,10 @@ impl HttpTransport {
     /// A transport over `endpoints` with the given limits and failover policy,
     /// sleeping between failed rounds with [`ThreadSleeper`].
     ///
+    /// Call it off async worker threads: building the blocking client starts
+    /// its internal runtime thread and blocks until that thread runs, which
+    /// panics on a Tokio worker thread in debug builds.
+    ///
     /// # Errors
     /// [`RpcError::Client`] if the TLS client cannot be built.
     pub fn new(
@@ -490,7 +496,8 @@ impl HttpTransport {
 
     /// The keeper's transport for one chain: its configured (or compiled
     /// default) endpoints and secret headers, its request timeout, and the
-    /// default failover policy seeded with `seed`.
+    /// default failover policy seeded with `seed`. Like [`Self::new`], call it
+    /// off async worker threads.
     ///
     /// # Errors
     /// [`RpcError::Endpoint`] if the configured list is unusable, or

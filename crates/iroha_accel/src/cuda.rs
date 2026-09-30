@@ -6,7 +6,7 @@
 //! variable registry backing and shared records use the metadata budget.
 
 use cust::{CudaFlags, init, sys};
-use mv::allocation::{AllocationReservation, ChargedBuffer, ChargedShared};
+use iroha_allocation::{AllocationReservation, ChargedBuffer, ChargedShared};
 use parking_lot::Mutex;
 use std::{
     alloc::Layout,

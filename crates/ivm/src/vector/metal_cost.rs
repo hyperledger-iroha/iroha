@@ -649,7 +649,7 @@ mod tests {
         };
 
         let registry = DeviceRegistry::<Mutex<MetalMerkleCostCache>>::new();
-        let credit = mv::allocation::AllocationBudget::new(16384);
+        let credit = iroha_allocation::AllocationBudget::new(16384);
         assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
         for identity in [11, 22] {
             let record = registry
@@ -755,7 +755,7 @@ mod tests {
             MetalBatchWork::Ed25519,
         ] {
             let registry = DeviceRegistry::<Mutex<MetalBatchCostCache>>::new();
-            let credit = mv::allocation::AllocationBudget::new(16384);
+            let credit = iroha_allocation::AllocationBudget::new(16384);
             assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
             for identity in [11, 22] {
                 let record = registry
@@ -852,7 +852,7 @@ mod tests {
         use super::super::metal_owner::{DeviceRegistry, FairProgress};
         use std::{cell::Cell, sync::Mutex};
         let registry = DeviceRegistry::<Mutex<MetalMerkleCostCache>>::new();
-        let credit = mv::allocation::AllocationBudget::new(16384);
+        let credit = iroha_allocation::AllocationBudget::new(16384);
         assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
         for identity in [11, 22] {
             let record = registry
@@ -939,7 +939,7 @@ mod tests {
             MetalBatchWork::Ed25519,
         ] {
             let registry = DeviceRegistry::<Mutex<MetalBatchCostCache>>::new();
-            let credit = mv::allocation::AllocationBudget::new(16384);
+            let credit = iroha_allocation::AllocationBudget::new(16384);
             assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
             for identity in [11, 22] {
                 let record = registry

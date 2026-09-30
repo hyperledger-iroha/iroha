@@ -489,7 +489,13 @@ fn private_settlement<C: RunContext>(
 }
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config()?;
-    let status = iroha::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()?;
+    let operator_key = context
+        .operator_key_pair()
+        .cloned()
+        .ok_or_else(|| eyre::eyre!("consensus diagnostics require --operator-private-key-file"))?;
+    let operator =
+        iroha::blocking::OperatorClient::from_client(client.operator_client(operator_key)?)?;
+    let status = operator.consensus().diagnostics()?;
     let sealed_count = status.lane_governance_sealed_total;
     let sealed_aliases = status.lane_governance_sealed_aliases;
     let lanes = norito::json::to_value(&status.lane_governance)?;

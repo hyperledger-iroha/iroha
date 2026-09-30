@@ -914,10 +914,6 @@ impl ParliamentTimedOvnCastingContextResponseV1 {
     /// # Errors
     /// Returns a stable message for unsupported, oversized, noncanonical,
     /// cross-bound, or phase-inconsistent public state.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "ordered fail-closed casting-context checks preserve stable error precedence"
-    )]
     pub fn validate_for_ballot(
         &self,
         expected_ballot_attempt_id: BallotAttemptId,
@@ -1044,10 +1040,6 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
     /// # Errors
     /// Returns a stable explanation for a malformed page, mismatched external
     /// trust anchor, invalid finality, invalid witness, or wrong ballot leaf.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "ordered fail-closed proof checks preserve stable error precedence"
-    )]
     pub fn verify_consensus_page_against(
         &self,
         network_id: NetworkId,
@@ -1938,10 +1930,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the shared SDK fixture pins every public and automatic Parliament variant"
-    )]
     fn shared_sdk_fixture_pins_routes_norito_indices_json_tags_and_result_roots() {
         use norito::codec::Encode;
 

@@ -40,6 +40,7 @@ use super::{
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
+    metrics::{InstanceMetrics, MetricsInstance},
     net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress, subscribe},
     records::{FileRecordStore, FreshKeyAssertion, install},
     schedule,
@@ -286,16 +287,7 @@ pub(crate) fn status_dto(
         signer: status.signer.as_ref().and_then(key),
         unanchored: status.unanchored,
         abstaining: status.abstaining,
-        halted: driver.halted().map(|reason| match reason {
-            HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
-            HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
-            HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
-            HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
-            HaltReason::PublicationRecoveryRequired { height } => {
-                SumeragiHaltReason::PublicationRecoveryRequired(height)
-            }
-            HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
-        }),
+        halted: driver.halted().map(halt_reason_dto),
         footprint: SumeragiFootprint {
             votes: widen(footprint.votes),
             timeouts: widen(footprint.timeouts),
@@ -313,6 +305,20 @@ pub(crate) fn status_dto(
             probe: widen(footprint.probe),
         },
     })
+}
+
+/// The served form of a core halt reason (`/v1/sumeragi/status`, `sumeragi_halted{reason}`).
+pub(crate) fn halt_reason_dto(reason: HaltReason) -> SumeragiHaltReason {
+    match reason {
+        HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
+        HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
+        HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
+        HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
+        HaltReason::PublicationRecoveryRequired { height } => {
+            SumeragiHaltReason::PublicationRecoveryRequired(height)
+        }
+        HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
+    }
 }
 
 impl NodeHandle {
@@ -485,8 +491,9 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         consensus_mode,
     } = inputs;
     // Local snapshot signatures authenticate exports, not full-World execution. Native R
-    // currently commits witnessed writes (S9); Strict startup therefore rebuilds original
-    // State from the signed genesis and certified journal before maintenance is authorized.
+    // commits the complete World state (Appendix E, E51), but restoring a snapshot against it
+    // is not implemented (TODO(S9)); Strict startup therefore rebuilds original State from the
+    // signed genesis and certified journal before maintenance is authorized.
     if startup::applied_height(&state) != 0 {
         return Err(NodeError::Input(
             "the state must be empty: Sumeragi rebuilds it from genesis and Kura".into(),
@@ -494,7 +501,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     }
     // Genesis: re-execute the stored one, or apply the supplied one.
     let (tip, config_fingerprint): (GenesisTip, iroha_crypto::Hash) =
-        match startup::stored_genesis(&state) {
+        match startup::stored_genesis(&state)? {
             Some((block, certificate, stored)) => {
                 if let Some(supplied) = &genesis
                     && startup::core_hash_of(supplied) != stored.block_hash
@@ -552,6 +559,24 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         InstanceKind::Global,
         0,
     );
+    let availability = Arc::new(
+        super::runtime_availability::NativeGlobalAvailability::new(
+            Arc::clone(&state),
+            instance,
+            Arc::clone(&crypto),
+        )
+        .map_err(|error| NodeError::Input(error.to_string()))?,
+    );
+    let availability_verifier = Arc::new(super::attestation::NativePastaVerifier::new(
+        instance,
+        *state.network_id_ref(),
+    ));
+    let lane_authorities = Arc::new(
+        super::runtime_availability::NativeLaneStoreAuthorities::new(
+            Arc::clone(&state),
+            Arc::clone(&crypto),
+        ),
+    );
     let staging = Staging::new();
     let blocks = Arc::new(KuraBlockStore::new(
         Arc::clone(&kura),
@@ -559,6 +584,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         GENESIS_HEIGHT,
         staging.clone(),
         state.ivm_execution_budget(),
+        availability,
+        availability_verifier,
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
         GENESIS_HEIGHT,
@@ -570,6 +597,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         *state.network_id_ref(),
         chain_id.clone(),
         shared,
+        state.ivm_execution_budget(),
+        lane_authorities,
     ));
     let mut executor = StateExecutor::spawn(ExecutorContext {
         state: Arc::clone(&state),
@@ -596,14 +625,28 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     // Replay what Kura holds above genesis.
     let stored = blocks.height();
     for height in GENESIS_HEIGHT.saturating_add(1)..=stored {
-        let entry = blocks.entry(height).ok_or_else(|| NodeError::Replay {
-            height,
-            reason: "entry missing".into(),
-        })?;
+        let (body, commit_qc) = blocks
+            .committed_body(height)
+            .map_err(|error| NodeError::Replay {
+                height,
+                reason: error.to_string(),
+            })?
+            .ok_or_else(|| NodeError::Replay {
+                height,
+                reason: "committed body missing".into(),
+            })?;
         executor
-            .replay(&entry.block, &entry.commit_qc)
+            .replay(&body, &commit_qc)
             .map_err(|reason| NodeError::Replay { height, reason })?;
     }
+    // Every replayed result bound the complete World state roots; the incrementally advanced
+    // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
+    state
+        .verify_world_state_accumulator()
+        .map_err(|reason| NodeError::Replay {
+            height: stored.max(GENESIS_HEIGHT),
+            reason,
+        })?;
     admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
     Ok(Prepared {
         state,
@@ -782,6 +825,7 @@ impl Prepared {
                 &instance,
                 Arc::clone(&shared),
                 BodyLimits::default(),
+                state.ivm_execution_budget(),
             )
             .map_err(|error| NodeError::Input(error.to_string()))?,
         );
@@ -835,6 +879,10 @@ impl Prepared {
                 recovery: Arc::clone(&recovery_publisher),
             }),
         )
+        .with_metrics(InstanceMetrics::for_node(
+            &state.telemetry,
+            MetricsInstance::Global,
+        ))
         .spawn(
             driver,
             DriverStart {
@@ -842,7 +890,7 @@ impl Prepared {
                 allocation_budget: budget,
                 local: local_params(n, &config.local),
                 init,
-                signers: vec![Box::new(signer)],
+                signers: vec![Arc::new(signer)],
                 crypto: shared,
                 attestor: Box::new(attestor),
                 verifier: Box::new(verifier),
@@ -1170,8 +1218,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        governance::manifest::LaneManifestRegistry, query::store::LiveQueryStore, state::World,
-        sumeragi::driver::traits::Frame, tx::AcceptedTransaction,
+        governance::manifest::LaneManifestRegistry,
+        query::store::LiveQueryStore,
+        state::World,
+        sumeragi::driver::traits::{Frame, SendOutcome},
+        tx::AcceptedTransaction,
     };
     use iroha_sumeragi::types::PublicKey as CoreKey;
 
@@ -1186,11 +1237,12 @@ mod tests {
     }
 
     impl Net for MemNet {
-        fn send(&self, to: &CoreKey, frame: &Frame) {
+        fn send(&self, to: &CoreKey, frame: &Frame) -> SendOutcome {
             let ingress = self.registry.0.lock().get(to).cloned();
             if let Some(ingress) = ingress {
                 ingress.deliver(&self.from, frame);
             }
+            SendOutcome::Admitted
         }
     }
 
@@ -1474,6 +1526,14 @@ mod tests {
         }
     }
 
+    /// Each validator's stored complete World state root (Appendix E, E51).
+    fn world_state_roots(validators: &[Validator]) -> Vec<Result<Hash, String>> {
+        validators
+            .iter()
+            .map(|validator| validator.state.world.state_accumulator.view().get().root())
+            .collect()
+    }
+
     fn committed_heights(validators: &[Validator]) -> Vec<u64> {
         validators
             .iter()
@@ -1649,6 +1709,7 @@ mod tests {
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
         };
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 64,
             max_merge_blocks: 16,
             stall_window: 10_000,
@@ -1803,6 +1864,7 @@ mod tests {
                 >= ELASTIC_BURST_INPUTS
         );
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 4,
             max_merge_blocks: 16,
             stall_window: 10_000,
@@ -2007,6 +2069,9 @@ mod tests {
             || committed_everywhere(&validators, hash),
         );
         assert_idle_height_unchanged(&validators, Duration::from_millis(750));
+        // Every validator holds the same complete World.
+        let roots = world_state_roots(&validators);
+        assert!(roots[0].is_ok() && roots.iter().all(|root| *root == roots[0]));
         shutdown(validators);
         let committed = disks
             .iter()
@@ -2015,8 +2080,11 @@ mod tests {
             .expect("validators");
         assert_eq!(committed, 2, "only genesis and the submitted transaction");
         assert_same_certified_blocks(&disks, committed);
-        // Replay the exact retained history, remain idle, then accept new work.
+        // Replay the exact retained history, remain idle, then accept new work. Startup
+        // checks the replayed accumulator against a cold capture; the restarted World equals
+        // the one before shutdown.
         let validators = start_all(&chain, &disks, false);
+        assert_eq!(world_state_roots(&validators), roots);
         assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         let hash = submit(&chain, &validators, "after idle restart");
         wait_until(
@@ -2130,7 +2198,9 @@ mod tests {
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
-        let (genesis, certificate, _) = startup::stored_genesis(&state).expect("stored genesis");
+        let (genesis, certificate, _) = startup::stored_genesis(&state)
+            .expect("valid stored genesis projection")
+            .expect("stored genesis");
         let tip = startup::apply_genesis(
             &state,
             genesis,
@@ -2141,6 +2211,25 @@ mod tests {
         .expect("genesis re-executes");
         let crypto = Arc::new(BlsCrypto::new());
         let shared: SharedCrypto = crypto.clone();
+        let instance = instance_id(
+            &*crypto,
+            &tip.block_hash,
+            chain.chain_id.to_string().as_bytes(),
+            InstanceKind::Global,
+            0,
+        );
+        let availability = Arc::new(
+            super::super::runtime_availability::NativeGlobalAvailability::new(
+                Arc::clone(&state),
+                instance,
+                Arc::clone(&crypto),
+            )
+            .expect("availability authority bound to original applied genesis"),
+        );
+        let verifier = Arc::new(super::super::attestation::NativePastaVerifier::new(
+            instance,
+            *state.network_id_ref(),
+        ));
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             kura,
@@ -2148,6 +2237,8 @@ mod tests {
             GENESIS_HEIGHT,
             staging.clone(),
             state.ivm_execution_budget(),
+            availability,
+            verifier,
         );
         let mut executor = StateExecutor::spawn(ExecutorContext {
             state: Arc::clone(&state),
@@ -2174,8 +2265,15 @@ mod tests {
         })
         .expect("executor");
         admit_window(&state, &crypto, GENESIS_HEIGHT).expect("authenticated schedule admission");
-        let entry = blocks.entry(2).expect("height 2 stored");
-        let mut forged = entry.commit_qc.clone();
+        // Metadata is not available body custody. Restore the original payload/frame
+        // through the independent genesis-bound schedule and complete stored-body checks.
+        let (body, commit_qc) = blocks
+            .committed_body(2)
+            .expect("authenticate and restore height 2 from original storage")
+            .expect("height 2 stored");
+        assert_eq!(body.source().instance(), instance);
+        assert_eq!(body.source().height(), 2);
+        let mut forged = commit_qc.clone();
         forged.result = Hash32([0xAB; 32]);
         // This negative must reach execution comparison, not fail earlier on a stale
         // signature. The original committee signs the wrong result over the real block.
@@ -2204,13 +2302,13 @@ mod tests {
             .collect::<Vec<_>>();
         forged.agg_sig = crypto.aggregate(&signatures);
         let error = executor
-            .replay(&entry.block, &forged)
+            .replay(&body, &forged)
             .expect_err("a differing certified result");
         assert!(error.contains("diverges"), "{error}");
         assert_eq!(startup::applied_height(&state), GENESIS_HEIGHT);
         // The stored certificate replays.
         executor
-            .replay(&entry.block, &entry.commit_qc)
+            .replay(&body, &commit_qc)
             .expect("the certified result reproduces");
         assert_eq!(startup::applied_height(&state), 2);
     }

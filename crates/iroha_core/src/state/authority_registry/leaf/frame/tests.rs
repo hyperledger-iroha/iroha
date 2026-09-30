@@ -1,7 +1,7 @@
 //! Canonical encoding remains identical while exact bytes retain original credit.
 
 use super::*;
-use mv::allocation::AllocationRefusal;
+use iroha_allocation::AllocationRefusal;
 use std::{
     cell::Cell,
     panic::{AssertUnwindSafe, catch_unwind},

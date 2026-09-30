@@ -23,7 +23,7 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     kagemusha_mint_finality_authority: Option<
         Arc<
-            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+            iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
         >,
     >,
     parliament_tle_partial_release_signer:
@@ -243,7 +243,7 @@ fn parliament_tle_local_participant_index_v1(
 fn require_parliament_tle_capability_for_local_seat_v1(
     local_participant_index: Option<u16>,
     signer: Option<&dyn iroha_core::tle_release::TlePartialReleaseSignerV1>,
-    session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+    session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
 ) -> Result<(), &'static str> {
     require_parliament_tle_signer_for_local_seat_v1(
         local_participant_index.is_some(),
@@ -504,7 +504,7 @@ impl IrohaRuntimeDeps {
         /// V1 top-up finality. The seed remains inside this runtime-owned object.
         with_kagemusha_mint_finality_authority(
             authority: Arc<
-                iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+                iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
             >,
         ) => kagemusha_mint_finality_authority;
         /// Attach the runtime-only adaptive Parliament TLE signing-share owner.
@@ -849,7 +849,8 @@ impl IrohaRuntimeDeps {
 #[cfg(test)]
 mod parliament_tle_release_tests {
     use super::*;
-    use iroha_core::tle_release::{TleKeySessionPublicStateV1, ValidatedTleKeySessionV1};
+    use iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1;
+    use iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1;
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair,
         threshold_bls::{
@@ -875,7 +876,7 @@ mod parliament_tle_release_tests {
     impl iroha_core::tle_release::TlePartialReleaseSignerV1 for UnavailableSigner {
         fn attest_partial_release_capability(
             &self,
-            _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+            _session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
             _expected_participant_index: u16,
         ) -> Result<
             iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -887,7 +888,7 @@ mod parliament_tle_release_tests {
         fn sign_partial_release(
             &self,
             _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
-        ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+        ) -> Result<iroha_core_timed_ovn::tle::TlePartialReleaseShareV1, String> {
             Err("unavailable".to_owned())
         }
     }
@@ -976,7 +977,7 @@ mod parliament_tle_release_tests {
     impl iroha_core::tle_release::TlePartialReleaseSignerV1 for CapabilityProbeSigner {
         fn attest_partial_release_capability(
             &self,
-            session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+            session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
             expected_participant_index: u16,
         ) -> Result<
             iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -1012,7 +1013,7 @@ mod parliament_tle_release_tests {
         fn sign_partial_release(
             &self,
             _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
-        ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+        ) -> Result<iroha_core_timed_ovn::tle::TlePartialReleaseShareV1, String> {
             self.sign_calls.fetch_add(1, Ordering::AcqRel);
             Err("the readiness path must never invoke signing".to_owned())
         }

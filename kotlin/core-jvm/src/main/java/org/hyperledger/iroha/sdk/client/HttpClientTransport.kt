@@ -1469,21 +1469,15 @@ class HttpClientTransport private constructor(
         pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
         checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
     ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> {
-        val initialHeight =
-            ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(initialTrustedCheckpointHeight)
-        val initialCheckpoint = requireCastingCheckpoint(initialTrustedCheckpointNorito)
         require(canonicalAuth.timestampMs == null && canonicalAuth.nonce == null) {
             "casting-proof paging requires unpinned canonical authentication"
         }
-        return requestParliamentTimedOvnCastingProofPageV1(
-            ballotAttemptId = ballotAttemptId,
-            currentHeight = initialHeight,
-            currentCheckpoint = initialCheckpoint,
-            initialHeight = initialHeight,
-            canonicalAuth = canonicalAuth,
-            pageVerifier = pageVerifier,
-            checkpointPersister = checkpointPersister,
-            verifiedPages = 0,
+        return ParliamentTimedOvnCastingProofPagerV1.synchronize(
+            initialTrustedCheckpointHeight,
+            initialTrustedCheckpointNorito,
+            { height -> requestParliamentTimedOvnCastingProofV1(ballotAttemptId, height, canonicalAuth) },
+            pageVerifier,
+            checkpointPersister,
         )
     }
 
@@ -1504,110 +1498,6 @@ class HttpClientTransport private constructor(
             pageVerifier,
             checkpointPersister,
         )
-
-    private fun requestParliamentTimedOvnCastingProofPageV1(
-        ballotAttemptId: String,
-        currentHeight: BigInteger,
-        currentCheckpoint: ByteArray,
-        initialHeight: BigInteger,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
-        checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
-        verifiedPages: Int,
-    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> {
-        if (verifiedPages >= ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGES) {
-            return failedCastingProofPageFuture(
-                IllegalStateException("Parliament casting-proof page limit was reached"),
-            )
-        }
-        return requestParliamentTimedOvnCastingProofV1(
-            ballotAttemptId,
-            currentHeight,
-            canonicalAuth,
-        ).thenCompose { response ->
-            val verification = pageVerifier.verify(
-                response,
-                currentHeight,
-                currentCheckpoint.copyOf(),
-            )
-            validateCastingProofPromotion(
-                initialHeight,
-                currentHeight,
-                verification,
-            )
-            val persisted = checkpointPersister.persist(verification)
-            persisted.thenCompose {
-                val nextPageCount = verifiedPages + 1
-                if (!verification.moreAvailable) {
-                    CompletableFuture.completedFuture(
-                        ParliamentTimedOvnCastingProofTerminalV1(
-                            response,
-                            currentHeight,
-                            currentCheckpoint,
-                            verification,
-                            nextPageCount,
-                        ),
-                    )
-                } else {
-                    requestParliamentTimedOvnCastingProofPageV1(
-                        ballotAttemptId,
-                        verification.evaluatedBlockHeight,
-                        verification.promotedCheckpointNorito(),
-                        initialHeight,
-                        canonicalAuth,
-                        pageVerifier,
-                        checkpointPersister,
-                        nextPageCount,
-                    )
-                }
-            }
-        }
-    }
-
-    private fun validateCastingProofPromotion(
-        initialHeight: BigInteger,
-        currentHeight: BigInteger,
-        verification: ParliamentTimedOvnCastingProofPageVerificationV1,
-    ) {
-        val evaluatedHeight = verification.evaluatedBlockHeight
-        require(evaluatedHeight >= currentHeight) {
-            "native casting-proof verification regressed the checkpoint height"
-        }
-        val pageAdvance = evaluatedHeight.subtract(currentHeight)
-        require(
-            pageAdvance <=
-                BigInteger.valueOf(
-                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE.toLong(),
-                ),
-        ) { "native casting-proof verification exceeded the page height bound" }
-        require(
-            evaluatedHeight.subtract(initialHeight) <=
-                BigInteger.valueOf(
-                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE.toLong(),
-                ),
-        ) { "native casting-proof verification exceeded the aggregate height bound" }
-        if (verification.moreAvailable) {
-            require(pageAdvance.signum() > 0) {
-                "nonterminal casting-proof page did not advance its checkpoint"
-            }
-        }
-        // Native verification checks the complete retained decision. Same-height alternate
-        // certificate witnesses need not have byte-identical checkpoint encodings.
-    }
-
-    private fun requireCastingCheckpoint(value: ByteArray): ByteArray {
-        require(value.size in 1..(68 * 1024 * 1024)) {
-            "initialTrustedCheckpointNorito must contain a bounded complete canonical checkpoint"
-        }
-        return value.copyOf()
-    }
-
-    private fun failedCastingProofPageFuture(
-        error: Throwable,
-    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> =
-        CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1>().also {
-            it.completeExceptionally(error)
-        }
 
     /** Fetch the complete public transcript for one currently authorized TLE release. */
     fun getParliamentTleReleaseContextV1(

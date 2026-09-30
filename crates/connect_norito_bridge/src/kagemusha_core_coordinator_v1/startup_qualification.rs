@@ -1,19 +1,19 @@
-//! Test-only native-owned, bounded fresh observations before and after aggregate-state recovery.
+//! Native-owned, bounded fresh observations before enrollment and after aggregate-state recovery.
 //!
 //! Read challenges are deliberately absent from the payment WAL. Recreating this owner requires
 //! fresh OS entropy and a new signed device response. A qualification observation authenticates
 //! catalog membership and key possession; it grants no bootstrap, trusted-time, revocation or
 //! monetary capability. The native backend must share one mutex-owned instance per wallet across
 //! handles and invalidate observations on every installed epoch/catalog transition.
-//! TODO: wire this owner into the production backend together with hardware-anchored state and
-//! durable accepted-response replay. Stock bridge builds continue to return unavailable.
+//! The production phase-one backend owns transient pre-enrollment qualification. Durable monetary
+//! use separately requires the authenticated Core owner, actual hardware and response journals.
 
 use std::{collections::BTreeMap, time::Duration};
 
 use super::initial_enrollment::FreshIssuerAdmissionV1;
 use super::native_deadline::NativeDeadlineV1;
 
-use iroha_core::zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
+use iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
     KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1, KagemushaEnabledProfileV1,
@@ -160,6 +160,19 @@ pub(crate) struct NativeStartupQualificationOwnerV1 {
 }
 
 impl NativeStartupQualificationOwnerV1 {
+    pub(super) fn from_pre_enrollment_context(
+        release: &KagemushaAuthenticatedReleaseV1,
+        enrollment: KagemushaRecoveryEnrollmentBindingV1,
+        native_authorization_public_key: &KagemushaDevicePublicKeyV1,
+    ) -> Result<Self> {
+        if release.purpose() != iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production
+            || release.network_id() != enrollment.owner.runtime.network_id
+        {
+            return Err(ObservationErrorV1::InvalidQualification);
+        }
+        Self::new(release, enrollment, native_authorization_public_key)
+    }
+
     /// Pin the owner and exact credential proved by the one-use native issuer ceremony.
     /// This grants no current device observation, hardware clock or monetary authority.
     pub(super) fn from_fresh_issuer_admission(admission: &FreshIssuerAdmissionV1) -> Result<Self> {

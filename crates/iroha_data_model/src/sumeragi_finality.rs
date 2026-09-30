@@ -50,6 +50,7 @@ use iroha_crypto::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
+    availability::AvailabilityFrame,
     crypto::Crypto,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
     preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
@@ -71,6 +72,9 @@ use crate::{
 
 /// Maximum canonical certified block accepted by a portable proof reader.
 pub const MAX_FINALITY_BLOCK_BYTES: usize = 32 * 1024 * 1024;
+/// Finite portable-reader scratch bound for availability codewords and field workspace.
+/// Exceeding this local reader bound is not a native consensus invalidity verdict.
+pub const MAX_FINALITY_AVAILABILITY_SCRATCH_BYTES: usize = 64 * 1024 * 1024;
 /// Domain of current node finality statements.
 pub const FINALITY_ATTESTATION_DOMAIN: &[u8] = b"iroha:sumeragi-finality-attestation:v1\0";
 
@@ -88,6 +92,71 @@ fn need(condition: bool, reason: &str) -> Result<(), FinalityError> {
 }
 fn malformed(error: impl std::fmt::Display) -> FinalityError {
     FinalityError(error.to_string())
+}
+
+// Stream the exact borrowed resultless view; never clone the executed block graph.
+fn proposal_wire(block: &SignedBlock) -> Result<Vec<u8>, FinalityError> {
+    let length = block.resultless_proposal_wire_len().map_err(malformed)?;
+    need(
+        length <= MAX_FINALITY_BLOCK_BYTES,
+        "proposal exceeds portable reader bound",
+    )?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(length).map_err(malformed)?;
+    block
+        .write_resultless_proposal_wire(&mut bytes)
+        .map_err(malformed)?;
+    need(bytes.len() == length, "canonical proposal length differs")?;
+    Ok(bytes)
+}
+
+/// Verify the signed availability table and every original RS16 row against the exact
+/// canonical proposal, under independently authenticated height authority.
+///
+/// Scratch is bounded by the portable reader limit. This read-only verification cannot
+/// manufacture native body custody or allocation authority.
+///
+/// # Errors
+/// Invalid signatures, layout, proposal bytes, row commitments, or reader resource limits.
+pub fn verify_payload_availability(
+    instance: Hash32,
+    config: &iroha_sumeragi::types::HeightConfig,
+    header: &CoreHeader,
+    availability: &AvailabilityFrame,
+    payload: &[u8],
+    crypto: &dyn Crypto,
+) -> Result<(), FinalityError> {
+    let verified = iroha_sumeragi::availability::verify_availability(
+        instance,
+        config,
+        header,
+        availability.as_slice(),
+        crypto,
+    )
+    .map_err(|error| FinalityError(format!("signed availability: {error:?}")))?;
+    let shape = verified.shape();
+    let scratch = shape
+        .workspace_words()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|bytes| bytes.checked_add(shape.encoded_bytes()))
+        .ok_or_else(|| FinalityError("availability scratch length overflow".into()))?;
+    need(
+        scratch <= MAX_FINALITY_AVAILABILITY_SCRATCH_BYTES,
+        "availability exceeds portable reader scratch bound",
+    )?;
+    let mut codeword = Vec::new();
+    codeword
+        .try_reserve_exact(shape.encoded_bytes())
+        .map_err(malformed)?;
+    codeword.resize(shape.encoded_bytes(), 0);
+    let mut workspace = Vec::new();
+    workspace
+        .try_reserve_exact(shape.workspace_words())
+        .map_err(malformed)?;
+    workspace.resize(shape.workspace_words(), 0);
+    verified
+        .verify_payload(payload, &mut codeword, &mut workspace, crypto)
+        .map_err(|error| FinalityError(format!("availability payload: {error:?}")))
 }
 
 /// A consensus key and its proof of possession; its authority comes from the trusted schedule.
@@ -163,6 +232,7 @@ pub struct SumeragiFinalityBundle {
 pub struct DecodedSumeragiBlock {
     block: SignedBlock,
     header: Option<CoreHeader>,
+    availability: Option<AvailabilityFrame>,
     core_hash: Hash32,
     result: Hash32,
     commitment: ExecutionResultCommitment,
@@ -193,6 +263,15 @@ impl SumeragiFinalityProof {
     /// # Errors
     /// Malformed, empty, inconsistent, oversized or cryptographically invalid material.
     pub fn decode_checked(&self) -> Result<DecodedSumeragiBlock, FinalityError> {
+        self.decode_parts().map(|(decoded, _, _)| decoded)
+    }
+
+    // Preserve the exact proposal image and admitted proof-key context until the trusted
+    // contiguous verifier has authenticated its schedule. The public structural reader
+    // discards these; neither path manufactures native available-body custody.
+    fn decode_parts(
+        &self,
+    ) -> Result<(DecodedSumeragiBlock, Option<Vec<u8>>, ProofCrypto), FinalityError> {
         need(
             !self.block_wire.is_empty() && self.block_wire.len() <= MAX_FINALITY_BLOCK_BYTES,
             "block frame exceeds its finite bound",
@@ -253,21 +332,26 @@ impl SumeragiFinalityProof {
                     == block.output_merkle_commitment(),
             "execution commitment differs from canonical result-bearing block",
         )?;
-        let (header, core_hash) = if self.height() == 1 {
+        let (header, core_hash, availability, payload) = if self.height() == 1 {
             need(
-                certificate.consensus_header().is_empty() && certificate.commit_qc().is_empty(),
+                certificate.consensus_header().is_empty()
+                    && certificate.commit_qc().is_empty()
+                    && certificate.availability().is_empty(),
                 "genesis requires a result-only certificate",
             )?;
-            (None, Hash32(Hash::from(block.hash()).into()))
+            (None, Hash32(Hash::from(block.hash()).into()), None, None)
         } else {
             need(block.has_consensus_work(), "empty blocks are invalid")?;
             let header: CoreHeader =
                 norito::decode_canonical(certificate.consensus_header()).map_err(malformed)?;
             let qc: Qc = norito::decode_canonical(certificate.commit_qc()).map_err(malformed)?;
-            let payload = block
-                .canonical_resultless_proposal()
-                .encode_wire()
-                .map_err(malformed)?;
+            let availability: AvailabilityFrame =
+                norito::decode_canonical(certificate.availability()).map_err(malformed)?;
+            need(
+                availability.has_valid_structure(),
+                "availability table structure is invalid",
+            )?;
+            let payload = proposal_wire(&block)?;
             let core_hash = header.hash(&crypto);
             need(
                 header.height == self.height()
@@ -307,16 +391,21 @@ impl SumeragiFinalityProof {
             iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee)
                 .verify_qc_signatures(&qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
-            (Some(header), core_hash)
+            (Some(header), core_hash, Some(availability), Some(payload))
         };
-        Ok(DecodedSumeragiBlock {
-            block,
-            header,
-            core_hash,
-            result,
-            commitment,
-            committee_digest,
-        })
+        Ok((
+            DecodedSumeragiBlock {
+                block,
+                header,
+                availability,
+                core_hash,
+                result,
+                commitment,
+                committee_digest,
+            },
+            payload,
+            crypto,
+        ))
     }
 }
 
@@ -563,7 +652,7 @@ impl SumeragiFinalityVerifier {
         reason = "the child header intentionally binds the parent's core hash and result"
     )]
     fn check(&self, proof: &SumeragiFinalityProof) -> Result<DecodedSumeragiBlock, FinalityError> {
-        let decoded = proof.decode_checked()?;
+        let (decoded, proposal, crypto) = proof.decode_parts()?;
         let height = proof.height();
         if height == 1 {
             need(
@@ -571,11 +660,13 @@ impl SumeragiFinalityVerifier {
                     && decoded
                         .block
                         .canonical_resultless_proposal()
+                        .map_err(malformed)?
                         .encode_wire()
                         .map_err(malformed)?
                         == self
                             .genesis
                             .canonical_resultless_proposal()
+                            .map_err(malformed)?
                             .encode_wire()
                             .map_err(malformed)?
                     && decoded.committee_digest == self.genesis_committee_digest
@@ -633,6 +724,31 @@ impl SumeragiFinalityVerifier {
                     && header.parent_result == parent.result
                     && decoded.block.header().prev_block_hash() == Some(parent.block_hash),
                 "proof breaks authenticated instance, parent/result or authenticated epoch binding",
+            )?;
+            let ScheduledSlot::Ready(scheduled) = &parent.schedule.next else {
+                return Err(FinalityError(
+                    "parent has no authenticated next-height configuration".into(),
+                ));
+            };
+            need(
+                scheduled.height == height,
+                "availability configuration height differs",
+            )?;
+            let config = scheduled.height_config().map_err(malformed)?;
+            let availability = decoded
+                .availability
+                .as_ref()
+                .ok_or_else(|| FinalityError("mandatory availability frame is absent".into()))?;
+            let payload = proposal
+                .as_deref()
+                .ok_or_else(|| FinalityError("canonical proposal image is absent".into()))?;
+            verify_payload_availability(
+                self.instance,
+                &config,
+                header,
+                availability,
+                payload,
+                &crypto,
             )?;
         }
         Ok(decoded)
@@ -803,6 +919,9 @@ impl ProofCrypto {
 impl Crypto for ProofCrypto {
     fn hash(&self, bytes: &[u8]) -> Hash32 {
         chain_hash(bytes)
+    }
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32 {
+        Hash32(Hash::new_from_chunks(chunks).into())
     }
     fn verify(&self, pk: &CoreKey, msg: &[u8], signature: &Signature) -> bool {
         PublicKey::from_bytes(Algorithm::BlsNormal, pk.as_bytes()).is_ok_and(|key| {

@@ -860,7 +860,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_Parliame
 ) -> jni::sys::jobjectArray {
     parliament_jni_components(
         &mut env,
-        iroha_core::governance::timed_ovn::TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+        iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
         |env| {
             let proof_response = read_parliament_jni_bytes(
                 env,
@@ -921,7 +921,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_Parliame
 ) -> jni::sys::jobjectArray {
     parliament_jni_components(
         &mut env,
-        iroha_core::governance::timed_ovn::TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+        iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
         |env| {
             let choice = u8::try_from(choice).ok().filter(|choice| *choice <= 2)?;
             let proof_response = read_parliament_jni_bytes(

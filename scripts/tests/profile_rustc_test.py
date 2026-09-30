@@ -379,8 +379,10 @@ fn main() {
     wrapper.chmod(0o700)
     environment = dict(os.environ, RUSTC=str(wrapper),
                        CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0")
-    environment.pop("RUSTC_WORKSPACE_WRAPPER", None)
-    environment.pop("RUSTC_WRAPPER", None)
+    # An unset environment entry still permits Cargo's machine-wide configured cache wrapper.
+    # These tests measure the actual compiler, including its per-invocation RSS and artifacts.
+    environment["RUSTC_WORKSPACE_WRAPPER"] = ""
+    environment["RUSTC_WRAPPER"] = ""
     result = subprocess.run(
         [cargo, *cargo_arguments, "--offline", "--features=selected", "--jobs=2", "--message-format=json"],
         cwd=source, env=environment, capture_output=True, text=True, timeout=120,

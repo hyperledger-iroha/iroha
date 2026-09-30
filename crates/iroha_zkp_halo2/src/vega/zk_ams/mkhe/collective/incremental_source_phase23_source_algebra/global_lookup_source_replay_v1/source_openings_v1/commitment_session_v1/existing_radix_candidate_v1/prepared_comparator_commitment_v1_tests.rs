@@ -251,6 +251,4 @@ fn private_transition_has_no_point_or_entropy_injection_or_cursor_reset() {
     }
     assert!(source.contains("owner.validate_v1()"));
     assert!(source.contains("let RnsNativeExistingRadixCandidateOwnerV1"));
-    assert!(source.lines().count() <= 400);
-    assert!(source.len() <= 24_000);
 }

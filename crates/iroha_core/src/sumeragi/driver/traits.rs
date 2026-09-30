@@ -10,12 +10,14 @@ use std::{io, sync::Arc, time::Instant};
 
 use iroha_sumeragi::{
     api::{ExecOutcome, HaltReason, LocalFault},
-    message::{Block, Evidence, Qc, SyncEntry, TrafficClass},
+    availability::{AvailabilitySource, AvailableBody, PayloadBytes},
+    message::{Evidence, Qc, SyncEntry, TrafficClass},
     safety::RecordState,
     types::{AppliedConfig, Hash32, Millis, PublicKey},
 };
 
 use super::{FrameLimitExceeded, Worker};
+use crate::sumeragi::durable_artifact::BodyReader;
 
 /// An encoded wire message for the transport: the exact `WireMessage::encode()` bytes (encoded
 /// once and shared by every recipient), the instance they belong to and their O8 class.
@@ -29,11 +31,30 @@ pub struct Frame {
     pub bytes: Arc<[u8]>,
 }
 
+/// Admission of one exact frame occurrence to its recipient's transport queue.
+#[must_use = "retain backpressured delivery or explicitly cancel a protocol-retried message"]
+pub enum SendOutcome {
+    /// The transport owns the frame; this is not a remote-delivery acknowledgement.
+    Admitted,
+    /// The exact frame and its queue position remain owned by this retry handle.
+    Backpressured(Box<dyn PendingSend>),
+    /// The transport has closed; retrying cannot succeed.
+    Closed,
+    /// The transport permanently rejected this frame or recipient.
+    Rejected,
+}
+
+/// An original transport occurrence retained through temporary admission pressure.
+pub trait PendingSend: Send {
+    /// Retry without blocking or replacing the original message or admission ticket.
+    fn retry(self: Box<Self>) -> SendOutcome;
+}
+
 /// The authenticated transport (§12.2): posts a frame to one peer in its traffic class.
 pub trait Net: Send + Sync {
-    /// Post `frame` to `to` without blocking; under backpressure the frame is dropped (the core
-    /// rebroadcasts, §12.3 O6).
-    fn send(&self, to: &PublicKey, frame: &Frame);
+    /// Attempt admission without blocking. Streaming callers retain a backpressured
+    /// occurrence until admission succeeds; cancelling its owner releases its queue position.
+    fn send(&self, to: &PublicKey, frame: &Frame) -> SendOutcome;
 }
 
 /// One entry of the installation log (§7.4 record provenance), written with a fresh store id.
@@ -113,14 +134,12 @@ pub trait RecordStore: Send + Sync {
 
 /// Durable store of block bodies the core accepted and that are not applied yet (§7.4 body
 /// durability), keyed by `(height, block_hash)`.
-pub trait BodyStore: Send + Sync {
+pub trait BodyStore: BodyReader {
     /// Durably store `block` (hash `block_hash`).
     ///
     /// # Errors
     /// A write failure (the driver retries, never skips).
-    fn put(&self, block_hash: &Hash32, block: &Block) -> io::Result<()>;
-    /// The stored body of `(height, block_hash)`, if held.
-    fn get(&self, height: u64, block_hash: &Hash32) -> Option<Block>;
+    fn put(&self, block_hash: &Hash32, block: &AvailableBody) -> io::Result<()>;
     /// Drop every body at or below `height` (applied heights live in the block store).
     ///
     /// # Errors
@@ -130,16 +149,28 @@ pub trait BodyStore: Send + Sync {
 
 /// The committed chain (Kura in the node): one block and its `CommitQC` per height above
 /// genesis, written durably and in height order.
-pub trait BlockStore: Send + Sync {
+pub trait BlockStore: BodyReader {
     /// Highest stored height (the genesis height when nothing is stored above it).
     fn height(&self) -> u64;
     /// The committed block and `CommitQC` of `height`, if stored.
-    fn entry(&self, height: u64) -> Option<SyncEntry>;
+    ///
+    /// # Errors
+    /// I/O, corruption and resource refusal remain errors, never missing entries.
+    fn entry(&self, height: u64) -> io::Result<Option<SyncEntry>>;
+    /// Resolve the exact authenticated historical schedule independently of stored bytes.
+    ///
+    /// # Errors
+    /// A corrupt or unavailable authority owner cannot authorize serving.
+    fn availability_source(
+        &self,
+        height: u64,
+        block_hash: Hash32,
+    ) -> io::Result<Option<AvailabilitySource>>;
     /// Durably append the next height.
     ///
     /// # Errors
     /// A write failure; nothing was appended (the driver retries, never skips).
-    fn append(&self, block: &Block, commit_qc: &Qc) -> io::Result<()>;
+    fn append(&self, block: &AvailableBody, commit_qc: &Qc) -> io::Result<()>;
 }
 
 /// A monotonic local clock in milliseconds (§1.5: no synchronised time is assumed).
@@ -200,7 +231,7 @@ pub trait Executor: Send {
     /// cached post-state. `None` if that post-state is not held (not an error: the driver parks
     /// the request until the parent is applied or executed, O4). A `Valid` post-state is kept
     /// until the block is applied or discarded.
-    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome>;
+    fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome>;
     /// Drop the post-states of the blocks at `height` other than `keep`.
     fn discard(&mut self, height: u64, keep: &[Hash32]);
     /// The post-state of the next committed block (its parent is the applied state): the
@@ -213,7 +244,7 @@ pub trait Executor: Send {
     /// recovery; the driver halts instead of preparing or executing again.
     fn prepare(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError>;
     /// Make the prepared post-state of `block` the applied state (after the block store holds
@@ -226,7 +257,11 @@ pub trait Executor: Send {
     /// # Errors
     /// A retryable refusal retains the original owner. A consuming failure requires recovery;
     /// the driver halts and never reports a successful apply for it.
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<AppliedConfig, PublicationError>;
+    fn commit(
+        &mut self,
+        block: &AvailableBody,
+        commit_qc: &Qc,
+    ) -> Result<AppliedConfig, PublicationError>;
     /// Build exact canonical application control independently of transactions, including EMPTY.
     /// A retryable refusal keeps the producer/source; it never substitutes an empty witness.
     ///
@@ -255,14 +290,18 @@ pub trait Executor: Send {
         message: &iroha_sumeragi::message::ApplicationControl,
     ) -> Result<(), PublicationError>;
     /// Build a payload of at most `max_bytes` for `(height, view)` by peeking at the queue
-    /// (never removing transactions) and return it with its commit-attestation flag (§3.7 A1).
+    /// (never removing transactions), admitted to the original instance pool, with its
+    /// commit-attestation flag (§3.7 A1). `None` means genuinely absent work.
+    ///
+    /// # Errors
+    /// A local refusal retains the exact source and completed encoding for retry.
     fn build(
         &mut self,
         height: u64,
         view: u64,
         max_bytes: u32,
         exec_budget_ms: u32,
-    ) -> (Vec<u8>, bool);
+    ) -> Result<(Option<PayloadBytes>, bool), PublicationError>;
     /// The payload of `block_hash` executed `Invalid`: quarantine the transactions that make a
     /// block invalid on their own.
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32);

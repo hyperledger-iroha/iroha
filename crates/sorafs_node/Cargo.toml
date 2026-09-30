@@ -55,7 +55,3 @@ tower = { version = "0.5.2", features = ["util"] }
 [[test]]
 name = "pin_workflows"
 path = "tests/pin_workflows.rs"
-
-[[test]]
-name = "cli"
-path = "tests/cli.rs"

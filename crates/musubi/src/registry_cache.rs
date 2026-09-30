@@ -88,10 +88,6 @@ pub struct ResolverIndexCacheSnapshotV1 {
     resolver_pages: Vec<CachedResolverPageV1>,
 }
 impl ResolverIndexCacheSnapshotV1 {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "cache snapshot admission validates every deployment, page-order, cursor, and coherence invariant in one fail-closed pass"
-    )]
     fn validate(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         if self.network_id.as_bytes()[31] & 1 != 1 || self.account_chain_discriminant == 0 {
             return Err(invalid("cache snapshot has an invalid deployment identity"));

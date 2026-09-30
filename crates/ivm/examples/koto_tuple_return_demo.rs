@@ -1,6 +1,7 @@
 //! Kotodama tuple-return demo: compile a function returning pointer-backed integers.
 use iroha_primitives::numeric_abi::IntValueV1;
-use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{IVM, PointerType, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn returned_int(vm: &IVM, word_index: usize) -> i64 {
     let pointer = vm
         .public_call_result_word(word_index)

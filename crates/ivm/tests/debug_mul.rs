@@ -10,7 +10,7 @@ fn debug_mul() {
             }
         }
     "#;
-    let code = ivm::KotodamaCompiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile");
     let mut vm = ivm::IVM::new(u64::MAX);

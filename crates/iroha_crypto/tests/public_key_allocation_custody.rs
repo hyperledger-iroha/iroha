@@ -1,10 +1,10 @@
 //! Actual allocator refusal and deallocation ordering for canonical key custody.
 
-use iroha_crypto::{Algorithm, KeyPair, PublicKey, PublicKeyAllocationError};
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferFromChargeError,
     RetainedPayload,
 };
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, PublicKeyAllocationError};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},

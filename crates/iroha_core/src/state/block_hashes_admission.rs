@@ -23,7 +23,7 @@ pub enum StateAdmissionError {
 }
 impl StateAdmissionError {
     /// Original resource release, when releasing retained custody can help.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::Storage(e) => e.release_wait(),
             Self::History(e) => e.release_wait(),
@@ -82,7 +82,7 @@ pub enum StateStorageAdmissionError {
 
 impl StateStorageAdmissionError {
     /// The original release observation, only when releasing another owner can help.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::World(error) => error.release_wait(),
         }
@@ -94,10 +94,10 @@ impl StateStorageAdmissionError {
 pub enum BlockHashAdmissionError {
     /// Another physical owner must release the original history lock.
     #[error("canonical hash history is busy")]
-    Busy(concread::release::ReleaseWait),
+    Busy(iroha_allocation::release::ReleaseWait),
     /// The configured finite pool refused the complete operation.
     #[error("canonical hash history capacity: {0}")]
-    Capacity(mv::allocation::AllocationRefusal),
+    Capacity(iroha_allocation::AllocationRefusal),
     /// A checked layout or generation cannot be represented.
     #[error("canonical hash history planning failed: {0:?}")]
     Planning(PlanningError),
@@ -106,7 +106,7 @@ pub enum BlockHashAdmissionError {
     Poisoned,
     /// The observed original generation was replaced before acquisition.
     #[error("canonical hash history predecessor changed")]
-    Changed(concread::release::ReleaseWait),
+    Changed(iroha_allocation::release::ReleaseWait),
     /// Emergency Fast startup does not permit a successor.
     #[error("emergency Fast history is read-only; restart in Strict mode")]
     ReadOnly,
@@ -114,10 +114,10 @@ pub enum BlockHashAdmissionError {
 
 impl BlockHashAdmissionError {
     /// The original release observation, only when releasing another owner can help.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::Busy(wait) | Self::Changed(wait) => Some(wait),
-            Self::Capacity(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
+            Self::Capacity(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
                 Some(release)
             }
             _ => None,
@@ -135,13 +135,15 @@ impl<E: std::fmt::Debug> From<StateAdmissionError> for StateBlockStartError<E> {
 }
 impl<E: std::fmt::Debug> StateBlockStartError<E> {
     /// Preserve the original storage release without retrying a deterministic stage failure.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::Storage(error) => error.release_wait(),
             Self::History(error) => error.release_wait(),
             Self::Membership(error) => error.release_wait(),
             Self::ExecutionDeferred(error) => match error.allocation_refusal() {
-                Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) => Some(release),
+                Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
+                    Some(release)
+                }
                 _ => None,
             },
             Self::Stage(_) => None,
@@ -150,9 +152,9 @@ impl<E: std::fmt::Debug> StateBlockStartError<E> {
 }
 
 /// Concrete payloads contain no nested allocation or destructor-owned storage.
-pub(super) struct BlockHashPolicy(mv::allocation::AllocationReservation);
+pub(super) struct BlockHashPolicy(iroha_allocation::AllocationReservation);
 impl NodeFunding for BlockHashPolicy {
-    type Charge = mv::allocation::AllocationCharge;
+    type Charge = iroha_allocation::AllocationCharge;
     fn take_node_charge(&mut self, layout: std::alloc::Layout) -> Self::Charge {
         self.0
             .try_split(layout)
@@ -180,13 +182,13 @@ impl BlockHashes {
         &self,
         existing: AllocationDemand,
         additional: AllocationDemand,
-    ) -> Result<BlockHashPolicy, mv::allocation::AllocationRefusal> {
+    ) -> Result<BlockHashPolicy, iroha_allocation::AllocationRefusal> {
         let required = existing
             .bytes()
             .checked_add(additional.bytes())
-            .ok_or(mv::allocation::AllocationRefusal::DemandOverflow)?;
+            .ok_or(iroha_allocation::AllocationRefusal::DemandOverflow)?;
         if required > self.budget.limit_bytes() {
-            return Err(mv::allocation::AllocationRefusal::ExceedsLimit {
+            return Err(iroha_allocation::AllocationRefusal::ExceedsLimit {
                 requested_bytes: required,
                 limit_bytes: self.budget.limit_bytes(),
             });
@@ -196,15 +198,15 @@ impl BlockHashes {
     pub(super) fn admit(
         &self,
         demand: AllocationDemand,
-    ) -> Result<BlockHashPolicy, mv::allocation::AllocationRefusal> {
+    ) -> Result<BlockHashPolicy, iroha_allocation::AllocationRefusal> {
         self.budget
             .try_reserve_bytes(demand.bytes())
             .map(BlockHashPolicy)
     }
     fn admission_error(
         &self,
-        error: MapAdmissionError<mv::allocation::AllocationRefusal>,
-        wait: concread::release::ReleaseWait,
+        error: MapAdmissionError<iroha_allocation::AllocationRefusal>,
+        wait: iroha_allocation::release::ReleaseWait,
     ) -> BlockHashAdmissionError {
         match error {
             MapAdmissionError::Busy => BlockHashAdmissionError::Busy(wait),
@@ -218,7 +220,7 @@ impl BlockHashes {
     /// The input sequence is owned by the caller's authenticated snapshot/replay scope.
     pub(crate) fn try_new(
         initial: impl IntoIterator<Item = HashOf<BlockHeader>>,
-        budget: mv::allocation::AllocationBudget,
+        budget: iroha_allocation::AllocationBudget,
     ) -> Result<Self, BlockHashAdmissionError> {
         budget.with_deferred_refund_notifications(|_| {
             let control_layout = ChargedBlockHashMap::layout();
@@ -237,7 +239,7 @@ impl BlockHashes {
             let owner = Self {
                 inner: BlockHashStorage::Owned(ChargedBlockHashMap::new(map, control_charge)),
                 budget: budget.clone(),
-                released: concread::release::ReleaseNotification::default(),
+                released: iroha_allocation::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),
             };
             for (index, hash) in initial.into_iter().enumerate() {

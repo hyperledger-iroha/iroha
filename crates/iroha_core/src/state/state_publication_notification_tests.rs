@@ -17,7 +17,7 @@ struct ProbeStateWriter {
     busy: AtomicUsize,
     odd: AtomicUsize,
     unavailable: AtomicUsize,
-    cleanup: Mutex<Option<concread::release::DeferredRelease>>,
+    cleanup: Mutex<Option<iroha_allocation::release::DeferredRelease>>,
 }
 
 impl Wake for ProbeStateWriter {

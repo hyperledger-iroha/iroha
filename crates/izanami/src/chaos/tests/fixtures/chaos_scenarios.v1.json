@@ -117,7 +117,7 @@
     {"ordinal":109,"name":"endpoint_pool_preferred_endpoint_round_robins_submitters","family":"endpoint","scenario":"endpoint_pool_preferred_endpoint_round_robins_submitters","checks":4,"outcome":"pass"},
     {"ordinal":110,"name":"endpoint_pool_skips_reserved_fault_target_when_alternate_is_healthy","family":"endpoint","scenario":"endpoint_pool_skips_reserved_fault_target_when_alternate_is_healthy","checks":2,"outcome":"pass"},
     {"ordinal":111,"name":"submission_metadata_increments_counter","family":"scalar","scenario":"submission_metadata_increments_counter","checks":2,"outcome":"pass"},
-    {"ordinal":112,"name":"make_network_builder_emits_only_strict_sumeragi_v2_config","family":"builder","scenario":"make_network_builder_emits_only_strict_sumeragi_v2_config","checks":12,"outcome":"pass"},
+    {"ordinal":112,"name":"make_network_builder_emits_only_native_sumeragi_config","family":"builder","scenario":"make_network_builder_emits_only_native_sumeragi_config","checks":12,"outcome":"pass"},
     {"ordinal":113,"name":"make_network_builder_derives_nexus_keys","family":"builder","scenario":"make_network_builder_derives_nexus_keys","checks":0,"outcome":"pass"},
     {"ordinal":114,"name":"make_network_builder_uses_fast_pipeline_default_without_nexus","family":"builder","scenario":"make_network_builder_uses_fast_pipeline_default_without_nexus","checks":1,"outcome":"pass"}
   ]

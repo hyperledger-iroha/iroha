@@ -26,7 +26,7 @@ def canonical_configuration_inputs(commit):
     manifest_path=Path('evidence/configuration_manifest.json')
     manifest={'version':1,'protocol':replay.control.PROTOCOL,'commit':commit,'passed':True,
         'configurations':[{'participants':n,'validators_per_dataspace':4,'quorum':RUNNER.QUORUM,
-            'mandatory_signed_rs16_da_rbc':True,'path':str(paths[n]),**replay.accounting.accounting_file_binding(payloads[n])} for n in RUNNER.PARTICIPANTS]}
+            'mandatory_signed_rs16_da':True,'path':str(paths[n]),**replay.accounting.accounting_file_binding(payloads[n])} for n in RUNNER.PARTICIPANTS]}
     return paths,payloads,manifest_path,raw(manifest)
 
 

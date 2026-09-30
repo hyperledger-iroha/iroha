@@ -65,8 +65,9 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::{domain::DomainId, name::Name, peer::PeerId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sumeragi::{
+    availability::{PayloadAuthoring, PayloadBytes},
     crypto::{Signer as _, form_qc},
-    message::{Block, BlockHeader, SyncEntry, Vote, VoteKind},
+    message::{BlockHeader, Vote, VoteKind},
     preimage::payload_hash,
     types::{ControlWitness, Hash32, SIGNATURE_LEN, Signature},
 };
@@ -81,8 +82,10 @@ const INITIAL_XOR: u64 = 1_000_000;
 struct DeferredLaneStores(OnceLock<Arc<LaneStores>>);
 
 impl LaneBlockSource for DeferredLaneStores {
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Option<u64> {
-        self.0.get()?.tip(lane, incarnation)
+    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+        self.0
+            .get()
+            .map_or(Ok(None), |stores| stores.tip(lane, incarnation))
     }
 
     fn block(
@@ -90,8 +93,10 @@ impl LaneBlockSource for DeferredLaneStores {
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> Option<CommittedLaneBlock> {
-        self.0.get()?.block(lane, incarnation, height)
+    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+        self.0
+            .get()
+            .map_or(Ok(None), |stores| stores.block(lane, incarnation, height))
     }
 
     fn wait_for(
@@ -100,10 +105,10 @@ impl LaneBlockSource for DeferredLaneStores {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> bool {
-        self.0
-            .get()
-            .is_some_and(|stores| stores.wait_for(lane, incarnation, height, timeout))
+    ) -> std::io::Result<bool> {
+        self.0.get().map_or(Ok(false), |stores| {
+            stores.wait_for(lane, incarnation, height, timeout)
+        })
     }
 }
 
@@ -261,13 +266,21 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         }
     }
     let dir = tempfile::tempdir().expect("lane-store directory");
-    let crypto: SharedCrypto = Arc::new(BlsCrypto::new());
+    let bls = Arc::new(BlsCrypto::new());
+    let crypto: SharedCrypto = bls.clone();
     let chain_id = chain.state().view().chain_id().to_string();
     let stores = Arc::new(LaneStores::new(
         dir.path().to_path_buf(),
         chain.network_id(),
         chain_id.clone(),
         Arc::clone(&crypto),
+        chain.execution_budget(),
+        Arc::new(
+            iroha_core::sumeragi::test_chain::TestLaneStoreAuthorities::new(
+                Arc::clone(chain.state()),
+                bls,
+            ),
+        ),
     ));
     assert!(deferred.0.set(Arc::clone(&stores)).is_ok());
 
@@ -501,23 +514,36 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         panic!("committed anchor is available")
     };
     let instance = lane_instance(&*crypto, &chain.network_id(), &chain_id, &record);
-    let block = Block {
-        header: BlockHeader {
-            instance,
-            epoch: height_config.epoch.id,
-            height: 1,
-            origin_view: 0,
-            parent_hash: Hash32(record.merged.block_hash),
-            parent_result: Hash32(record.merged.result),
-            payload_hash: payload_hash(&*crypto, &payload),
-            payload_len: u32::try_from(payload.len()).unwrap(),
-            proposer: 0,
-            skipped_leaders: Vec::new(),
-            control_witness: ControlWitness::empty(),
-            attest: false,
-        },
-        payload,
+    let header = BlockHeader {
+        instance,
+        epoch: height_config.epoch.id,
+        height: 1,
+        origin_view: 0,
+        parent_hash: Hash32(record.merged.block_hash),
+        parent_result: Hash32(record.merged.result),
+        payload_hash: payload_hash(&*crypto, &payload),
+        availability_digest: Hash32::ZERO,
+        payload_len: u32::try_from(payload.len()).unwrap(),
+        proposer: 0,
+        skipped_leaders: Vec::new(),
+        control_witness: ControlWitness::empty(),
+        attest: false,
     };
+    let budget = chain.execution_budget();
+    let mut original = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+    original.append(&payload).unwrap();
+    let payload = PayloadBytes::from_charged(original, &budget)
+        .unwrap_or_else(|_| panic!("original private lane payload backing/control"));
+    let author = validators
+        .iter()
+        .map(|key| KeyPairSigner::new(key).expect("BLS author"))
+        .find(|signer| height_config.committee.get(0) == Some(signer.public_key()))
+        .expect("original lane author");
+    let authored = PayloadAuthoring::new(header, payload)
+        .complete(instance, &height_config, &budget, &*crypto, &author)
+        .unwrap_or_else(|(_, error)| panic!("original private lane availability: {error:?}"));
+    drop(authored.codeword);
+    let block = authored.body;
     let votes = validators
         .iter()
         .take(3)
@@ -549,10 +575,6 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         &votes.iter().collect::<Vec<_>>(),
     )
     .expect("real exact-quorum lane certificate");
-    let entry = SyncEntry {
-        block,
-        commit_qc: qc,
-    };
     verify_lane_entry(
         &record,
         &chain.network_id(),
@@ -560,11 +582,12 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         &anchors,
         &history,
         &record.merged,
-        &entry,
+        &block,
+        &qc,
     )
     .expect("authenticate and reproduce actual lane admission");
-    let mut forged = entry.clone();
-    forged.commit_qc.agg_sig.0[0] ^= 1;
+    let mut forged = qc.clone();
+    forged.agg_sig.0[0] ^= 1;
     assert!(
         verify_lane_entry(
             &record,
@@ -573,6 +596,7 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
             &anchors,
             &history,
             &record.merged,
+            &block,
             &forged
         )
         .is_err(),
@@ -581,12 +605,13 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
     stores
         .store(PRIVATE_LANE, &record.incarnation)
         .expect("open lane store")
-        .append(&entry.block, &entry.commit_qc)
+        .append(&block, &qc)
         .expect("persist authenticated lane frame");
     let proposal = {
         let view = chain.state().view();
         let parent = view.latest_block().expect("activation parent");
-        let merges = merge::propose(&view, &*stores, 5);
+        let merges = merge::propose(&view, &*stores, 5)
+            .expect("authenticated private lane storage available");
         let cadence = Duration::from_millis(
             view.world()
                 .consensus_schedule()

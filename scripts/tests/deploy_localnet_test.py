@@ -52,11 +52,16 @@ class DeployLocalnetShellSafetyTest(unittest.TestCase):
         self.assertIn("KURA_BLOCKS_IN_MEMORY=32", text)
         self.assertIn("blocks_in_memory = \" blocks", text)
 
-    def test_peer_count_fails_closed_to_revision4_geometry(self) -> None:
+    def test_peer_count_fails_closed_to_sumeragi_committee_geometry(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("PEERS < 4 || PEERS > 31", text)
         self.assertIn("(PEERS - 1) % 3 != 0", text)
-        self.assertIn("exact revision-4 3f + 1 committee", text)
+        self.assertIn("exact Sumeragi 3f + 1 committee", text)
+
+    def test_cadence_override_uses_the_signed_genesis_block_cadence_flag(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--block-cadence-ms)", text)
+        self.assertIn('KAGAMI_ARGS+=(--block-cadence-ms "$BLOCK_CADENCE_MS")', text)
 
     def test_tool_binaries_share_one_cargo_build_invocation(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")

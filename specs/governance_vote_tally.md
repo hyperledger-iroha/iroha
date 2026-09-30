@@ -1,6 +1,6 @@
 # Development vote-membership fixture (not election qualification)
 
-The depth-8 `VoteBoolCommitMerkle<8>` relation in `crates/iroha_core/src/zk.rs`
+The depth-8 `VoteBoolCommitMerkle<8>` relation in `crates/iroha_core_zk/src/lib.rs`
 remains a development fixture. It proves one fixed boolean commitment and eight
 fixed left-branch compression steps. It does not prove credential ownership,
 election/choice binding, ciphertext correctness, aggregate conservation, a

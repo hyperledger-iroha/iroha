@@ -50,6 +50,37 @@ class SumeragiHttpTransportContractTest {
     }
 
     @Test
+    fun `lanes use one exact bounded operator JSON GET and parse the Rust lane corpus`() {
+        val payload = org.hyperledger.iroha.sdk.consensus.NativeLaneFixtures.json("mixed_lanes")
+            .toByteArray(StandardCharsets.UTF_8)
+        val executor = FixedResponseExecutor(jsonResponse(payload))
+
+        val lanes = transport(executor).getSumeragiLanes().join()
+
+        assertEquals(3, lanes.size)
+        assertEquals(BigInteger.ONE, lanes[0].record.lane)
+        assertEquals(1, lanes[0].instance?.protocolVersion)
+        assertEquals(null, lanes[1].instance)
+        assertEquals("https://torii.example/api/v1/sumeragi/lanes", executor.request.uri.toString())
+        assertEquals("GET", executor.request.method)
+        assertTrue(executor.request.body.isEmpty())
+        assertEquals(listOf("application/json"), executor.request.headers["Accept"])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
+        assertEquals(16L * 1024L * 1024L, executor.request.maximumResponseBytes)
+
+        assertFails("the lane route must reject a status-shaped payload") {
+            transport(FixedResponseExecutor(jsonResponse(statusJson().toByteArray()))).getSumeragiLanes().join()
+        }
+        val textResponse = TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(payload)
+            .setHeaders(mapOf("Content-Type" to listOf("text/plain")))
+            .build()
+        assertFails { transport(FixedResponseExecutor(textResponse)).getSumeragiLanes().join() }
+    }
+
+    @Test
     fun `status accepts parameters and reject malformed or ambiguous JSON content types`() {
         val payload = statusJson().toByteArray(StandardCharsets.UTF_8)
         val diagnosticsPayload = diagnosticsJson().toByteArray(StandardCharsets.UTF_8)

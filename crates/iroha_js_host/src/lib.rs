@@ -39,10 +39,10 @@ mod confidential_wallet;
 mod shared_codec_tests;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
-use iroha_core::privacy_profiles::{
+use iroha_core_privacy::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
-use iroha_core::zk::confidential_v2::{
+use iroha_core_zk::confidential_v2::{
     self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
     ConfidentialUnshieldOutputV3,
 };
@@ -6375,7 +6375,7 @@ pub fn encode_contract_argument_record_json(
     let payload_value = json::parse_value(&payload_json).map_err(norito_to_napi)?;
     let payload: Json = json::from_value(payload_value).map_err(norito_to_napi)?;
     let record =
-        iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
+        ivm::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
 /// Validate and return the exact canonical `VersionedSignedTransaction` V1 wire.
@@ -9014,15 +9014,17 @@ seiyaku Privacy {
             .into_iter()
             .map(|row| {
                 let activation = (row.protocol_id == active_protocol).then(|| {
-                    iroha_core::privacy_profiles::compiled_privacy_profile_v1(active_protocol)
-                        .expect("selected native profile is available")
-                        .activation_record(PrivacyProtocolLifecycleV1::Active(
-                            PrivacyActiveLifecycleV1 {
-                                proposed_at_height: 1,
-                                activated_at_height: 2,
-                                state_since_height: 2,
-                            },
-                        ))
+                    iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1(
+                        active_protocol,
+                    )
+                    .expect("selected native profile is available")
+                    .activation_record(PrivacyProtocolLifecycleV1::Active(
+                        PrivacyActiveLifecycleV1 {
+                            proposed_at_height: 1,
+                            activated_at_height: 2,
+                            state_since_height: 2,
+                        },
+                    ))
                 });
                 PrivacyCapabilityRowV1 {
                     protocol_id: row.protocol_id,

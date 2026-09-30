@@ -295,10 +295,6 @@ where
     )
     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 observation projection is exhaustive"
-)]
 fn make_server_observation(
     network_id: NetworkId,
     binding: &ProviderBindingWireV1,
@@ -1417,10 +1413,6 @@ fn make_server_observation(
     validate_observation(binding, &observation).map_err(server_error)?;
     Ok(observation)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 backend inventory is exhaustive"
-)]
 fn validate_exact_backend_set(
     catalog: &[ProviderBindingWireV1],
     backends: &RuntimeProviderBrokerBackendsV1,

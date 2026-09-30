@@ -285,6 +285,11 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::ActivateRetailDailyLimitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::BindRetailIdentityV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    // AMX two-phase commit (`crate::sumeragi::amx`): World records only, no asset effect.
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxDataspaceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,

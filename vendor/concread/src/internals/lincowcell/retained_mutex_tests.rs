@@ -259,8 +259,10 @@ fn retained_busy_and_stale_refusals_return_same_original_work() {
 #[test]
 fn deferred_observed_notice_freezes_actual_poison_after_original_unlock() {
     struct Retain<'a, 'out> {
-        guard: Option<crate::release::ReleaseGuard<'a, retained_mutex::MutexGuard<'a, usize>>>,
-        notice: &'out mut Option<crate::release::DeferredRelease>,
+        guard: Option<
+            iroha_allocation::release::ReleaseGuard<'a, retained_mutex::MutexGuard<'a, usize>>,
+        >,
+        notice: &'out mut Option<iroha_allocation::release::DeferredRelease>,
     }
     impl Drop for Retain<'_, '_> {
         fn drop(&mut self) {
@@ -270,7 +272,7 @@ fn deferred_observed_notice_freezes_actual_poison_after_original_unlock() {
     }
     for mutated in [false, true] {
         let mutex = Mutex::new(7_usize);
-        let source = crate::release::ReleaseNotification::default();
+        let source = iroha_allocation::release::ReleaseNotification::default();
         let observation = source.observe();
         let mut wait = observation.clone().wait_for_release();
         let mut context = Context::from_waker(Waker::noop());
@@ -307,7 +309,7 @@ fn chained_retirement_preserves_original_recorded_poison_verdict() {
             }))
             .is_err());
         }
-        let source = crate::release::ReleaseNotification::default();
+        let source = iroha_allocation::release::ReleaseNotification::default();
         let observation = source.observe();
         let mut wait = observation.clone().wait_for_release();
         let mut context = Context::from_waker(Waker::noop());

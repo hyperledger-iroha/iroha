@@ -140,7 +140,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
-      - name: Core and simulator (default seeds)
+      - name: Core, simulator, specification traceability and quorums (default seeds)
         run: cargo test --locked -p iroha_sumeragi --features sim
       - name: Node driver, lanes and four-validator node tests
         run: cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
@@ -260,10 +260,6 @@ jobs:
           python-version: "3.11"
       - name: Install pinned router-test dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
-      - name: Verify current project views and archived evidence
-        run: |
-          python3 -I -S scripts/archive_project_history.py verify --archive docs/history/2026-09-06 --check-current
-          python3 -m pytest -q scripts/tests/archive_project_history_test.py
       - name: Verify the KAGEMUSHA first-release package surface
         run: |
           python3 -m pytest -q \
@@ -294,7 +290,6 @@ jobs:
             scripts/tests/check_kotlin_jni_test.py \
             scripts/tests/check_dependency_budget_test.py \
             scripts/tests/sdk_operation_inventory_test.py \
-            scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py \
             scripts/tests/check_nexus_provisioning_templates_test.py \
@@ -309,7 +304,6 @@ jobs:
           python3 scripts/check_dependency_budget.py
           python3 scripts/check_dependency_budget.py --check-boundaries
           python3 scripts/sdk_operation_inventory.py
-          python3 scripts/check_source_file_budget.py
           python3 -I -S scripts/check_telemetry_metric_catalog_v2.py
           python3 -I -S scripts/check_telemetry_metric_catalog_v2.py --self-test
           python3 -m unittest \

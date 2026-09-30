@@ -2213,14 +2213,6 @@ async fn run_realistic_30tps_localnet(
                     ["network", "transaction_gossip_restricted_target_cap"],
                     8_i64,
                 )
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                )
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
@@ -3012,14 +3004,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                     ["network", "transaction_gossip_restricted_target_cap"],
                     3_i64,
                 )
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                )
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
@@ -3254,14 +3238,6 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     ["network", "transaction_gossip_restricted_target_cap"],
                     8_i64,
                 )
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                )
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
@@ -3421,14 +3397,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_target_cap"],
                     3_i64,
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
                 )
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
@@ -3972,14 +3940,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_target_cap"],
                     3_i64,
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
                 )
                 .write(["network", "p2p_post_queue_cap"], 8192_i64)
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
@@ -4586,8 +4546,14 @@ async fn collect_sumeragi_statuses(
 ) -> Result<Vec<SumeragiDiagnosticsStatus>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
+        let operator_key = client
+            .client()
+            .operator_key_pair()
+            .cloned()
+            .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
+        let operator = client.client().operator_client(operator_key)?;
         if let Ok(response) = tokio::time::timeout(
-            status_timeout, client.client().get_sumeragi_diagnostics(),
+            status_timeout, operator.consensus().diagnostics(),
         ).await {
             response
                 .map_err(|err| {

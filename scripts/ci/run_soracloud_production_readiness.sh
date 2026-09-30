@@ -289,7 +289,7 @@ run_focused_gates() {
   run_step "runtime implementation hard cut" \
     "test ! -e crates/irohad/src/soracloud_runtime_stub.rs && ! rg -n 'soracloud_runtime_stub|stub_runtime_' crates/irohad/src crates/irohad/Cargo.toml"
   run_step "runtime manager posture" \
-    "env -u LOG_FORMAT cargo test -p irohad --bin iroha3d manager_config_ -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p irohad_lib --lib manager_config_ -- --nocapture"
 }
 
 run_portable_gate() {

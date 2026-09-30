@@ -41,9 +41,12 @@ fn execute(prepared: &PreparedTestChainConfig) -> (ValidBlock, Box<StateBlock<'_
 fn retained_execution_projection_matches_canonical_consensus_projection_without_publication() {
     let prepared = fixture();
     let (valid, staged) = execute(&prepared);
-    let expected =
-        commitment::execution_commitment(staged.exec_witness.as_ref().unwrap(), valid.as_ref())
-            .unwrap();
+    let expected = commitment::execution_commitment(
+        staged.exec_witness.as_ref().unwrap(),
+        valid.as_ref(),
+        &staged.world_state_transition().unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         staged.execution_commitment_for_testing(&valid).unwrap(),
         expected

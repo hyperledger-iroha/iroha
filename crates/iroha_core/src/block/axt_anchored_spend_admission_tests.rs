@@ -292,7 +292,8 @@ fn envelope_commit_height_must_match_block_height() {
 fn resultless_carrier_cannot_borrow_live_policy_snapshot() {
     let state = test_state();
     let block = test_block(vec![empty_envelope(1)], AxtPolicySnapshot::default())
-        .canonical_resultless_proposal();
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let state_block = state.block(block.header());
     assert!(matches!(
         validate_axt_envelopes(&block, &state_block),

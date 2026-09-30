@@ -22,21 +22,16 @@ use iroha_data_model::musubi::{
     MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1, MusubiDependencyKindV1,
     MusubiPackageSelectorV1, MusubiReleaseIdV1, MusubiVerificationNodeV1, MusubiVersionReqV1,
 };
-use ivm::{
-    SyscallPolicy,
-    koto_test_driver::{
-        KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
-        declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
-        run_tests_structured_source_set_with_modules_v1,
-    },
-    kotodama::{
-        compiler::{CompilerMode, CompilerOptions},
-        driver::discover_source_modules,
-        linker::{
-            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit,
-        },
-    },
-    syscalls::compute_abi_hash,
+use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
+use kotodama_lang::{
+    compiler::{CompilerMode, CompilerOptions},
+    driver::discover_source_modules,
+    linker::{ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit},
+};
+use kotodama_toolchain::koto_test_driver::{
+    KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
+    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+    run_tests_structured_source_set_with_modules_v1,
 };
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -212,10 +207,6 @@ fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1
         Err(WorkspaceTestErrorV1::UnsupportedPlatform)
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "workspace-test execution authenticates the exact lock graph, targets, and VM inputs in one ordered fail-closed workflow"
-)]
 fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     source: &S,
     workspace: &Workspace,
@@ -955,10 +946,6 @@ fn declared_test_sources(
     sources.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
     Ok(sources)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the bounded recursive directory walk carries each confinement and resource-budget guard explicitly"
-)]
 fn collect_declared_test_directory(
     package_root: &Path,
     directory: &Path,
@@ -1287,7 +1274,7 @@ mod tests {
         MusubiVerificationNodeV1,
     };
     use iroha_model_base::topology::DataSpaceId;
-    use ivm::kotodama::{
+    use kotodama_lang::{
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,
     };
@@ -1754,10 +1741,6 @@ default-members = ["app"]
         assert_eq!(registry.releases.borrow().len(), 2);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture proves authenticated reachability across path and registry package boundaries"
-    )]
     fn authenticates_registry_edges_reachable_through_a_pure_path_package_only() {
         let temp = tempdir().expect("tempdir");
         write(

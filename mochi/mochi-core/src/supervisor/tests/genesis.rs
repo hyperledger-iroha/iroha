@@ -690,10 +690,10 @@ fn invalid_first_release_inputs_fail_before_creating_the_data_root() {
     let temp = tempfile::tempdir().expect("tempdir");
     let valid_seed = "ab".repeat(32);
 
-    let mut zero_queues = toml::Table::new();
-    zero_queues.insert("body_bytes".to_owned(), toml::Value::Integer(0));
+    let mut retired_queues = toml::Table::new();
+    retired_queues.insert("body_bytes".to_owned(), toml::Value::Integer(0));
     let mut invalid_sumeragi = toml::Table::new();
-    invalid_sumeragi.insert("queues".to_owned(), toml::Value::Table(zero_queues));
+    invalid_sumeragi.insert("queues".to_owned(), toml::Value::Table(retired_queues));
 
     let mut managed_onboarding = toml::Table::new();
     managed_onboarding.insert(
@@ -739,9 +739,9 @@ fn invalid_first_release_inputs_fail_before_creating_the_data_root() {
             "requires a genesis profile",
         ),
         (
-            "zero-queue-capacity",
+            "retired-sumeragi-queues",
             SupervisorBuilder::new(ProfilePreset::FourPeerBft).sumeragi_config(invalid_sumeragi),
-            "must be a positive integer",
+            "unknown parameter: `sumeragi.queues`",
         ),
         (
             "managed-onboarding-override",

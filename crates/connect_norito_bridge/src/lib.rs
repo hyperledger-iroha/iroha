@@ -10,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 #[cfg(test)]
 use core::ffi::c_void;
-use iroha_core::privacy_profiles::{
+use iroha_core_privacy::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_crypto::{

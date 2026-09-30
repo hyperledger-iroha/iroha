@@ -113,7 +113,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--peers",
         type=int,
         default=DEFAULT_PEERS,
-        help="Exact revision-4 committee size: 4, 7, ..., 31.",
+        help="Exact Sumeragi committee size: 4, 7, ..., 31.",
     )
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
     parser.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL)
@@ -188,7 +188,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.peers < 4 or args.peers > 31 or (args.peers - 1) % 3 != 0:
         parser.error(
-            "--peers must be an exact revision-4 3f + 1 committee: 4, 7, ..., 31"
+            "--peers must be an exact Sumeragi 3f + 1 committee: 4, 7, ..., 31"
         )
     if args.count <= 0:
         parser.error("--count must be greater than zero")

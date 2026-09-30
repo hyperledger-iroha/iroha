@@ -195,8 +195,9 @@ class OkHttpTransportExecutor private constructor(
             active.toMap().also { active.clear() }
         }
         for ((call, operation) in pending) {
-            call.cancel()
+            // Settle the public future before IO cancellation can deliver its failure callback.
             operation.future.cancel(false)
+            call.cancel()
             operation.stream?.close()
         }
         if (ownsClient) {

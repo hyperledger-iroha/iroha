@@ -1,15 +1,7 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! JS host parity helpers (requires `js_host_parity` feature to compile).
+//! Cross-runtime local SoraFS parity against the actual Node module and C ABI.
 #[cfg(feature = "js_host_parity")]
 mod js_host_parity {
-    //! SoraFS orchestrator parity coverage across Rust, JS, and FFI bridges.
-    use connect_norito_bridge::{connect_norito_free, connect_norito_sorafs_local_fetch};
-    use core::ffi::c_ulong;
-    use iroha_js_host::{
-        JsLocalProviderSpec, JsMultiFetchChunkReceipt, JsMultiFetchOptions,
-        JsMultiFetchProviderReport, JsProviderMetadata, JsRangeCapability, JsStreamBudget,
-        JsTransportHint, JsU64,
-    };
+    use norito::json::{Value, json};
     use sorafs_car::{
         fetch_plan::{chunk_fetch_plan_to_string, try_chunk_fetch_plan_to_json},
         fixtures::MultiPeerFixture,
@@ -18,56 +10,13 @@ mod js_host_parity {
             ProviderMetadataInput,
         },
     };
-    use std::{collections::HashMap, convert::TryFrom, mem, path::Path, time::Instant};
+    use std::{
+        collections::HashMap,
+        path::Path,
+        process::Command,
+        time::{Duration, Instant},
+    };
     use tempfile::tempdir;
-    fn js_metadata_from_provider(
-        metadata: &sorafs_car::multi_fetch::ProviderMetadata,
-    ) -> JsProviderMetadata {
-        JsProviderMetadata {
-            provider_id: metadata.provider_id.clone(),
-            profile_id: metadata.profile_id.clone(),
-            profile_aliases: Some(metadata.profile_aliases.clone()),
-            availability: metadata.availability.clone(),
-            stake_amount: metadata.stake_amount.clone(),
-            max_streams: metadata.max_streams.map(u16::from).map(u32::from),
-            refresh_deadline: metadata.refresh_deadline.map(JsU64::from),
-            expires_at: metadata.expires_at.map(JsU64::from),
-            ttl_secs: metadata.ttl_secs.map(JsU64::from),
-            allow_unknown_capabilities: Some(metadata.allow_unknown_capabilities),
-            capability_names: Some(metadata.capability_names.clone()),
-            rendezvous_topics: Some(metadata.rendezvous_topics.clone()),
-            notes: metadata.notes.clone(),
-            range_capability: metadata
-                .range_capability
-                .as_ref()
-                .map(|range| JsRangeCapability {
-                    max_chunk_span: range.max_chunk_span,
-                    min_granularity: range.min_granularity,
-                    supports_sparse_offsets: Some(range.supports_sparse_offsets),
-                    requires_alignment: Some(range.requires_alignment),
-                    supports_merkle_proof: Some(range.supports_merkle_proof),
-                }),
-            stream_budget: metadata
-                .stream_budget
-                .as_ref()
-                .map(|budget| JsStreamBudget {
-                    max_in_flight: budget.max_in_flight,
-                    max_bytes_per_sec: JsU64(budget.max_bytes_per_sec),
-                    burst_bytes: budget.burst_bytes.map(JsU64),
-                }),
-            transport_hints: Some(
-                metadata
-                    .transport_hints
-                    .iter()
-                    .map(|hint| JsTransportHint {
-                        protocol: hint.protocol.clone(),
-                        protocol_id: hint.protocol_id,
-                        priority: hint.priority,
-                    })
-                    .collect(),
-            ),
-        }
-    }
     fn providers_json_from_metadata(
         metadata: &sorafs_car::multi_fetch::ProviderMetadata,
         path: &Path,
@@ -229,19 +178,6 @@ mod js_host_parity {
             metadata: Some(ProviderMetadataInput::from_metadata(metadata)),
         }
     }
-    fn scoreboard_map_from_js(
-        entries: &[iroha_js_host::JsScoreboardEntry],
-    ) -> HashMap<String, (f64, String)> {
-        entries
-            .iter()
-            .map(|entry| {
-                (
-                    entry.alias.clone(),
-                    (entry.normalized_weight, entry.eligibility.clone()),
-                )
-            })
-            .collect()
-    }
     fn scoreboard_map_from_result(
         entries: Option<&[LocalFetchScoreboardEntry]>,
     ) -> HashMap<String, (f64, String)> {
@@ -271,67 +207,159 @@ mod js_host_parity {
             _ => HashMap::new(),
         }
     }
+
+    fn run_native_runtime(program: &str, script: &Path, request: &Path) -> Value {
+        let output = Command::new(program)
+            .arg(script)
+            .arg(request)
+            .output()
+            .expect("launch actual native runtime");
+        assert!(
+            output.status.success(),
+            "{program} native runtime failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.len() <= 16 * 1024 * 1024,
+            "native report exceeds test bound"
+        );
+        norito::json::from_slice(&output.stdout).expect("canonical native runtime report")
+    }
+    fn duration_from_report(report: &Value) -> Duration {
+        Duration::from_nanos(
+            report
+                .get("duration_ns")
+                .and_then(Value::as_u64)
+                .expect("actual native call duration"),
+        )
+    }
+    fn reports_from_json(report: &Value) -> HashMap<String, (u64, u64, bool)> {
+        report
+            .get("provider_reports")
+            .and_then(Value::as_array)
+            .expect("provider reports")
+            .iter()
+            .map(|entry| {
+                (
+                    entry
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .expect("provider id")
+                        .to_owned(),
+                    (
+                        entry
+                            .get("successes")
+                            .and_then(Value::as_u64)
+                            .expect("successes"),
+                        entry
+                            .get("failures")
+                            .and_then(Value::as_u64)
+                            .expect("failures"),
+                        entry
+                            .get("disabled")
+                            .and_then(Value::as_bool)
+                            .expect("disabled"),
+                    ),
+                )
+            })
+            .collect()
+    }
+    fn receipts_from_json(report: &Value) -> Vec<(u64, String, u64)> {
+        report
+            .get("chunk_receipts")
+            .and_then(Value::as_array)
+            .expect("chunk receipts")
+            .iter()
+            .map(|entry| {
+                (
+                    entry
+                        .get("chunk_index")
+                        .and_then(Value::as_u64)
+                        .expect("chunk index"),
+                    entry
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .expect("provider id")
+                        .to_owned(),
+                    entry
+                        .get("attempts")
+                        .and_then(Value::as_u64)
+                        .expect("attempts"),
+                )
+            })
+            .collect()
+    }
     #[test]
     fn orchestrator_parity_across_runtimes() {
-        let fixture = MultiPeerFixture::with_providers(2);
+        let fixture = MultiPeerFixture::with_providers(2).expect("canonical multi-peer fixture");
         let tempdir = tempdir().expect("tempdir");
+        let directory = tempdir
+            .path()
+            .canonicalize()
+            .expect("physical private fixture directory");
         let plan = fixture.plan();
-        let plan_json = try_chunk_fetch_plan_to_json(&plan).expect("canonical plan JSON");
-        let plan_json_string = chunk_fetch_plan_to_string(&plan).expect("canonical plan string");
+        let plan_json = try_chunk_fetch_plan_to_json(plan).expect("canonical plan JSON");
+        let plan_json_string = chunk_fetch_plan_to_string(plan).expect("canonical plan string");
         let mut local_inputs = Vec::new();
-        let mut js_inputs = Vec::new();
-        let mut ffi_inputs = Vec::new();
+        let mut providers = Vec::new();
         for (idx, metadata) in fixture.providers().iter().enumerate() {
             let name = metadata.provider_id.clone().expect("provider id");
-            let path = tempdir.path().join(format!("{name}.bin"));
+            let path = directory.join(format!("{name}.bin"));
             std::fs::write(&path, &fixture.provider_payloads()[idx]).expect("write payload");
             local_inputs.push(provider_input_from_metadata(metadata, &path));
-            js_inputs.push(JsLocalProviderSpec {
-                name,
-                path: path.to_string_lossy().to_string(),
-                max_concurrent: Some(2),
-                weight: Some(1),
-                metadata: Some(js_metadata_from_provider(metadata)),
-            });
-            ffi_inputs.push(providers_json_from_metadata(metadata, &path));
+            providers.push(providers_json_from_metadata(metadata, &path));
         }
         let local_options = LocalFetchOptions {
             verify_digests: Some(true),
             verify_lengths: Some(true),
             use_scoreboard: Some(true),
             return_scoreboard: Some(true),
+            scoreboard_now_unix_secs: Some(fixture.now_unix_secs()),
             ..Default::default()
         };
         let rust_start = Instant::now();
-        let baseline = local_fetch::execute_local_fetch(
-            &plan_json,
-            local_inputs.clone(),
-            local_options.clone(),
-        )
-        .expect("rust baseline");
+        let baseline = local_fetch::execute_local_fetch(&plan_json, local_inputs, local_options)
+            .expect("rust baseline");
         let rust_duration = rust_start.elapsed();
-        let js_options = JsMultiFetchOptions {
-            verify_digests: Some(true),
-            verify_lengths: Some(true),
-            use_scoreboard: Some(true),
-            return_scoreboard: Some(true),
-            ..Default::default()
-        };
-        let js_start = Instant::now();
-        let js_result = iroha_js_host::sorafs_multi_fetch_local(
-            plan_json_string.clone(),
-            mem::take(&mut js_inputs),
-            Some(js_options),
+        let request = json!({
+            "plan": plan_json_string,
+            "providers": Value::Array(providers),
+            "options": {
+                "verify_digests": true, "verify_lengths": true, "use_scoreboard": true,
+                "return_scoreboard": true, "scoreboard_now_unix_secs": fixture.now_unix_secs(),
+            },
+        });
+        let request_path = directory.join("runtime-request.json");
+        std::fs::write(
+            &request_path,
+            norito::json::to_string(&request).expect("runtime request"),
         )
-        .expect("js fetch");
-        let js_duration = js_start.elapsed();
+        .expect("write runtime request");
+        let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support");
+        let node = std::env::var("IROHA_PARITY_NODE").unwrap_or_else(|_| "node".to_owned());
+        let python = std::env::var("IROHA_PARITY_PYTHON").unwrap_or_else(|_| "python3".to_owned());
+        let js_result = run_native_runtime(
+            &node,
+            &support.join("sorafs_parity_node.mjs"),
+            &request_path,
+        );
+        let js_duration = duration_from_report(&js_result);
+        let js_report = js_result.get("report").expect("JS report");
+        let js_payload = hex::decode(
+            js_result
+                .get("payload_hex")
+                .and_then(Value::as_str)
+                .expect("JS payload bytes"),
+        )
+        .expect("JS payload hex");
         assert_eq!(
-            js_result.payload.to_vec(),
+            js_payload,
             baseline.outcome.assemble_payload(),
             "JS payload mismatch"
         );
         let rust_scoreboard = scoreboard_map_from_result(baseline.scoreboard.as_deref());
-        let js_scoreboard = scoreboard_map_from_js(js_result.scoreboard.as_deref().unwrap_or(&[]));
+        let js_scoreboard =
+            scoreboard_map_from_json(js_report.get("scoreboard").expect("JS scoreboard"));
         assert_eq!(rust_scoreboard, js_scoreboard, "JS scoreboard mismatch");
         let rust_reports: HashMap<_, _> = baseline
             .outcome
@@ -340,173 +368,76 @@ mod js_host_parity {
             .map(|report| {
                 (
                     report.provider.id().as_str().to_owned(),
-                    (report.successes, report.failures, report.disabled),
-                )
-            })
-            .collect();
-        let js_reports: HashMap<_, _> = js_result
-            .provider_reports
-            .iter()
-            .map(|report: &JsMultiFetchProviderReport| {
-                (
-                    report.provider.clone(),
                     (
-                        usize::try_from(report.successes).expect("success count fits in usize"),
-                        usize::try_from(report.failures).expect("failure count fits in usize"),
+                        report.successes as u64,
+                        report.failures as u64,
                         report.disabled,
                     ),
                 )
             })
             .collect();
-        assert_eq!(rust_reports, js_reports, "JS provider reports mismatch");
+        assert_eq!(
+            rust_reports,
+            reports_from_json(js_report),
+            "JS provider reports mismatch"
+        );
         let rust_receipts: Vec<_> = baseline
             .outcome
             .chunk_receipts
             .iter()
             .map(|receipt| {
                 (
-                    receipt.chunk_index,
+                    receipt.chunk_index as u64,
                     receipt.provider.to_string(),
-                    receipt.attempts,
+                    receipt.attempts as u64,
                 )
             })
             .collect();
-        let js_receipts: Vec<_> = js_result
-            .chunk_receipts
-            .iter()
-            .map(|receipt: &JsMultiFetchChunkReceipt| {
-                (
-                    usize::try_from(receipt.chunk_index).expect("chunk index fits in usize"),
-                    receipt.provider.clone(),
-                    usize::try_from(receipt.attempts).expect("attempts fit in usize"),
-                )
-            })
-            .collect();
-        assert_eq!(rust_receipts, js_receipts, "JS chunk receipts mismatch");
-        let ffi_plan = plan_json_string.clone();
-        let ffi_providers = norito::json::Value::Array(ffi_inputs.clone());
-        let ffi_providers_str =
-            norito::json::to_string(&ffi_providers).expect("providers json string");
-        let ffi_options = norito::json!({
-            "verify_digests": true,
-            "verify_lengths": true,
-            "use_scoreboard": true,
-            "return_scoreboard": true,
-        });
-        let ffi_options_str = norito::json::to_string(&ffi_options).expect("options json string");
-        let mut out_payload_ptr: *mut u8 = std::ptr::null_mut();
-        let mut out_payload_len: c_ulong = 0;
-        let mut out_report_ptr: *mut u8 = std::ptr::null_mut();
-        let mut out_report_len: c_ulong = 0;
-        let ffi_start = Instant::now();
-        let ffi_rc = {
-            #[allow(unsafe_code)]
-            unsafe {
-                connect_norito_sorafs_local_fetch(
-                    ffi_plan.as_ptr().cast(),
-                    ffi_plan.len() as c_ulong,
-                    ffi_providers_str.as_ptr().cast(),
-                    ffi_providers_str.len() as c_ulong,
-                    ffi_options_str.as_ptr().cast(),
-                    ffi_options_str.len() as c_ulong,
-                    &mut out_payload_ptr,
-                    &mut out_payload_len,
-                    &mut out_report_ptr,
-                    &mut out_report_len,
-                )
-            }
-        };
-        let ffi_duration = ffi_start.elapsed();
-        assert_eq!(ffi_rc, 0, "FFI fetch returned error {ffi_rc}");
-        let ffi_payload = {
-            #[allow(unsafe_code)]
-            unsafe {
-                let slice = std::slice::from_raw_parts(out_payload_ptr, out_payload_len as usize);
-                let data = slice.to_vec();
-                connect_norito_free(out_payload_ptr);
-                data
-            }
-        };
+        assert_eq!(
+            rust_receipts,
+            receipts_from_json(js_report),
+            "JS chunk receipts mismatch"
+        );
+        let ffi_result = run_native_runtime(
+            &python,
+            &support.join("sorafs_parity_ffi.py"),
+            &request_path,
+        );
+        let ffi_duration = duration_from_report(&ffi_result);
+        assert_eq!(
+            ffi_result.get("return_code").and_then(Value::as_u64),
+            Some(0),
+            "FFI fetch returned error"
+        );
+        let ffi_payload = hex::decode(
+            ffi_result
+                .get("payload_hex")
+                .and_then(Value::as_str)
+                .expect("FFI payload bytes"),
+        )
+        .expect("FFI payload hex");
         assert_eq!(
             ffi_payload,
             baseline.outcome.assemble_payload(),
             "FFI payload mismatch"
         );
-        let ffi_report_json = {
-            #[allow(unsafe_code)]
-            unsafe {
-                let slice = std::slice::from_raw_parts(out_report_ptr, out_report_len as usize);
-                let json = String::from_utf8(slice.to_vec()).expect("utf-8 report");
-                connect_norito_free(out_report_ptr);
-                json
-            }
-        };
-        let ffi_report_value: norito::json::Value =
-            norito::json::from_str(&ffi_report_json).expect("ffi report json");
-        let ffi_scoreboard = scoreboard_map_from_json(
-            ffi_report_value
-                .get("scoreboard")
-                .unwrap_or(&norito::json::Value::Null),
-        );
+        let ffi_report = ffi_result.get("report").expect("FFI report");
+        let ffi_scoreboard =
+            scoreboard_map_from_json(ffi_report.get("scoreboard").expect("FFI scoreboard"));
         assert_eq!(rust_scoreboard, ffi_scoreboard, "FFI scoreboard mismatch");
-        let ffi_reports_map: HashMap<_, _> = ffi_report_value
-            .get("provider_reports")
-            .and_then(norito::json::Value::as_array)
-            .unwrap()
-            .iter()
-            .map(|entry| {
-                let obj = entry.as_object().expect("provider report object");
-                let provider = obj
-                    .get("provider")
-                    .and_then(norito::json::Value::as_str)
-                    .expect("provider id")
-                    .to_owned();
-                let successes = obj
-                    .get("successes")
-                    .and_then(norito::json::Value::as_u64)
-                    .expect("successes") as usize;
-                let failures = obj
-                    .get("failures")
-                    .and_then(norito::json::Value::as_u64)
-                    .expect("failures") as usize;
-                let disabled = obj
-                    .get("disabled")
-                    .and_then(norito::json::Value::as_bool)
-                    .expect("disabled");
-                (provider, (successes, failures, disabled))
-            })
-            .collect();
         assert_eq!(
-            rust_reports, ffi_reports_map,
+            rust_reports,
+            reports_from_json(ffi_report),
             "FFI provider reports mismatch"
         );
-        let ffi_receipts: Vec<_> = ffi_report_value
-            .get("chunk_receipts")
-            .and_then(norito::json::Value::as_array)
-            .unwrap()
-            .iter()
-            .map(|entry| {
-                let obj = entry.as_object().expect("receipt object");
-                let idx = obj
-                    .get("chunk_index")
-                    .and_then(norito::json::Value::as_u64)
-                    .expect("chunk index") as usize;
-                let provider = obj
-                    .get("provider")
-                    .and_then(norito::json::Value::as_str)
-                    .expect("provider")
-                    .to_owned();
-                let attempts = obj
-                    .get("attempts")
-                    .and_then(norito::json::Value::as_u64)
-                    .expect("attempts") as usize;
-                (idx, provider, attempts)
-            })
-            .collect();
-        assert_eq!(rust_receipts, ffi_receipts, "FFI chunk receipts mismatch");
-        assert!(rust_duration > std::time::Duration::ZERO);
-        assert!(js_duration > std::time::Duration::ZERO);
-        assert!(ffi_duration > std::time::Duration::ZERO);
+        assert_eq!(
+            rust_receipts,
+            receipts_from_json(ffi_report),
+            "FFI chunk receipts mismatch"
+        );
+        assert!(rust_duration > Duration::ZERO);
+        assert!(js_duration > Duration::ZERO);
+        assert!(ffi_duration > Duration::ZERO);
         let rust_ms = rust_duration.as_micros() as f64 / 1000.0;
         let js_ms = js_duration.as_micros() as f64 / 1000.0;
         let ffi_ms = ffi_duration.as_micros() as f64 / 1000.0;

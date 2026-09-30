@@ -112,7 +112,7 @@ expectations before bringing a node online.
    This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
 2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
 3. Check logs and `--trace-config` output for lane/data-space validation warnings. If any appear, revisit Step 4 so the effective catalog, aliases, and routing rules match the council-approved topology.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm the operator-signed `/v1/sumeragi/status` and `/v1/sumeragi/lanes` reads answer, and verify streaming keys are rotated or imported as required).
 
 ## Step 6 — Cutover and hand-off
 1. Store the verified per-build manifests and checksum sidecars plus
@@ -140,4 +140,4 @@ expectations before bringing a node online.
 - [ ] Configuration validator (`iroha3d --sora --config … --trace-config`) passes without warnings.
 - [ ] Aggregate signature, manifests, and checksums archived in the onboarding ticket and Ops notified.
 
-For broader context on Nexus migration phases and telemetry expectations, review `specs/nexus_transition_notes.md`.
+For operations and lane status, review `specs/nexus_operations.md` and `specs/sumeragi_lanes.md`.

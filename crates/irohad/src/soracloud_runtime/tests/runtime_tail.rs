@@ -92,7 +92,7 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
         sample_mailbox_message(&bundle, "update", b"retry-me".to_vec()),
     );
     let active = VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity);
-    let allocation = VMError::AllocationDeferred(mv::allocation::AllocationRefusal::DemandOverflow);
+    let allocation = VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow);
     for (error, label) in [
         (active, "execution_deferred"),
         (allocation, "allocation_deferred"),

@@ -10,10 +10,13 @@ fn actual_lane_snapshot_chain() -> (crate::sumeragi::test_chain::CertifiedTestCh
     let authority = config.genesis_key.clone();
     config.world.account_permissions.insert(
         AccountId::new(authority.public_key().clone()),
-        BTreeSet::from([Permission::from(iroha_executor_data_model::permission::parameter::CanSetParameters)]),
+        BTreeSet::from([Permission::from(
+            iroha_executor_data_model::permission::parameter::CanSetParameters,
+        )]),
     );
     config.genesis_parameters.push(Parameter::Custom(
         SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 4,
             max_merge_blocks: 8,
             stall_window: 1,
@@ -31,7 +34,10 @@ fn actual_lane_snapshot_chain() -> (crate::sumeragi::test_chain::CertifiedTestCh
         }
         .into_custom_parameter(),
     ));
-    (CertifiedTestChain::start(config).expect("actual certified lane genesis"), authority)
+    (
+        CertifiedTestChain::start(config).expect("actual certified lane genesis"),
+        authority,
+    )
 }
 
 state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_predecessors

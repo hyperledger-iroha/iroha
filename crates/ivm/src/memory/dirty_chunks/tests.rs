@@ -1,7 +1,7 @@
 //! Original-credit, geometry and allocation-free operation controls.
 
 use super::*;
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 use std::sync::Arc;
 
 #[test]

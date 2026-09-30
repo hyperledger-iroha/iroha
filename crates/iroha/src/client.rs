@@ -5,6 +5,7 @@ mod capability_test_support;
 pub mod configuration;
 #[cfg(test)]
 mod configuration_http_tests;
+pub mod consensus;
 mod consensus_keys;
 pub mod data_availability;
 #[cfg(test)]
@@ -17,6 +18,7 @@ mod multisig_validation;
 pub mod musubi;
 #[cfg(test)]
 mod musubi_http_tests;
+pub mod nexus;
 #[cfg(test)]
 mod operator_auth_tests;
 mod private_settlement;
@@ -26,7 +28,7 @@ mod reserve;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
 pub mod sccp;
-mod staking_preparation;
+pub use nexus::Nexus;
 pub mod status;
 #[cfg(test)]
 mod status_http_tests;
@@ -82,7 +84,6 @@ use iroha_data_model::{
         AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
-    block::consensus::SumeragiDiagnosticsStatus,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         types::{BlobDigest, ExtraMetadata},
@@ -822,10 +823,6 @@ fn alias_setup_dependency_rank(intent: &AliasIntentV1) -> u8 {
 /// Returns an error when the plan version or hash is invalid, the plan is not
 /// executable, a frame is unknown or non-canonical, or its resource mapping is
 /// incomplete or inconsistent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered setup-plan verifier keeps every first-error check in protocol order"
-)]
 pub fn decode_and_verify_alias_setup_plan(
     plan: &AliasTransactionPlanV1,
 ) -> Result<Vec<InstructionBox>> {
@@ -1087,10 +1084,6 @@ pub fn decode_and_verify_alias_setup_plan_for_request(
 ///
 /// Returns an error when the plan is malformed, non-canonical, blocked,
 /// internally inconsistent, or carries a substituted lifecycle instruction.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the lifecycle verifier keeps its ordered V1 framing and quote checks together"
-)]
 pub fn decode_and_verify_alias_lifecycle_plan(
     plan: &AliasLifecycleTransactionPlanV1,
 ) -> Result<Option<InstructionBox>> {
@@ -1600,10 +1593,6 @@ pub mod account_onboarding_test_fixture {
 /// # Errors
 /// Returns an error if the receipt is stale, substituted, conflicting, or not
 /// canonically framed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the onboarding verifier preserves the receipt's ordered fail-closed checks"
-)]
 pub fn decode_and_verify_account_onboarding_plan_for_request(
     expected_network_id: NetworkId,
     request: &AccountOnboardingPlanRequestV1,
@@ -8276,52 +8265,6 @@ impl Client {
         Self::validate_sumeragi_status_version(&status)?;
         norito::json::to_value(&status)
             .map_err(|err| eyre!("Failed to render Sumeragi status JSON: {err}"))
-    }
-    /// GET `/v1/sumeragi/diagnostics` with typed decoding and NPoS field validation.
-    ///
-    /// These diagnostic observations are not authenticated finality proofs.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
-    /// diagnostics evidence fails verification.
-    pub async fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
-        let request = self
-            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
-            .header("Accept", ACCEPT_NORITO_PREFERRED)
-            .build()?;
-        let resp = self.dispatch_request(request).await?;
-        Self::decode_sumeragi_diagnostics(&resp)
-    }
-
-    fn decode_sumeragi_diagnostics(resp: &Response<Vec<u8>>) -> Result<SumeragiDiagnosticsStatus> {
-        Self::ensure_response_status(
-            resp,
-            StatusCode::OK,
-            "Failed to get sumeragi diagnostics",
-            " ",
-        )?;
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        let wire = if Self::is_norito_content_type(content_type) {
-            decode_from_bytes::<SumeragiDiagnosticsStatus>(resp.body()).map_err(|err| {
-                eyre!("Failed to decode sumeragi diagnostics Norito payload: {err}")
-            })?
-        } else if Self::is_exact_json_content_type(content_type) {
-            norito::json::from_slice(resp.body())?
-        } else {
-            return Err(eyre!(
-                "Failed to decode sumeragi diagnostics: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
-            ));
-        };
-        if let Some(npos) = &wire.npos {
-            npos.validate()
-                .map_err(|reason| eyre!("Invalid NPoS diagnostics payload: {reason}"))?;
-        }
-        Ok(wire)
     }
     /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
@@ -19648,7 +19591,7 @@ impl Client {
     /// Relay one bounded canonical validation-fee proof page as untrusted bytes.
     ///
     /// The authenticated request uses this client's configured query account and
-    /// NetworkId. Decoding only checks the current wire shape. This method does
+    /// `NetworkId`. Decoding only checks the current wire shape. This method does
     /// not authenticate finality, registry, witness, or checkpoint authority.
     /// Consumers must verify the returned bytes against independently pinned
     /// bindings and roots before displaying or using any policy projection.
@@ -20301,10 +20244,6 @@ impl AccountClient {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the contract-call workflow keeps prepare, quote, bind, sign, and submit checks in order"
-    )]
     pub async fn post_contract_call_json(
         &self,
         authority: &iroha_data_model::account::AccountId,
@@ -22130,8 +22069,8 @@ mod tx_hash_tests {
         );
         let report = format!("{err:#}");
         assert!(
-            report.contains("admission remains ambiguous"),
-            "unexpected error: {err:?}"
+            report.contains("do not automatically resubmit or create a replacement transaction"),
+            "missing reconciliation instruction: {err:?}"
         );
         assert!(
             report.contains(&identity.entrypoint_hash.to_string()),
@@ -22172,7 +22111,10 @@ mod tx_hash_tests {
         let err = super::finalize_transaction_confirmation_error(err, Some(&context));
         let report = format!("{err:#}");
         assert!(report.contains("authenticated rejection details are invalid"));
-        assert!(!report.contains("admission remains ambiguous"));
+        assert!(
+            err.downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+                .is_none()
+        );
     }
     #[test]
     fn late_outcome_unknown_is_merged_after_an_unresolved_fallback() {
@@ -22212,7 +22154,17 @@ mod tx_hash_tests {
             })
             .expect_err("the unresolved fallback must preserve late ambiguity evidence");
         let report = format!("{err:#}");
-        assert!(report.contains("admission remains ambiguous"));
+        let ambiguity = err
+            .downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+            .expect("unresolved submission must retain its typed reconciliation identities");
+        assert_eq!(
+            ambiguity.entrypoint_hash().to_string(),
+            expected_entrypoint_hash
+        );
+        assert_eq!(
+            ambiguity.signed_transaction_hash().to_string(),
+            expected_signed_transaction_hash
+        );
         assert!(report.contains(&expected_entrypoint_hash));
         assert!(report.contains(&expected_signed_transaction_hash));
         assert!(report.contains("confirmation deadline elapsed"));
@@ -22225,7 +22177,10 @@ mod tx_hash_tests {
         let err = super::finalize_transaction_confirmation_error(terminal, Some(&context));
         let report = format!("{err:#}");
         assert!(report.contains("Transaction expired"));
-        assert!(!report.contains("admission remains ambiguous"));
+        assert!(
+            err.downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+                .is_none()
+        );
     }
     #[test]
     fn tx_confirmation_status_from_pipeline_response_keeps_rejection_private() {
@@ -22921,7 +22876,10 @@ mod tx_confirmation_stream_tests {
         .expect_err("an authoritative rejection must remain terminal");
         let report = format!("{err:#}");
         assert!(report.contains("authoritatively rejected"));
-        assert!(!report.contains("admission remains ambiguous"));
+        assert!(
+            err.downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn outcome_unknown_submission_honors_authoritative_expiry() {
@@ -22949,7 +22907,10 @@ mod tx_confirmation_stream_tests {
         .expect_err("an authoritative expiry must remain terminal");
         let report = format!("{err:#}");
         assert!(report.contains("Transaction expired"));
-        assert!(!report.contains("admission remains ambiguous"));
+        assert!(
+            err.downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn unresolved_outcome_unknown_queue_timeout_preserves_both_identities() {
@@ -22984,7 +22945,17 @@ mod tx_confirmation_stream_tests {
         let context = super::TransactionDispatchOutcomeUnknownContext::exact(identity);
         let err = super::finalize_transaction_confirmation_error(err, Some(&context));
         let report = format!("{err:#}");
-        assert!(report.contains("admission remains ambiguous"));
+        let ambiguity = err
+            .downcast_ref::<super::TransactionDispatchOutcomeUnknownError>()
+            .expect("unresolved submission must retain its typed reconciliation identities");
+        assert_eq!(
+            ambiguity.entrypoint_hash().to_string(),
+            expected_entrypoint_hash
+        );
+        assert_eq!(
+            ambiguity.signed_transaction_hash().to_string(),
+            expected_signed_transaction_hash
+        );
         assert!(report.contains(&expected_entrypoint_hash));
         assert!(report.contains(&expected_signed_transaction_hash));
         assert!(report.contains("transaction queued for too long"));
@@ -23323,6 +23294,7 @@ mod blocks_api {
 }
 #[cfg(test)]
 mod tests {
+    use super::consensus::tests::sample_sumeragi_diagnostics;
     use super::{
         default_alias_policy,
         evidence_http_tests::{
@@ -25161,10 +25133,6 @@ mod tests {
         Index,
         Account,
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the helper checks all alias read variants against the same signed and unsigned request contract"
-    )]
     fn assert_alias_read_request(fixture: AliasReadFixture, authenticated: bool) {
         let client = client_with_static_canonical_auth_headers();
         let alias = "bright-brook-5859@ubl.sbp"
@@ -25527,10 +25495,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test keeps the complete fail-closed canonicality and cross-field consistency payload matrix together"
-    )]
     fn typed_account_alias_reads_reject_noncanonical_or_inconsistent_payloads() {
         let alias = "merchant@banka.paynet"
             .parse::<AccountAliasName>()
@@ -28699,52 +28663,6 @@ mod tests {
             )
             .expect("transaction preparation should not read RNG when nonce is disabled");
         assert_eq!(transaction.nonce, None);
-    }
-    fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
-        SumeragiDiagnosticsStatus {
-            tx_queue_depth: 7,
-            tx_queue_capacity: 20,
-            tx_queue_retained_bytes: 3_072,
-            tx_queue_max_retained_bytes: 4_096,
-            tx_queue_saturated: true,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: true,
-            tx_queue_saturated_by_age: true,
-            tx_queue_oldest_queued_age_ms: 1_250,
-            npos: None,
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: Vec::new(),
-        }
-    }
-    fn encoded_sumeragi_diagnostics_response(
-        status: &SumeragiDiagnosticsStatus,
-        content_type: &'static str,
-        context: &'static str,
-    ) -> HttpResponse<Vec<u8>> {
-        let body = if content_type == APPLICATION_JSON {
-            norito::json::to_vec(status).expect(context)
-        } else {
-            norito::to_bytes(status).expect(context)
-        };
-        mk_response(StatusCode::OK, body, Some(content_type))
-    }
-    fn request_sumeragi_diagnostics(
-        status: &SumeragiDiagnosticsStatus,
-        content_type: &'static str,
-        context: &'static str,
-    ) -> Result<SumeragiDiagnosticsStatus> {
-        let client = client_with_base_url(base_url());
-        capture_request(
-            encoded_sumeragi_diagnostics_response(status, content_type, context),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
-            },
-        )
-        .0
     }
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -32524,7 +32442,7 @@ mod tests {
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.blocks, status.blocks);
     }
-    fn sample_sumeragi_status() -> SumeragiStatus {
+    pub(super) fn sample_sumeragi_status() -> SumeragiStatus {
         let key = KeyPair::from_seed(vec![7; 32], iroha_crypto::Algorithm::BlsNormal)
             .public_key()
             .clone();
@@ -32693,128 +32611,6 @@ mod tests {
                 },
             )
             .expect_err("the JSON-specific helper must not guess or fall back");
-            assert!(
-                error.to_string().contains("invalid content-type"),
-                "{error}"
-            );
-        }
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
-        let client = client_with_base_url(base_url());
-        let (result, _) = capture_request(
-            mk_response(
-                StatusCode::OK,
-                br#"{"lane_relay_envelopes":["#.to_vec(),
-                Some(APPLICATION_JSON),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
-            },
-        );
-        assert!(result.is_err(), "malformed json should be rejected");
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_unknown_json_fields() {
-        let client = client_with_base_url(base_url());
-        let mut status = sample_sumeragi_diagnostics();
-        status.npos = Some(
-            iroha_data_model::block::consensus::SumeragiNposDiagnostics {
-                epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-                epoch_seed: [0xA5; 32],
-            },
-        );
-        let current = norito::json::to_value(&status).expect("serialize diagnostics fixture");
-        let mut nested = current.clone();
-        nested
-            .pointer_mut("/npos")
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("diagnostics fixture contains the current NPoS schedule")
-            .insert("canonical".to_owned(), norito::json::Value::Null);
-        let mut rejected = vec![("unknown nested schedule field", nested)];
-        for field in [
-            "lane_commitments",
-            "dataspace_commitments",
-            "pipeline_execution",
-        ] {
-            let mut retired = current.clone();
-            retired
-                .as_object_mut()
-                .expect("diagnostics object")
-                .insert(field.to_owned(), norito::json::Value::Array(Vec::new()));
-            rejected.push((field, retired));
-        }
-        for (case, value) in rejected {
-            let (result, _) = capture_request(
-                mk_response(
-                    StatusCode::OK,
-                    norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"),
-                    Some(APPLICATION_JSON),
-                ),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
-                },
-            );
-            assert!(result.is_err(), "{case} must be rejected");
-        }
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {
-        let mut status = sample_sumeragi_diagnostics();
-        status.npos = Some(
-            iroha_data_model::block::consensus::SumeragiNposDiagnostics {
-                epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-                epoch_seed: [0; 32],
-            },
-        );
-        let error = request_sumeragi_diagnostics(
-            &status,
-            APPLICATION_JSON,
-            "encode invalid diagnostics JSON",
-        )
-        .expect_err("zero NPoS seed must be rejected");
-        assert!(error.to_string().contains("epoch seed must be non-zero"));
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_requires_declared_current_media_type() {
-        let client = client_with_base_url(base_url());
-        let status = sample_sumeragi_diagnostics();
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
-        let (decoded, _) = capture_request(
-            mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
-            },
-        );
-        let decoded = decoded.expect("decode declared current diagnostics JSON");
-        assert_eq!(decoded, status);
-        for content_type in [
-            None,
-            Some("application/octet-stream"),
-            Some("application/x-norito-legacy"),
-        ] {
-            let error = with_mock_http(
-                respond_with(
-                    &Arc::new(Mutex::new(Vec::new())),
-                    mk_response(StatusCode::OK, body.clone(), content_type),
-                ),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
-                },
-            )
-            .expect_err("undeclared or noncanonical diagnostics media must fail closed");
             assert!(
                 error.to_string().contains("invalid content-type"),
                 "{error}"

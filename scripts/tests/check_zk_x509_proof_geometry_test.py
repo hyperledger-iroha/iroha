@@ -131,3 +131,8 @@ def test_complete_calendar_bindings_keep_each_column_and_the_same_ceiling() -> N
     assert result["current_trace_columns"] == 5_623 + added_base + added_aux
     assert result["combined_current_max_bytes"] == 9_204_362 + (added_base + added_aux) * per_column
     assert result["headroom_bytes"] == 14 * per_column + 118
+
+
+def test_numeric_constants_accept_public_owner_visibility() -> None:
+    assert SCREEN["_constant"]("pub const OWNER_BYTES: u32 = 123;", "OWNER_BYTES") == 123
+    assert SCREEN["_constant"]("pub(crate) const OWNER_BYTES: u32 = 123;", "OWNER_BYTES") == 123

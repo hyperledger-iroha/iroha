@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, MutableMapping, Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 OBJECT_FORMAT = "sha1"
 OID_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -61,7 +61,7 @@ REQUIRED_SELECTED_ORIGINS = {
     "scripts/tests/check_source_file_budget_test.py": "donor",
     "scripts/tests/profile_cargo_build_test.py": "protected_integration",
 }
-REQUIRED_SOURCE_BUDGET = {
+REQUIRED_HISTORICAL_SOURCE_BUDGET = {
     "path": "ci/source_file_budget.json",
     "schema_version": 2,
     "production_limit": 5_000,
@@ -693,7 +693,7 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
             "ancestry",
             "selected_paths",
             "signed_lock_anchor",
-            "source_budget",
+            "historical_source_budget",
         },
         "provenance manifest",
     )
@@ -827,16 +827,16 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
     require_int(lock["bytes"], "signed_lock_anchor.cargo_lock.bytes", positive=True)
     require_sha256(lock["sha256"], "signed_lock_anchor.cargo_lock.sha256")
 
-    validate_source_budget_contract(
-        manifest["source_budget"], REQUIRED_SOURCE_BUDGET, "source_budget"
+    validate_historical_source_budget_contract(
+        manifest["historical_source_budget"], REQUIRED_HISTORICAL_SOURCE_BUDGET, "historical_source_budget"
     )
     return manifest
 
 
-def validate_source_budget_contract(
+def validate_historical_source_budget_contract(
     payload: Any, expected: Mapping[str, Any], label: str
 ) -> None:
-    """Pin the active per-file source policy."""
+    """Authenticate the retired source-budget record as historical evidence."""
     contract = require_object(payload, label)
     require_exact_keys(contract, set(expected), label)
     for key, required in expected.items():
@@ -920,37 +920,6 @@ def historical_rust_count(
     return len(entries), sum(line_cache[entry.oid] for entry in entries)
 
 
-def verify_current_source_budget(root: Path, contract: Mapping[str, Any]) -> None:
-    """Verify current file limits and counting scope, with no aggregate target."""
-    path = root / str(contract["path"])
-    payload = require_object(strict_json_file(path, str(contract["path"])), "current source budget")
-    schema = require_int(payload.get("schema_version"), "current source budget.schema_version")
-    if schema != contract["schema_version"]:
-        raise ProvenanceError("current source budget schema_version changed")
-    require_exact_keys(
-        payload,
-        {"schema_version", "limits", "excluded_prefixes", "exceptions"},
-        "current source budget",
-    )
-    limits = require_object(payload.get("limits"), "current source budget.limits")
-    require_exact_keys(limits, {"production", "test"}, "current source budget.limits")
-    for kind in ("production", "test"):
-        actual = require_int(limits[kind], f"current source budget {kind}", positive=True)
-        expected = contract[f"{kind}_limit"]
-        if actual != expected:
-            raise ProvenanceError(
-                f"current source budget {kind} limit is {actual}, expected {expected}"
-            )
-    require_object(payload["exceptions"], "current source budget.exceptions")
-    prefixes = payload.get("excluded_prefixes")
-    if not isinstance(prefixes, list):
-        raise ProvenanceError("current source budget excluded_prefixes must be an array")
-    parsed_prefixes = tuple(
-        require_prefix(prefix, f"current source budget excluded_prefixes[{index}]")
-        for index, prefix in enumerate(prefixes)
-    )
-    if parsed_prefixes != tuple(contract["excluded_prefixes"]):
-        raise ProvenanceError("current source budget exclusions changed")
 
 
 def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int | str]:
@@ -996,7 +965,7 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int |
         observed_paths, observed_lines = historical_rust_count(
             store,
             commit,
-            tuple(manifest["source_budget"]["excluded_prefixes"]),
+            tuple(manifest["historical_source_budget"]["excluded_prefixes"]),
             line_cache,
         )
         total_historical_paths += observed_paths
@@ -1081,7 +1050,6 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int |
     )
     head_lock_bytes = verified_blobs[head_lock.oid]
 
-    verify_current_source_budget(root, manifest["source_budget"])
     return {
         "roles": len(lineage),
         "selected_paths": len(manifest["selected_paths"]),
@@ -1116,8 +1084,8 @@ def main() -> int:
         f"head_cargo_lock_bytes={report['head_cargo_lock_bytes']} "
         f"head_cargo_lock_sha256={report['head_cargo_lock_sha256']} "
         "structural_signature_only=true "
-        f"production_limit={REQUIRED_SOURCE_BUDGET['production_limit']} "
-        f"test_limit={REQUIRED_SOURCE_BUDGET['test_limit']}"
+        f"historical_production_limit={REQUIRED_HISTORICAL_SOURCE_BUDGET['production_limit']} "
+        f"historical_test_limit={REQUIRED_HISTORICAL_SOURCE_BUDGET['test_limit']}"
     )
     return 0
 

@@ -4409,7 +4409,7 @@ mod tests_overlay_manifest {
     }
     #[test]
     fn selective_rebuild_reuses_the_prepared_argument_plan_without_redecoding() {
-        let artifact = ivm::KotodamaCompiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku RebuildArguments {
@@ -4491,7 +4491,7 @@ seiyaku RebuildArguments {
     }
     #[test]
     fn raw_rebuild_does_not_reuse_a_plan_for_different_signed_arguments() {
-        let artifact = ivm::KotodamaCompiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku RawRebuildArguments {
@@ -4572,7 +4572,7 @@ seiyaku RawRebuildArguments {
     }
     fn parameterized_quarantine_fixture() -> (State, SignedTransaction, SignedTransaction) {
         use iroha_data_model::transaction::executable::ContractArgumentRecord;
-        let program = ivm::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku QuarantineArguments {
@@ -4838,7 +4838,7 @@ seiyaku QuarantineArguments {
     }
     #[test]
     fn state_free_raw_builder_rejects_protected_entrypoint_before_argument_decode() {
-        let program = ivm::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku ProtectedStateFreeOverlay {
@@ -4886,7 +4886,7 @@ seiyaku ProtectedStateFreeOverlay {
     }
     #[test]
     fn state_free_raw_builder_rejects_permissionless_entrypoint_before_argument_decode() {
-        let program = ivm::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
@@ -4939,7 +4939,7 @@ seiyaku PermissionlessStateFreeOverlay {
             ContractArgumentRecord, ContractInvocation,
         };
         const REQUIRED_PERMISSION: &str = "CanWriteParameterizedOverlay";
-        let program = ivm::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku ProtectedParameterizedOverlay {
@@ -5038,7 +5038,7 @@ seiyaku ProtectedParameterizedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive guarded contract address");
-        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+        let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedOverlay {
@@ -5128,7 +5128,7 @@ seiyaku GuardedOverlay {
             ),
             "unexpected authorization error: {denied:?}"
         );
-        let (rebound_artifact, rebound_manifest) = ivm::KotodamaCompiler::new()
+        let (rebound_artifact, rebound_manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedOverlayRebound {
@@ -6458,12 +6458,13 @@ mod tests {
     }
     #[test]
     fn proved_contract_permission_denies_before_argument_decode_or_proof_validation() {
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        );
         let (program, manifest) = compiler
             .compile_source_with_manifest(
                 r#"
@@ -6785,12 +6786,13 @@ seiyaku ProtectedProved {
         use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        );
         let (program, manifest) = compiler
             .compile_source_with_manifest(
                 r#"

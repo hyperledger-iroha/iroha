@@ -20,11 +20,11 @@ use crate::{
     merkle_utils::compute_memory_leaf_digest,
     stack_policy::IvmStackPolicy,
 };
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
 use likely_stable::{likely, unlikely};
-use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 use std::{
     convert::TryInto,
@@ -126,6 +126,13 @@ impl MemoryImage {
         match self {
             Self::Local(image) => image.mark_unmeasured(),
             Self::Funded(image) => image.mark_unmeasured(),
+        }
+    }
+
+    fn remeasure_fixed(&mut self) {
+        match self {
+            Self::Local(image) => image.remeasure_fixed(),
+            Self::Funded(image) => image.remeasure_fixed(),
         }
     }
 }
@@ -249,7 +256,14 @@ impl Memory {
     // TODO: Complete original active-pool plans for read-log growth, hardware
     // and remaining snapshot scratch before claiming complete execution funding.
     pub(crate) fn prepare_for_cache(&mut self) -> bool {
-        self.call_frames.compact_for_cache()
+        if !self.call_frames.compact_for_cache() {
+            return false;
+        }
+        // The image never resizes; activation only marks it unmeasured while
+        // guest code runs. After the template reset its exact size is known
+        // again, so it must not block retention of the idle runtime.
+        self.data.remeasure_fixed();
+        true
     }
     pub(crate) fn try_retain(&self) -> bool {
         self.data.try_retain()

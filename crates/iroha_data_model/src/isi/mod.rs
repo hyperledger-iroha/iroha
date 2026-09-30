@@ -173,6 +173,12 @@ impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetHolding
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::ActivateRetailDailyLimitV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
+impl_direct_instruction_box!(
+    crate::isi::sumeragi_amx::RegisterAmxDataspaceV1,
+    crate::isi::sumeragi_amx::BeginAmxV1,
+    crate::isi::sumeragi_amx::RelayAmxPreparedV1,
+    crate::isi::sumeragi_amx::RelayAmxHandoffV1,
+);
 // Allow direct boxing of ZK asset and voting instructions
 impl_direct_instruction_box!(crate::isi::zk::RegisterZkAsset);
 impl_direct_instruction_box!(crate::isi::zk::ScheduleConfidentialPolicyTransition);
@@ -1897,6 +1903,8 @@ pub mod sorafs;
 pub mod space_directory;
 /// Public lane staking instructions.
 pub mod staking;
+/// AMX two-phase-commit instructions of the global chain.
+pub mod sumeragi_amx;
 /// Asset, account, and value transfer instructions.
 pub mod transfer;
 mod transparent;

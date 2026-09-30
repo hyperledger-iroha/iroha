@@ -25,11 +25,15 @@ def test_sorafs_release_http_clients_do_not_follow_redirects() -> None:
     for name in run_impls:
         implementation = cli.split(f"impl Run for {name}", 1)[1].split("\n}", 1)[0]
         assert ".redirect(reqwest::redirect::Policy::none())" in implementation
+    assert '#[path = "sorafs/tests.rs"]\nmod tests;' in cli
+    cli_tests = read_rust_source_bundle(
+        IROHA_CLI_SORAFS_RS.parent / "sorafs" / "tests.rs", root=REPO_ROOT
+    )
     for name in (
         "fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects()",
         "fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects()",
     ):
-        assert name in cli
+        assert name in cli_tests
     xtask_root = REPO_ROOT / "xtask" / "src"
     assert re.search(r"(?m)^mod sorafs;$", read(xtask_root / "main.rs"))
     xtask = read(xtask_root / "sorafs.rs")

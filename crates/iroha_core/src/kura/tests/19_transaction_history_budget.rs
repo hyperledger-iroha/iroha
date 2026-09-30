@@ -40,7 +40,7 @@ fn transaction_history_budget_retains_the_configured_pool_and_refunds_once() {
     );
     assert!(matches!(
         second.try_reserve_bytes(1),
-        Err(mv::allocation::AllocationRefusal::Capacity { .. })
+        Err(iroha_allocation::AllocationRefusal::Capacity { .. })
     ));
     drop(first);
     drop(kura);

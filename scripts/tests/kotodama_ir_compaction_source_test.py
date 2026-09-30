@@ -338,6 +338,12 @@ def _validate_v1_lowering_contract(production: str) -> None:
     _require("Builtin::StageAnchoredSpend=>{letspend=lower_expr(ctx,&args[0],vars);"
              "ctx.current_instr(Instr::StageAnchoredSpend{spend});emit_i64_const(ctx,0)}"
              in surface, "anchored-spend lowering changed")
+    _require("Builtin::ScExecuteSubmitBallot=>{letpayload=lower_expr(ctx,&args[0],vars);"
+             "ctx.current_instr(Instr::VendorExecuteInstruction{payload,"
+             "kind:VendorInstructionKind::SubmitBallot,});emit_i64_const(ctx,0)}"
+             in surface, "typed submit-ballot instruction routing changed")
+    _require("matched operation-specific instruction bridge" not in production,
+             "typed submit-ballot lowering must not restore the panic lookup")
     expression = _function_region(production, "lower_expr")
     _require("let l = lower_expr(ctx, left, vars);\n            let r = lower_expr(ctx, right, vars);"
              in expression, "equality operands must lower once left-to-right")
@@ -486,6 +492,9 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
              "lowered_args.push(lower_expr_as_i64(ctx, arg, vars));", "must not narrow"),
             ("ctx.current_instr(Instr::StageAnchoredSpend { spend });",
              "ctx.current_instr(Instr::AxtCommit);", "anchored-spend lowering"),
+            ("kind: VendorInstructionKind::SubmitBallot,",
+             "kind: vendor_instruction_kind_for_builtin(builtin),",
+             "typed submit-ballot instruction routing"),
             ("let l = lower_expr(ctx, left, vars);\n            let r = lower_expr(ctx, right, vars);",
              "let r = lower_expr(ctx, right, vars);\n            let l = lower_expr(ctx, left, vars);",
              "left-to-right"),
@@ -499,6 +508,10 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
             with self.subTest(retired=retired):
                 with self.assertRaisesRegex(GuardError, "retired V1 lowering"):
                     _validate_v1_lowering_contract(production + "\n// " + retired)
+        with self.assertRaisesRegex(GuardError, "must not restore the panic lookup"):
+            _validate_v1_lowering_contract(
+                production + '\n// matched operation-specific instruction bridge'
+            )
 
     def test_compiled_module_ownership_cannot_redirect(self) -> None:
         for owner in ('pub mod something_else;', '#[path = "other.rs"]\npub mod ir;',

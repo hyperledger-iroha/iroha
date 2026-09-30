@@ -1,6 +1,6 @@
 //! Original capture notifications retained by the enclosing field aggregate.
 
-use concread::release::DeferredRelease;
+use iroha_allocation::release::DeferredRelease;
 
 /// Native release custody from a successful original-owner capture.
 ///

@@ -28,6 +28,9 @@ name = "mv"
 path = "src/lib.rs"
 
 
+[dependencies]
+iroha_allocation = { workspace = true }
+
 [dependencies.concread]
 workspace = true
 default-features = false
@@ -63,16 +66,6 @@ path = "tests/linear_allocation_custody.rs"
 [[test]]
 name = "admitted_map_custody"
 path = "tests/admitted_map_custody.rs"
-
-# Exercise the real typed buffer owner with an isolated observed global allocator.
-[[test]]
-name = "charged_buffer_custody"
-path = "tests/charged_buffer_custody.rs"
-
-# Physical allocation/refund ordering for original prepaid shared ownership.
-[[test]]
-name = "charged_shared_custody"
-path = "tests/charged_shared_custody.rs"
 
 # Actual allocator/refusal and same-source custody of prepaid Cell publication identities.
 [[test]]

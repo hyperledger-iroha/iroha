@@ -67,21 +67,21 @@ Audited code evidence:
 - [../crates/iroha_data_model/src/proof.rs](../crates/iroha_data_model/src/proof.rs):
   `ProofBox`, `ProofAttachment`, `VerifyingKeyBox`, `VerifyingKeyRecord`, key status,
   and backend/commitment serialization policy.
-- [../crates/iroha_core/src/zk.rs](../crates/iroha_core/src/zk.rs): verifier
+- [../crates/iroha_core_zk/src/lib.rs](../crates/iroha_core_zk/src/lib.rs): verifier
   dispatch, preverify/dedup, backend-label guardrails, envelope metadata checks,
   STARK/Halo2 entry points, and timing/size guardrails.
-- [../crates/iroha_core/src/zk_stark.rs](../crates/iroha_core/src/zk_stark.rs):
+- [../crates/iroha_core_zk/src/stark.rs](../crates/iroha_core_zk/src/stark.rs):
   generic native Goldilocks STARK/FRI verifier and AIR bindings; the generic
   boundary explicitly rejects the retired ZK-ACE relation.
-- [../crates/iroha_core/src/privacy_engines/zk_ace.rs](../crates/iroha_core/src/privacy_engines/zk_ace.rs)
+- [../crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs](../crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs)
   and
-  [../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs](../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs):
+  [../crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs):
   the private zeroizing witness, compiled profile, dedicated masked AIR,
   theorem-bound DEEP/FRI prover, and native verifier.
-- [../crates/iroha_core/src/privacy_engines/transparent_stark.rs](../crates/iroha_core/src/privacy_engines/transparent_stark.rs),
-  [../crates/iroha_core/src/privacy_engines/aggregate_stark.rs](../crates/iroha_core/src/privacy_engines/aggregate_stark.rs),
+- [../crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs),
+  [../crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs),
   and
-  [../crates/iroha_core/src/privacy_engines/proof_managed_note_stark.rs](../crates/iroha_core/src/privacy_engines/proof_managed_note_stark.rs):
+  [../crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs):
   shared field, transcript, Merkle, aggregate DEEP/FRI, exact proof-codec, and
   proof-managed relation-profile boundaries.
 - [../crates/iroha_zkp_halo2/src/lib.rs](../crates/iroha_zkp_halo2/src/lib.rs):
@@ -94,8 +94,8 @@ Audited code evidence:
   privacy activation and ZK-ACE policy governance, typed proof verification,
   atomic transfer effects, and replay-nullifier consumption.
 - [../crates/iroha_core/src/smartcontracts/isi/world.rs](../crates/iroha_core/src/smartcontracts/isi/world.rs):
-  generic verifying-key registry policy, `VerifyProof`, governance proof
-  checks, and FASTPQ lane relay admission.
+  generic verifying-key registry policy, `VerifyProof` and governance proof
+  checks.
 - [../crates/iroha_core/src/smartcontracts/ivm/host.rs](../crates/iroha_core/src/smartcontracts/ivm/host.rs):
   IVM VK loading, envelope enforcement, verifier syscalls, and batch verification.
 - [../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs](../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs):
@@ -658,10 +658,7 @@ zero pointer remains an explicit proof-clear operation. The adversarial
 regression preloads a valid cache sentinel, submits a fully valid FASTPQ proof,
 and proves the proof map, cache contents, and cache slot remain unchanged.
 
-Specialized callsites have distinct trust analyses. Verified lane-relay
-registration matches the proven roots and transaction set to a lane execution
-commitment, but its transaction-order and authoritative state-root construction
-remain unresolved under ZK-AUDIT-30. Fee-sponsor vault allocation is checked
+Specialized callsites have distinct trust analyses. Fee-sponsor vault allocation is checked
 against authenticated owner/delegation and current authoritative vault/policy
 state. Those paths do not derive authority from generic syscall success. The
 issuer-signed asset handle path is narrower but not release-qualified: its
@@ -823,12 +820,13 @@ supplied anchor. For sealed reveals the membership identity is derived from the
 exact outer wire. The caller must still authenticate that anchor through finalized
 ledger state, QC/committee facts, issuer signatures, successful source execution,
 transfer facts, and nonce consumption. This helper does not authorize a spend by
-itself. `TrustedBlockProofAnchor::from_untrusted_finality_artifact` can authenticate
-the signed artifact, complete executed block, and retained transcript map, but its
-cryptographic checks are relative to the supplied roster. The future AXT resolver
-must first pin the expected network and height context from immutable trusted WSV
-state, using the `BridgeFinalityVerifier` trust boundary; artifact self-consistency
-alone is insufficient. The six passing tests cover a real transfer proof with a fabricated test
+itself. `TrustedBlockProofAnchor::from_verified_finality` accepts only a
+`VerifiedSumeragiBlock` from the portable finality verifier, whose checks are relative
+to the genesis or checkpoint its caller selected, and `from_committed_execution`
+accepts only an executed-wire identity that the certified-chain reader authenticated.
+The future AXT resolver must still pin the expected network and trust root from
+immutable trusted WSV state, using the `SumeragiFinalityVerifier` trust boundary
+([bridge finality](bridge_finality.md)); proof self-consistency alone is insufficient. The six passing tests cover a real transfer proof with a fabricated test
 anchor, exact root/set/dataspace bytes, DA/expiry/profile/cap rejection, wire order,
 exactly-once membership, and sealed-reveal identity. The complete AXT module suite
 passes 76 tests, including those six regressions. The seven Core regressions
@@ -837,10 +835,10 @@ that executable predates the later shared hash-frame refactor. These fixtures do
 not prove authoritative finalized WSV or runtime authorization.
 
 The root foundation also requires replacement on the consensus side.
-`ordinary_execution_roots` and `parent_state_from_witness` in
-[Core execution commitments](../crates/iroha_core/src/sumeragi/exec.rs) use only
+`post_state_from_witness` and `parent_state_from_witness` in
+[the execution-witness roots](../crates/iroha_core/src/exec_witness/roots.rs) use only
 witnessed writes and their pre-values, or witnessed reads when there are no writes.
-[The SMT constructor](../crates/iroha_core/src/sumeragi/smt.rs) fills absent siblings
+[The SMT constructor](../crates/iroha_core/src/exec_witness/smt.rs) fills absent siblings
 with its empty hash. These roots commit to those projections, not the full persisted
 WSV. Canonical executed-block bytes and QC authentication do not change that root
 meaning. An authoritative root resolver cannot treat this projection as an existing
@@ -1158,11 +1156,9 @@ AXT/FASTPQ binding checks canonical binding normalization, dataspace, manifest r
 payload size, batch parameter, batch public dataspace, concrete execution batch,
 source transaction commitment, embedded binding metadata, claim digest, witness and
 policy commitments, source receipt id, target dataspaces, effect type, corridor, batch
-seal, transfer transitions, and transfer transcripts. `RegisterVerifiedLaneRelay`
-then checks lane envelope verification, proof payload digest, height/expiry, source
-dataspace, effect type, lane relay claim digest, and FASTPQ proof result before
-recording a verified lane relay. These metadata checks do not establish the missing
-ordered entry membership or authoritative WSV witness relation in ZK-AUDIT-30.
+seal, transfer transitions, and transfer transcripts. These metadata checks do not
+establish the missing ordered entry membership or authoritative WSV witness relation
+in ZK-AUDIT-30.
 
 ## Formal Model
 
@@ -1197,9 +1193,9 @@ counterexamples.
 ```bash
 scripts/formal/zk_tlc.sh fast
 scripts/formal/zk_tlc.sh mutations
-cargo test -p iroha_core --features zk-stark --lib zk_stark::tests::
+cargo test -p iroha_core_zk --lib stark::tests::
 cargo test -p iroha_core --features zk-stark --lib zk_ace
-cargo test -p iroha_core --features zk-halo2-ipa --lib zk::
+cargo test -p iroha_core_zk --lib
 cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover
 ```

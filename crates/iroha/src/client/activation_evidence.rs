@@ -278,7 +278,7 @@ impl Client {
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
     /// block hash match, its proposal inputs and execution context match the header commitments, its full typed output
     /// cache is consistent, and the supplied successful, signed transaction belongs to this
-    /// client's NetworkId and verifies through its exact Network input-index join and separate
+    /// client's `NetworkId` and verifies through its exact Network input-index join and separate
     /// input/output proofs.
     ///
     /// The required commitment must come from an independently verified, externally anchored

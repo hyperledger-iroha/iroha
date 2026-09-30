@@ -1,26 +1,17 @@
 import argparse
 import array
 import contextlib
-import importlib.util
 import io
 import json
 import os
-import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "iso_rail_gateway_adapter.py"
-SPEC = importlib.util.spec_from_file_location("iso_rail_gateway_adapter", SCRIPT_PATH)
-ADAPTER = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-sys.modules[SPEC.name] = ADAPTER
-SPEC.loader.exec_module(ADAPTER)
-
-
 from pytests.scripts.iso_rail_gateway_adapter_test_support import (
+    ADAPTER,
     SAMPLE_XML,
     TEST_NETWORK_ID,
     TEST_OPERATOR_CONTEXT,
@@ -76,15 +67,14 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, 'lstat', new=failing_lstat),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._reject_symlinked_existing_ancestors(
                             ADAPTER.Path("ancestor") / "leaf",
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output ancestors", message)
@@ -130,12 +120,11 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                                 raise error
                             return original_lstat(self)
 
-                        path_type.lstat = failing_lstat
-                        try:
+                        with (
+                            patch.object(path_type, 'lstat', new=failing_lstat),
+                        ):
                             with self.assertRaises(ADAPTER.AdapterError) as caught:
                                 action(path)
-                        finally:
-                            path_type.lstat = original_lstat
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -168,12 +157,11 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, 'lstat', new=failing_lstat),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_input_directory(path, "inbox_dir")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect inbox_dir", message)
@@ -202,16 +190,15 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 def failing_stat(_self, *args, error=failure, **kwargs):
                     raise error
 
-                path_type.stat = failing_stat
-                try:
+                with (
+                    patch.object(path_type, 'stat', new=failing_stat),
+                ):
                     self.assertFalse(
                         ADAPTER._same_existing_path(
                             ADAPTER.Path("left"),
                             ADAPTER.Path("right"),
                         )
                     )
-                finally:
-                    path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=rail-resolve-secret"
@@ -297,12 +284,11 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                                 raise error
                             return original_resolve(self, *args, **kwargs)
 
-                        path_type.resolve = failing_resolve
-                        try:
+                        with (
+                            patch.object(path_type, 'resolve', new=failing_resolve),
+                        ):
                             with self.assertRaises(ADAPTER.AdapterError) as caught:
                                 action(root)
-                        finally:
-                            path_type.resolve = original_resolve
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -489,19 +475,16 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, 'exists', new=failing_exists),
+                    patch.object(path_type, 'is_symlink', new=false_is_symlink),
+                    patch.object(path_type, 'lstat', new=failing_lstat),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_output_file_target(
                             ADAPTER.Path("receipt.json"),
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output leaf", message)
@@ -523,16 +506,15 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, 'lstat', new=failing_lstat),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._write_text_output(
                             ADAPTER.Path("receipt.json"),
                             "{}\n",
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output parent", message)
@@ -557,16 +539,15 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with (
+                        patch.object(path_type, 'mkdir', new=failing_mkdir),
+                    ):
                         with self.assertRaises(ADAPTER.AdapterError) as caught:
                             ADAPTER._write_text_output(
                                 ADAPTER.Path(raw_root) / "out" / "receipt.json",
                                 "{}\n",
                                 display_label="receipt output",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create receipt output parent", message)
@@ -643,21 +624,17 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         return None
                     return original_mkdir(self, *args, **kwargs)
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                path_type.mkdir = failing_mkdir
-                try:
+                with (
+                    patch.object(path_type, 'exists', new=failing_exists),
+                    patch.object(path_type, 'is_symlink', new=false_is_symlink),
+                    patch.object(path_type, 'lstat', new=failing_lstat),
+                    patch.object(path_type, 'mkdir', new=failing_mkdir),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_output_directory(
                             ADAPTER.Path("receipts"),
                             "receipt directory",
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
-                    path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn(expected, message)

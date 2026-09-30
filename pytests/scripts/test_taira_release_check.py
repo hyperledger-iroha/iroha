@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1468 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1501 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1486 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1519 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -79,7 +79,7 @@ SPEC.loader.exec_module(gate)
 def production_library_events():
     return [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["lib"]},
              "profile": {"test": False}, "features": ["default"]}
-            for name in ("iroha_core", "iroha_torii")]
+            for name in ("iroha_core", "iroha_core_zk", "iroha_core_privacy", "iroha_core_timed_ovn", "iroha_torii")]
 
 
 def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
@@ -300,7 +300,7 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
         assert_native_coverage(self, ["native publication custody", "native durable archive recovery"])
-        required = {'core': ('zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals', 'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons'), 'data-model': ('isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema', 'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json', 'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity', 'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json', 'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload')}
+        required = {'core-zk': ('kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals', 'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons'), 'data-model': ('isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema', 'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json', 'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity', 'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json', 'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload')}
         for scope in gate.QUALIFICATION_SCOPES:
             for harness, cases in required.items():
                 stages = gate.qualification_stages(scope)[harness]
@@ -537,7 +537,7 @@ class BeaconGateTests(unittest.TestCase):
                     focused = gate.focused_regression_stages(scope, ("cli=" + regression,))
                     self.assertEqual(tuple(focused), ("cli",))
                     self.assertEqual([name for _, names in focused["cli"] for name in names], [regression])
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_real_beacon_fixture_replaces_clean_client_and_keeps_root_check_before_startup(self):
         real = EXPECTED_BEACON_NETWORK_TEST
@@ -770,7 +770,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         root = Path(gate.__file__).resolve().parents[1]
         gate.validate_mv_test_registration(root)
         paths = ("scripts/formal/rust_text.py", "crates/mv/src/lib.rs",
-                 "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
+                 "crates/mv/src/allocation.rs", "crates/mv/src/allocation_runtime_tests.rs",
+                 "crates/iroha_allocation/src/lib.rs", "crates/iroha_allocation/src/allocation_tests.rs",
+                 "crates/iroha_allocation/src/release.rs", "crates/iroha_allocation/src/release_tests.rs",
                  "crates/mv/src/publication.rs", "crates/mv/src/publication_nonblocking_tests.rs",
                  "crates/mv/src/release_tests.rs", "crates/mv/src/capture_tests.rs",
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
@@ -823,9 +825,29 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             owner.write_text(owner.read_text().replace('path = "release_tests.rs"', 'path = "foreign_tests.rs"'))
             with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
                 gate.validate_mv_test_registration(copied)
+            owner.write_text(original_owner)
+            allocation = copied / "crates/iroha_allocation/src/allocation_tests.rs"
+            original_allocation = allocation.read_text()
+            canonical = "partition_retains_exact_original_pool_and_conserves_real_credits"
+            for fake in ("", "\n/* #[test]\nfn " + canonical + "() {} */\n",
+                         '\nconst FAKE: &str = r"#[test]\nfn ' + canonical + '() {}";\n'):
+                allocation.write_text(original_allocation.replace("fn " + canonical + "(", "fn retired_partition(") + fake)
+                with self.assertRaisesRegex(gate.CheckError, canonical):
+                    gate.validate_mv_test_registration(copied)
+            allocation.write_text(original_allocation)
+            for relative, old in (
+                ("lib.rs", 'path = "allocation_tests.rs"'),
+                ("release.rs", 'path = "release_tests.rs"'),
+            ):
+                lower_owner = copied / "crates/iroha_allocation/src" / relative
+                original_lower = lower_owner.read_text()
+                lower_owner.write_text(original_lower.replace(old, 'path = "foreign.rs"'))
+                with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
+                    gate.validate_mv_test_registration(copied)
+                lower_owner.write_text(original_lower)
         library_groups = {
             "publication::nonblocking_tests::": 1,
-            "allocation::tests::": 7,
+            "allocation_runtime_tests::": 1,
             "release_tests::": 8,
             "capture_tests::": 5,
             "cell::charged_allocation_tests::": 7,
@@ -843,14 +865,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             selected_gate = importlib.util.module_from_spec(spec)
             with patch.object(sys, "platform", platform):
                 spec.loader.exec_module(selected_gate)
-            self.assertEqual(selected_gate.MV_OWNERSHIP_HARNESSES, ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
+            self.assertEqual(selected_gate.MV_OWNERSHIP_HARNESSES, ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 98)
+                self.assertEqual(len(library), 92)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 154)):
+                for harness, count in (("allocation", 30), ("mv", 92), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 130)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -889,7 +911,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for _, _, _, arguments in gate.HARNESS_TARGETS.values():
             package = arguments[1]
             if package != "concread":
-                self.assertEqual(gate.native_package_root(root, package), root / "crates" / package)
+                owners = {"irohad_lib": "crates/irohad", "iroha_cli_lib": "crates/iroha_cli",
+                          "irohad": "crates/irohad/bins", "iroha_cli": "crates/iroha_cli/bins"}
+                self.assertEqual(gate.native_package_root(root, package), root / owners.get(package, "crates/" + package))
         for unknown in ("foreign", "../concread", "vendor/concread"):
             with self.assertRaisesRegex(gate.CheckError, "maintained source owner"):
                 gate.native_package_root(root, unknown)
@@ -939,12 +963,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertNotIn("test_bptree2_cursor_remove_stress_7", canonical_remove,
                          "the disabled comment fixture must not qualify as executable coverage")
         expected = {
+            "allocation": [*("tests::" + name for name in names((root / "crates/iroha_allocation/src/allocation_tests.rs").read_text()) if "tests::" + name in {n for _, ns in gate.ALLOCATION_OWNERSHIP_STAGES for n in ns}),
+                           *("release::tests::" + name for name in names((root / "crates/iroha_allocation/src/release_tests.rs").read_text()))],
             "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage),
                                 *("storage_custody::capture::" + name for name in capture)],
             "mv-map": mapped,
             "concread": [*("ebrcell::acquisition_tests::" + name for name in names((root / "vendor/concread/src/ebrcell/acquisition_tests.rs").read_text())),
                          *("bptree::acquisition_tests::" + name for name in names((root / "vendor/concread/src/bptree/acquisition_tests.rs").read_text())),
-                         *("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
                          *("bptree::abandonment_tests::" + name for name in names((root / "vendor/concread/src/bptree/abandonment_tests.rs").read_text())),
                          *("internals::lincowcell::identity_preparation_tests::" + name for name in names((root / "vendor/concread/src/internals/lincowcell/mod.rs").read_text()) if name.startswith("reader_")),
                          *("bptree::admission::tests::" + name for name in names(ordinary)),
@@ -988,10 +1013,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                       (root / "crates/mv/src/storage.rs").read_text())
         self.assertIn('#[path = "touches_tests.rs"]\nmod tests;',
                       (root / "crates/mv/src/storage/touches.rs").read_text())
-        partition = "allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits"
-        self.assertEqual(names((root / "crates/mv/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
+        partition = "tests::partition_retains_exact_original_pool_and_conserves_real_credits"
+        self.assertEqual(names((root / "crates/iroha_allocation/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
         self.assertIn('#[path = "allocation_tests.rs"]\nmod tests;',
-                      (root / "crates/mv/src/allocation.rs").read_text())
+                      (root / "crates/iroha_allocation/src/lib.rs").read_text())
         self.assertIn('#[path = "admission_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/bptree/admission.rs").read_text())
         self.assertIn('#[path = "pair_admission.rs"]\nmod pair_admission;',
@@ -1008,12 +1033,16 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                       (root / "vendor/concread/src/internals/bptree/checkpoint.rs").read_text())
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
-            self.assertEqual([name for _, names in selected["mv"] for name in names].count(partition), 1)
+            self.assertEqual([name for _, names in selected["allocation"] for name in names].count(partition), 1)
             self.assertEqual([name for _, names in selected["mv"] for name in names
                               if name.startswith("storage::touches::tests::")],
                              ["storage::touches::tests::" + name for name in touch_names])
             for harness, actual_source_names in expected.items():
-                self.assertEqual([name for _, names in selected[harness] for name in names], actual_source_names)
+                actual = [name for _, names in selected[harness] for name in names]
+            if harness == "allocation":
+                self.assertCountEqual(actual, actual_source_names)
+            else:
+                self.assertEqual(actual, actual_source_names)
             prefix = "storage::admitted_tests::admitted_replacement_"
             selected_replacement = [name for _, names in selected["mv"] for name in names
                                     if name.startswith(prefix)]
@@ -1076,7 +1105,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_both_scopes_require_geometry_writer_and_profile_recovery(self):
         assert_native_coverage(self, ["native publication custody", "native durable archive recovery"])
-        required = {'client': ('blocking::tests::borrowed_async_client_reuses_keepalive_connection_between_blocking_calls', 'blocking::tests::background_tasks_progress_with_a_clone_and_cancel_after_final_owner_drop', 'client::evidence_http_tests::bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress', 'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress', 'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http', 'client::tests::decode_parameters_response_parses_json_payload', 'client::evidence_http_tests::get_transaction_status_response_global_sets_global_scope', 'client::evidence_http_tests::pipeline_status_404_returns_none_from_exact_global_query', 'client::transaction_wait_tests::transaction_wait_timeout_identifies_the_exact_pending_transaction', 'client::transaction_wait_tests::wait_for_transaction_applied_rejects_fixed_failures', 'client::transaction_wait_tests::transaction_wait_zero_timeout_never_dispatches_an_initial_read', 'client::transaction_wait_tests::transaction_wait_unrepresentable_deadline_fails_before_dispatch', 'client::transaction_wait_tests::transaction_wait_expired_context_deadline_cannot_be_extended', 'client::transaction_wait_tests::transaction_wait_late_http_status_is_unresolved_in_both_transports', 'client::transaction_wait_tests::transaction_wait_retries_spend_one_remaining_http_budget', 'client::transaction_wait_tests::transaction_wait_outcome_admission_rechecks_deadline_after_decoding', 'client::transaction_wait_tests::transaction_wait_async_deadline_retires_the_pending_status_future', 'client::tests::typed_account_alias_reads_map_not_found_to_none'), 'torii-unit': ('tests_runtime_handlers::canonical_outcome_releases_state_snapshot_before_kura_authentication', 'tests_runtime_handlers::canonical_outcome_preserves_exact_committed_rejection', 'tests_runtime_handlers::canonical_outcome_absent_membership_never_authenticates', 'tests_runtime_handlers::canonical_outcome_accepts_unrelated_state_append_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_removed_membership_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_rebound_membership_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_replaced_journal_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_missing_journal_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_result_substitution_under_the_same_header_hash', 'tests_runtime_handlers::canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cache', 'routing::bridge_finality_attestation_progress_tests::exact_tip_snapshot_races_are_bound_negotiated_progress', 'routing::bridge_finality_attestation_progress_tests::proof_identity_and_signature_failures_are_never_tip_progress', 'routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code', 'routing::bridge_finality_attestation_progress_tests::invalid_height_progress_shapes_remain_fixed_errors', 'openapi::tests::finality_attestation_tip_progress_openapi_matches_native_bindings', 'openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_current_durable_evidence', 'tests_runtime_handlers::pipeline_status_global_read_skips_non_terminal_local_cache', 'torii_routed_read_tests::pipeline_status_fanout_requires_exact_scoped_absence', 'openapi::tests::pipeline_status_openapi_exposes_only_the_exact_first_release_scope', 'mcp::tests::canonical_paths_and_status::applied_wait_status_poll_accepts_only_exact_200_or_404', 'tests::alias_error_envelopes_preserve_reports_and_exact_absence_through_middleware', 'tests::alias_account_absence_requires_complete_scoped_fanout', 'openapi::tests::alias_errors_openapi_match_native_reports_and_bound_absence'), 'torii-shared': ('bridge_finality::tests::tip_mismatch_requires_exact_selector_and_real_height_progress', 'tests::pipeline_transaction_status_roundtrip_is_status_only', 'aliases::tests::alias_error_details_roundtrip_and_reject_unknown_fields'), 'cli': ('taira_dataspace_deploy::profile::tests::retained_profile_export_uses_native_trust_and_exact_input_hashes', 'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_unbound_or_malformed_public_inputs', 'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_changed_linked_and_unsafe_files', 'taira_dataspace_deploy::profile::tests::retained_profile_export_dispatch_rejects_credential_and_transaction_globals', 'taira_dataspace_deploy::tests::saved_apply_emits_report_before_rejecting_incomplete_success', 'taira_dataspace_deploy::tests::saved_report_preserves_output_failure', 'taira_dataspace_deploy::finality::tests::deployment_attestation_progress_retries_only_exact_sdk_type', 'taira_dataspace_deploy::finality::tests::deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors', 'taira_dataspace_deploy::tests::journal_rejects_links_replacement_and_incomplete_records', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_overlap_and_preserve_input_order', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_reject_non_four_cardinality_before_dispatch', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_join_all_workers_and_report_first_error', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_inherit_configured_address_profile', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_recover_worker_panic_after_joining_all', 'taira_dataspace_deploy::finality::tests::deployment_carrier_results_require_exact_bytes_before_publication', 'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_requires_valid_complete_status_pair', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_retries_only_pending_or_newer_carrier', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_never_masks_fixed_worker_errors', 'taira_dataspace_deploy::tests::saved_commands_require_positive_budget_and_default_to_three_minutes', 'taira_dataspace_deploy::tests::saved_zero_budget_stops_before_journal_or_client_access', 'taira_dataspace_deploy::tests::expired_operation_never_observes_or_starts_completion', 'taira_dataspace_deploy::tests::apply_observes_pending_until_applied_without_reentering_dispatch', 'taira_dataspace_deploy::tests::status_observes_once_and_terminal_apply_does_not_retry', 'taira_dataspace_deploy::tests::phase_deadline_rejects_late_applied_and_clips_pending_sleep', 'taira_dataspace_deploy::tests::completion_retries_only_explicit_sync_progress_and_status_is_one_attempt', 'taira_dataspace_deploy::tests::completion_deadline_rejects_a_late_success'), 'core': ('queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal', 'queue::router::alias_registry_routing_tests::alias_registry_routing_is_independent_of_height_and_catalog', 'queue::router::alias_registry_routing_tests::alias_registry_routing_nested_walkers_use_universal_registry', 'queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards', 'queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap', 'queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay', 'snapshot::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes', 'snapshot::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery', 'snapshot::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber', 'snapshot::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write', 'block::valid::tests::account_profile_validation_preserves_delegated_metadata_results', 'block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads'), 'network': ('dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up',), 'test-network': ('tests::profile_account_defaults_materialize_selected_chain_before_root_parse', 'tests::profile_account_defaults_preserve_explicit_foreign_and_invalid_overrides', 'tests::peer_clients_preserve_selected_network_profile_after_builder_scope', 'tests::genesis_preexecution_preserves_selected_profile_across_threads', 'tests::validated_genesis_cache_reuses_exact_block_and_network_identity', 'tests::file_backed_genesis_keeps_fresh_preexecution_validation')}
+        required = {'client': ('blocking::tests::borrowed_async_client_reuses_keepalive_connection_between_blocking_calls', 'blocking::tests::background_tasks_progress_with_a_clone_and_cancel_after_final_owner_drop', 'client::evidence_http_tests::bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress', 'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress', 'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http', 'client::tests::decode_parameters_response_parses_json_payload', 'client::evidence_http_tests::get_transaction_status_response_global_sets_global_scope', 'client::evidence_http_tests::pipeline_status_404_returns_none_from_exact_global_query', 'client::transaction_wait_tests::transaction_wait_timeout_identifies_the_exact_pending_transaction', 'client::transaction_wait_tests::wait_for_transaction_applied_rejects_fixed_failures', 'client::transaction_wait_tests::transaction_wait_zero_timeout_never_dispatches_an_initial_read', 'client::transaction_wait_tests::transaction_wait_unrepresentable_deadline_fails_before_dispatch', 'client::transaction_wait_tests::transaction_wait_expired_context_deadline_cannot_be_extended', 'client::transaction_wait_tests::transaction_wait_late_http_status_is_unresolved_in_both_transports', 'client::transaction_wait_tests::transaction_wait_retries_spend_one_remaining_http_budget', 'client::transaction_wait_tests::transaction_wait_outcome_admission_rechecks_deadline_after_decoding', 'client::transaction_wait_tests::transaction_wait_async_deadline_retires_the_pending_status_future', 'client::tests::typed_account_alias_reads_map_not_found_to_none'), 'torii-unit': ('tests_runtime_handlers::canonical_outcome_releases_state_snapshot_before_kura_authentication', 'tests_runtime_handlers::canonical_outcome_preserves_exact_committed_rejection', 'tests_runtime_handlers::canonical_outcome_absent_membership_never_authenticates', 'tests_runtime_handlers::canonical_outcome_accepts_unrelated_state_append_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_removed_membership_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_rebound_membership_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_replaced_journal_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_missing_journal_after_authentication', 'tests_runtime_handlers::canonical_outcome_rejects_result_substitution_under_the_same_header_hash', 'tests_runtime_handlers::canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cache', 'routing::bridge_finality_attestation_progress_tests::exact_tip_snapshot_races_are_bound_negotiated_progress', 'routing::bridge_finality_attestation_progress_tests::proof_identity_and_signature_failures_are_never_tip_progress', 'routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code', 'routing::bridge_finality_attestation_progress_tests::invalid_height_progress_shapes_remain_fixed_errors', 'openapi::tests::finality_attestation_tip_progress_openapi_matches_native_bindings', 'openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_current_durable_evidence', 'tests_runtime_handlers::pipeline_status_global_read_skips_non_terminal_local_cache', 'torii_routed_read_tests::pipeline_status_fanout_requires_exact_scoped_absence', 'openapi::tests::pipeline_status_openapi_exposes_only_the_exact_first_release_scope', 'mcp::tests::canonical_paths_and_status::applied_wait_status_poll_accepts_only_exact_200_or_404', 'tests::alias_error_envelopes_preserve_reports_and_exact_absence_through_middleware', 'tests::alias_account_absence_requires_complete_scoped_fanout', 'openapi::tests::alias_errors_openapi_match_native_reports_and_bound_absence'), 'torii-shared': ('bridge_finality::tests::tip_mismatch_requires_exact_selector_and_real_height_progress', 'tests::pipeline_transaction_status_roundtrip_is_status_only', 'aliases::tests::alias_error_details_roundtrip_and_reject_unknown_fields'), 'cli': ('taira_dataspace_deploy::profile::tests::retained_profile_export_uses_native_trust_and_exact_input_hashes', 'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_unbound_or_malformed_public_inputs', 'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_changed_linked_and_unsafe_files', 'taira_dataspace_deploy::profile::tests::retained_profile_export_dispatch_rejects_credential_and_transaction_globals', 'taira_dataspace_deploy::tests::saved_apply_emits_report_before_rejecting_incomplete_success', 'taira_dataspace_deploy::tests::saved_report_preserves_output_failure', 'taira_dataspace_deploy::finality::tests::deployment_attestation_progress_retries_only_exact_sdk_type', 'taira_dataspace_deploy::finality::tests::deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors', 'taira_dataspace_deploy::tests::journal_rejects_links_replacement_and_incomplete_records', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_overlap_and_preserve_input_order', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_reject_non_four_cardinality_before_dispatch', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_join_all_workers_and_report_first_error', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_inherit_configured_address_profile', 'taira_dataspace_deploy::finality::tests::deployment_peer_reads_recover_worker_panic_after_joining_all', 'taira_dataspace_deploy::finality::tests::deployment_carrier_results_require_exact_bytes_before_publication', 'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_requires_valid_complete_status_pair', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_retries_only_pending_or_newer_carrier', 'taira_dataspace_deploy::finality::tests::deployment_peer_progress_never_masks_fixed_worker_errors', 'taira_dataspace_deploy::tests::saved_commands_require_positive_budget_and_default_to_three_minutes', 'taira_dataspace_deploy::tests::saved_engine_checks_deadline_and_selected_plan_before_client_access', 'taira_dataspace_deploy::tests::expired_operation_never_observes_or_starts_completion', 'taira_dataspace_deploy::tests::apply_observes_pending_until_applied_without_reentering_dispatch', 'taira_dataspace_deploy::tests::status_observes_once_and_terminal_apply_does_not_retry', 'taira_dataspace_deploy::tests::phase_deadline_rejects_late_applied_and_clips_pending_sleep', 'taira_dataspace_deploy::tests::completion_retries_only_explicit_sync_progress_and_status_is_one_attempt', 'taira_dataspace_deploy::tests::completion_deadline_rejects_a_late_success'), 'core': ('queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal', 'queue::router::alias_registry_routing_tests::alias_registry_routing_is_independent_of_height_and_catalog', 'queue::router::alias_registry_routing_tests::alias_registry_routing_nested_walkers_use_universal_registry', 'queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards', 'queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap', 'queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay', 'snapshot::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes', 'snapshot::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery', 'snapshot::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber', 'snapshot::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write', 'block::valid::tests::account_profile_validation_preserves_delegated_metadata_results', 'block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads'), 'network': ('dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up',), 'test-network': ('tests::profile_account_defaults_materialize_selected_chain_before_root_parse', 'tests::profile_account_defaults_preserve_explicit_foreign_and_invalid_overrides', 'tests::peer_clients_preserve_selected_network_profile_after_builder_scope', 'tests::genesis_preexecution_preserves_selected_profile_across_threads', 'tests::validated_genesis_cache_reuses_exact_block_and_network_identity', 'tests::file_backed_genesis_keeps_fresh_preexecution_validation')}
         for scope in gate.QUALIFICATION_SCOPES:
             for harness, cases in required.items():
                 stages = gate.qualification_stages(scope)[harness]
@@ -1379,7 +1408,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             names = [name for _, tests in gate.qualification_stages(scope)["cli"] for name in tests]
             with self.subTest(scope=scope):
                 self.assertEqual(names.count(required), 1)
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_both_scopes_require_exact_native_public_input_preparation(self):
         required = (
@@ -1404,7 +1433,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 with self.subTest(scope=scope, regression=name):
                     self.assertEqual(selected.count(name), 1)
                     self.assertEqual(leaf.count("fn " + name.rsplit("::", 1)[1] + "()"), 1)
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_both_scopes_require_authenticated_execution_inclusion(self):
         required = {
@@ -1620,7 +1649,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_codegen_failure_stops_fixtures_and_checkpoint_changes_without_metadata_pass(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         later = ("run_config_checks", "run_stages",
                  "check_shipping_binaries", "compile_network_binaries", "run_network_checks",
                  "independent_check_evidence")
@@ -1662,7 +1691,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 raise gate.CheckError("stop after codegen graph assertion")
             with self.subTest(scope=scope), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
-                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli-bin", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "compile_test_harnesses", side_effect=stop_at_codegen) as compile, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, "stop after codegen"):
@@ -1694,7 +1723,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 order.append((harness, stages))
                 executed.extend((harness, test) for _, tests in stages for test in tests)
             with self.subTest(scope=scope), \
-                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli-bin", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "require_network_fixture_capacity"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
@@ -1803,7 +1832,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                     environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                     source_commit="a" * 40, update_independent_checks=checkpoint)
             self.assertEqual(failure.exception.failures, ("core startup failed", "daemon startup failed"))
-            self.assertEqual(executed, ["config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "torii-unit", "daemon"])
+            self.assertEqual(executed, ["config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon"])
             checkpoint.assert_called_once_with(None)
             metadata.assert_not_called()
             network.assert_not_called()
@@ -1839,8 +1868,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                         environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                         source_commit="a" * 40, update_independent_checks=checkpoint)
                 self.assertIs(failure.exception, error)
-                self.assertEqual(order, ["compiled", "config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core"])
+                self.assertEqual(order, ["compiled", "config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core"])
                 self.assertEqual(executed, [("config", gate.CONFIG_STAGES),
+                                            ("allocation", gate.ALLOCATION_OWNERSHIP_STAGES),
                                             ("mv", gate.MV_OWNERSHIP_STAGES),
                                             ("mv-ebr", gate.MV_EBR_STAGES),
                                             ("mv-map", gate.MV_MAP_STAGES),
@@ -1941,7 +1971,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                             completed_independent_checks=evidence,
                                             update_independent_checks=checkpoint)
                     self.assertIs(failure.exception, error)
-                    self.assertEqual([call.args[0] for call in execute.call_args_list], ["config", "mv"])
+                    self.assertEqual([call.args[0] for call in execute.call_args_list], ["config", "allocation", "mv"])
                     checkpoint.assert_called_once_with(None)
                     network.assert_not_called()
 
@@ -1949,7 +1979,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for scope in gate.QUALIFICATION_SCOPES:
             copies, checkpoint = self.copies(), MagicMock()
             selected = gate.qualification_stages(scope)
-            shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+            shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
             early, _, _ = gate.native_harness_plan(selected, shipping)
             independent = (("cli", selected["cli"]),) + early
             evidence = gate.independent_check_evidence(copies, independent, qualification_scope=scope)
@@ -1973,7 +2003,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             checkpoint.assert_not_called()
 
     def test_shipping_codegen_failure_stops_long_tests_and_new_checkpoint(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (False, True):
                 copies, checkpoint, output, executed = self.copies(), MagicMock(), io.StringIO(), []
@@ -2008,6 +2038,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 priority_torii, _ = gate.partition_priority_stages(
                     selected["torii-unit"], stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
                 allowed = {"config": gate.CONFIG_STAGES, "core": gate.CORE_STARTUP_STAGES,
+                           "core-zk": gate.CORE_ZK_STAGES,
                            "torii-unit": gate.TORII_STARTUP_STAGES + priority_torii,
                            "daemon": gate.DAEMON_STARTUP_STAGES, "cli": priority_cli,
                            **{name: selected[name] for name in gate.MV_OWNERSHIP_HARNESSES}}
@@ -2037,7 +2068,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         return independent, prefix, deferred
 
     def test_pre_network_partition_places_each_selected_independent_test_once(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
 
         def rows(groups):
             return [(name, test) for name, stages in groups for _, tests in stages for test in tests]
@@ -2068,7 +2099,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                        priority_torii=startup, native_archive=())
 
     def test_exact_pre_network_checkpoint_skips_prefix_but_reruns_network_and_deferred_groups(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (True, False):
                 copies, order, executed = self.copies(), [], []
@@ -2284,7 +2315,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
             self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertEqual([call.args[0] for call in run.call_args_list],
-                             ["/copies/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
+                             ["/copies/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
             self.assertEqual([call.args[3] for call in run.call_args_list],
                              [*[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES], gate.CONFIG_STAGES])
             shipping.assert_not_called()
@@ -2907,16 +2938,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_command_reuses_native_cargo_lane_and_does_not_run_full_suite(self):
         self.assertEqual(gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}), [
             "/fixed/cargo", "--config", "/repo/.cargo/config.toml", "test",
-            "--manifest-path", "/repo/Cargo.toml", "--locked", "--offline", "-p", "iroha_cli",
-            "--bin", "iroha", "--no-run", "--message-format=json-render-diagnostics",
+            "--manifest-path", "/repo/Cargo.toml", "--locked", "--offline", "-p", "iroha_cli_lib",
+            "--lib", "--no-run", "--message-format=json-render-diagnostics",
         ])
 
     def test_artifact_accepts_only_executable_iroha_binary_test_harness(self):
-        event = {"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["bin"]},
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha_cli", "kind": ["lib"]},
                  "profile": {"test": True}, "executable": "/warm/debug/deps/iroha-test"}
         self.assertEqual(gate.test_artifact(json.dumps(event)), event["executable"])
         for changes in ({"profile": {"test": False}}, {"executable": None},
-                        {"target": {"name": "iroha", "kind": ["lib"]}},
+                        {"target": {"name": "iroha_cli", "kind": ["bin"]}},
                         {"target": {"name": "kagami", "kind": ["bin"]}}):
             self.assertIsNone(gate.test_artifact(json.dumps(event | changes)))
         self.assertIsNone(gate.test_artifact("[cargo-fast] normal progress"))
@@ -3030,7 +3061,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  'taira_dataspace_deploy::tests::journal_rejects_links_replacement_and_incomplete_records',
                  'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied',
                  'taira_dataspace_deploy::tests::init_builds_native_restricted_intent_from_policy_and_profile',
-                 'taira_dataspace_deploy::tests::init_rejects_policy_drift_and_parses_explicit_caps',
+                 'taira_dataspace_deploy::tests::definition_command_rejects_retired_inputs_and_policy_drift',
                  'taira_dataspace_deploy::lane_manifest::tests::generates_typed_manifest_from_executed_signed_genesis',
                  'taira_dataspace_deploy::lane_manifest::tests::rejects_genesis_without_explicit_bindings_or_with_malformed_wire',
                  'taira_dataspace_deploy::lane_manifest::tests::requires_unique_complete_activated_genesis_bindings',
@@ -3042,13 +3073,13 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  'taira_public_reset::deployment_profile::tests::deployment_profile_binds_native_genesis_and_ordered_inventory_peers',
                  'taira_public_reset::deployment_profile::tests::deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution',
                  'taira_public_reset::deployment_profile::tests::deployment_profile_command_parses_without_private_or_runtime_arguments'],
-         'core': ['zk::zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
-                  'zk::zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
-                  'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
-                  'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
-                  'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-                  'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
-                  'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
+         'core-zk': ['zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
+                     'zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
+                     'zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
+                     'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
+                     'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
+                     'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup'],
+         'core': ['sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
          'torii-unit': ['sns::tests::registration_absence_http_response_is_typed_and_other_not_found_is_not',
                         'openapi::tests::sns_name_absence_openapi_is_typed_and_selector_bound'],
          'torii-shared': ['sns::tests::missing_registration_response_requires_exact_fields_and_selector'],
@@ -3071,7 +3102,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
-        for group in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES",
+        for group in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES", "KAGAMI_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
@@ -3098,7 +3129,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_frozen_harness_uses_captured_manifest_config_and_no_git_lookup(self):
         child = MagicMock()
-        child.stdout = io.StringIO(json.dumps({"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["bin"]}, "profile": {"test": True}, "executable": "/warm/iroha-test"}) + "\n")
+        child.stdout = io.StringIO(json.dumps({"reason": "compiler-artifact", "target": {"name": "iroha_cli", "kind": ["lib"]}, "profile": {"test": True}, "executable": "/warm/iroha-test"}) + "\n")
         child.wait.return_value = 0
         process = MagicMock()
         process.__enter__.return_value = child
@@ -3114,7 +3145,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
             run = stack.enter_context(patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3122,6 +3153,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_ZK_STAGES", ()))
             stack.enter_context(patch.object(gate, "CURRENT_CONSENSUS_STAGES", ()))
             stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
             stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
@@ -3152,7 +3184,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
             run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3160,6 +3192,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_ZK_STAGES", ()))
             stack.enter_context(patch.object(gate, "CURRENT_CONSENSUS_STAGES", ()))
             stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
             stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
@@ -3192,7 +3225,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})))
             run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI", ("cli",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3200,6 +3233,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_ZK_STAGES", ()))
             stack.enter_context(patch.object(gate, "CURRENT_CONSENSUS_STAGES", ()))
             stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
             stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
@@ -3231,7 +3265,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                 name: "/warm/" + name for name in gate.HARNESS_TARGETS})) as compile, \
              patch.object(gate, "run_network_checks") as network, \
-             patch.multiple(gate, MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
+             patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
                             MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(), CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()), \
              patch.object(gate, "DATA_MODEL_STAGES", ()), \
              patch.object(gate, "CRYPTO_STAGES", ()), \
@@ -3242,9 +3276,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
-        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")})
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")})
         self.assertEqual([call.args[0] for call in run.call_args_list],
-                         ["/warm/core", "/warm/core", "/warm/torii-unit", "/warm/daemon", "/warm/cli"])
+                         ["/warm/core", "/warm/core", "/warm/core-zk", "/warm/torii-unit", "/warm/daemon", "/warm/cli"])
         priority_cli, _ = gate.partition_priority_stages(
             gate.STAGES, test_names=gate.PRIORITY_CLI_TESTS)
         self.assertEqual(run.call_args.args[3], priority_cli)
@@ -3253,7 +3287,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_failure_does_not_trigger_separate_harness_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
              patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                  name: "/warm/" + name for name in names})) as batch, \
@@ -3268,7 +3302,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "torii-unit", "daemon", "cli", "torii-unit")])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")])
         self.assertTrue(all(call.kwargs["inventories"] is inventory for call in stages.call_args_list))
         self.assertEqual([{key: value for key, value in call.kwargs.items() if key != "inventories"}
                           for call in stages.call_args_list],
@@ -3278,11 +3312,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         priority_torii, _ = gate.partition_priority_stages(
             gate.TORII_UNIT_STAGES, stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES), gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
+                         [gate.ALLOCATION_OWNERSHIP_STAGES, gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES), gate.CORE_ZK_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
 
     def test_deferred_transport_or_fixture_failure_stops_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed, target in (("crypto", "crypto"), ("p2p", "p2p"),
                                ("fixture", "test-network")):
             output = io.StringIO()
@@ -3309,7 +3343,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_public_contract_library_failures_block_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed in ("client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle"):
             def run(harness, *args, **_kwargs):
                 if harness == "/warm/" + failed:
@@ -3360,7 +3394,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             self.assertIn("iroha3d_taira", spawn.call_args.args[0])
 
     def test_focused_four_peer_build_omits_only_unused_sorafs_shipping_binary(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for focused, expected_names in (
             (False, {"iroha3d", "iroha", "iroha3d_taira", "sorafs-node", "kagami"}),
             (True, {"iroha3d", "iroha", "iroha3d_taira", "kagami"}),
@@ -3441,7 +3475,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             spawn.assert_not_called()
 
     def test_focused_fixture_requires_audited_runtime_shipping_inputs(self):
-        with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli", "sorafs-bin")), \
+        with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli-bin", "sorafs-bin")), \
              patch.object(gate.subprocess, "Popen") as spawn:
             with self.assertRaisesRegex(gate.CheckError, "lacks an audited shipping binary"):
                 gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
@@ -3773,7 +3807,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
     def test_one_batch_runs_configuration_first_after_source_audits(self):
         events = []
-        libraries = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        libraries = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
 
         def run_stage(harness, root, env, stages, lock_fds, **kwargs):
             self.assertIn(harness, kwargs.pop("inventories"))
@@ -3801,7 +3835,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(events, ["source", "library-build", "config-pass",
-                                  *["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "torii-unit", "daemon", "cli", "torii-unit")]])
+                                  *["/warm/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
         for phase in ("build", "schema"):
@@ -3837,8 +3871,8 @@ class EarlyConfigurationGateTests(unittest.TestCase):
     def test_configuration_always_runs_before_exact_independent_checkpoint_reuse(self):
         for config_fails in (False, True):
             with self.subTest(config_fails=config_fails), contextlib.ExitStack() as stack:
-                for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
-                             "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
+                for name in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
+                             "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
                              "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES",
                              "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                     stack.enter_context(patch.object(gate, name, ()))
@@ -4136,7 +4170,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         return process
 
     def test_release_codegen_alone_enforces_the_complete_exact_harness_census(self):
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         for scope in gate.QUALIFICATION_SCOPES:
             _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
             metadata_lines = "".join(json.dumps({
@@ -4180,9 +4214,9 @@ class NativeTestBatchBuildTests(unittest.TestCase):
                 isolate.assert_not_called()
 
     def test_resource_batch_requires_both_libraries_and_all_explicit_integration_artifacts(self):
-        names = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+        names = ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
         self.assertEqual(gate.native_harness_selection(names), [
-            "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
+            "-p", "iroha_allocation", "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
         ])
         lines = "".join(self.artifact(name) for name in names)
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
@@ -4194,7 +4228,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.args[0], [
             "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test",
             "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-            "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
+            "-p", "iroha_allocation", "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
             "--no-run", "--message-format=json-render-diagnostics",
         ])
         for missing in names:
@@ -4374,14 +4408,14 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
             "filenames": ["/warm/metadata.rmeta"]}) + "\n"
 
     def test_metadata_checks_exact_complete_test_graph_with_preserved_cargo_custody(self):
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         for scope in gate.QUALIFICATION_SCOPES:
             _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
             self.assertEqual(names, (
-                "config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
-                "kagami", "proof", "proof-flows", "crypto", "p2p", "core",
+                "config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
+                "kagami", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk",
                 "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared",
-                "torii-lifecycle", "daemon", "network", "cli", "taira-launcher",
+                "torii-lifecycle", "daemon", "network", "cli", "cli-bin", "taira-launcher",
                 "sorafs-bin",
             ))
             lines = "[cargo-fast] warm lane\n" + "".join(self.artifact(name) for name in names)
@@ -4526,7 +4560,7 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
 class ShippingMetadataCheckTests(unittest.TestCase):
     env = NativeTestMetadataCheckTests.env
     process = NativeTestBatchBuildTests.process
-    shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+    shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
 
     @staticmethod
     def artifact(name, *, test=False, kind="bin"):
@@ -4539,7 +4573,7 @@ class ShippingMetadataCheckTests(unittest.TestCase):
         root = SCRIPT.parent.parent
         self.assertEqual(gate.shipping_harnesses(root), self.shipping)
         lines = "[cargo-fast] existing warm target\n" + "".join(self.artifact(name) for name in self.shipping)
-        lines += self.artifact("cli")
+        lines += self.artifact("cli-bin")
         output = io.StringIO()
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
              patch.object(gate, "isolate_native_artifacts") as isolate, contextlib.redirect_stdout(output):
@@ -4593,7 +4627,8 @@ class ShippingMetadataCheckTests(unittest.TestCase):
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_shipping_metadata_refuses_core_and_torii_fixture_feature_leaks(self):
-        for library, feature in (("iroha_core", "iroha-core-tests"), ("iroha_torii", "test-fixtures")):
+        for library, feature in (("iroha_core", "iroha-core-tests"), ("iroha_core_zk", "test-utils"), ("iroha_core_privacy", "test-utils"), ("iroha_core_timed_ovn", "test-utils"),
+                                 ("iroha_torii", "test-fixtures")):
             event = {"reason": "compiler-artifact", "package_id": "opaque-cargo-package-identity",
                      "target": {"name": library, "kind": ["lib"]}, "profile": {"test": False},
                      "features": ["default", feature]}
@@ -4612,6 +4647,9 @@ class ShippingMetadataCheckTests(unittest.TestCase):
                    "profile": {"test": False}, "features": features}
                   for name, kind, features in (
                       ("iroha_core", "lib", ["default", "json"]),
+                      ("iroha_core_zk", "lib", ["default"]),
+                      ("iroha_core_privacy", "lib", ["default"]),
+                      ("iroha_core_timed_ovn", "lib", ["default"]),
                       ("iroha_torii", "lib", ["default", "app_api"]),
                       ("another_library", "lib", ["test-fixtures", "iroha-core-tests"]),
                       ("iroha_torii", "bin", ["test-fixtures"]),
@@ -4641,9 +4679,9 @@ class ShippingMetadataCheckTests(unittest.TestCase):
                 with self.assertRaises(gate.CheckError):
                     gate.check_shipping_binaries(Path("/frozen"), self.env, ())
                 spawn.assert_not_called()
-        injected = (*gate.HARNESS_TARGETS["cli"][:3], ["-p", "iroha_cli", "--bin", "iroha", "--features", "test-fixtures"])
-        with patch.dict(gate.HARNESS_TARGETS, {"cli": injected}), \
-             patch.object(gate, "shipping_harnesses", return_value=("cli",)), \
+        injected = (*gate.HARNESS_TARGETS["cli-bin"][:3], ["-p", "iroha_cli", "--bin", "iroha", "--features", "test-fixtures"])
+        with patch.dict(gate.HARNESS_TARGETS, {"cli-bin": injected}), \
+             patch.object(gate, "shipping_harnesses", return_value=("cli-bin",)), \
              patch.object(gate.subprocess, "Popen") as spawn:
             with self.assertRaisesRegex(gate.CheckError, "explicit library, integration or binary targets"):
                 gate.check_shipping_binaries(Path("/frozen"), self.env, ())
@@ -4698,8 +4736,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             executable.parent.mkdir(mode=0o700, exist_ok=True)
         executable.write_bytes(payload)
         executable.chmod(0o700)
-        package_directory = (self.source / "vendor" / "concread" if package == "concread"
-                             else self.source / "crates" / package)
+        package_directory = gate.native_package_root(self.source, package)
         row = {"name": name, "executable": str(executable), "profile": {"test": is_test},
                "manifest_path": str(package_directory / "Cargo.toml")}
         event = {"reason": "compiler-artifact", "target": {"name": name, "kind": [kind]},
@@ -5410,7 +5447,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     raise gate.CheckError("early CLI fixture failed")
                 errors = io.StringIO()
                 with contextlib.ExitStack() as stack:
-                    for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
+                    for name in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
                         stack.enter_context(patch.object(gate, name, ()))
                     for name in ("run_lifecycle_source_checks", "run_config_checks", "check_test_harnesses"):
                         stack.enter_context(patch.object(gate, name))
@@ -5487,7 +5524,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         executable, row, _ = self.artifact()
         development = self.directory / "checkout"
         development.mkdir(mode=0o700)
-        row["manifest_path"] = str(development / "crates/iroha_cli/Cargo.toml")
+        row["manifest_path"] = str(development / "crates/iroha_cli/bins/Cargo.toml")
         original = self.contract.stable_hash_path
         def guarded_hash(*args, **kwargs):
             self.assert_profile_locked()

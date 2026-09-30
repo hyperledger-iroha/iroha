@@ -43,7 +43,7 @@ pub(super) fn test_registry() -> CudaProcess {
     use crate::{ProcessResources, resources::ResourcePools, slots::Slots};
     let limits = RegistryLimits::STANDARD;
     let owner = Box::leak(Box::new(ProcessResources {
-        metadata: mv::allocation::AllocationBudget::new(limits.metadata_bytes),
+        metadata: iroha_allocation::AllocationBudget::new(limits.metadata_bytes),
         modules: Slots::new(limits.modules),
         streams: Slots::new(limits.streams),
         resources: ResourcePools::new(limits.work),

@@ -11,7 +11,7 @@ use ivm::error::{ExecutionDeferral, VMError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionDeferred {
     reason: ExecutionDeferral,
-    allocation: Option<mv::allocation::AllocationRefusal>,
+    allocation: Option<iroha_allocation::AllocationRefusal>,
 }
 
 impl ExecutionDeferred {
@@ -25,7 +25,7 @@ impl ExecutionDeferred {
     /// Only `Capacity` carries a release-driven retry source. An allocator
     /// refusal, arithmetic overflow, or demand exceeding the configured pool
     /// limit cannot be cured by waiting on an invented notification.
-    pub fn allocation_refusal(&self) -> Option<&mv::allocation::AllocationRefusal> {
+    pub fn allocation_refusal(&self) -> Option<&iroha_allocation::AllocationRefusal> {
         self.allocation.as_ref()
     }
 
@@ -56,8 +56,8 @@ impl From<ExecutionDeferral> for ExecutionDeferred {
     }
 }
 
-impl From<mv::allocation::AllocationRefusal> for ExecutionDeferred {
-    fn from(refusal: mv::allocation::AllocationRefusal) -> Self {
+impl From<iroha_allocation::AllocationRefusal> for ExecutionDeferred {
+    fn from(refusal: iroha_allocation::AllocationRefusal) -> Self {
         Self {
             reason: ExecutionDeferral::ActiveMemoryCapacity,
             allocation: Some(refusal),
@@ -204,7 +204,7 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
         }
-        let budget = mv::allocation::AllocationBudget::new(8);
+        let budget = iroha_allocation::AllocationBudget::new(8);
         let occupied = budget.try_reserve_bytes(8).expect("initial reservation");
         let refusal = budget.try_reserve_bytes(1).expect_err("pool is occupied");
         let owner = ExecutionDeferred::from(refusal.clone());
@@ -213,7 +213,7 @@ mod tests {
         let cloned = owner.clone();
         drop(owner);
         drop(budget);
-        let Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+        let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
             cloned.allocation_refusal()
         else {
             panic!("original capacity release evidence must survive");
@@ -233,16 +233,16 @@ mod tests {
         let allocator = ExecutionDeferred::from(ExecutionDeferral::AllocationUnavailable);
         assert_eq!(allocator.reason(), ExecutionDeferral::AllocationUnavailable);
         assert!(allocator.allocation_refusal().is_none());
-        let overflow = ExecutionDeferred::from(mv::allocation::AllocationRefusal::DemandOverflow);
+        let overflow = ExecutionDeferred::from(iroha_allocation::AllocationRefusal::DemandOverflow);
         assert!(matches!(
             overflow.allocation_refusal(),
-            Some(mv::allocation::AllocationRefusal::DemandOverflow)
+            Some(iroha_allocation::AllocationRefusal::DemandOverflow)
         ));
-        let budget = mv::allocation::AllocationBudget::new(0);
+        let budget = iroha_allocation::AllocationBudget::new(0);
         let impossible = ExecutionDeferred::from(budget.try_reserve_bytes(1).unwrap_err());
         assert!(matches!(
             impossible.allocation_refusal(),
-            Some(mv::allocation::AllocationRefusal::ExceedsLimit { .. })
+            Some(iroha_allocation::AllocationRefusal::ExceedsLimit { .. })
         ));
         assert_eq!(
             ExecutionDeferred::from_vm_error(&allocator.clone().into_vm_error()),

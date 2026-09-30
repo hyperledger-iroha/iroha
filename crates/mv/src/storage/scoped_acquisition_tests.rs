@@ -29,7 +29,10 @@ impl Wake for PairProbe {
         }
     }
 }
-fn watch(source: &ReleaseNotification, probe: &Arc<PairProbe>) -> concread::release::ReleaseFuture {
+fn watch(
+    source: &ReleaseNotification,
+    probe: &Arc<PairProbe>,
+) -> iroha_allocation::release::ReleaseFuture {
     let mut future = source.observe().wait_for_release();
     let waker = Waker::from(Arc::clone(probe));
     assert!(
@@ -320,7 +323,7 @@ fn admitted_returned_block_retains_original_scope_until_both_writers_release() {
     let held = budget
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
-    let Err(crate::allocation::AllocationRefusal::Capacity { release, .. }) =
+    let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         budget.try_reserve_bytes(1)
     else {
         panic!("original finite pool is exhausted");

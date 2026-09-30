@@ -8,6 +8,11 @@ Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
 `/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
 nonexecutable inspector before compilation; install this prerequisite first.
 
+Both doctor scopes require `GET /readyz` to return HTTP 200 with the exact
+plain-text `Ready` response. A healthy status or mounted MCP route does not
+substitute for admission readiness. Failed readiness reports only a bounded
+machine error code; arbitrary upstream message or data fields are omitted.
+
 The compiled `iroha taira doctor` checks `GET /v1/accounts/faucet/policy` in
 both basic and full scopes without a client configuration or authentication.
 A successful response must contain the exact canonical V1 policy. Missing

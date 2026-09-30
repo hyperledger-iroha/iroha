@@ -1635,10 +1635,6 @@ impl ResolvedWorkspaceGraphV1 {
             .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "preserves resolver transaction ordering"
-)]
 fn resolve_and_persist_graph(
     workspace: &Workspace,
     selected_packages: &[MusubiPackageSelectorV1],

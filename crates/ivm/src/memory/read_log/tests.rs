@@ -308,7 +308,7 @@ fn refunds_notify_after_memory_unlocks_on_publication_refusal_and_unwind() {
         let next = 8 * std::mem::size_of::<AccessRange>();
         budget.set_limit_bytes(occupied + next);
         let refusal = budget.try_reserve_bytes(next + 1).unwrap_err();
-        let mv::allocation::AllocationRefusal::Capacity { release, .. } = refusal else {
+        let iroha_allocation::AllocationRefusal::Capacity { release, .. } = refusal else {
             panic!("actual occupied-pool refusal");
         };
         let probe = Arc::new(Probe {

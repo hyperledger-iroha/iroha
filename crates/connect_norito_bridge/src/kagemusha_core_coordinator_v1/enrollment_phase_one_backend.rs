@@ -37,6 +37,8 @@ struct PhaseOneOwnerV1 {
     prepared: Option<PreparedIssuerProofV1>,
     fresh_admission: Option<FreshIssuerAdmissionV1>,
     cancelled_ticket: Option<u64>,
+    qualification: Option<super::KagemushaPreEnrollmentQualificationOwnerV1>,
+    app_preparation: Option<Vec<u8>>,
 }
 
 /// Rust-only challenge and proof handoff to a separately qualified enrollment provider.
@@ -51,12 +53,37 @@ struct PhaseOneOwnerV1 {
 /// The returned challenge and proof are kernel-owned consuming states, not host-created bytes.
 /// An unavailable or uncertain result leaves the relevant journal intent frozen.
 pub trait KagemushaQualifiedEnrollmentDelegateV1: Send + Sync + 'static {
+    /// Verify the original issuer preparation before platform attestation/key generation.
+    /// This uses independent native pins and trusted service time, not a financial session.
+    fn verify_app_preparation(
+        &self,
+        _handle: u64,
+        _live_selection: KagemushaEnrollmentLiveSelectionV1,
+        _signed_preparation: &[u8],
+    ) -> Result<[u8; 32], KagemushaCoreCoordinatorBackendErrorV1> {
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+    }
+
+    /// Resolve the original live ticket to independently pinned qualification authority.
+    /// No monetary Core or enrolled retail session is needed for this fresh device read.
+    fn pre_enrollment_qualification(
+        &self,
+        _handle: u64,
+        _live_selection: KagemushaEnrollmentLiveSelectionV1,
+    ) -> Result<
+        super::KagemushaPreEnrollmentQualificationOwnerV1,
+        KagemushaCoreCoordinatorBackendErrorV1,
+    > {
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+    }
+
     /// Consume the exact retained selection and verify one bounded issuer challenge.
     fn accept_challenge(
         &self,
         handle: u64,
         live_selection: KagemushaEnrollmentLiveSelectionV1,
         request_frame: &[u8],
+        qualification: Option<&super::KagemushaVerifiedPreEnrollmentQualificationV1>,
     ) -> Result<AcceptedIssuerChallengeV1, KagemushaCoreCoordinatorBackendErrorV1>;
 
     /// Consume the original authenticated challenge once for the account and device proofs.
@@ -190,6 +217,8 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
             if let Some(handle) = owner.handle.take() {
                 let _selected = owner.selection.take();
                 owner.selection_response = None;
+                owner.qualification = None;
+                owner.app_preparation = None;
                 let _accepted = owner.accepted.take();
                 let _prepared = owner.prepared.take();
                 let _admission = owner.fresh_admission.take();
@@ -218,7 +247,7 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         method: KagemushaCoreCoordinatorMethodV1,
         request_frame: &[u8],
     ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
-        let owner = self
+        let mut owner = self
             .owner
             .lock()
             .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
@@ -232,6 +261,46 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                 | KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof
         ) {
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        if matches!(
+            method,
+            KagemushaCoreCoordinatorMethodV1::BeginObservation
+                | KagemushaCoreCoordinatorMethodV1::AcceptQualification
+                | KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply
+        ) && owner.accepted.is_none()
+            && owner.prepared.is_none()
+            && owner.fresh_admission.is_none()
+        {
+            archive_boundary::validate_request(method, request_frame)
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+            let selected = owner
+                .selection
+                .as_ref()
+                .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+                .clone();
+            let live = self
+                .journal
+                .retain_live(selected, self.pins)
+                .map_err(map_journal_error)?;
+            if owner.qualification.is_none() {
+                if method != KagemushaCoreCoordinatorMethodV1::BeginObservation {
+                    return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+                }
+                owner.qualification = Some(
+                    self.qualified_enrollment
+                        .as_ref()
+                        .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)?
+                        .pre_enrollment_qualification(handle, live)?,
+                );
+            }
+            let response = owner
+                .qualification
+                .as_mut()
+                .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+                .invoke(method, request_frame)?;
+            archive_boundary::validate_response(method, request_frame, &response)
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+            return Ok(response);
         }
         self.inner.invoke(handle, method, request_frame)
     }
@@ -291,6 +360,39 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                     .clone()
                     .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
             }
+            phase if phase == super::INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1.to_le_bytes() => {
+                let selected = owner
+                    .selection
+                    .as_ref()
+                    .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+                    .clone();
+                if fields[1] != selected.ticket.to_le_bytes()
+                    || owner
+                        .app_preparation
+                        .as_ref()
+                        .is_some_and(|previous| previous != &fields[2])
+                    || owner.accepted.is_some()
+                    || owner.prepared.is_some()
+                    || owner.fresh_admission.is_some()
+                {
+                    return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+                }
+                let live = self
+                    .journal
+                    .retain_live(selected, self.pins)
+                    .map_err(map_journal_error)?;
+                let nonce = self
+                    .qualified_enrollment
+                    .as_ref()
+                    .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)?
+                    .verify_app_preparation(handle, live, &fields[2])?;
+                let response = kagemusha_core_coordinator_encode_response_v1(&[nonce.to_vec()])
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+                archive_boundary::validate_response(method, request_frame, &response)
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+                owner.app_preparation = Some(fields[2].clone());
+                Ok(response)
+            }
             phase if phase == 2_u32.to_le_bytes() => {
                 let qualified = self
                     .qualified_enrollment
@@ -317,8 +419,15 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                         // The delegate is the explicitly qualified policy/evidence owner. The
                         // persisted intent prevents a second verifier/device action if its
                         // result is lost, rejected, or cannot be published durably.
-                        let accepted =
-                            qualified.accept_challenge(handle, live_selection, request_frame)?;
+                        let accepted = qualified.accept_challenge(
+                            handle,
+                            live_selection,
+                            request_frame,
+                            owner
+                                .qualification
+                                .as_ref()
+                                .and_then(|owner| owner.verified()),
+                        )?;
                         let challenge_id = accepted
                             .device_request_id()
                             .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
@@ -482,6 +591,8 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                 let selection = selection.clone();
                 let _selected = owner.selection.take();
                 owner.selection_response = None;
+                owner.qualification = None;
+                owner.app_preparation = None;
                 let _accepted = owner.accepted.take();
                 let _prepared = owner.prepared.take();
                 let _admission = owner.fresh_admission.take();
@@ -518,7 +629,7 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         handle: u64,
         operation_id: [u8; 32],
     ) -> Result<
-        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
         KagemushaCoreCoordinatorBackendErrorV1,
     > {
         let owner = self
@@ -542,6 +653,8 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         owner.handle = None;
         let _selected = owner.selection.take();
         owner.selection_response = None;
+        owner.qualification = None;
+        owner.app_preparation = None;
         let _accepted = owner.accepted.take();
         let _prepared = owner.prepared.take();
         let _admission = owner.fresh_admission.take();

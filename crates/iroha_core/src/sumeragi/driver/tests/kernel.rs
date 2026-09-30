@@ -6,7 +6,7 @@ use std::sync::Arc;
 use iroha_sumeragi::{
     api::{Action, CommittedTip, Event, Init, LocalFault, LocalParams},
     crypto::Attestation,
-    message::{BlockRequest, Status, SyncRequest, TrafficClass, VoteKind, WireMessage},
+    message::{PayloadRequest, Status, SyncRequest, TrafficClass, VoteKind, WireMessage},
     safety::{RecordState, SafetyRecord},
     testing::FakeValidators,
     types::{ChainParams, Hash32, HeightConfig, Millis},
@@ -66,9 +66,10 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
         recent_headers: Vec::new(),
     };
     let start = KernelStart {
+        allocation_budget: super::test_budget(),
         local: LocalParams::default(),
         init,
-        signers: vec![Box::new(vals.signer(0).clone())],
+        signers: vec![Arc::new(vals.signer(0).clone())],
         crypto: Box::new(crypto.clone()),
         hasher: Box::new(crypto),
         attestation: Attestation::none(),
@@ -81,7 +82,7 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
 }
 
 fn request(height: u64) -> WireMessage {
-    WireMessage::BlockRequest(BlockRequest {
+    WireMessage::PayloadRequest(PayloadRequest {
         instance: INSTANCE,
         height,
         block_hash: Hash32::ZERO,
@@ -125,7 +126,7 @@ fn tick_first_then_local_then_messages() {
 fn own_and_foreign_messages_are_dropped() {
     let (mut kernel, vals) = start_kernel(0);
     kernel.receive(vals.key(0), request(1), TrafficClass::Control);
-    let foreign = WireMessage::BlockRequest(BlockRequest {
+    let foreign = WireMessage::PayloadRequest(PayloadRequest {
         instance: Hash32([6; 32]),
         height: 1,
         block_hash: Hash32::ZERO,
@@ -157,10 +158,7 @@ fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
         ))),
         ExecOp::DriveApplicationControl(_) => ExecDone::ApplicationControlDriven(Ok(None)),
         ExecOp::ReceiveApplicationControl { .. } => ExecDone::ApplicationControlReceived(Ok(())),
-        ExecOp::Build { .. } => ExecDone::Built {
-            payload: Vec::new(),
-            attest: false,
-        },
+        ExecOp::Build { .. } => ExecDone::Built(Ok((None, false))),
         ExecOp::Execute { .. } => ExecDone::Executed(None),
         ExecOp::Discard { .. } => ExecDone::Discarded,
         ExecOp::Reject { .. } => ExecDone::Rejected,
@@ -239,7 +237,12 @@ fn sync_request(from_height: u64) -> WireMessage {
 fn barrier_and_ordered_persistence() {
     let (mut kernel, vals) = start_kernel(0);
     settle(&mut kernel);
-    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), Vec::new());
+    let b1 = block(
+        1,
+        Hash32([0xa0; 32]),
+        Hash32([0xa1; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     let send = |h: u64| Action::Broadcast {
         to: vec![vals.key(0), vals.key(1)],
         msg: request(h),
@@ -336,12 +339,17 @@ fn barrier_and_ordered_persistence() {
 #[test]
 fn served_bodies_become_local_events() {
     let (mut kernel, _) = start_kernel(0);
-    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), Vec::new());
+    let b1 = block(
+        1,
+        Hash32([0xa0; 32]),
+        Hash32([0xa1; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     kernel.complete(
         0,
         Completion::Served(Served {
-            event: Some(Event::BodyAvailable { block: b1.clone() }),
-            bytes: 0,
+            events: vec![Event::BodyAvailable { block: b1.clone() }],
+            ..Served::default()
         }),
     );
     kernel.transactions_available();
@@ -362,7 +370,8 @@ fn served_bodies_become_local_events() {
 
 /// §12.2 serving limits: a flood of `SyncRequest`s from three peers leaves one pending
 /// `ServeBlocks` per peer (one in flight), and the node's own `FetchBody` — a body it lacks
-/// for a `CommitQC` — waits at most for the request in flight.
+/// for a `CommitQC` — runs after the in-flight request and its mandatory lifetime cleanup,
+/// before any queued peer response.
 #[test]
 fn serving_is_bounded_and_the_nodes_fetch_goes_first() {
     let (mut kernel, vals) = start_kernel(0);
@@ -418,7 +427,24 @@ fn serving_is_bounded_and_the_nodes_fetch_goes_first() {
     assert!(
         matches!(
             &ops[..],
-            [Op::Serve(ServeRequest::Fetch { block_hash, .. })] if *block_hash == hash(&b1)
+            [Op::Serve(ServeRequest::Payload(work))] if matches!(&**work,
+                super::super::payload_worker::PayloadWork::Retain { height: 1, keep }
+                if keep.as_slice() == [hash(&b1)])
+        ),
+        "authorized cleanup precedes local recovery: {ops:?}"
+    );
+    kernel.complete(
+        0,
+        Completion::Served(Served {
+            payload: true,
+            ..Served::default()
+        }),
+    );
+    let ops = kernel.poll(0);
+    assert!(
+        matches!(
+            &ops[..],
+            [Op::Serve(ServeRequest::Payload(work))] if matches!(&**work, super::super::payload_worker::PayloadWork::Fetch { source, .. } if source.block_hash() == hash(&b1))
         ),
         "{ops:?}"
     );
@@ -538,7 +564,12 @@ fn publication_recovery_halts_before_poll_and_preserves_safety_persistence() {
 
     let (mut kernel, vals) = start_kernel(0);
     settle(&mut kernel);
-    let block = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), Vec::new());
+    let block = block(
+        1,
+        Hash32([0xa0; 32]),
+        Hash32([0xa1; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     let result = Hash32([0x31; 32]);
     kernel.route(vec![Action::CommitBlock {
         commit_qc: commit_qc(&block, result),
@@ -686,4 +717,19 @@ fn frame_limits_cover_both_atomic_boundary_configs_without_pending_fallback() {
         super::super::applied_frame_limits(1, 3, &pending),
         [None, None]
     );
+}
+
+#[test]
+fn core_discard_routes_the_same_authorized_keep_set_to_payload_lifetime() {
+    let (mut kernel, _) = start_kernel(0);
+    let keep = vec![Hash32([0x73; 32])];
+    kernel.route(vec![Action::DiscardExecution {
+        height: 1,
+        keep: keep.clone(),
+    }]);
+    let operations = kernel.poll(0);
+    assert!(operations.iter().any(|operation| matches!(operation,
+        Op::Serve(ServeRequest::Payload(work))
+            if matches!(&**work, super::super::payload_worker::PayloadWork::Retain { height: 1, keep: retained } if retained == &keep)
+    )), "the exact Core lifetime reaches the payload worker before another author job");
 }

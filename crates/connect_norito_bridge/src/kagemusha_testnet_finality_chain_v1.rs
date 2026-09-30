@@ -4,7 +4,7 @@
 //! finality response. This module checks every consecutive signed native decision before the
 //! diagnostic owner may pin the resulting checkpoint for a pre-reserved operation.
 
-use iroha_core::zk::kagemusha_v1_recursion::KagemushaVerifiedFinalityChainV1;
+use iroha_core_zk::kagemusha_v1_recursion::KagemushaVerifiedFinalityChainV1;
 use iroha_data_model::{
     NetworkId,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,

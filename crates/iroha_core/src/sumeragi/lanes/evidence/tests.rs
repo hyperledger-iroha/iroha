@@ -16,8 +16,9 @@ use iroha_model_base::{
 };
 use iroha_sumeragi::{
     api::ExecOutcome,
+    availability::{AvailabilitySource, AvailableBody, PayloadAuthoring, PayloadBytes},
     crypto::{Crypto as _, Signer as _},
-    message::{Block, BlockHeader, Qc},
+    message::{BlockHeader, Qc, SyncEntry},
     preimage::payload_hash,
     types::{AggregateSignature, Bitmap, ControlWitness, SIGNATURE_LEN},
 };
@@ -25,7 +26,11 @@ use iroha_sumeragi::{
 use super::*;
 use crate::sumeragi::{
     crypto::KeyPairSigner,
-    driver::traits::{BlockStore, Executor as _},
+    driver::{
+        SharedCrypto,
+        traits::{BlockStore, Executor as _},
+    },
+    durable_artifact::{BodyReadError, BodyReadJob, BodyReader},
     lanes::{
         LaneBatch,
         executor::{AnchorSource, LaneExecutor, LaneTransactions},
@@ -64,14 +69,26 @@ impl LaneTransactions for NoTransactions {
     }
 }
 struct EmptyStore;
+impl BodyReader for EmptyStore {
+    fn begin_read(&self, _: AvailabilitySource) -> Result<Box<dyn BodyReadJob>, BodyReadError> {
+        panic!("an empty fixture store never reads a committed body")
+    }
+}
 impl BlockStore for EmptyStore {
     fn height(&self) -> u64 {
         0
     }
-    fn entry(&self, _height: u64) -> Option<SyncEntry> {
-        None
+    fn entry(&self, _: u64) -> std::io::Result<Option<SyncEntry>> {
+        Ok(None)
     }
-    fn append(&self, _block: &Block, _qc: &Qc) -> std::io::Result<()> {
+    fn availability_source(
+        &self,
+        _: u64,
+        _: Hash32,
+    ) -> std::io::Result<Option<AvailabilitySource>> {
+        Ok(None)
+    }
+    fn append(&self, _: &AvailableBody, _: &Qc) -> std::io::Result<()> {
         panic!("the executor fixture must not publish while constructing evidence")
     }
 }
@@ -81,7 +98,9 @@ struct Fixture {
     network: NetworkId,
     anchors: Arc<Anchors>,
     prior: SumeragiLaneFrontier,
-    entry: SyncEntry,
+    body: AvailableBody,
+    qc: Qc,
+    budget: iroha_allocation::AllocationBudget,
     keys: Vec<KeyPair>,
 }
 const CHAIN: &str = "native-lane-entry-test";
@@ -99,6 +118,7 @@ impl Fixture {
             .collect::<Vec<_>>();
         keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
         let mut record = SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(2),
             dataspace: DataSpaceId::new(0),
             incarnation: [0x73; 32],
@@ -141,46 +161,73 @@ impl Fixture {
             transactions: vec![tx.sign(user.private_key())],
         };
         let config = lane_height_config(&record).unwrap();
-        let crypto = BlsCrypto::new();
+        let crypto = Arc::new(BlsCrypto::new());
+        crypto
+            .admit_committee(
+                record
+                    .committee
+                    .iter()
+                    .map(|member| (member.peer.public_key(), member.pop.as_slice())),
+            )
+            .unwrap();
+        let budget = iroha_allocation::AllocationBudget::new(1 << 25);
         let payload = batch.to_payload();
-        let block = Block {
-            header: BlockHeader {
-                control_witness: ControlWitness::empty(),
-                instance: lane_instance(&crypto, &network, CHAIN, &record),
-                epoch: config.epoch.id,
-                height: 1,
-                origin_view: 0,
-                parent_hash: Hash32(prior.block_hash),
-                parent_result: Hash32(prior.result),
-                payload_hash: payload_hash(&crypto, &payload),
-                payload_len: u32::try_from(payload.len()).unwrap(),
-                proposer: 0,
-                skipped_leaders: Vec::new(),
-                attest: false,
-            },
-            payload,
+        let header = BlockHeader {
+            control_witness: ControlWitness::empty(),
+            instance: lane_instance(&*crypto, &network, CHAIN, &record),
+            epoch: config.epoch.id,
+            height: 1,
+            origin_view: 0,
+            parent_hash: Hash32(prior.block_hash),
+            parent_result: Hash32(prior.result),
+            payload_hash: payload_hash(&*crypto, &payload),
+            availability_digest: Hash32::ZERO,
+            payload_len: u32::try_from(payload.len()).unwrap(),
+            proposer: 0,
+            skipped_leaders: Vec::new(),
+            attest: false,
         };
-        let mut executor = LaneExecutor::<_, _, NoTransactions>::recover(
+        let mut charged = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        charged.append(&payload).unwrap();
+        let payload = PayloadBytes::from_charged(charged, &budget)
+            .unwrap_or_else(|_| panic!("original fixture payload"));
+        let authored = PayloadAuthoring::new(header, payload)
+            .complete(
+                lane_instance(&*crypto, &network, CHAIN, &record),
+                &config,
+                &budget,
+                &*crypto,
+                &KeyPairSigner::new(&keys[0]).unwrap(),
+            )
+            .unwrap_or_else(|(_, error)| panic!("original signed lane availability: {error:?}"));
+        drop(authored.codeword);
+        let block = authored.body;
+        let shared: SharedCrypto = crypto.clone();
+        let mut executor = LaneExecutor::<_, _, NoTransactions>::begin_recover(
             record.clone(),
             config,
+            lane_instance(&*crypto, &network, CHAIN, &record),
             Arc::clone(&anchors),
             StatelessChecks::new(network),
             None,
             Hash32(prior.block_hash),
-            &EmptyStore,
+            Arc::new(EmptyStore),
+            shared,
+            budget.clone(),
         )
-        .unwrap();
-        let Some(ExecOutcome::Valid(result)) = executor.execute(&block, &block.hash(&crypto))
+        .complete()
+        .unwrap_or_else(|(_, error)| panic!("empty original lane recovery: {error}"));
+        let Some(ExecOutcome::Valid(result)) = executor.execute(&block, &block.hash(&*crypto))
         else {
             panic!("original lane execution must be valid");
         };
         let commit_qc = Qc {
             kind: VoteKind::Commit,
-            instance: block.header.instance,
-            epoch: block.header.epoch,
+            instance: block.header().instance,
+            epoch: block.header().epoch,
             height: 1,
             view: 0,
-            block_hash: block.hash(&crypto),
+            block_hash: block.hash(&*crypto),
             result,
             attest: false,
             signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
@@ -193,21 +240,45 @@ impl Fixture {
             network,
             anchors,
             prior,
-            entry: SyncEntry { block, commit_qc },
+            body: block,
+            qc: commit_qc,
+            budget,
             keys,
         };
         fixture.resign(3);
         fixture
     }
     fn resign(&mut self, count: usize) {
-        self.entry.commit_qc.signers =
-            Bitmap::from_indices(4, (0..count).map(|index| index as u32)).unwrap();
-        let preimage = self.entry.commit_qc.preimage();
+        self.qc.signers = Bitmap::from_indices(4, (0..count).map(|index| index as u32)).unwrap();
+        let preimage = self.qc.preimage();
         let signatures = self.keys[..count]
             .iter()
             .map(|key| KeyPairSigner::new(key).unwrap().sign(&preimage))
             .collect::<Vec<_>>();
-        self.entry.commit_qc.agg_sig = BlsCrypto::new().aggregate(&signatures);
+        self.qc.agg_sig = BlsCrypto::new().aggregate(&signatures);
+    }
+    fn replace_payload(&mut self, bytes: &[u8], config: &HeightConfig) {
+        let crypto = BlsCrypto::new();
+        let mut header = self.body.header().clone();
+        header.payload_len = u32::try_from(bytes.len()).unwrap();
+        header.payload_hash = payload_hash(&crypto, bytes);
+        let mut charged = iroha_allocation::ChargedBuffer::new(bytes.len(), &self.budget).unwrap();
+        charged.append(bytes).unwrap();
+        let payload = PayloadBytes::from_charged(charged, &self.budget)
+            .unwrap_or_else(|_| panic!("original replacement fixture payload"));
+        let authored = PayloadAuthoring::new(header, payload)
+            .complete(
+                self.body.source().instance(),
+                config,
+                &self.budget,
+                &crypto,
+                &KeyPairSigner::new(&self.keys[0]).unwrap(),
+            )
+            .unwrap_or_else(|(_, error)| panic!("original reauthored fixture: {error:?}"));
+        drop(authored.codeword);
+        self.body = authored.body;
+        self.qc.block_hash = self.body.hash(&crypto);
+        self.resign(3);
     }
     fn verify(&self) -> Result<LaneResult, LaneEntryError> {
         verify_lane_entry(
@@ -217,7 +288,8 @@ impl Fixture {
             &*self.anchors,
             &LaneChainView::default(),
             &self.prior,
-            &self.entry,
+            &self.body,
+            &self.qc,
         )
     }
 }
@@ -226,7 +298,7 @@ impl Fixture {
 fn original_execution_and_exact_real_quorum_reproduce_lane_result() {
     let fixture = Fixture::new();
     let result = fixture.verify().unwrap();
-    assert_eq!(result.hash(), fixture.entry.commit_qc.result);
+    assert_eq!(result.hash(), fixture.qc.result);
     assert_eq!(result.anchor_hash, fixture.anchors.hash);
     assert_eq!(result.tx_hashes.len(), 1);
 }
@@ -239,11 +311,11 @@ fn source_context_predecessor_pop_and_exact_quorum_are_all_required() {
             0 => fixture.record.incarnation[0] ^= 1,
             1 => fixture.record.committee[0].pop[0] ^= 1,
             2 => fixture.prior.result[0] ^= 1,
-            3 => fixture.entry.commit_qc.agg_sig.0[0] ^= 1,
+            3 => fixture.qc.agg_sig.0[0] ^= 1,
             4 => fixture.resign(2),
             5 => fixture.resign(4),
             6 => {
-                fixture.entry.commit_qc.result.0[0] ^= 1;
+                fixture.qc.result.0[0] ^= 1;
                 fixture.resign(3);
             }
             7 => fixture.record.committee.swap(0, 1),
@@ -264,7 +336,8 @@ fn source_context_predecessor_pop_and_exact_quorum_are_all_required() {
             &fixture.network,
             "other-chain",
             &fixture.prior,
-            &fixture.entry
+            &fixture.body,
+            &fixture.qc
         )
         .is_err()
     );
@@ -285,7 +358,8 @@ fn unavailable_anchor_is_distinct_from_bad_admission_or_bad_certificate() {
             &missing,
             &LaneChainView::default(),
             &fixture.prior,
-            &fixture.entry
+            &fixture.body,
+            &fixture.qc
         ),
         Err(LaneEntryError::UnavailableAnchor)
     ));
@@ -306,7 +380,8 @@ fn unavailable_anchor_is_distinct_from_bad_admission_or_bad_certificate() {
             &*fixture.anchors,
             &history,
             &fixture.prior,
-            &fixture.entry
+            &fixture.body,
+            &fixture.qc
         ),
         Err(LaneEntryError::Admission(AdmissionError::Duplicate(0)))
     ));
@@ -315,24 +390,38 @@ fn unavailable_anchor_is_distinct_from_bad_admission_or_bad_certificate() {
 #[test]
 fn valid_certificate_does_not_assert_its_payload_is_an_admissible_batch() {
     let mut fixture = Fixture::new();
-    fixture.entry.block.payload = vec![0xff];
-    let crypto = BlsCrypto::new();
-    fixture.entry.block.header.payload_len = 1;
-    fixture.entry.block.header.payload_hash = payload_hash(&crypto, &fixture.entry.block.payload);
-    fixture.entry.commit_qc.block_hash = fixture.entry.block.hash(&crypto);
-    fixture.resign(3);
+    let config = lane_height_config(&fixture.record).unwrap();
+    fixture.replace_payload(&[0xff], &config);
     assert!(
         verify_lane_certificate(
             &fixture.record,
             &fixture.network,
             CHAIN,
             &fixture.prior,
-            &fixture.entry
+            &fixture.body,
+            &fixture.qc
         )
         .is_ok()
     );
     assert!(matches!(
         fixture.verify(),
         Err(LaneEntryError::Admission(AdmissionError::Encoding(_)))
+    ));
+}
+
+#[test]
+fn equal_epoch_and_header_do_not_relabel_a_body_checked_under_foreign_parameters() {
+    let mut fixture = Fixture::new();
+    let original = fixture.body.header().clone();
+    let payload = fixture.body.payload().as_slice().to_vec();
+    let mut foreign = lane_height_config(&fixture.record).unwrap();
+    foreign.params.max_block_bytes -= 1;
+    fixture.replace_payload(&payload, &foreign);
+    assert_eq!(fixture.body.header(), &original);
+    assert!(matches!(
+        fixture.verify(),
+        Err(LaneEntryError::Binding(
+            "body was authenticated under another historical authority"
+        ))
     ));
 }

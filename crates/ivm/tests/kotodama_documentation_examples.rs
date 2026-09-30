@@ -2,14 +2,15 @@ use iroha_crypto::PublicKey;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
-    IVM, KotodamaCompiler, VMError,
+    IVM, VMError,
     host::IVMHost,
-    kotodama::compiler::CompilerOptions,
     mock_wsv::{
         AccountId, AssetDefinitionId, Mintable, MockWorldStateView, NftId, PermissionToken, WsvHost,
     },
     syscalls,
 };
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::CompilerOptions;
 use std::{
     any::Any,
     path::{Path, PathBuf},

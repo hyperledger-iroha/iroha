@@ -6,7 +6,7 @@
 //! authority. All prior semantic checks run before scratch admission.
 
 use super::*;
-use mv::allocation::{ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{ChargedBuffer, ChargedBufferError};
 
 pub(super) fn validate_directory_revisions(
     world: &impl WorldReadOnly,

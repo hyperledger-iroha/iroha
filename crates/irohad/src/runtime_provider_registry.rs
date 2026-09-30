@@ -1398,10 +1398,6 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// a required public binding is missing, or an in-memory view was manually
     /// substituted with a noncanonical, zero-qualified, or test-marked
     /// binding.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "complete Governance DAG service projection"
-    )]
     pub fn try_from_governance_dag_service_view(
         chain_id: &iroha_model_base::chain::ChainId,
         network_id: NetworkId,
@@ -2476,7 +2472,6 @@ fn validate_musubi_provider_attestation_runtime_handle(
     }
     Ok(())
 }
-#[expect(clippy::too_many_lines, reason = "cohesive attestation provider group")]
 fn qualify_musubi_provider_attestation_dependencies(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
@@ -2772,10 +2767,6 @@ fn qualify_native_transaction_signers(
     );
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "complete provider-ingest dependency audit"
-)]
 fn qualify_provider_ingest_dependencies(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
@@ -5583,7 +5574,6 @@ mod tests {
             });
     }
     #[test]
-    #[expect(clippy::too_many_lines, reason = "all specialized provider families")]
     fn canonical_catalog_roundtrips_every_specialized_config_projection_family() {
         let mut governance = default_runtime_config();
         configure_governance_producer(&mut governance);
@@ -5988,10 +5978,6 @@ mod tests {
             .expect("canonical non-default origin port");
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "complete evidence-viewer binding group"
-    )]
     fn evidence_viewer_catalog_projects_exact_checkpoint_store_qualification() {
         let mut config = default_runtime_config();
         configure_evidence_viewer(&mut config);

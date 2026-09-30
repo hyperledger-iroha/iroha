@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SHARED_PATH = (
     REPO_ROOT
     / "crates"
-    / "iroha_core"
+    / "iroha_core_privacy"
     / "src"
     / "privacy_engines"
     / "shared_note_profile_constraints.rs"
@@ -39,7 +39,7 @@ PROFILE_CONTRACTS = {
     "ivm": {
         "path": REPO_ROOT
         / "crates"
-        / "iroha_core"
+        / "iroha_core_privacy"
         / "src"
         / "privacy_engines"
         / "ivm_private_note"
@@ -64,7 +64,7 @@ PROFILE_CONTRACTS = {
     "pq": {
         "path": REPO_ROOT
         / "crates"
-        / "iroha_core"
+        / "iroha_core_privacy"
         / "src"
         / "privacy_engines"
         / "pq_masp"

@@ -2265,6 +2265,7 @@ mod tests {
         group::{Curve as _, Group as _},
         pasta::{Ep, EpAffine, Eq, EqAffine, Fp, Fq},
     };
+    use iroha_allocation::AllocationBudget;
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature,
         bls_normal_aggregate_signatures,
@@ -2304,7 +2305,6 @@ mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_sumeragi::{message::Qc, types::AggregateSignature};
-    use mv::allocation::AllocationBudget;
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};
 
@@ -2910,6 +2910,7 @@ mod tests {
         let mut block = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
+        let availability = certificate.availability().to_vec();
         let mut commitment =
             ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
         let mint_finality_authorization_id = commitment
@@ -2952,6 +2953,7 @@ mod tests {
             header,
             norito::encode_canonical(&qc).unwrap(),
             commitment.preimage().unwrap(),
+            availability,
         )));
         let mut finality_proof = fixture.latest().clone();
         finality_proof.block_wire = block.encode_wire().unwrap();

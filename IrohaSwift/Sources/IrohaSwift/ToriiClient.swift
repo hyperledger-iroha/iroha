@@ -17789,10 +17789,15 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
         return entry
     }
 
+    /// Milliseconds since the last committed non-empty block, or since the last block while
+    /// the peer has not reported a non-empty one.
     public var livenessElapsedMs: Int {
         timeSinceLastNonEmptyBlockMs > 0 ? timeSinceLastNonEmptyBlockMs : timeSinceLastBlockMs
     }
 
+    /// True when queued work exists and `livenessElapsedMs` exceeds `stallThresholdMs`.
+    /// `ToriiPipelinePreflight.isStatusStalled(_:)` supplies the threshold derived from the
+    /// served block cadence.
     public func isQueueStalled(stallThresholdMs: Int) -> Bool {
         queueSize > 0 && livenessElapsedMs > stallThresholdMs
     }
@@ -17866,18 +17871,64 @@ public struct ToriiStatusSnapshot: Sendable, Equatable {
     public let metrics: ToriiStatusMetrics
 }
 
+/// Decode one served `u64` preflight field as a non-negative (with `positive`, nonzero) `Int`.
+fileprivate func decodePipelinePreflightUnsigned<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    _ key: Key,
+    positive: Bool = false
+) throws -> Int {
+    let value = try container.decode(Int.self, forKey: key)
+    guard value >= (positive ? 1 : 0) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) must be \(positive ? "positive" : "non-negative")"
+        )
+    }
+    return value
+}
+
+/// Decode one served preflight string, which Torii never leaves empty.
+fileprivate func decodePipelinePreflightString<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    _ key: Key
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    guard !value.isEmpty else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) must be a non-empty string"
+        )
+    }
+    return value
+}
+
+/// Consensus timing Torii serves in `GET /v1/pipeline/preflight`.
 public struct ToriiPipelinePreflightSumeragi: Decodable, Sendable, Equatable {
-    public let blockTimeMs: Int
-    public let commitTimeMs: Int
-    public let stallThresholdMs: Int
+    /// Signed-genesis target block time in milliseconds (always positive).
+    public let blockCadenceMs: Int
 
     private enum CodingKeys: String, CodingKey {
-        case blockTimeMs = "block_time_ms"
-        case commitTimeMs = "commit_time_ms"
-        case stallThresholdMs = "stall_threshold_ms"
+        case blockCadenceMs = "block_cadence_ms"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["block_cadence_ms"],
+            debugName: "pipeline preflight sumeragi"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockCadenceMs = try decodePipelinePreflightUnsigned(
+            container,
+            .blockCadenceMs,
+            positive: true
+        )
     }
 }
 
+/// Transaction admission limits Torii serves in pipeline preflight.
 public struct ToriiPipelinePreflightAdmission: Decodable, Sendable, Equatable {
     public let maxSignatures: Int
     public let maxInstructions: Int
@@ -17892,16 +17943,51 @@ public struct ToriiPipelinePreflightAdmission: Decodable, Sendable, Equatable {
         case maxDecompressedBytes = "max_decompressed_bytes"
         case maxMetadataDepth = "max_metadata_depth"
     }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: [
+                "max_signatures",
+                "max_instructions",
+                "max_tx_bytes",
+                "max_decompressed_bytes",
+                "max_metadata_depth",
+            ],
+            debugName: "pipeline preflight admission"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        maxSignatures = try decodePipelinePreflightUnsigned(container, .maxSignatures)
+        maxInstructions = try decodePipelinePreflightUnsigned(container, .maxInstructions)
+        maxTxBytes = try decodePipelinePreflightUnsigned(container, .maxTxBytes)
+        maxDecompressedBytes = try decodePipelinePreflightUnsigned(
+            container,
+            .maxDecompressedBytes
+        )
+        maxMetadataDepth = try decodePipelinePreflightUnsigned(container, .maxMetadataDepth)
+    }
 }
 
+/// Block assembly limits Torii serves in pipeline preflight.
 public struct ToriiPipelinePreflightBlock: Decodable, Sendable, Equatable {
     public let maxTransactions: Int
 
     private enum CodingKeys: String, CodingKey {
         case maxTransactions = "max_transactions"
     }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["max_transactions"],
+            debugName: "pipeline preflight block"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        maxTransactions = try decodePipelinePreflightUnsigned(container, .maxTransactions)
+    }
 }
 
+/// Pipeline execution and verification limits Torii serves in pipeline preflight.
 public struct ToriiPipelinePreflightPipeline: Decodable, Sendable, Equatable {
     public let signatureBatchMaxEd25519: Int
     public let signatureBatchMaxSecp256k1: Int
@@ -17939,64 +18025,81 @@ public struct ToriiPipelinePreflightPipeline: Decodable, Sendable, Equatable {
             debugName: "pipeline preflight pipeline"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        signatureBatchMaxEd25519 = try container.decode(
-            Int.self,
-            forKey: .signatureBatchMaxEd25519
+        signatureBatchMaxEd25519 = try decodePipelinePreflightUnsigned(
+            container,
+            .signatureBatchMaxEd25519
         )
-        signatureBatchMaxSecp256k1 = try container.decode(
-            Int.self,
-            forKey: .signatureBatchMaxSecp256k1
+        signatureBatchMaxSecp256k1 = try decodePipelinePreflightUnsigned(
+            container,
+            .signatureBatchMaxSecp256k1
         )
-        signatureBatchMaxPqc = try container.decode(Int.self, forKey: .signatureBatchMaxPqc)
-        signatureBatchMaxBls = try container.decode(Int.self, forKey: .signatureBatchMaxBls)
-        overlayMaxInstructions = try container.decode(Int.self, forKey: .overlayMaxInstructions)
-        ivmMaxCyclesUpperBound = try container.decode(
-            Int.self,
-            forKey: .ivmMaxCyclesUpperBound
+        signatureBatchMaxPqc = try decodePipelinePreflightUnsigned(container, .signatureBatchMaxPqc)
+        signatureBatchMaxBls = try decodePipelinePreflightUnsigned(container, .signatureBatchMaxBls)
+        overlayMaxInstructions = try decodePipelinePreflightUnsigned(
+            container,
+            .overlayMaxInstructions
         )
-        guard ivmMaxCyclesUpperBound > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .ivmMaxCyclesUpperBound,
-                in: container,
-                debugDescription: "ivm_max_cycles_upper_bound must be positive"
-            )
-        }
-        ivmAdmissionCycleLimit = try container.decode(
-            Int.self,
-            forKey: .ivmAdmissionCycleLimit
+        ivmMaxCyclesUpperBound = try decodePipelinePreflightUnsigned(
+            container,
+            .ivmMaxCyclesUpperBound,
+            positive: true
         )
-        guard ivmAdmissionCycleLimit > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .ivmAdmissionCycleLimit,
-                in: container,
-                debugDescription: "ivm_admission_cycle_limit must be positive"
-            )
-        }
-        ivmMaxDecodedInstructions = try container.decode(
-            Int.self,
-            forKey: .ivmMaxDecodedInstructions
+        ivmAdmissionCycleLimit = try decodePipelinePreflightUnsigned(
+            container,
+            .ivmAdmissionCycleLimit,
+            positive: true
+        )
+        ivmMaxDecodedInstructions = try decodePipelinePreflightUnsigned(
+            container,
+            .ivmMaxDecodedInstructions
         )
     }
 }
 
+/// Queue occupancy Torii serves in pipeline preflight.
 public struct ToriiPipelinePreflightQueue: Decodable, Sendable, Equatable {
     public let size: Int
     public let queued: Int
     public let inflight: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case size
+        case queued
+        case inflight
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["size", "queued", "inflight"],
+            debugName: "pipeline preflight queue"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        size = try decodePipelinePreflightUnsigned(container, .size)
+        queued = try decodePipelinePreflightUnsigned(container, .queued)
+        inflight = try decodePipelinePreflightUnsigned(container, .inflight)
+    }
 }
 
+/// Nexus fee configuration Torii serves in pipeline preflight.
+///
+/// Fee amounts are canonical decimal quantity strings; `settlementMode` is `direct` or
+/// `lane_relay_burn`.
 public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
+    /// Settlement modes Torii serves.
+    public static let settlementModes: Set<String> = ["direct", "lane_relay_burn"]
+
     public let feeAssetId: String
     public let feeSinkAccountId: String
-    public let baseFee: ToriiJSONValue
-    public let perByteFee: ToriiJSONValue
-    public let perInstructionFee: ToriiJSONValue
-    public let perGasUnitFee: ToriiJSONValue
+    public let baseFee: String
+    public let perByteFee: String
+    public let perInstructionFee: String
+    public let perGasUnitFee: String
     public let sponsorVaultCustodyAccountId: String
     public let settlementMode: String
     public let successfulClaimFeeExemptAuthorities: [String]
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case feeAssetId = "fee_asset_id"
         case feeSinkAccountId = "fee_sink_account_id"
         case baseFee = "base_fee"
@@ -18009,8 +18112,13 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            debugName: "pipeline preflight fees"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        feeAssetId = try container.decode(String.self, forKey: .feeAssetId)
+        feeAssetId = try decodePipelinePreflightString(container, .feeAssetId)
         let feeSinkAccountId = try container.decode(String.self, forKey: .feeSinkAccountId)
         guard (try? exactCanonicalToriiAccountAddress(feeSinkAccountId)) != nil else {
             throw DecodingError.dataCorruptedError(
@@ -18020,13 +18128,10 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
             )
         }
         self.feeSinkAccountId = feeSinkAccountId
-        baseFee = try container.decode(ToriiJSONValue.self, forKey: .baseFee)
-        perByteFee = try container.decode(ToriiJSONValue.self, forKey: .perByteFee)
-        perInstructionFee = try container.decode(
-            ToriiJSONValue.self,
-            forKey: .perInstructionFee
-        )
-        perGasUnitFee = try container.decode(ToriiJSONValue.self, forKey: .perGasUnitFee)
+        baseFee = try decodePipelinePreflightString(container, .baseFee)
+        perByteFee = try decodePipelinePreflightString(container, .perByteFee)
+        perInstructionFee = try decodePipelinePreflightString(container, .perInstructionFee)
+        perGasUnitFee = try decodePipelinePreflightString(container, .perGasUnitFee)
         let sponsorVaultCustodyAccountId = try container.decode(
             String.self,
             forKey: .sponsorVaultCustodyAccountId
@@ -18039,7 +18144,15 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
             )
         }
         self.sponsorVaultCustodyAccountId = sponsorVaultCustodyAccountId
-        settlementMode = try container.decode(String.self, forKey: .settlementMode)
+        let settlementMode = try container.decode(String.self, forKey: .settlementMode)
+        guard Self.settlementModes.contains(settlementMode) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .settlementMode,
+                in: container,
+                debugDescription: "settlement_mode must be one of: direct, lane_relay_burn"
+            )
+        }
+        self.settlementMode = settlementMode
         let authorities = try container.decode(
             [String].self,
             forKey: .successfulClaimFeeExemptAuthorities
@@ -18057,7 +18170,24 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
     }
 }
 
+/// Typed `GET /v1/pipeline/preflight` body.
+///
+/// Every object carries exactly the fields Torii serves; any other field is rejected as
+/// protocol drift.
 public struct ToriiPipelinePreflight: Decodable, Sendable, Equatable {
+    /// Target block cadences a peer with queued work may go without committing a non-empty
+    /// block before `isStatusStalled(_:)` reports a stall.
+    ///
+    /// Torii serves one consensus timing value, `sumeragi.block_cadence_ms` (the signed-genesis
+    /// target block time), so `stallThresholdMs` is `stallBlockCadences * blockCadenceMs`. With
+    /// work queued a healthy chain commits about once per cadence. At the Sumeragi defaults
+    /// (1 s block time, 5 s payload retry, 2-3 s base view timer) one crashed leader delays the
+    /// next commit by roughly 11-14 s plus execution (`specs/sumeragi.md` §8.2 P4, §9.3); twenty
+    /// cadences keep such a single view change from being reported as a stall. Callers that
+    /// know their deployment's local timers pass their own threshold to
+    /// `ToriiStatusPayload.isQueueStalled(stallThresholdMs:)`.
+    public static let stallBlockCadences = 20
+
     public let schemaVersion: Int
     public let chainHeight: Int
     public let sumeragi: ToriiPipelinePreflightSumeragi
@@ -18067,7 +18197,7 @@ public struct ToriiPipelinePreflight: Decodable, Sendable, Equatable {
     public let queue: ToriiPipelinePreflightQueue
     public let fees: ToriiPipelinePreflightFees
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case schemaVersion = "schema_version"
         case chainHeight = "chain_height"
         case sumeragi
@@ -18078,8 +18208,39 @@ public struct ToriiPipelinePreflight: Decodable, Sendable, Equatable {
         case fees
     }
 
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            debugName: "pipeline preflight"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try decodePipelinePreflightUnsigned(
+            container,
+            .schemaVersion,
+            positive: true
+        )
+        chainHeight = try decodePipelinePreflightUnsigned(container, .chainHeight)
+        sumeragi = try container.decode(ToriiPipelinePreflightSumeragi.self, forKey: .sumeragi)
+        admission = try container.decode(ToriiPipelinePreflightAdmission.self, forKey: .admission)
+        block = try container.decode(ToriiPipelinePreflightBlock.self, forKey: .block)
+        pipeline = try container.decode(ToriiPipelinePreflightPipeline.self, forKey: .pipeline)
+        queue = try container.decode(ToriiPipelinePreflightQueue.self, forKey: .queue)
+        fees = try container.decode(ToriiPipelinePreflightFees.self, forKey: .fees)
+    }
+
+    /// SDK-derived stall threshold, not a served field: `stallBlockCadences` times
+    /// `sumeragi.blockCadenceMs`, saturated at `Int.max`.
+    public var stallThresholdMs: Int {
+        let (threshold, overflow) = sumeragi.blockCadenceMs.multipliedReportingOverflow(
+            by: Self.stallBlockCadences
+        )
+        return overflow ? Int.max : threshold
+    }
+
+    /// Report queued work with no non-empty block committed for longer than `stallThresholdMs`.
     public func isStatusStalled(_ status: ToriiStatusPayload) -> Bool {
-        status.isQueueStalled(stallThresholdMs: sumeragi.stallThresholdMs)
+        status.isQueueStalled(stallThresholdMs: stallThresholdMs)
     }
 }
 
@@ -24092,8 +24253,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             where code == 408 || code == 409 || code == 425 || code == 429
                 || (500...599).contains(code):
             return error
-        case .invalidURL, .httpStatus, .stream, .dataModelMismatch,
-             .transactionSchemaMismatch:
+        case .ramLfeEncryptionUnavailable, .invalidURL, .httpStatus, .stream,
+             .dataModelMismatch, .transactionSchemaMismatch:
             return nil
         }
     }
@@ -26055,14 +26216,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiPipelinePreflight.self, from: data)
     }
 
+    /// Return a healthy sampled network clock. Fallback, incomplete or unhealthy
+    /// snapshots are rejected before they can influence transaction timestamps.
     public func getTimeNow() async throws -> ToriiTimeSnapshot {
         let request = try makeRequest(path: "/v1/time/now")
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300, responseBody: data)
         let snapshot = try decodeJSON(ToriiTimeSnapshot.self, from: data)
-        guard snapshot.now > 0 else {
+        guard snapshot.healthyLowerBoundMs != nil else {
             throw ToriiClientError.invalidPayload(
-                "time/now returned a zero server timestamp."
+                "time/now returned an unhealthy or fallback network clock."
             )
         }
         recordObservedServerClock(

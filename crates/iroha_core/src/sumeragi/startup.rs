@@ -34,7 +34,13 @@ const _: () = assert!(
 pub enum StartupError {
     /// The genesis block is invalid.
     #[error("genesis is invalid: {0}")]
-    InvalidGenesis(String),
+    InvalidGenesis(#[source] Box<crate::block::BlockValidationError>),
+    /// The executed genesis lane transition did not complete correctly.
+    #[error("genesis lane transition is invalid: {0}")]
+    LaneStep(#[source] super::lanes::step::LaneStepError),
+    /// The original executed genesis and witness cannot form their commitment.
+    #[error("genesis execution commitment is invalid: {0}")]
+    ExecutionCommitment(#[source] iroha_data_model::sumeragi_finality::CommitmentError),
     /// The genesis committee or schedule is invalid.
     #[error("genesis schedule is invalid: {0}")]
     Schedule(String),
@@ -59,6 +65,7 @@ pub struct GenesisTip {
 pub(crate) struct GenesisExecutionAuthorization {
     state: usize,
     tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
+    telemetry_origin: super::executor::CommitTelemetryOrigin,
 }
 impl GenesisExecutionAuthorization {
     pub(super) fn into_parts(
@@ -66,8 +73,9 @@ impl GenesisExecutionAuthorization {
     ) -> (
         usize,
         crate::state::native_execution_tip::NativeExecutionTipRecord,
+        super::executor::CommitTelemetryOrigin,
     ) {
-        (self.state, self.tip)
+        (self.state, self.tip, self.telemetry_origin)
     }
 }
 
@@ -107,7 +115,7 @@ pub fn apply_genesis(
         consensus_mode,
     )
     .unpack(|_| {})
-    .map_err(|(_, error)| StartupError::InvalidGenesis(error.to_string()))?;
+    .map_err(|(_, error)| StartupError::InvalidGenesis(error))?;
     let inputs = overlay
         .take_sumeragi_execution_inputs()
         .map_err(|error| StartupError::Schedule(error.to_string()))?;
@@ -121,7 +129,7 @@ pub fn apply_genesis(
     }
     overlay
         .take_sumeragi_lanes()
-        .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
+        .map_err(StartupError::LaneStep)?;
     let witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;
@@ -129,18 +137,30 @@ pub fn apply_genesis(
     let native_lanes =
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(&witness, &budget)
             .map_err(|error| StartupError::Local(error.to_string()))?;
-    let retained_result = execution_result(&witness, valid.as_ref(), inputs, native_lanes)
-        .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
+    // Genesis starts from the empty World and absorbs everything it holds (§4.1, E51).
+    let transition = overlay
+        .world_state_transition()
+        .map_err(StartupError::Local)?;
+    let retained_result =
+        execution_result(&witness, valid.as_ref(), &transition, inputs, native_lanes)
+            .map_err(StartupError::ExecutionCommitment)?;
     let preimage = encode_result_preimage(&retained_result, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let result = result_of_preimage(preimage.as_slice());
-    let empty_header = mv::allocation::ChargedBuffer::new(0, &budget)
+    let empty_header = iroha_allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let empty_qc = mv::allocation::ChargedBuffer::new(0, &budget)
+    let empty_qc = iroha_allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let certificate =
-        CommitCertificate::from_charged_parts(empty_header, empty_qc, preimage, &budget)
-            .map_err(|(_original_parts, error)| StartupError::Local(error.to_string()))?;
+    let empty_availability = iroha_allocation::ChargedBuffer::new(0, &budget)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
+    let certificate = CommitCertificate::from_charged_parts(
+        empty_header,
+        empty_qc,
+        preimage,
+        empty_availability,
+        &budget,
+    )
+    .map_err(|(_original_parts, error)| StartupError::Local(error.to_string()))?;
     // Freeze H1 complete context values from the same original overlay and R used by
     // every successor. A separately reconstructed current-head projection is not a source.
     let archive = crate::query::native_context_archive::NativeContextArchive::open(
@@ -183,6 +203,10 @@ pub fn apply_genesis(
             &certificate,
             super::executor::NativeExecutionAuthorization::from_genesis(
                 GenesisExecutionAuthorization {
+                    telemetry_origin: match stored {
+                        Some(_) => super::executor::CommitTelemetryOrigin::HistoricalReplay,
+                        None => super::executor::CommitTelemetryOrigin::Forward,
+                    },
                     state: std::ptr::from_ref(state) as usize,
                     tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                         height: GENESIS_HEIGHT,
@@ -210,18 +234,30 @@ pub fn apply_genesis(
     Ok(GenesisTip { block_hash, result })
 }
 
-/// The genesis tip recorded in Kura, if genesis is stored.
-#[must_use]
-pub fn stored_genesis(state: &State) -> Option<(SignedBlock, CommitCertificate, GenesisTip)> {
-    let block = state
+/// The genesis tip recorded in Kura, if genesis is stored with its result certificate.
+///
+/// # Errors
+/// The stored frame cannot project to a valid original proposal.
+pub fn stored_genesis(
+    state: &State,
+) -> Result<Option<(SignedBlock, CommitCertificate, GenesisTip)>, StartupError> {
+    let Some(block) = state
         .kura()
-        .get_block(core::num::NonZeroUsize::new(1).expect("non-zero"))?;
-    let certificate = block.commit_certificate()?.clone();
+        .get_block(core::num::NonZeroUsize::new(1).expect("non-zero"))
+    else {
+        return Ok(None);
+    };
+    let Some(certificate) = block.commit_certificate().cloned() else {
+        return Ok(None);
+    };
     let tip = GenesisTip {
         block_hash: core_hash_of(&block),
         result: result_of_preimage(certificate.result_preimage()),
     };
-    Some((block.canonical_resultless_proposal(), certificate, tip))
+    let proposal = block
+        .canonical_resultless_proposal()
+        .map_err(|error| StartupError::Local(format!("stored genesis proposal: {error}")))?;
+    Ok(Some((proposal, certificate, tip)))
 }
 
 /// The validators of a signed genesis, in canonical order (`C_g`).

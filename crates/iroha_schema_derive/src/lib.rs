@@ -514,9 +514,15 @@ fn impl_into_schema(
     let name = &input.ident;
     let type_name_body = trait_body(name, &input.generics, false);
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let metadata = metadata(emitter, &input.data, &input.norito_attrs);
+    let discriminants = match &input.data {
+        IntoSchemaData::Enum(variants) => enum_variant_indices(emitter, variants),
+        IntoSchemaData::Struct(_) => Vec::new(),
+    };
+    let metadata = metadata(&input.data, &input.norito_attrs, &discriminants);
     let where_clause = override_where_clause(emitter, where_clause, bounds);
+    let payloads = enum_payload_impls(input, where_clause.as_ref(), &discriminants);
     quote! {
+        #payloads
         impl #impl_generics iroha_schema::IntoSchema for #name #ty_generics #where_clause {
             fn type_name() -> String {
                 #type_name_body
@@ -643,12 +649,12 @@ fn trait_body(name: &syn::Ident, generics: &syn::Generics, is_type_id_trait: boo
 }
 /// Returns schema method body
 fn metadata(
-    emitter: &mut Emitter,
     data: &IntoSchemaData,
     norito_attrs: &NoritoContainerAttrs,
+    discriminants: &[u32],
 ) -> TokenStream {
     let (types, expr) = match &data {
-        IntoSchemaData::Enum(variants) => metadata_for_enums(emitter, norito_attrs, variants),
+        IntoSchemaData::Enum(variants) => metadata_for_enums(norito_attrs, variants, discriminants),
         IntoSchemaData::Struct(IntoSchemaFields {
             style: Style::Struct,
             fields,
@@ -718,37 +724,70 @@ fn metadata_for_structs(fields: &[IntoSchemaField]) -> (Vec<syn::Type>, syn::Exp
     (fields_ty, expr)
 }
 /// Takes variant fields and gets its type
-fn variant_field(emitter: &mut Emitter, fields: &IntoSchemaFields) -> Option<syn::Type> {
-    let field = match fields.style {
-        Style::Unit => return None,
-        Style::Tuple if fields.len() == 1 => fields.iter().next().unwrap(),
-        Style::Tuple => {
-            emit!(
-                emitter,
-                "Use at most 1 field in unnamed enum variants. Check out styleguide"
-            );
-            fields.iter().next().unwrap()
+fn variant_field(fields: &IntoSchemaFields, discriminant: u32) -> Option<syn::Type> {
+    match fields.style {
+        Style::Unit => None,
+        Style::Tuple if fields.len() == 1 => fields
+            .iter()
+            .next()
+            .and_then(convert_field_to_codegen)
+            .map(|field| field.ty),
+        Style::Tuple | Style::Struct => {
+            Some(parse_quote!(iroha_schema::EnumVariantPayload<Self, #discriminant>))
         }
-        Style::Struct => {
-            emit!(
-                emitter,
-                "Please don't use named fields on enums. It is against Iroha styleguide"
-            );
-            fields.iter().next().unwrap()
-        }
+    }
+}
+
+/// Composite variants use schema-only identities owned by the original enum.
+/// Keep `Self` as that enum when resolving recursive fields and generic bounds.
+fn enum_payload_impls(
+    input: &IntoSchemaInput,
+    where_clause: Option<&syn::WhereClause>,
+    discriminants: &[u32],
+) -> TokenStream {
+    let IntoSchemaData::Enum(variants) = &input.data else {
+        return TokenStream::new();
     };
-    convert_field_to_codegen(field).map(|this_field| this_field.ty)
+    let name = &input.ident;
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
+    let implementations = variants
+        .iter()
+        .zip(discriminants.iter().copied())
+        .filter(|(variant, _)| !variant.codec_attrs.skip)
+        .filter_map(|(variant, discriminant)| {
+            let (types, metadata) = match variant.fields.style {
+                Style::Tuple if variant.fields.len() != 1 => {
+                    metadata_for_tuplestructs(&variant.fields.fields)
+                }
+                Style::Struct => metadata_for_structs(&variant.fields.fields),
+                _ => return None,
+            };
+            let variant_name = variant.ident.to_string();
+            Some(quote! {
+                impl #impl_generics iroha_schema::EnumPayload<#discriminant>
+                    for #name #ty_generics #where_clause
+                {
+                    fn variant_name() -> &'static str { #variant_name }
+                    fn update_payload_schema(map: &mut iroha_schema::MetaMap) {
+                        if !map.contains_key::<iroha_schema::EnumVariantPayload<Self, #discriminant>>() {
+                            map.insert::<iroha_schema::EnumVariantPayload<Self, #discriminant>>(#metadata);
+                            #(<#types as iroha_schema::IntoSchema>::update_schema_map(map);)*
+                        }
+                    }
+                }
+            })
+        });
+    quote!(#(#implementations)*)
 }
 /// Returns types for which schema should be called and metadata for struct
 fn metadata_for_enums(
-    emitter: &mut Emitter,
     norito_attrs: &NoritoContainerAttrs,
     variants: &[IntoSchemaVariant],
+    discriminants: &[u32],
 ) -> (Vec<syn::Type>, syn::Expr) {
-    let discriminants = enum_variant_indices(emitter, variants);
     let variant_exprs: Vec<_> = variants
         .iter()
-        .zip(discriminants)
+        .zip(discriminants.iter().copied())
         .filter(|(variant, _)| !variant.codec_attrs.skip)
         .map(|(variant, discriminant)| {
             let name = &variant.ident;
@@ -765,7 +804,7 @@ fn metadata_for_enums(
                 })
                 .unwrap_or(name_str);
             let tag_lit = syn::LitStr::new(&tag_value, Span::call_site());
-            let ty = variant_field(emitter, &variant.fields).map_or_else(
+            let ty = variant_field(&variant.fields, discriminant).map_or_else(
                 || quote! { None },
                 |ty| quote! { Some(core::any::TypeId::of::<#ty>()) },
             );
@@ -780,8 +819,9 @@ fn metadata_for_enums(
         .collect();
     let fields_ty = variants
         .iter()
-        .filter(|variant| !variant.codec_attrs.skip)
-        .filter_map(|variant| variant_field(emitter, &variant.fields))
+        .zip(discriminants.iter().copied())
+        .filter(|(variant, _)| !variant.codec_attrs.skip)
+        .filter_map(|(variant, discriminant)| variant_field(&variant.fields, discriminant))
         .collect::<_>();
     let expr = parse_quote! {
         iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
@@ -894,6 +934,28 @@ fn convert_field_to_codegen(field: &IntoSchemaField) -> Option<CodegenField> {
 mod tests {
     use super::*;
     use syn::parse_quote;
+    #[test]
+    fn composite_variant_codegen_uses_the_resolved_discriminant() {
+        let declaration = parse_quote! {
+            enum Report<T> {
+                #[codec(index = 17)]
+                Pair(T, u32),
+                Named { value: T, reason: u8 },
+                #[codec(skip)]
+                Skipped(T, T),
+            }
+        };
+        let input = IntoSchemaInput::from_derive_input(&declaration).unwrap();
+        let mut emitter = Emitter::new();
+        let generated = impl_into_schema(&mut emitter, &input, None);
+        syn::parse2::<syn::File>(generated.clone()).expect("valid generated implementations");
+        let text = generated.to_string();
+        assert!(text.contains("EnumPayload < 17u32 >"), "{text}");
+        assert!(text.contains("EnumPayload < 1u32 >"), "{text}");
+        assert!(!text.contains("EnumPayload < 2u32 >"), "{text}");
+        assert!(text.contains("Metadata :: Tuple"), "{text}");
+        assert!(text.contains("Metadata :: Struct"), "{text}");
+    }
     #[test]
     fn shared_container_flags_are_accepted() {
         let attrs = vec![parse_quote!(

@@ -1,7 +1,7 @@
 //! Concrete finite allocation custody through every current/undo publication path.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use std::{
     sync::{
         Arc,

@@ -122,9 +122,7 @@ DEPLOYMENT_FIELDS = frozenset(
         "chain_discriminant",
     }
 )
-VALIDATOR_FIELDS = frozenset(
-    {"validator_id", "voting", "da_enabled", "rbc_enabled"}
-)
+VALIDATOR_FIELDS = frozenset({"validator_id", "voting", "da_enabled"})
 PROVIDER_FIELDS = frozenset({"provider_id", "operator_id"})
 GATEWAY_FIELDS = frozenset({"gateway_id", "region", "administrator_id"})
 GOVERNANCE_DAG_FIELDS = frozenset(
@@ -297,7 +295,6 @@ def _validate_validators(value: Any, errors: list[str]) -> tuple[int, list[str]]
             validator_ids.append(validator_id)
         _require_true(row.get("voting"), f"{label}.voting", errors)
         _require_true(row.get("da_enabled"), f"{label}.da_enabled", errors)
-        _require_true(row.get("rbc_enabled"), f"{label}.rbc_enabled", errors)
     _require_unique(
         validator_ids,
         EXPECTED_VALIDATOR_COUNT,

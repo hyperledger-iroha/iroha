@@ -90,9 +90,8 @@ fn chunk_profile_default_handles_one_gib_stream() {
     );
     let (overall_digest, chunk_digests) = replay_chunks(&chunks, &template);
     let repeat = TOTAL_LEN / template.len();
-    let chunk_dump_path = std::env::var("CARGO_BIN_EXE_sorafs_chunk_dump")
-        .expect("sorafs_chunk_dump binary available during tests");
-    let mut child = Command::new(&chunk_dump_path)
+    let chunk_dump_path = env!("CARGO_BIN_EXE_sorafs_chunk_dump");
+    let mut child = Command::new(chunk_dump_path)
         .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

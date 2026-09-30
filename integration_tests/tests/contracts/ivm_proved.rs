@@ -45,7 +45,7 @@ const EXECUTION_UNAVAILABLE: &str =
     "zk_proof: IvmProved requires the complete native STARK execution relation";
 
 fn counter_artifact() -> Vec<u8> {
-    ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+    kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         force_zk: true,
         max_cycles: 4_096,
         ..Default::default()

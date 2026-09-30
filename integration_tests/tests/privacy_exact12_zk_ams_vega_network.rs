@@ -11,7 +11,7 @@ use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::{sandbox, sync::rebind_blocking_client};
 use iroha::blocking::Client;
-use iroha_core::{
+use iroha_core_privacy::{
     privacy_engines::{
         p256::TranscriptBindingV1,
         vega::{

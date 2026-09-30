@@ -52,9 +52,13 @@ fn changed_certificate(
     let mut header = certificate.consensus_header().to_vec();
     let mut qc = certificate.commit_qc().to_vec();
     let mut result = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
     change(&mut header, &mut qc, &mut result);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-        header, qc, result,
+        header,
+        qc,
+        result,
+        availability,
     )));
     SumeragiFinalityProof {
         block_wire: block.encode_wire().unwrap(),

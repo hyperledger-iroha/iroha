@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use iroha_core::zk::kagemusha_v1_state::{
+use iroha_core_zk::kagemusha_v1_state::{
     DurabilityAnchorStatementV1, KagemushaRecoveryEnrollmentBindingV1,
 };
 use iroha_crypto::{Algorithm, HashOf, Signature, SignatureOf};

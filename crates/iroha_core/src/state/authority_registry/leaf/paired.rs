@@ -29,7 +29,7 @@ impl CanonicalTableLeafSet {
     pub(crate) fn paired_table_from_rows<'a, K, V>(
         table: &str,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
         rows: impl IntoIterator<Item = (&'a K, &'a V)>,
     ) -> Result<CanonicalTablePairedSnapshot, LeafError>
     where
@@ -66,7 +66,7 @@ impl CanonicalTableLeafSet {
         table: &str,
         semantic_identity: &'static str,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
         rows: impl IntoIterator<Item = (&'a K, &'a V)>,
         project: impl Fn(&'a V) -> S,
     ) -> Result<CanonicalTablePairedSnapshot, LeafError>
@@ -124,7 +124,7 @@ impl CanonicalTableLeafSet {
     fn paired_table_from_digest_rows(
         table: &str,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
         mut lookup: Self,
         mut encoded: StagedRows<'_>,
         retained_bytes: usize,

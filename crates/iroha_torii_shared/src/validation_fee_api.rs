@@ -369,10 +369,6 @@ impl ValidationFeeHijiriQuoteProjectionV1 {
     /// Returns an error when a schema marker, canonical decimal/hash, height relationship,
     /// optional account-risk pair, protected base-fee invariant, or Q16 fee calculation is
     /// incoherent.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the ordered V1 coherence checks preserve fail-closed validation and stable error precedence"
-    )]
     pub fn validate_coherence(&self) -> Result<(), String> {
         if self.schema != VALIDATION_FEE_HIJIRI_QUOTE_PROJECTION_SCHEMA_NAME
             || self.version != VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1
@@ -1051,10 +1047,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
     /// # Errors
     ///
     /// Returns a stable explanation when any portable binding is malformed or inconsistent.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the ordered V1 proof checks preserve fail-closed validation and stable error precedence"
-    )]
     pub fn verify_against(
         &self,
         network_id: NetworkId,
@@ -1686,10 +1678,6 @@ mod tests {
         HijiriParametersV1::try_new(1, None, fee_policy, default_account_risk)
             .expect("valid global Hijiri parameter")
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fixture binds every certificate field to its derived identity"
-    )]
     fn parliament_authorization(
         proposal_fingerprint: [u8; 32],
         enacted_at_height: u64,
@@ -1875,10 +1863,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the focused schema test keeps every required and retired mobile policy key auditable together"
-    )]
     fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
         let authorization = parliament_authorization([0x02; 32], 2_048);
         let proposal = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)

@@ -411,8 +411,10 @@ proof and issuer completion through six bounded phases. Its accepted challenge,
 prepared proof and completed admission are consuming Rust types tied to the
 original revocable selection; a restart cannot recreate them from app frames.
 The app-side phase owner correlates those six frames to one selected account and
-signed release; a lost cancellation reply permits only an exact retry of the
-same revocation ticket. No qualified issuer/app-evidence delegate or installed
+signed release. Successful reads and cancellation retries use the original live
+owner and ticket. A failed native dispatch or response publication revokes that
+process owner; uncertain state must be recovered by the qualified backend in a
+fresh process. No qualified issuer/app-evidence delegate or installed
 monetary backend is present, so these phase mechanics do not yet admit a wallet.
 
 ## Payment and recovery algorithm
@@ -916,7 +918,7 @@ binding, then demonstrate them in genuine linked proofs.
   HCE and nearby transport choice.
 - `formal/kagemusha_v1/KagemushaV1.tla`: ExactNextNonForking and crash/rotation
   model; the mutation harness produces a counterexample for a second successor.
-- `crates/iroha_core/src/zk/kagemusha_v1_state/mod.rs`: hardware epoch and
+- `crates/iroha_core_zk/src/kagemusha_v1_state/mod.rs`: hardware epoch and
   exact-next transition statement.
 - [Apple CardSession](https://developer.apple.com/documentation/corenfc/cardsession)
   and [NFC & SE platform](https://developer.apple.com/support/nfc-se-platform/).

@@ -9,8 +9,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use mv::allocation::AllocationBudget;
-use mv::allocation::AllocationReservation;
+use iroha_allocation::AllocationBudget;
+use iroha_allocation::AllocationReservation;
 use parking_lot::RwLock;
 #[cfg(any(feature = "cuda", test))]
 use std::sync::atomic::AtomicBool;

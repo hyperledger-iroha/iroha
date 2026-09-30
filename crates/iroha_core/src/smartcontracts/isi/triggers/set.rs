@@ -1142,14 +1142,17 @@ impl SetBlock<'_> {
     /// the same ten stores as the merge encoder without changing that format or
     /// cloning action instructions, metadata, contract arguments, or bytecode.
     /// Contract leaves contain only original bytecode; the lookup hash, deployable
-    /// code hash, and reference count are checked against the four action stores.
-    /// It provides no snapshot, read-witness, or full-state-root authority.
+    /// code hash, and reference count are checked against the four action stores
+    /// unless the builder's pass already follows that check for the same stores.
+    /// The World state accumulator folds these stores into the World state root.
     pub(crate) fn append_world_projection<P: crate::state::world_projection::WorldProjection>(
         &self,
         builder: &mut P,
     ) -> core::result::Result<(), P::Error> {
         use crate::state::world_projection::hash_value;
-        self.validate_world_contract_rows()?;
+        if builder.validates_trigger_contract_rows() {
+            self.validate_world_contract_rows()?;
+        }
         builder.append_storage_with("triggers.data", &self.data_triggers, hash_world_action)?;
         builder.append_storage_with(
             "triggers.pipeline",

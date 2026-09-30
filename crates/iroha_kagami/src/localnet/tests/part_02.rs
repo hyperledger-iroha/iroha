@@ -2694,7 +2694,7 @@ fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation
         .enumerate()
     {
         let validator = PeerId::new(peer.public_key.clone());
-        let expected = iroha_core::zk::kagemusha_v1_recursion::
+        let expected = iroha_core_zk::kagemusha_v1_recursion::
             derive_kagemusha_mint_finality_validator_keys_v1(
                 &peer.mint_finality_seed, 0, validator.clone()).expect("private key derivation");
         assert_eq!(*actual, expected);
@@ -2703,7 +2703,7 @@ fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation
             "iroha:kagami:localnet:kagemusha-mint-finality:v1:epoch-0:{index}:{validator}"
         ))
         .into();
-        let exposed = iroha_core::zk::kagemusha_v1_recursion::
+        let exposed = iroha_core_zk::kagemusha_v1_recursion::
             derive_kagemusha_mint_finality_validator_keys_v1(
                 &public_seed, 0, validator).expect("old public derivation");
         assert_ne!(*actual, exposed);

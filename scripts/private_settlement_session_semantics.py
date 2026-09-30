@@ -55,7 +55,7 @@ def native_payload(result, request, ready, vector):
     participants = request['participants']
     control.require(type(participants) is int and participants in (2, 3, 4, 8, 16),
                     'native benchmark participant count is invalid')
-    for key in ('mandatory_signed_rs16_da_rbc', 'authenticated_private_settlement_route_control'):
+    for key in ('mandatory_signed_rs16_da', 'authenticated_private_settlement_route_control'):
         control.require(result[key] is True, 'native benchmark disabled required consensus evidence')
     control.unsigned(result['signed_rs16_da_observations'])
     control.require(result['signed_rs16_da_observations'] >= runner.minimum_signed_rs16_da_observations(participants)
@@ -200,7 +200,7 @@ class SessionSemantics:
             'network_counting_unit': packet['counting_unit'],
             'rss_observation': 'sampled_aggregate_peak', **provenance}
         response = {**identity, **environment, **provenance, 'kind': 'benchmark', 'passed': True,
-            **{key: result[key] for key in ('mandatory_signed_rs16_da_rbc', 'signed_rs16_da_observations',
+            **{key: result[key] for key in ('mandatory_signed_rs16_da', 'signed_rs16_da_observations',
                                           'authenticated_private_settlement_route_control', 'process_inventory')},
             'payload': {**payload, **metrics}}
         return response, sample

@@ -90,7 +90,7 @@ fn det_s44_boundary_waits_for_original_application() {
     ));
     h.auto_apply = false;
     let boundary = h.commit_with(0, b"boundary work");
-    assert!(boundary.header.attest);
+    assert!(boundary.header().attest);
     assert_eq!(h.core.applied, 2);
     assert_eq!(h.core.tip.height, 3);
     assert!(h.core.awaiting);
@@ -123,7 +123,7 @@ fn det_s44_lag_two_cannot_install_next_epoch_early() {
     let event = Event::BlockApplied {
         height: 2,
         block_hash: h.bh(&second),
-        header: Box::new(second.header),
+        header: Box::new(second.header().clone()),
         config: AppliedConfig::Continuation {
             after_next: ConfigSlot::Ready(h.config(4)),
         },
@@ -146,7 +146,7 @@ fn det_s44_boundary_conflict_is_atomic() {
     h.fire(Event::BlockApplied {
         height: 3,
         block_hash: h.bh(&boundary),
-        header: Box::new(boundary.header),
+        header: Box::new(boundary.header().clone()),
         config: AppliedConfig::Boundary {
             next: h.config(4),
             after_next: wrong,
@@ -169,7 +169,7 @@ fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
         let req = h.last_build.expect("scheduled build");
         h.fire(Event::PayloadBuilt {
             req,
-            payload: Vec::new(),
+            payload: None,
             attest: false,
         });
         assert!(
@@ -180,7 +180,7 @@ fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
         let req = h.last_build.expect("work triggers a new build");
         h.fire(Event::PayloadBuilt {
             req,
-            payload: b"boundary work".to_vec(),
+            payload: h.payload(b"boundary work"),
             attest: false,
         });
         let proposal = h
@@ -236,10 +236,10 @@ fn boundary_restart_never_installs_unapplied_authority() {
     h.restart();
     assert_eq!(h.height(), 4);
     assert_eq!(h.core.cfg.epoch.id, h.config(4).epoch.id);
-    assert_ne!(h.core.cfg.epoch.id, boundary.header.epoch);
+    assert_ne!(h.core.cfg.epoch.id, boundary.header().epoch);
 
     let mut record = h.core.safety.clone().expect("retained signer active");
-    record.epoch = boundary.header.epoch;
+    record.epoch = boundary.header().epoch;
     h.records
         .insert(record.key.clone(), record.encode(&h.v.crypto).unwrap());
     h.restart();
@@ -266,7 +266,7 @@ fn boundary_core_four_seven_four_keeps_exact_quorums_and_contexts() {
         let certificate = &h.store.last().unwrap().1;
         assert_eq!(certificate.signers.count_ones(), before.committee.q());
         assert_eq!(certificate.epoch, before.epoch.id);
-        assert_eq!(block.header.attest, matches!(height, 3 | 6));
+        assert_eq!(block.header().attest, matches!(height, 3 | 6));
         assert_eq!(h.core.halted, None);
         assert_eq!(h.core.applied, height);
         assert_eq!(h.core.cfg.epoch.id, h.config(height + 1).epoch.id);
@@ -310,8 +310,9 @@ fn retained_key_probe_cannot_anchor_a_different_epoch_context() {
 fn boundary_certificates_remain_attested_before_cache_hits() {
     let mut h = boundary_harness(1, 0);
     let good = h.block(0, b"boundary");
-    let mut bad = good.clone();
-    bad.header.attest = false;
+    let mut header = good.header().clone();
+    header.attest = false;
+    let bad = h.author(header, good.payload().as_slice());
     let good_pqc = h.qc_q(VoteKind::Prepare, 0, &good);
     let bad_pqc = h.qc_q(VoteKind::Prepare, 0, &bad);
     let entries = |qc: &Qc| {

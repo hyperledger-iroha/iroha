@@ -80,7 +80,7 @@ fn restore(world: &World) -> Result<World, json::Error> {
         _marker: PhantomData,
     };
     parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         SnapshotJsonMap::parse(&encoded, "world")?,
@@ -202,7 +202,7 @@ fn missing_first_release_registry_field_is_rejected() {
         _marker: PhantomData,
     };
     let error = parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         map,

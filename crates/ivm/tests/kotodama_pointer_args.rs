@@ -4,11 +4,11 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::name::Name;
 use ivm::{
     IVM, PointerType,
-    kotodama::compiler::Compiler,
     mock_wsv::{MockWorldStateView, WsvHost},
     validate_tlv_bytes,
 };
 use ivm_abi::state_value::StateValueKindV1;
+use kotodama_lang::compiler::Compiler;
 use std::str::FromStr;
 mod common;
 fn account_from_public_key(public_key: &str) -> AccountId {

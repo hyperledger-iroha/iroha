@@ -1036,7 +1036,10 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1("
             in fetch,
             "ToriiRejectRedirectTaskDelegate.shared" in torii,
-            "validatedSccpContentLength(" in torii,
+            "let (data, response) = try await sendBoundedResponse(" in fetch,
+            "guard let declaredLength = try Self.validatedContentLength(" in fetch,
+            "maximumBytes: PrivacyExact12CapabilityManifestV1.maximumArchiveBytes" in fetch,
+            "declaredLength > 0, declaredLength == data.count" in fetch,
             "testEveryTruncationAndOneByteSuffixFailClosed" in tests,
             "testGenericInstructionConstructionCannotBypassPrivacyAdmission" in tests,
         )

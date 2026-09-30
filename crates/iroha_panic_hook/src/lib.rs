@@ -68,6 +68,10 @@ pub fn with_hook_suppressed<R>(f: impl FnOnce() -> R) -> R {
 /// This is the recovery boundary for operations that deliberately translate a
 /// third-party/provider panic into a typed error. Consensus and supervisor
 /// invariants must continue to panic without using this helper.
+///
+/// # Errors
+///
+/// Returns the panic payload when `f` unwinds.
 pub fn catch_unwind_suppressed<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
     catch_unwind(AssertUnwindSafe(|| with_hook_suppressed(f)))
 }

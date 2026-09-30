@@ -3,7 +3,7 @@ use super::{history::*, *};
 use concread::bptree::{
     BptreeMapAbandonment, BptreeMapCommitRetirement, BptreeMapCommitSlot, BptreeMapOwnedAcquisition,
 };
-use concread::release::{DeferredRelease, ReleaseGuard};
+use iroha_allocation::release::{DeferredRelease, ReleaseGuard};
 
 type Acquired<'a> = ReleaseGuard<'a, BptreeMapOwnedAcquisition<'a, Key, Value, Mode>>;
 type Preparing<'a> = ReleaseGuard<'a, BptreeMapCommitSlot<'a, Key, Value, Mode>>;
@@ -25,8 +25,8 @@ pub(super) struct Cleanup {
     _reader: Option<DeferredRelease>,
     _writer: Option<DeferredRelease>,
     _loan: Option<DeferredRelease>,
-    _retry_readers: Option<concread::release::DeferredReleaseBatch>,
-    _retry_writers: Option<concread::release::DeferredReleaseBatch>,
+    _retry_readers: Option<iroha_allocation::release::DeferredReleaseBatch>,
+    _retry_writers: Option<iroha_allocation::release::DeferredReleaseBatch>,
 }
 
 pub(super) struct Slot<'a> {
@@ -37,8 +37,8 @@ pub(super) struct Slot<'a> {
     reader_release: Option<DeferredRelease>,
     writer_release: Option<DeferredRelease>,
     loan_release: Option<DeferredRelease>,
-    retry_readers: Option<concread::release::DeferredReleaseBatch>,
-    retry_writers: Option<concread::release::DeferredReleaseBatch>,
+    retry_readers: Option<iroha_allocation::release::DeferredReleaseBatch>,
+    retry_writers: Option<iroha_allocation::release::DeferredReleaseBatch>,
 }
 impl<'a> Slot<'a> {
     pub(super) fn new(target: &'a TransactionsStorage, mut pending: Pending) -> Self {

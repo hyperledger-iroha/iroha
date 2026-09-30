@@ -1355,10 +1355,6 @@ mod tests {
         assert!(!rendered.contains("--genesis-manifest-json"));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the scenario validates the complete generated Nexus template through both canonical admission paths"
-    )]
     fn wizard_nexus_profile_template_passes_canonical_and_cli_profile_admission() {
         let keypair = checked_wizard_bls_keypair();
         let transport_keypair = checked_wizard_transport_keypair();

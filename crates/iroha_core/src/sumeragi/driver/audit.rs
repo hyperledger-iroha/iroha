@@ -22,10 +22,7 @@
 
 use core::fmt;
 
-use iroha_sumeragi::{
-    message::{Block, Qc},
-    safety::SafetyRecord,
-};
+use iroha_sumeragi::{availability::AvailableBody, message::Qc, safety::SafetyRecord};
 
 /// Log that `record` is durable. Called by the persistence worker right after the write.
 pub(super) fn record_durable(record: &SafetyRecord) {
@@ -41,23 +38,24 @@ pub(super) fn record_durable(record: &SafetyRecord) {
 
 /// Log that `block`, certified by `commit_qc`, is the applied state. Called by the executor
 /// worker right after a successful `commit`.
-pub(super) fn block_applied(block: &Block, commit_qc: &Qc) {
+pub(super) fn block_applied(block: &AvailableBody, commit_qc: &Qc) {
     iroha_logger::info!(
+        process_id = std::process::id(),
         instance = %commit_qc.instance,
         height = commit_qc.height,
         view = commit_qc.view,
-        origin_view = block.header.origin_view,
+        origin_view = block.header().origin_view,
         block = %commit_qc.block_hash,
         result = %commit_qc.result,
-        proposer = block.header.proposer,
-        payload_bytes = block.header.payload_len,
+        proposer = block.header().proposer,
+        payload_bytes = block.header().payload_len,
         attest = commit_qc.attest,
         "sumeragi block applied"
     );
 }
 
 /// Lowercase hex of raw bytes.
-struct Hex<'a>(&'a [u8]);
+pub(super) struct Hex<'a>(pub(super) &'a [u8]);
 
 impl fmt::Display for Hex<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -378,6 +376,10 @@ mod tests {
         let line = &lines[0];
         assert_eq!(line.level, "INFO");
         assert_eq!(line.message, "sumeragi block applied");
+        assert_eq!(
+            line.field("process_id"),
+            Some(std::process::id().to_string().as_str())
+        );
         assert_eq!(
             line.field("instance"),
             Some(qc.instance.to_string().as_str())

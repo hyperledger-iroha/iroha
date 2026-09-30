@@ -1952,6 +1952,14 @@ fn outbound_nonce_sanity_window_never_exhausts_fresh_request_throughput() {
         "IPFS authenticator",
     )
     .expect("bind request authenticator");
+    // Exercise the production eviction path with a small sender window. Filling
+    // the entire configured window with signatures can outlive the first
+    // envelope, making this assertion depend on machine speed and suite load.
+    authenticator
+        .recent_outbound_nonces
+        .lock()
+        .expect("lock sender nonce window")
+        .capacity = 2;
     let request = canonical_test_request(
         GovernanceDagAuthenticationScope::Ipfs,
         "POST",
@@ -1962,7 +1970,7 @@ fn outbound_nonce_sanity_window_never_exhausts_fresh_request_throughput() {
     let oldest = authenticator
         .authenticate(&request)
         .expect("authenticate initial request");
-    for _ in 0..GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1 {
+    for _ in 0..2 {
         authenticator
             .authenticate(&request)
             .expect("fresh outbound nonces must evict rather than exhaust the sender window");
@@ -1970,11 +1978,24 @@ fn outbound_nonce_sanity_window_never_exhausts_fresh_request_throughput() {
     authenticator
         .validate_envelope(&request, &oldest)
         .expect("sender eviction is not receiver replay authority");
-    let now = current_unix_timestamp_seconds();
+    assert!(
+        authenticator.validate_envelope(&request, &oldest).is_err(),
+        "the sender still rejects reuse while a nonce remains in its window"
+    );
+}
+#[test]
+fn outbound_nonce_window_expires_entries_at_the_exact_deadline() {
+    let now = 42;
     let mut window = OutboundRequestNonceWindowV1::new();
     window
         .observe([0xA1; 32], now, now.saturating_sub(1))
         .expect("observe nonce before its expiry");
+    assert!(
+        window
+            .observe([0xA1; 32], now.saturating_add(1), now.saturating_sub(1))
+            .is_err(),
+        "a live nonce cannot be reused even when its new envelope expires later"
+    );
     window
         .observe([0xA1; 32], now.saturating_add(1), now)
         .expect("an envelope expiring at now is no longer live");

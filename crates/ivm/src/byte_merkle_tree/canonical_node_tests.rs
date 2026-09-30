@@ -1,7 +1,7 @@
 //! Fixed canonical backing, original credit and in-place maintenance controls.
 use super::*;
 use crate::memory::dirty_chunks::DirtyChunks;
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 use std::sync::{Arc, Barrier};
 
 #[test]

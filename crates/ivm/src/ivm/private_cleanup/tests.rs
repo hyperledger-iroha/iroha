@@ -11,7 +11,7 @@ use crate::{
     },
     metadata::ProgramMetadata,
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 const SECRET: u64 = 0x1122_3344_5566_7788;
 const PUBLIC: u64 = 0xAABB_CCDD;
@@ -31,7 +31,7 @@ fn transition(vm: &mut IVM, action: Transition) -> Result<(), VMError> {
         Transition::Disable => vm.set_zk_mode(false),
         Transition::RawLoad => vm.load_code(&wide::encode_halt().to_le_bytes()),
         Transition::PreparedLoad => {
-            let (code, _) = crate::KotodamaCompiler::new()
+            let (code, _) = kotodama_lang::compiler::Compiler::new()
                 .compile_source_with_manifest("seiyaku Cleanup { view fn main() -> bool { true } }")
                 .unwrap();
             let prepared = crate::PreparedContract::prepare(std::sync::Arc::from(code)).unwrap();

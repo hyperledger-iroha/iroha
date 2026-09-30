@@ -33,10 +33,6 @@ mod stream_token_operations;
 #[path = "protocol/platform/operation_dispatch/transaction_signing.rs"]
 mod transaction_signing_operations;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 operation routing matrix is exhaustive"
-)]
 fn dispatch_server_operation_with_session(
     state: &BrokerServerStateV1,
     pop_session: &mut PopBrokerServerSessionV1,

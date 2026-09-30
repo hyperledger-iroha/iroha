@@ -648,13 +648,14 @@ fn compiled_secret_commitment_executes_end_to_end() {
             }
         }
     "#;
-    let artifact =
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+    let artifact = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
             force_zk: true,
-            ..ivm::kotodama::compiler::CompilerOptions::default()
-        })
-        .compile_source(source)
-        .expect("compile a source-level Secret<T> commitment");
+            ..kotodama_lang::compiler::CompilerOptions::default()
+        },
+    )
+    .compile_source(source)
+    .expect("compile a source-level Secret<T> commitment");
     let metadata = ProgramMetadata::parse(&artifact).expect("parse compiled artifact");
     assert_ne!(
         metadata.metadata.mode & ivm::ivm_mode::ZK,
@@ -693,10 +694,12 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
                 }}
             "#
         );
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-            force_zk: true,
-            ..ivm::kotodama::compiler::CompilerOptions::default()
-        })
+        kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                force_zk: true,
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        )
         .compile_source(&source)
         .unwrap_or_else(|error| panic!("compile Secret<{kind}> commitment: {error}"))
     }

@@ -5979,7 +5979,7 @@ mod tests {
             ivm_private_note::private_note_statement_fixture_v1,
             p256::SecretScalarV1,
             pq_masp::relation::{
-                derive_pq_masp_note_commitment_v1, tests::valid_fixture as pq_masp_fixture,
+                derive_pq_masp_note_commitment_v1, test_fixtures::valid_fixture as pq_masp_fixture,
             },
         },
         privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1},

@@ -276,10 +276,7 @@ fn alternate_qc_source(fixture: &Fixture, height: u64) -> State {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        sumeragi::{
-            block_store::{commit_certificate, decode_certificate},
-            test_chain::Signers,
-        },
+        sumeragi::{block_store::commit_certificate, test_chain::Signers},
     };
     let kura = Kura::blank_kura_for_testing();
     let mut other = State::new_with_chain_and_network_id_for_testing(
@@ -297,7 +294,7 @@ fn alternate_qc_source(fixture: &Fixture, height: u64) -> State {
             .unwrap();
         let block = if current == height {
             let certificate = original.commit_certificate().unwrap();
-            let (header, qc) = decode_certificate(certificate).unwrap();
+            let (body, qc) = fixture.chain.committed_body(height).unwrap().unwrap();
             let alternate = fixture.chain.commit_qc(
                 height,
                 qc.block_hash,
@@ -308,8 +305,13 @@ fn alternate_qc_source(fixture: &Fixture, height: u64) -> State {
             assert_ne!(alternate.signers, qc.signers);
             let block = Arc::new(
                 original.as_ref().clone().with_commit_certificate(Some(
-                    commit_certificate(&header, &alternate, certificate.result_preimage().to_vec())
-                        .unwrap(),
+                    commit_certificate(
+                        body.header(),
+                        &alternate,
+                        certificate.result_preimage().to_vec(),
+                        certificate.availability().to_vec(),
+                    )
+                    .unwrap(),
                 )),
             );
             assert_eq!(block.hash(), original.hash());

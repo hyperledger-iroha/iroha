@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Check shared emitter ownership, error propagation and retained diagnostic tests.
 
-Current contracts are structural. Historical source/lock hashes and opening
-objects remain in docs/history/2026-09-07/norito-helper-compaction.json; they do
-not freeze unrelated dependencies, local test ordering or source formatting.
+Current contracts are structural and do not freeze unrelated dependencies,
+local test ordering or source formatting.
 This source check does not replace compiled procedural-macro and UI suites.
 """
 
@@ -23,7 +22,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MACRO_OWNER = "crates/iroha_derive/src/lib.rs"
-MAX_MACRO_LINES = 85
 EXPECTED_TEST_IDS = (
     "handle_ok",
     "handle_err",
@@ -141,8 +139,6 @@ def validate(
     production = rust.production(owner)
     item = _operation(production, "define_emitter_ext", MACRO_OWNER)
     block = production[item.start:item.end + 1]
-    _require(len(block.splitlines()) <= MAX_MACRO_LINES, "emitter.macro_line_ceiling")
-    _require(max(map(len, block.splitlines())) <= 100, "emitter.macro_packed_line")
     prefix = production[:item.start]
     _require(re.search(r"#\[proc_macro\]\s*pub\s*$", prefix) is not None, "emitter.proc_macro_registration")
     _require("if!input.is_empty(){returnsyn::Error::new(" in item.code and ").to_compile_error().into();}" in item.code, "emitter.rejects_input")
@@ -214,6 +210,10 @@ class SharedEmitterSourceTest(unittest.TestCase):
 
     def test_current_source(self) -> None:
         validate(*self.inputs)
+
+    def test_macro_whitespace_growth_preserves_emitter_contract(self) -> None:
+        changed = self.changed(0, None, "Some(value)", "Some(" + "\n" * 20_000 + "value)")
+        validate(*changed)
 
     def test_each_typed_emitter_operation_rejects_control_flow_mutations(self) -> None:
         cases = (

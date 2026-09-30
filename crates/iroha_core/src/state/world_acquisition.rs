@@ -8,13 +8,15 @@ use super::{
     WorldBlock,
     block_field::{BlockField, OriginalPublicationBlock},
 };
-use mv::allocation::OwnedAllocationScope;
+use iroha_allocation::OwnedAllocationScope;
 use mv::storage::AdmittedStorageError;
 use mv::{BlockAcquisition, BlockMode, BlockRetirement};
 
 mod original_control;
+#[cfg(test)]
+pub(super) use original_control::OriginalControlSource;
 pub(super) use original_control::{
-    OriginalControlSource, OriginalWorldFields, WorldPlacement, initialize_original_field,
+    OriginalWorldFields, WorldPlacement, add_original_control_demand, initialize_original_field,
     original_cell,
 };
 
@@ -241,18 +243,14 @@ impl Drop for WorldBlock<'_> {
 macro_rules! build_world_block_from_fields {
     ($state:expr, $mode:expr, $budget:expr;
         [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
-        use world_acquisition::OriginalControlSource as _;
         let budget = $budget;
         let mut demand = world_acquisition::OriginalWorldFields::layout().size();
-        $(for layout in $state.$prefix.generation_layouts().into_iter().chain([$state.$prefix.successor_layout()]).flatten() {
-            demand = demand.checked_add(layout.size()).ok_or(mv::storage::AdmittedStorageError::Allocation(mv::allocation::AllocationRefusal::DemandOverflow))?;
-        })*
-        $(for layout in $state.$privacy.generation_layouts().into_iter().chain([$state.$privacy.successor_layout()]).flatten() {
-            demand = demand.checked_add(layout.size()).ok_or(mv::storage::AdmittedStorageError::Allocation(mv::allocation::AllocationRefusal::DemandOverflow))?;
-        })*
-        $(for layout in $state.$suffix.generation_layouts().into_iter().chain([$state.$suffix.successor_layout()]).flatten() {
-            demand = demand.checked_add(layout.size()).ok_or(mv::storage::AdmittedStorageError::Allocation(mv::allocation::AllocationRefusal::DemandOverflow))?;
-        })*
+        // Keep each store's layout iterator and checked-arithmetic temporaries
+        // in its own frame. Expanding those locals into this aggregate frame
+        // reserves their combined stack space for the entire acquisition.
+        $(world_acquisition::add_original_control_demand(&$state.$prefix, &mut demand)?;)*
+        $(world_acquisition::add_original_control_demand(&$state.$privacy, &mut demand)?;)*
+        $(world_acquisition::add_original_control_demand(&$state.$suffix, &mut demand)?;)*
         // Admit the complete concrete control demand atomically before any
         // allocation or physical World writer, from the caller's original pool.
         let mut reservation = budget.try_reserve_bytes(demand).map_err(mv::storage::AdmittedStorageError::Allocation)?;

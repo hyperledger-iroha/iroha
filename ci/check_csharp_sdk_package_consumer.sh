@@ -207,7 +207,7 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 24u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 25u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
     throw new InvalidOperationException("Packed ABI-25 SoraFS native bridge is unavailable");
@@ -217,7 +217,7 @@ var hijiriRequest = new ValidationFeeHijiriQuoteRequestV1(
     "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     2);
 var hijiriRequestNorito = ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest);
-if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 24u
+if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 25u
     || hijiriRequestNorito.Length == 0
     || hijiriRequestNorito.Length > ValidationFeeHijiriQuoteRequestV1.MaximumRequestBytes)
 {

@@ -58,6 +58,45 @@ fn flag(value: &Value, key: &str, expected: bool) -> Result<()> {
     )
 }
 
+fn protected_validator_config_name(path: &str, release: &str) -> Result<&'static str> {
+    let name = occupied::validator_config_name(Path::new(path))?;
+    need(
+        path == format!("{release}/config/{name}"),
+        "protected validator configuration escaped its selected release",
+    )?;
+    Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatcher_transition_binds_beacon_config_to_exact_selected_release() {
+        let release = format!("/srv/taira/taira-validator-1/releases/{}", "a".repeat(40));
+        for name in ["config.toml", "beacon.toml"] {
+            assert_eq!(
+                protected_validator_config_name(&format!("{release}/config/{name}"), &release)
+                    .unwrap(),
+                name
+            );
+        }
+        for path in [
+            format!("{release}/config/foreign.toml"),
+            format!("{release}/config/../config/beacon.toml"),
+            format!("{release}/beacon.toml"),
+            format!("{release}-other/config/beacon.toml"),
+            "/srv/taira/taira-validator-2/current/config/beacon.toml".to_owned(),
+            "/private/runtime/taira-public-reset/beacon.toml".to_owned(),
+        ] {
+            assert!(
+                protected_validator_config_name(&path, &release).is_err(),
+                "{path}"
+            );
+        }
+    }
+}
+
 pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     need(plan.schema == SCHEMA, "exact transition schema required")?;
     validate_lower_hex("operation ID", &plan.operation_id, 32)?;
@@ -132,16 +171,18 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
             )?;
         } else {
             need(
-                role.files.len() == 5
-                    && paths
-                        .contains(format!("{}/config/config.toml", role.selector.target).as_str())
-                    && paths
-                        .contains(format!("/etc/systemd/system/iroha3d-{slug}.service").as_str()),
+                role.files.len() == 5,
+                "validator protected closure incomplete",
+            )?;
+            let config_name =
+                protected_validator_config_name(&role.files[1].path, &role.selector.target)?;
+            need(
+                paths.contains(format!("/etc/systemd/system/iroha3d-{slug}.service").as_str()),
                 "validator protected closure incomplete",
             )?;
             for (index, basename) in [
                 "iroha3d_taira",
-                "config.toml",
+                config_name,
                 "genesis.json",
                 "genesis.sha256",
                 "",

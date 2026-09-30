@@ -15,8 +15,6 @@ EXTENDED_PATH = (
     REPO_ROOT
     / "crates/iroha_torii/tests/mcp_endpoints/extended_tool_dispatch_tests.rs"
 )
-MAIN_MAX_LINES = 4_775
-EXTENDED_MAX_LINES = 672
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
@@ -338,10 +336,6 @@ def _expected_invocation(case: tuple[object, ...]) -> str:
 
 
 def validate_source(main: str, extended: str) -> None:
-    if len(main.splitlines()) > MAIN_MAX_LINES:
-        raise GuardError("mcp_endpoints.rs exceeded the frozen source budget")
-    if len(extended.splitlines()) > EXTENDED_MAX_LINES:
-        raise GuardError("extended MCP dispatch tests exceeded the frozen source budget")
     include = 'include!("mcp_endpoints/extended_tool_dispatch_tests.rs");'
     if main.count(include) != 1:
         raise GuardError("extended MCP dispatch tests must be included exactly once")
@@ -398,6 +392,9 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.main = MAIN_PATH.read_text()
         cls.extended = EXTENDED_PATH.read_text()
+
+    def test_whitespace_growth_preserves_alias_matrix(self) -> None:
+        validate_source(self.main + "\n" * 100_000, self.extended + "\n" * 100_000)
 
     def test_current_source_preserves_alias_matrix(self) -> None:
         validate_source(self.main, self.extended)

@@ -9,7 +9,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-mv = { workspace = true }
+iroha_allocation = { workspace = true }
 parking_lot = { workspace = true }
 cust = { version = "0.3.2", optional = true }
 

@@ -25,12 +25,12 @@ macro_rules! runtime_cells {
         }
 
         impl<'state> CellPhase<'state> {
-            fn admit(state: &'state State, budget: &mv::allocation::AllocationBudget) -> Result<Self, StateStorageAdmissionError> {
+            fn admit(state: &'state State, budget: &iroha_allocation::AllocationBudget) -> Result<Self, StateStorageAdmissionError> {
                 let layout = mv::cell::CellPublicationSuccessor::allocation_layout();
                 let mut demand = 0_usize;
                 $(let _ = &state.$field;
                   demand = demand.checked_add(layout.size()).ok_or_else(||
-                      StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(mv::allocation::AllocationRefusal::DemandOverflow)))?;)+
+                      StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(iroha_allocation::AllocationRefusal::DemandOverflow)))?;)+
                 let mut parent = budget.try_reserve_bytes(demand)
                     .map_err(mv::storage::AdmittedStorageError::Allocation)?;
                 // All four original tokens exist before World can acquire its
@@ -133,7 +133,7 @@ runtime_cells! {
     commit_topology: Vec<PeerId> => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
     prev_commit_topology: Vec<PeerId> => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
     canonical_runtime: SnapshotNexusRuntime => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
-    native_execution_tip: Option<NativeExecutionTip> => mv::allocation::AllocationCharge, crate::state::native_execution_tip::original_cell,
+    native_execution_tip: Option<NativeExecutionTip> => iroha_allocation::AllocationCharge, crate::state::native_execution_tip::original_cell,
 }
 
 /// Complete original acquisition, armed throughout State input preparation.

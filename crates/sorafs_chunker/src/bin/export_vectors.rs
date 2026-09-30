@@ -28,6 +28,7 @@ struct CliOptions {
     // Internal override used by focused signature tests and the staged owner.
     signature_out: Option<PathBuf>,
 }
+#[derive(Debug)]
 enum CliError {
     Help,
     Message(String),
@@ -1677,6 +1678,8 @@ mod tests {
     };
     const SIGNING_KEY_1: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const SIGNING_KEY_2: &str = "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
+    static NEXT_TEMP_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn temp_dir() -> PathBuf {
         let mut dir = std::env::temp_dir();
         let nanos = SystemTime::now()
@@ -1684,11 +1687,11 @@ mod tests {
             .expect("system time")
             .as_nanos();
         dir.push(format!(
-            "sorafs_chunker_test_{:x}_{}",
+            "sorafs_chunker_test_{:x}_{nanos}_{}",
             std::process::id(),
-            nanos
+            NEXT_TEMP_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::create_dir(&dir).expect("create exclusive temp dir");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1697,6 +1700,22 @@ mod tests {
         }
         dir
     }
+    #[test]
+    fn parallel_fixture_directories_are_exclusive() {
+        let paths = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..32).map(|_| scope.spawn(temp_dir)).collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().expect("fixture thread"))
+                .collect::<Vec<_>>()
+        });
+        let unique: std::collections::BTreeSet<_> = paths.iter().collect();
+        assert_eq!(unique.len(), paths.len());
+        for path in paths {
+            fs::remove_dir(path).expect("cleanup exclusive fixture directory");
+        }
+    }
+
     fn prepare_generated_tree(root: &Path, marker: &[u8]) {
         for relative in GENERATED_PATHS {
             let path = root.join(relative);

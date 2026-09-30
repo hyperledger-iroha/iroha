@@ -16,10 +16,10 @@ from typing import Any
 
 MANIFEST_PATHS = (
     Path(
-        "crates/iroha_core/src/privacy_engines/bootle_lantern/"
+        "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/"
         "falcon512/assets/manifest.json"
     ),
-    Path("crates/iroha_core/src/privacy_engines/zk_x509/assets/manifest.json"),
+    Path("crates/iroha_core_privacy/src/privacy_engines/zk_x509/assets/manifest.json"),
     Path("crates/ivm/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/iso20022_schema_v1/manifest.json"),
     Path("crates/ivm/src/assets/text_v1/manifest.json"),
@@ -74,10 +74,10 @@ ASSET_FIELDS = frozenset(
     {"path", "byte_length", "sha256", "layout", "source_preimages"}
 )
 DECLARATION_PREIMAGE_FIELDS = frozenset(
-    {"path", "constant", "physical_lines", "sha256", "source_commit"}
+    {"path", "constant", "physical_lines", "sha256", "source_commit", "source_path"}
 )
 LINE_SPAN_PREIMAGE_FIELDS = frozenset(
-    {"path", "start_line", "physical_lines", "sha256", "source_commit"}
+    {"path", "start_line", "physical_lines", "sha256", "source_commit", "source_path"}
 )
 CURRENT_INCLUDE_PREIMAGE_FIELDS = frozenset({"path"})
 
@@ -157,6 +157,13 @@ def _safe_path(root: Path, base: Path, raw: str, context: str) -> Path:
     except ValueError as error:
         raise AssetError(f"{context} escapes the repository: {raw}") from error
     return resolved
+
+
+def _historical_source_path(root: Path, base: Path, preimage: dict[str, Any], context: str) -> str:
+    """Resolve the immutable source owner, independently of a moved consumer."""
+    if "source_path" in preimage:
+        return _safe_path(root, root, _string(preimage["source_path"], f"{context}.source_path"), f"{context}.source_path").relative_to(root).as_posix()
+    return _safe_path(root, base, _string(preimage.get("path"), f"{context}.path"), f"{context}.path").relative_to(root).as_posix()
 
 
 def declaration_slice(source: bytes, constant: str, physical_lines: int) -> bytes:
@@ -516,13 +523,7 @@ def audit_repository(root: Path) -> AuditCounts:
                     else LINE_SPAN_PREIMAGE_FIELDS
                 )
                 _exact_fields(preimage, preimage_fields, preimage_context)
-                historical_path = _safe_path(
-                    root,
-                    manifest_path.parent,
-                    _string(preimage.get("path"), f"{preimage_context}.path"),
-                    f"{preimage_context}.path",
-                )
-                relative_source = historical_path.relative_to(root).as_posix()
+                relative_source = _historical_source_path(root, manifest_path.parent, preimage, preimage_context)
                 physical_lines = _positive_int(
                     preimage.get("physical_lines"),
                     f"{preimage_context}.physical_lines",

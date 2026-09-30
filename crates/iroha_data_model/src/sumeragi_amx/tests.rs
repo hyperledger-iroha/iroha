@@ -1,0 +1,1220 @@
+//! AMX records, proofs, the foreign-committee tracker and the global two-phase-commit state,
+//! over genuine BLS certificates of synthetic foreign blocks.
+
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_aggregate_signatures};
+use iroha_model_base::peer::PeerId;
+use iroha_sumeragi::{
+    message::{BlockHeader as CoreHeader, Qc, VoteKind},
+    types::{AggregateSignature, Bitmap, ChainParams, ControlWitness, Hash32},
+};
+
+use super::*;
+use crate::{
+    block::consensus::{ExecKv, ExecWitness},
+    isi::kagemusha_v1::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    },
+    sumeragi::epoch::{
+        ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1,
+        tests::{fixture, retained},
+    },
+    sumeragi_finality::{
+        ChainParamsRecord, ExecutionCommitment, ExecutionResultCommitment, FinalityValidator,
+        NativeLaneStateProof, ProofCrypto, SUMERAGI_LANE_STATE_WITNESS_KEY, ScheduleOutcome,
+        ScheduledConfig, ScheduledSlot, SumeragiLaneStateCommitment, core_epoch,
+    },
+    sumeragi_lanes::SumeragiLaneState,
+};
+
+const DS1: DataSpaceId = DataSpaceId::new(11);
+const DS2: DataSpaceId = DataSpaceId::new(12);
+const DS3: DataSpaceId = DataSpaceId::new(13);
+
+fn instance(dataspace: DataSpaceId) -> [u8; 32] {
+    Hash::new(dataspace.as_u64().to_be_bytes()).into()
+}
+
+/// The BLS key pairs of seeds `seeds`, as `fixture` derives them.
+fn key_pairs(seeds: impl IntoIterator<Item = u8>) -> Vec<KeyPair> {
+    seeds
+        .into_iter()
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        .collect()
+}
+
+/// A successor of `previous` activating a new generation with the keys of `seeds`.
+fn rotated(previous: &ValidatorEpochContextV1, seeds: [u8; 4]) -> ValidatorEpochContextV1 {
+    let mut pairs = key_pairs(seeds);
+    pairs.sort_by_key(|pair| PeerId::new(pair.public_key().clone()));
+    let mut next = retained(previous);
+    next.committee = pairs
+        .iter()
+        .map(|pair| ValidatorCommitteeMemberV1 {
+            validator: PeerId::new(pair.public_key().clone()),
+            proof_of_possession: iroha_crypto::bls_normal_pop_prove(pair.private_key()).unwrap(),
+        })
+        .collect();
+    next.authority.generation += 1;
+    for (keys, member) in next.authority.validators.iter_mut().zip(&next.committee) {
+        keys.validator = member.validator.clone();
+    }
+    next.authorization.authority_generation = next.authority.generation;
+    next.authorization.authority_id = next.authority.authority_id().unwrap();
+    next.authorization.decision = KagemushaMintFinalityEpochDecisionV1::Activate;
+    next.authorization.transition_id = [0x61; 32];
+    next.authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+        session_id: [0x42; 32],
+        transcript_hash: [0x52; 32],
+    });
+    next.leader_seed = [0x33; 32];
+    next.validate_successor(previous).unwrap();
+    next
+}
+
+fn slot(height: u64, context: &ValidatorEpochContextV1) -> ScheduledSlot {
+    ScheduledSlot::Ready(ScheduledConfig {
+        height,
+        epoch: context.clone(),
+        params: ChainParamsRecord::from_core(&ChainParams::default()),
+    })
+}
+
+/// A genesis-anchored epoch context whose first epoch spans heights `1..=100`, for tests that
+/// need more heights than [`fixture`]'s ten.
+fn long_fixture() -> ValidatorEpochContextV1 {
+    let mut context = fixture(4);
+    context.authorization.last_height = 100;
+    context.validate().unwrap();
+    context
+}
+
+/// The retained successor of `previous`: same generation, committee and installed beacon, next
+/// interval.
+fn kept(previous: &ValidatorEpochContextV1) -> ValidatorEpochContextV1 {
+    let mut next = retained(previous);
+    next.authorization.transition_id = [0; 32];
+    if previous.authorization.beacon != BeaconEpochBindingV1::Bootstrap {
+        next.authorization.beacon = previous.authorization.beacon;
+    }
+    next.validate_successor(previous).unwrap();
+    next
+}
+
+/// The complete write set of a synthetic block of `context` at `height`: the mandatory
+/// lane-state write, then `writes`. A record proof's path is built over all of it.
+fn block_writes(
+    context: &ValidatorEpochContextV1,
+    height: u64,
+    writes: &[(Vec<u8>, Vec<u8>)],
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let lanes = SumeragiLaneStateCommitment::from_state(
+        context.network_id,
+        height,
+        &SumeragiLaneState::default(),
+    )
+    .unwrap();
+    let mut all = vec![(
+        SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
+        norito::encode_canonical(&lanes).unwrap(),
+    )];
+    all.extend(writes.iter().cloned());
+    all
+}
+
+/// The certified result of a synthetic block of `context` at `height` whose execution wrote
+/// `writes` (plus the mandatory lane-state write); at the last height of the epoch it carries
+/// the boundary into `next`.
+fn result_commitment(
+    context: &ValidatorEpochContextV1,
+    height: u64,
+    writes: &[(Vec<u8>, Vec<u8>)],
+    next: Option<&ValidatorEpochContextV1>,
+) -> ExecutionResultCommitment {
+    let mut witness = ExecWitness::default();
+    for (key, value) in block_writes(context, height, writes) {
+        witness.writes.push(ExecKv { key, value });
+    }
+    let scratch = NativeLaneStateProof::scratch_bytes(witness.writes.len()).unwrap();
+    let native_lanes = NativeLaneStateProof::from_witness(
+        &witness,
+        &iroha_allocation::AllocationBudget::new(scratch),
+    )
+    .unwrap();
+    let root = native_lanes.computed_root().unwrap();
+    // Two independent implementations of the write-set tree agree.
+    assert_eq!(
+        write_set_root(
+            witness
+                .writes
+                .iter()
+                .map(|write| (write.key.as_slice(), write.value.as_slice()))
+        )
+        .unwrap(),
+        root
+    );
+    let boundary = next.map(|next| ValidatorEpochBoundaryV1 {
+        version: 1,
+        height,
+        predecessor_context_id: context.context_id().unwrap(),
+        selection_anchor: HashOf::from_untyped_unchecked(Hash::new(b"boundary parent")),
+        next: next.clone(),
+        preparation: None,
+    });
+    let successor = next.unwrap_or(context);
+    let schedule = ScheduleOutcome {
+        height,
+        current: context.clone(),
+        boundary,
+        next: slot(height + 1, successor),
+        after_next: slot(height + 2, successor),
+    };
+    ExecutionResultCommitment::new(
+        height,
+        ExecutionCommitment {
+            parent_state_root: Hash::new(b"parent"),
+            post_state_root: root,
+            ordinary_writes_root: root,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
+            parent_world_state_root: Hash::new(b"fixture parent world"),
+            world_state_root: Hash::new(b"fixture world"),
+            event_commitment: None,
+            executed_block_wire_len: 64,
+            executed_block_wire_hash: Hash::new(height.to_be_bytes()),
+            transaction_input_commitment: None,
+            transaction_output_commitment: None,
+        },
+        schedule,
+        None,
+        native_lanes,
+    )
+    .unwrap()
+}
+
+/// A core header of `instance` at `height` in `context` and its `CommitQC` for `result`, signed
+/// by the first `signers` members of the committee (canonical key order).
+fn sign(
+    instance: [u8; 32],
+    context: &ValidatorEpochContextV1,
+    height: u64,
+    result: Hash32,
+    signers: usize,
+) -> (CoreHeader, Qc) {
+    let validators: Vec<FinalityValidator> = context
+        .committee
+        .iter()
+        .map(|member| FinalityValidator {
+            public_key: member.validator.public_key().clone(),
+            proof_of_possession: member.proof_of_possession.clone(),
+        })
+        .collect();
+    let (crypto, _) = ProofCrypto::new(&validators).unwrap();
+    let epoch = core_epoch(context).unwrap();
+    let header = CoreHeader {
+        instance: Hash32(instance),
+        epoch: epoch.id,
+        height,
+        origin_view: 0,
+        parent_hash: Hash32([7; 32]),
+        parent_result: Hash32([8; 32]),
+        payload_hash: Hash32([9; 32]),
+        availability_digest: Hash32([10; 32]),
+        payload_len: 100,
+        proposer: 0,
+        skipped_leaders: vec![],
+        control_witness: ControlWitness::empty(),
+        attest: false,
+    };
+    let mut qc = Qc {
+        kind: VoteKind::Commit,
+        instance: header.instance,
+        epoch: header.epoch,
+        height,
+        view: 0,
+        block_hash: header.hash(&crypto),
+        result,
+        attest: false,
+        signers: Bitmap::from_indices(4, 0..u32::try_from(signers).unwrap()).unwrap(),
+        agg_sig: AggregateSignature([0; 96]),
+        attestations: vec![],
+        attestation_witness: None,
+    };
+    let everyone = key_pairs(1..=16);
+    let shares: Vec<_> = context
+        .committee
+        .iter()
+        .take(signers)
+        .map(|member| {
+            let pair = everyone
+                .iter()
+                .find(|pair| pair.public_key() == member.validator.public_key())
+                .expect("a fixture key");
+            iroha_crypto::Signature::try_new(pair.private_key(), &qc.preimage()).unwrap()
+        })
+        .collect();
+    let payloads: Vec<_> = shares
+        .iter()
+        .map(iroha_crypto::Signature::payload)
+        .collect();
+    qc.agg_sig = AggregateSignature(
+        bls_normal_aggregate_signatures(&payloads)
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
+    (header, qc)
+}
+
+/// Certify a synthetic block of `instance` at `height` in `context` whose execution wrote
+/// `writes` (plus the mandatory lane-state write), signed by `signers` members; at the last
+/// height of the epoch the result carries the boundary into `next`.
+fn certify(
+    instance: [u8; 32],
+    context: &ValidatorEpochContextV1,
+    height: u64,
+    writes: &[(Vec<u8>, Vec<u8>)],
+    next: Option<&ValidatorEpochContextV1>,
+    signers: usize,
+) -> AmxCertifiedBlockV1 {
+    let commitment = result_commitment(context, height, writes, next);
+    let (header, qc) = sign(
+        instance,
+        context,
+        height,
+        commitment.result().unwrap(),
+        signers,
+    );
+    AmxCertifiedBlockV1 {
+        consensus_header: norito::encode_canonical(&header).unwrap(),
+        commit_qc: norito::encode_canonical(&qc).unwrap(),
+        result_preimage: commitment.preimage().unwrap(),
+    }
+}
+
+fn write_of(record: &AmxRecordV1) -> (Vec<u8>, Vec<u8>) {
+    (
+        record.witness_key().to_vec(),
+        record.witness_value().unwrap(),
+    )
+}
+
+/// A proof that `instance` recorded `record` at `height` of `context`, next to `others`.
+fn record_proof(
+    instance: [u8; 32],
+    context: &ValidatorEpochContextV1,
+    height: u64,
+    record: &AmxRecordV1,
+    others: &[(Vec<u8>, Vec<u8>)],
+) -> AmxRecordProofV1 {
+    let mut writes = others.to_vec();
+    writes.push(write_of(record));
+    let block = certify(instance, context, height, &writes, None, 3);
+    AmxRecordProofV1::from_writes(
+        block,
+        block_writes(context, height, &writes)
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice())),
+        record.clone(),
+    )
+    .unwrap()
+}
+
+fn transaction(participants: &[DataSpaceId], deadline: u64, nonce: u8) -> AmxTransactionV1 {
+    AmxTransactionV1 {
+        legs: participants
+            .iter()
+            .map(|dataspace| AmxLegV1 {
+                dataspace: *dataspace,
+                payload: vec![nonce; 3],
+            })
+            .collect(),
+        deadline,
+        nonce: [nonce; 32],
+    }
+}
+
+fn prepared(tx: [u8; 32], participant: DataSpaceId, vote: AmxVoteV1) -> AmxRecordV1 {
+    AmxRecordV1::Prepared(AmxPreparedV1 {
+        tx,
+        participant,
+        vote,
+    })
+}
+
+fn state_with(dataspaces: &[DataSpaceId]) -> SumeragiAmxState {
+    let mut state = SumeragiAmxState::default();
+    for dataspace in dataspaces {
+        state
+            .register_dataspace(
+                *dataspace,
+                AmxForeignInstanceV1::new(instance(*dataspace), fixture(4)).unwrap(),
+            )
+            .unwrap();
+    }
+    state
+}
+
+#[test]
+fn sumeragi_amx_transaction_id_binds_every_field_and_validates_shape() {
+    let base = transaction(&[DS1, DS2], 50, 1);
+    let id = base.id().unwrap();
+    assert_eq!(id, base.id().unwrap());
+    let mut changed = base.clone();
+    changed.deadline += 1;
+    assert_ne!(changed.id().unwrap(), id);
+    let mut changed = base.clone();
+    changed.nonce[0] ^= 1;
+    assert_ne!(changed.id().unwrap(), id);
+    let mut changed = base.clone();
+    changed.legs[1].payload.push(0);
+    assert_ne!(changed.id().unwrap(), id);
+    let begin = base.begin().unwrap();
+    assert_eq!(begin.participants, vec![DS1, DS2]);
+    assert!(begin.matches(&base) && !begin.matches(&changed));
+    assert_eq!(base.leg(DS2).unwrap().dataspace, DS2);
+    assert!(base.leg(DS3).is_none());
+
+    for bad in [
+        transaction(&[DS1], 50, 1),
+        transaction(&[DS2, DS1], 50, 1),
+        transaction(&[DS1, DS1], 50, 1),
+        transaction(&[DS1, DS2], 0, 1),
+    ] {
+        assert!(bad.id().is_err(), "{bad:?}");
+    }
+    let mut oversized = base.clone();
+    oversized.legs[0].payload = vec![0; MAX_AMX_LEG_BYTES + 1];
+    assert!(oversized.validate().is_err());
+    let many: Vec<DataSpaceId> = (0..=MAX_AMX_PARTICIPANTS as u64)
+        .map(DataSpaceId::new)
+        .collect();
+    assert!(transaction(&many, 50, 1).validate().is_err());
+    assert!(
+        transaction(&many[..MAX_AMX_PARTICIPANTS], 50, 1)
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
+fn sumeragi_amx_records_round_trip_norito_and_json() {
+    let tx = transaction(&[DS1, DS2], 50, 1);
+    let x = tx.id().unwrap();
+    let records = [
+        AmxRecordV1::Begin(tx.begin().unwrap()),
+        prepared(x, DS1, AmxVoteV1::Yes([5; 32])),
+        prepared(x, DS2, AmxVoteV1::No),
+        AmxRecordV1::Decision(AmxDecisionV1 {
+            tx: x,
+            outcome: AmxOutcomeV1::Commit,
+        }),
+        AmxRecordV1::Decision(AmxDecisionV1 {
+            tx: x,
+            outcome: AmxOutcomeV1::Abort,
+        }),
+    ];
+    for record in &records {
+        let bytes = norito::encode_canonical(record).unwrap();
+        assert_eq!(
+            &norito::decode_canonical::<AmxRecordV1>(&bytes).unwrap(),
+            record
+        );
+        let json = norito::json::to_json(record).unwrap();
+        assert_eq!(
+            &norito::json::from_str::<AmxRecordV1>(&json).unwrap(),
+            record
+        );
+        let (key, value) = write_of(record);
+        assert_eq!(key[0], 0xD9);
+        assert_eq!(key[1], record.kind() as u8);
+        assert_eq!(&key[2..], x.as_slice());
+        assert_eq!(&AmxRecordV1::from_witness(&key, &value).unwrap(), record);
+    }
+    // A value under another record's key, or a malformed value, is not a record.
+    let (begin_key, _) = write_of(&records[0]);
+    let (_, decision_value) = write_of(&records[3]);
+    assert!(AmxRecordV1::from_witness(&begin_key, &decision_value).is_err());
+    assert!(AmxRecordV1::from_witness(&begin_key, &[1, 2, 3]).is_err());
+    let json = norito::json::to_json(&tx).unwrap();
+    assert_eq!(
+        norito::json::from_str::<AmxTransactionV1>(&json).unwrap(),
+        tx
+    );
+    let bytes = norito::encode_canonical(&tx).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<AmxTransactionV1>(&bytes).unwrap(),
+        tx
+    );
+}
+
+#[test]
+fn sumeragi_amx_write_proof_matches_the_certified_write_root() {
+    let writes: Vec<(Vec<u8>, Vec<u8>)> = (0u8..40)
+        .map(|index| (vec![index, 1, 2], vec![index; usize::from(index) + 1]))
+        .collect();
+    let pairs = || {
+        writes
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice()))
+    };
+    let root = write_set_root(pairs()).unwrap();
+    for (key, value) in &writes {
+        let (proof, found) = AmxWriteProofV1::from_writes(pairs(), key).unwrap();
+        assert_eq!(&found, value);
+        assert_eq!(proof.root(key, value).unwrap(), root);
+        assert!(proof.siblings.len() < 20, "compact path");
+        assert_ne!(proof.root(key, b"other").unwrap(), root);
+        let bytes = norito::encode_canonical(&proof).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<AmxWriteProofV1>(&bytes).unwrap(),
+            proof
+        );
+        let mut tampered = proof.clone();
+        tampered.present[0] ^= 1;
+        assert!(!tampered.root(key, value).is_ok_and(|other| other == root));
+        let mut unmarked = proof.clone();
+        if let Some(first) = unmarked.siblings.first_mut() {
+            first[31] &= 0xFE;
+            assert!(unmarked.root(key, value).is_err());
+        }
+    }
+    assert!(AmxWriteProofV1::from_writes(pairs(), b"absent").is_err());
+    // The last write of a key wins, as in the executor's recorder.
+    let mut repeated = writes.clone();
+    repeated.push((writes[3].0.clone(), b"latest".to_vec()));
+    let (proof, found) = AmxWriteProofV1::from_writes(
+        repeated
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice())),
+        &writes[3].0,
+    )
+    .unwrap();
+    assert_eq!(found, b"latest");
+    assert_eq!(
+        proof.root(&writes[3].0, b"latest").unwrap(),
+        write_set_root(
+            repeated
+                .iter()
+                .map(|(key, value)| (key.as_slice(), value.as_slice()))
+        )
+        .unwrap()
+    );
+    assert_eq!(write_set_root(std::iter::empty()).unwrap(), Hash::new([]));
+}
+
+#[test]
+fn sumeragi_amx_tracker_verifies_records_under_the_tracked_committee_only() {
+    let context = fixture(4);
+    let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();
+    let x = transaction(&[DS1, DS2], 50, 1).id().unwrap();
+    let record = prepared(x, DS1, AmxVoteV1::Yes([5; 32]));
+    let others = vec![(b"unrelated".to_vec(), b"write".to_vec())];
+    let proof = record_proof(instance(DS1), &context, 3, &record, &others);
+    let verified = tracker.verify_record(&proof).unwrap();
+    assert_eq!((verified.height, verified.epoch), (3, 0));
+    let bytes = norito::encode_canonical(&proof).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<AmxRecordProofV1>(&bytes).unwrap(),
+        proof
+    );
+    let json = norito::json::to_json(&proof).unwrap();
+    assert_eq!(
+        norito::json::from_str::<AmxRecordProofV1>(&json).unwrap(),
+        proof
+    );
+
+    // Another record under the same path, or the same record in another instance's block.
+    let mut forged = proof.clone();
+    forged.record = prepared(x, DS1, AmxVoteV1::No);
+    assert!(tracker.verify_record(&forged).is_err());
+    let foreign = record_proof(instance(DS2), &context, 3, &record, &others);
+    assert!(tracker.verify_record(&foreign).is_err());
+    // A block that does not hold the record.
+    let mut elsewhere = proof.clone();
+    elsewhere.block = certify(instance(DS1), &context, 3, &others, None, 3);
+    assert!(tracker.verify_record(&elsewhere).is_err());
+    // Fewer than a quorum of signers.
+    let mut short = proof.clone();
+    short.block = certify(
+        instance(DS1),
+        &context,
+        3,
+        &[others[0].clone(), write_of(&record)],
+        None,
+        2,
+    );
+    assert!(tracker.verify_record(&short).is_err());
+    // A committee the tracker does not hold (same epoch number, other keys).
+    let other = rotated(&context, [9, 10, 11, 12]);
+    let stranger = record_proof(instance(DS1), &other, 13, &record, &others);
+    assert!(matches!(
+        tracker.verify_record(&stranger),
+        Err(AmxError::EpochNotTracked { epoch: 1, .. })
+    ));
+    // A result preimage that is not the certified one.
+    let mut swapped = proof.clone();
+    swapped.block.result_preimage =
+        certify(instance(DS1), &context, 3, &others, None, 3).result_preimage;
+    assert!(tracker.verify_record(&swapped).is_err());
+    // A header of another height under the same certificate.
+    let mut moved = proof.clone();
+    moved.block.consensus_header =
+        certify(instance(DS1), &context, 4, &others, None, 3).consensus_header;
+    assert!(tracker.verify_record(&moved).is_err());
+    // Oversized parts are rejected before decoding.
+    let mut oversized = proof;
+    oversized.block.commit_qc = vec![0; MAX_AMX_QC_BYTES + 1];
+    assert!(tracker.verify_record(&oversized).is_err());
+}
+
+#[test]
+fn sumeragi_amx_tracker_hands_off_epoch_by_epoch() {
+    let first = fixture(4);
+    let second = rotated(&first, [5, 6, 7, 8]);
+    let third = kept(&second);
+    let mut tracker = AmxForeignInstanceV1::new(instance(DS1), first.clone()).unwrap();
+    let x = [3; 32];
+    let record = prepared(x, DS1, AmxVoteV1::No);
+    let in_second = record_proof(instance(DS1), &second, 12, &record, &[]);
+    let in_third = record_proof(instance(DS1), &third, 22, &record, &[]);
+    assert!(matches!(
+        tracker.verify_record(&in_second),
+        Err(AmxError::EpochNotTracked {
+            epoch: 1,
+            tracked: 0
+        })
+    ));
+
+    // A handoff must be the last block of the tracked epoch and carry the boundary decision.
+    let early = AmxHandoffProofV1 {
+        block: certify(instance(DS1), &first, 5, &[], None, 3),
+    };
+    assert!(tracker.apply_handoff(&early).is_err());
+    // A boundary signed by the successor committee is not verifiable yet.
+    let skipped = AmxHandoffProofV1 {
+        block: certify(instance(DS1), &second, 20, &[], Some(&third), 3),
+    };
+    assert!(matches!(
+        tracker.apply_handoff(&skipped),
+        Err(AmxError::EpochNotTracked { .. })
+    ));
+    let handoff = AmxHandoffProofV1 {
+        block: certify(instance(DS1), &first, 10, &[], Some(&second), 3),
+    };
+    let json = norito::json::to_json(&handoff).unwrap();
+    assert_eq!(
+        norito::json::from_str::<AmxHandoffProofV1>(&json).unwrap(),
+        handoff
+    );
+    assert_eq!(
+        tracker.apply_handoff(&handoff).unwrap(),
+        AmxHandoffOutcome::Advanced { epoch: 1 }
+    );
+    assert_eq!(tracker.epoch(), 1);
+    tracker.validate().unwrap();
+    // Epochs e − 1 and e verify; the replayed handoff is stale.
+    tracker.verify_record(&in_second).unwrap();
+    tracker
+        .verify_record(&record_proof(instance(DS1), &first, 4, &record, &[]))
+        .unwrap();
+    assert_eq!(
+        tracker.apply_handoff(&handoff).unwrap(),
+        AmxHandoffOutcome::Stale
+    );
+    assert!(tracker.verify_record(&in_third).is_err());
+    assert_eq!(
+        tracker.apply_handoff(&AmxHandoffProofV1 {
+            block: certify(instance(DS1), &second, 20, &[], Some(&third), 3),
+        }),
+        Ok(AmxHandoffOutcome::Advanced { epoch: 2 })
+    );
+    tracker.verify_record(&in_third).unwrap();
+    // Epoch 0 has left the window.
+    assert!(matches!(
+        tracker.verify_record(&record_proof(instance(DS1), &first, 4, &record, &[])),
+        Err(AmxError::EpochNotTracked { epoch: 0, .. })
+    ));
+    let bytes = norito::encode_canonical(&tracker).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<AmxForeignInstanceV1>(&bytes).unwrap(),
+        tracker
+    );
+}
+
+#[test]
+fn sumeragi_amx_begin_rejects_duplicates_unregistered_participants_and_bad_deadlines() {
+    let mut state = state_with(&[DS1, DS2]);
+    let tx = transaction(&[DS1, DS2], 50, 1);
+    let record = state.begin(10, &tx).unwrap();
+    assert_eq!(record, AmxRecordV1::Begin(tx.begin().unwrap()));
+    assert_eq!(state.transaction(&tx.id().unwrap()).unwrap().begun_at, 10);
+    assert!(matches!(state.begin(11, &tx), Err(AmxError::State(_))));
+    assert!(state.begin(10, &transaction(&[DS1, DS3], 50, 2)).is_err());
+    assert!(state.begin(50, &transaction(&[DS1, DS2], 50, 3)).is_err());
+    assert!(
+        state
+            .begin(
+                10,
+                &transaction(&[DS1, DS2], 11 + MAX_AMX_DEADLINE_WINDOW, 4)
+            )
+            .is_err()
+    );
+    state
+        .begin(
+            10,
+            &transaction(&[DS1, DS2], 10 + MAX_AMX_DEADLINE_WINDOW, 5),
+        )
+        .unwrap();
+    assert!(
+        state
+            .register_dataspace(DS1, state.dataspaces[0].tracker.clone())
+            .is_err()
+    );
+    state.validate().unwrap();
+    let bytes = norito::encode_canonical(&state).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<SumeragiAmxState>(&bytes).unwrap(),
+        state
+    );
+    let json = norito::json::to_json(&state).unwrap();
+    assert_eq!(
+        norito::json::from_str::<SumeragiAmxState>(&json).unwrap(),
+        state
+    );
+}
+
+#[test]
+fn sumeragi_amx_commit_needs_every_yes_by_the_deadline() {
+    let mut state = state_with(&[DS1, DS2, DS3]);
+    let tx = transaction(&[DS1, DS2, DS3], 40, 1);
+    let x = tx.id().unwrap();
+    state.begin(10, &tx).unwrap();
+    let yes = |dataspace| {
+        record_proof(
+            instance(dataspace),
+            &fixture(4),
+            5,
+            &prepared(
+                x,
+                dataspace,
+                AmxVoteV1::Yes([u8::try_from(dataspace.as_u64()).unwrap(); 32]),
+            ),
+            &[],
+        )
+    };
+    assert_eq!(
+        state.relay_prepared(12, &yes(DS1)).unwrap(),
+        AmxRelayOutcome::Voted
+    );
+    // A repeated vote is ignored.
+    assert_eq!(
+        state.relay_prepared(13, &yes(DS1)).unwrap(),
+        AmxRelayOutcome::Ignored
+    );
+    // A proof from one dataspace cannot vote for another.
+    let mut impostor = yes(DS2);
+    impostor.record = prepared(x, DS3, AmxVoteV1::Yes([13; 32]));
+    assert!(state.relay_prepared(13, &impostor).is_err());
+    assert_eq!(
+        state.relay_prepared(14, &yes(DS2)).unwrap(),
+        AmxRelayOutcome::Voted
+    );
+    assert_eq!(
+        state.relay_prepared(40, &yes(DS3)).unwrap(),
+        AmxRelayOutcome::Decided(AmxDecisionV1 {
+            tx: x,
+            outcome: AmxOutcomeV1::Commit
+        })
+    );
+    let entry = state.transaction(&x).unwrap();
+    assert_eq!(entry.yes.len(), 3);
+    assert_eq!(
+        entry.decided,
+        Some(AmxDecidedV1 {
+            outcome: AmxOutcomeV1::Commit,
+            height: 40
+        })
+    );
+    state.validate().unwrap();
+    // One immutable decision: a later No is ignored, and the deadline step keeps the Commit.
+    let no = record_proof(
+        instance(DS1),
+        &fixture(4),
+        6,
+        &prepared(x, DS1, AmxVoteV1::No),
+        &[],
+    );
+    assert_eq!(
+        state.relay_prepared(40, &no).unwrap(),
+        AmxRelayOutcome::Ignored
+    );
+    assert!(state.expire(40).is_empty());
+    assert!(state.expire(41).is_empty());
+    assert!(state.transaction(&x).is_none());
+    // The dropped id can never be begun again: its deadline passed.
+    assert!(state.begin(41, &tx).is_err());
+    // A proof for an unknown transaction is ignored.
+    assert_eq!(
+        state.relay_prepared(42, &yes(DS1)).unwrap(),
+        AmxRelayOutcome::Ignored
+    );
+}
+
+#[test]
+fn sumeragi_amx_first_no_or_the_deadline_aborts() {
+    let mut state = state_with(&[DS1, DS2]);
+    let aborted_by_no = transaction(&[DS1, DS2], 40, 1);
+    let late_yes = transaction(&[DS1, DS2], 30, 2);
+    let silent = transaction(&[DS1, DS2], 30, 3);
+    for tx in [&aborted_by_no, &late_yes, &silent] {
+        state.begin(10, tx).unwrap();
+    }
+    let vote = |tx: &AmxTransactionV1, dataspace, vote| {
+        record_proof(
+            instance(dataspace),
+            &fixture(4),
+            5,
+            &prepared(tx.id().unwrap(), dataspace, vote),
+            &[],
+        )
+    };
+    assert_eq!(
+        state
+            .relay_prepared(12, &vote(&aborted_by_no, DS2, AmxVoteV1::No))
+            .unwrap(),
+        AmxRelayOutcome::Decided(AmxDecisionV1 {
+            tx: aborted_by_no.id().unwrap(),
+            outcome: AmxOutcomeV1::Abort
+        })
+    );
+    assert_eq!(
+        state
+            .relay_prepared(13, &vote(&aborted_by_no, DS1, AmxVoteV1::Yes([1; 32])))
+            .unwrap(),
+        AmxRelayOutcome::Ignored
+    );
+    state
+        .relay_prepared(20, &vote(&late_yes, DS1, AmxVoteV1::Yes([1; 32])))
+        .unwrap();
+    // The completing Yes arrives in the first block after the deadline: no Commit.
+    assert_eq!(
+        state
+            .relay_prepared(31, &vote(&late_yes, DS2, AmxVoteV1::Yes([2; 32])))
+            .unwrap(),
+        AmxRelayOutcome::Voted
+    );
+    assert!(state.expire(30).is_empty());
+    let mut aborted = state.expire(31);
+    aborted.sort();
+    let mut expected = vec![
+        AmxDecisionV1 {
+            tx: late_yes.id().unwrap(),
+            outcome: AmxOutcomeV1::Abort,
+        },
+        AmxDecisionV1 {
+            tx: silent.id().unwrap(),
+            outcome: AmxOutcomeV1::Abort,
+        },
+    ];
+    expected.sort();
+    assert_eq!(aborted, expected);
+    assert!(state.transaction(&late_yes.id().unwrap()).is_none());
+    assert!(state.transaction(&aborted_by_no.id().unwrap()).is_some());
+    assert!(state.expire(41).is_empty());
+    assert!(state.transactions.is_empty());
+}
+
+#[test]
+fn sumeragi_amx_state_validation_rejects_broken_invariants() {
+    let mut state = state_with(&[DS1, DS2]);
+    let tx = transaction(&[DS1, DS2], 40, 1);
+    state.begin(10, &tx).unwrap();
+    state.validate().unwrap();
+    let mut unordered = state.clone();
+    unordered.dataspaces.reverse();
+    assert!(unordered.validate().is_err());
+    let mut committed_without_votes = state.clone();
+    committed_without_votes.transactions[0].decided = Some(AmxDecidedV1 {
+        outcome: AmxOutcomeV1::Commit,
+        height: 12,
+    });
+    assert!(committed_without_votes.validate().is_err());
+    let mut stranger_vote = state.clone();
+    stranger_vote.transactions[0].yes.push(AmxYesV1 {
+        participant: DS3,
+        effects_hash: [0; 32],
+    });
+    assert!(stranger_vote.validate().is_err());
+    let mut unregistered = state;
+    unregistered.dataspaces.pop();
+    assert!(unregistered.validate().is_err());
+}
+
+#[test]
+fn sumeragi_amx_state_relays_handoffs_to_the_registered_tracker() {
+    let first = fixture(4);
+    let second = rotated(&first, [5, 6, 7, 8]);
+    let mut state = state_with(&[DS1]);
+    let handoff = AmxHandoffProofV1 {
+        block: certify(instance(DS1), &first, 10, &[], Some(&second), 3),
+    };
+    assert!(state.relay_handoff(DS2, &handoff).is_err());
+    assert_eq!(
+        state.relay_handoff(DS1, &handoff).unwrap(),
+        AmxHandoffOutcome::Advanced { epoch: 1 }
+    );
+    assert_eq!(state.dataspace(DS1).unwrap().tracker.epoch(), 1);
+    state.validate().unwrap();
+}
+
+const GLOBAL: [u8; 32] = [0x47; 32];
+
+/// An in-memory dataspace ledger: a leg `[from, to, amount_be64]` moves `amount` from `from` to
+/// `to`; escrow debits `from` into the transaction's escrow.
+#[derive(Default)]
+struct Ledger {
+    balances: std::collections::BTreeMap<u8, u64>,
+    escrows: std::collections::BTreeMap<[u8; 32], (u8, u8, u64)>,
+    applied: Vec<[u8; 32]>,
+    released: Vec<[u8; 32]>,
+}
+
+impl Ledger {
+    fn with(balances: &[(u8, u64)]) -> Self {
+        Self {
+            balances: balances.iter().copied().collect(),
+            ..Self::default()
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.balances.values().sum::<u64>()
+            + self
+                .escrows
+                .values()
+                .map(|(_, _, amount)| amount)
+                .sum::<u64>()
+    }
+}
+
+impl AmxEscrow for Ledger {
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Option<[u8; 32]> {
+        let [from, to, amount @ ..] = leg.payload.as_slice() else {
+            return None;
+        };
+        let amount = u64::from_be_bytes(amount.try_into().ok()?);
+        let balance = self.balances.entry(*from).or_default();
+        if *balance < amount {
+            return None;
+        }
+        *balance -= amount;
+        self.escrows.insert(*tx, (*from, *to, amount));
+        Some(Hash::new(&leg.payload).into())
+    }
+
+    fn apply(&mut self, tx: &[u8; 32]) {
+        let (_, to, amount) = self.escrows.remove(tx).expect("an escrow to apply");
+        *self.balances.entry(to).or_default() += amount;
+        self.applied.push(*tx);
+    }
+
+    fn release(&mut self, tx: &[u8; 32]) {
+        let (from, _, amount) = self.escrows.remove(tx).expect("an escrow to release");
+        *self.balances.entry(from).or_default() += amount;
+        self.released.push(*tx);
+    }
+}
+
+fn leg_payload(from: u8, to: u8, amount: u64) -> Vec<u8> {
+    let mut payload = vec![from, to];
+    payload.extend_from_slice(&amount.to_be_bytes());
+    payload
+}
+
+fn transfer(deadline: u64, nonce: u8, amounts: [u64; 2]) -> AmxTransactionV1 {
+    AmxTransactionV1 {
+        legs: vec![
+            AmxLegV1 {
+                dataspace: DS1,
+                payload: leg_payload(1, 2, amounts[0]),
+            },
+            AmxLegV1 {
+                dataspace: DS2,
+                payload: leg_payload(3, 4, amounts[1]),
+            },
+        ],
+        deadline,
+        nonce: [nonce; 32],
+    }
+}
+
+fn global_proof(height: u64, record: &AmxRecordV1) -> AmxRecordProofV1 {
+    record_proof(GLOBAL, &long_fixture(), height, record, &[])
+}
+
+fn decision(tx: &AmxTransactionV1, outcome: AmxOutcomeV1) -> AmxRecordV1 {
+    AmxRecordV1::Decision(AmxDecisionV1 {
+        tx: tx.id().unwrap(),
+        outcome,
+    })
+}
+
+fn participant() -> AmxParticipantStateV1 {
+    AmxParticipantStateV1::new(
+        DS1,
+        AmxForeignInstanceV1::new(GLOBAL, long_fixture()).unwrap(),
+    )
+}
+
+#[test]
+fn sumeragi_amx_participant_escrows_once_and_applies_on_commit() {
+    let mut state = participant();
+    let mut ledger = Ledger::with(&[(1, 100)]);
+    let tx = transfer(40, 1, [60, 5]);
+    let begin = global_proof(5, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    let record = state.prepare(&mut ledger, &tx, &begin).unwrap();
+    let AmxRecordV1::Prepared(prepared) = record else {
+        panic!("a Prepared record");
+    };
+    assert_eq!(prepared.participant, DS1);
+    assert!(matches!(prepared.vote, AmxVoteV1::Yes(_)));
+    assert_eq!(ledger.balances[&1], 40);
+    // A second inclusion of x is rejected and escrows nothing more.
+    assert!(state.prepare(&mut ledger, &tx, &begin).is_err());
+    assert_eq!(ledger.balances[&1], 40);
+    let commit = global_proof(20, &decision(&tx, AmxOutcomeV1::Commit));
+    assert_eq!(
+        state.settle(&mut ledger, &commit).unwrap(),
+        AmxSettleOutcome::Applied
+    );
+    assert_eq!((ledger.balances[&1], ledger.balances[&2]), (40, 60));
+    assert!(state.settle(&mut ledger, &commit).is_err());
+    assert_eq!(ledger.applied.len(), 1);
+    assert_eq!(ledger.total(), 100);
+    state.validate().unwrap();
+    let bytes = norito::encode_canonical(&state).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<AmxParticipantStateV1>(&bytes).unwrap(),
+        state
+    );
+    let json = norito::json::to_json(&state).unwrap();
+    assert_eq!(
+        norito::json::from_str::<AmxParticipantStateV1>(&json).unwrap(),
+        state
+    );
+}
+
+#[test]
+fn sumeragi_amx_participant_releases_a_yes_escrow_only_with_the_abort_proof() {
+    let mut state = participant();
+    let mut ledger = Ledger::with(&[(1, 100)]);
+    let tx = transfer(40, 2, [70, 5]);
+    let begin = global_proof(5, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    state.prepare(&mut ledger, &tx, &begin).unwrap();
+    assert_eq!(ledger.balances[&1], 30);
+    // A decision of another transaction, a non-decision record or a forged global block
+    // releases nothing.
+    let other = transfer(40, 3, [1, 1]);
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(20, &decision(&other, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Held
+    );
+    assert!(state.settle(&mut ledger, &begin).is_err());
+    let forged = record_proof(
+        instance(DS2),
+        &long_fixture(),
+        20,
+        &decision(&tx, AmxOutcomeV1::Abort),
+        &[],
+    );
+    assert!(state.settle(&mut ledger, &forged).is_err());
+    assert!(ledger.released.is_empty());
+    assert_eq!(ledger.balances[&1], 30);
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(21, &decision(&tx, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Released
+    );
+    assert_eq!(ledger.balances[&1], 100);
+    assert_eq!(ledger.total(), 100);
+}
+
+#[test]
+fn sumeragi_amx_participant_votes_no_without_escrow() {
+    let mut state = participant();
+    let mut ledger = Ledger::with(&[(1, 10)]);
+    let tx = transfer(40, 4, [60, 5]);
+    let begin = global_proof(5, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    assert_eq!(
+        state.prepare(&mut ledger, &tx, &begin).unwrap(),
+        AmxRecordV1::Prepared(AmxPreparedV1 {
+            tx: tx.id().unwrap(),
+            participant: DS1,
+            vote: AmxVoteV1::No
+        })
+    );
+    assert!(ledger.escrows.is_empty());
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(20, &decision(&tx, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Closed
+    );
+    assert_eq!(ledger.balances[&1], 10);
+}
+
+#[test]
+fn sumeragi_amx_participant_holding_the_decision_votes_no() {
+    let mut state = participant();
+    let mut ledger = Ledger::with(&[(1, 100)]);
+    let tx = transfer(40, 5, [60, 5]);
+    // The global chain aborted x (another participant's No) before this dataspace prepared it.
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(12, &decision(&tx, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Held
+    );
+    let begin = global_proof(5, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    let AmxRecordV1::Prepared(prepared) = state.prepare(&mut ledger, &tx, &begin).unwrap() else {
+        panic!("a Prepared record");
+    };
+    assert_eq!(prepared.vote, AmxVoteV1::No);
+    assert!(ledger.escrows.is_empty());
+    assert_eq!(
+        state.entry(&tx.id().unwrap()).unwrap().settled,
+        Some(AmxOutcomeV1::Abort)
+    );
+    assert!(state.held.is_empty());
+    state.validate().unwrap();
+}
+
+#[test]
+fn sumeragi_amx_participant_rejects_foreign_or_late_prepares_and_prunes() {
+    let mut state = participant();
+    let mut ledger = Ledger::with(&[(1, 100)]);
+    let tx = transfer(30, 6, [10, 5]);
+    let begin = global_proof(5, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    // The Begin of another transaction, a Begin certified by a non-global instance, a
+    // transaction without this participant and a non-Begin record are rejected.
+    let other = transfer(30, 7, [10, 5]);
+    assert!(state.prepare(&mut ledger, &other, &begin).is_err());
+    let foreign = record_proof(
+        instance(DS2),
+        &long_fixture(),
+        5,
+        &AmxRecordV1::Begin(tx.begin().unwrap()),
+        &[],
+    );
+    assert!(state.prepare(&mut ledger, &tx, &foreign).is_err());
+    let elsewhere = transaction(&[DS2, DS3], 30, 8);
+    let begin_elsewhere = global_proof(5, &AmxRecordV1::Begin(elsewhere.begin().unwrap()));
+    assert!(
+        state
+            .prepare(&mut ledger, &elsewhere, &begin_elsewhere)
+            .is_err()
+    );
+    let not_begin = global_proof(5, &decision(&tx, AmxOutcomeV1::Abort));
+    assert!(state.prepare(&mut ledger, &tx, &not_begin).is_err());
+    assert!(ledger.escrows.is_empty());
+
+    state.prepare(&mut ledger, &tx, &begin).unwrap();
+    state
+        .settle(
+            &mut ledger,
+            &global_proof(20, &decision(&tx, AmxOutcomeV1::Commit)),
+        )
+        .unwrap();
+    assert!(state.entry(&tx.id().unwrap()).is_some());
+    // An unsettled No (nothing escrowed) and an unsettled Yes escrow of the same deadline.
+    let refused = transfer(30, 10, [1_000, 5]);
+    let escrowed = transfer(30, 11, [5, 5]);
+    for pending in [&refused, &escrowed] {
+        let pending_begin = global_proof(6, &AmxRecordV1::Begin(pending.begin().unwrap()));
+        state.prepare(&mut ledger, pending, &pending_begin).unwrap();
+    }
+    assert_eq!(
+        state.entry(&refused.id().unwrap()).unwrap().vote,
+        AmxVoteV1::No
+    );
+    // Once a verified global block is beyond the deadline, no Prepare of x can follow: the
+    // settled entry is dropped and a late Prepare is rejected, not escrowed again.
+    let late = transfer(35, 9, [10, 5]);
+    let late_begin = global_proof(31, &AmxRecordV1::Begin(late.begin().unwrap()));
+    state.prepare(&mut ledger, &late, &late_begin).unwrap();
+    assert!(state.entry(&tx.id().unwrap()).is_none());
+    assert!(
+        state.entry(&refused.id().unwrap()).is_none(),
+        "an unsettled No past its deadline is dropped"
+    );
+    assert!(
+        state.entry(&escrowed.id().unwrap()).is_some(),
+        "an unsettled Yes escrow stays until its decision proof"
+    );
+    assert_eq!(state.global_height, 31);
+    assert!(state.prepare(&mut ledger, &tx, &begin).is_err());
+    // The dropped No's decision is only held; the escrow's decision releases it.
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(31, &decision(&refused, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Held
+    );
+    assert_eq!(
+        state
+            .settle(
+                &mut ledger,
+                &global_proof(31, &decision(&escrowed, AmxOutcomeV1::Abort))
+            )
+            .unwrap(),
+        AmxSettleOutcome::Released
+    );
+    assert_eq!(ledger.total(), 100);
+    assert_eq!(ledger.applied, vec![tx.id().unwrap()]);
+}
+
+#[test]
+fn sumeragi_amx_participant_follows_global_handoffs() {
+    let first = fixture(4);
+    let second = rotated(&first, [5, 6, 7, 8]);
+    let mut state = AmxParticipantStateV1::new(
+        DS1,
+        AmxForeignInstanceV1::new(GLOBAL, first.clone()).unwrap(),
+    );
+    let handoff = AmxHandoffProofV1 {
+        block: certify(GLOBAL, &first, 10, &[], Some(&second), 3),
+    };
+    assert_eq!(
+        state.handoff(&handoff).unwrap(),
+        AmxHandoffOutcome::Advanced { epoch: 1 }
+    );
+    assert_eq!(state.global_height, 10);
+    let mut ledger = Ledger::with(&[(1, 100)]);
+    let tx = transfer(40, 10, [10, 5]);
+    let begin = record_proof(
+        GLOBAL,
+        &second,
+        12,
+        &AmxRecordV1::Begin(tx.begin().unwrap()),
+        &[],
+    );
+    state.prepare(&mut ledger, &tx, &begin).unwrap();
+}

@@ -190,7 +190,7 @@ fn vrf_seed_syscall_defers_funded_output_without_guest_status_or_gas() {
         .unwrap_err();
     assert!(matches!(
         &error,
-        VMError::AllocationDeferred(mv::allocation::AllocationRefusal::Capacity { .. })
+        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { .. })
     ));
     assert_eq!(vm.register(10), pointer);
     assert_eq!(

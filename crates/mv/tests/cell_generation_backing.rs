@@ -1,8 +1,8 @@
 //! Physical writer backing, original pool refusal and retained publication custody.
 
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use mv::{
     BlockAcquisition, BlockMode, PublicationPreparationError, Value,
-    allocation::{AllocationBudget, AllocationCharge},
     cell::{
         Cell as MvCell, CellAllocationCharges, CellGenerationBacking, CellGenerationBackingError,
         CellInitialization, CellPublicationSuccessor,

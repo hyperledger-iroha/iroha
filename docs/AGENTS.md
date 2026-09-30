@@ -35,6 +35,10 @@ These guidelines apply to the `docs/` directory.
 ## Status and roadmap
 - For current implementation status and planned work, consult `status.md` and
   `roadmap.md` at the repository root.
+- Update status only when current health or blockers change, and roadmap only
+  when outstanding outcomes, owners or completion criteria change. Replace
+  resolved entries in place. Keep routine progress and test transcripts in PRs
+  or CI artifacts instead of adding dated documentation updates.
 
 ## Useful commands
 - Build docs for a crate locally: `cargo doc -p <crate> --no-deps --open`

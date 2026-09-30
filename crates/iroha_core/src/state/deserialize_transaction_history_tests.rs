@@ -5,7 +5,7 @@ mod transaction_history_restore_tests {
 
     #[test]
     fn original_admission_survives_backend_snapshot_and_durable_error_mapping() {
-        let budget = mv::allocation::AllocationBudget::new(1);
+        let budget = iroha_allocation::AllocationBudget::new(1);
         let _occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let membership = storage_transactions::MembershipAdmissionError::Capacity(refusal.clone());
@@ -122,7 +122,7 @@ mod transaction_history_restore_tests {
         let budget = kura.transaction_history_budget();
         let full = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
         let result = State::try_new(
-            mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             World::default(),
@@ -138,7 +138,7 @@ mod transaction_history_restore_tests {
         assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
         drop(full);
         let state = State::try_new(
-            mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             World::default(),
