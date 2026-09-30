@@ -835,6 +835,7 @@ mod tests {
         },
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::chain::ChainId;
     use iroha_model_base::peer::PeerId;
 
     fn default_test_topology() -> Vec<GenesisTopologyEntry> {

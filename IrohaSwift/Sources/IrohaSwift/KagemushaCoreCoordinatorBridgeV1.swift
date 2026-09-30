@@ -37,6 +37,32 @@ public struct KagemushaAppAttestCoreCommitAcknowledgmentV1: Equatable, Sendable 
   }
 }
 
+/// Bounded untrusted projections of one native-owned recovered account attempt.
+/// Native Core retains its fresh nonce, original checkpoint and 120-second continuous
+/// deadline. This value alone grants neither a recovered session nor monetary authority.
+public struct KagemushaEnrolledRecoveryAttemptV1: Equatable, Sendable {
+  public let attemptID: Data
+  public let challenge: KagemushaEnrolledOpenAccountChallengeV1
+  public let canonicalAccountChallenge: Data
+  public let accountSigningMessage: Data
+  public let canonicalDeviceCommand: Data
+  public let deviceRequestID: Data
+
+  /// Validate the exact method-12 phase-9 projection, without admitting its authority.
+  public init(nativeFields: [Data]) throws {
+    let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(9)])
+    _ = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: request, fields: nativeFields)
+    attemptID = Data(nativeFields[0])
+    canonicalAccountChallenge = Data(nativeFields[1])
+    challenge = try KagemushaEnrolledOpenAccountChallengeV1.decodeCanonicalExact(nativeFields[1])
+    accountSigningMessage = Data(nativeFields[2])
+    canonicalDeviceCommand = Data(nativeFields[3])
+    deviceRequestID = Data(nativeFields[4])
+  }
+}
+
 /// Serialized transport to the process-owned native coordinator, without a software backend.
 /// Contract matching proves ABI compatibility only; native Core must admit its qualified hardware.
 /// Returned Norito archives remain opaque. Close and every post-dispatch failure revoke the handle;
@@ -45,7 +71,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+  private static let expectedContract: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint
@@ -92,6 +118,27 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       try? endpoint.close(handle: closing)
       throw error
     }
+  }
+
+  /// Begin possession recovery from the installed native owner's retained enrollment.
+  /// The response must be correlated against independently held app selection before signing.
+  public func beginEnrolledRecovery() throws -> KagemushaEnrolledRecoveryAttemptV1 {
+    try KagemushaEnrolledRecoveryAttemptV1(nativeFields: invoke(.initialEnrollment,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(9)]))
+  }
+
+  /// Return the exact account signature and complete original authenticated hardware frame.
+  /// Only native Core may publish a recovered lease after authenticating both proofs.
+  public func completeEnrolledRecovery(_ attempt: KagemushaEnrolledRecoveryAttemptV1,
+    accountSignature: Data, originalDeviceResponse: Data) throws {
+    _ = try invoke(.initialEnrollment, fields: [KagemushaCoreCoordinatorFrameV1.u32(10),
+      attempt.attemptID, accountSignature, originalDeviceResponse])
+  }
+
+  /// Cancel the exact outstanding native attempt without creating another attempt.
+  /// Retire a completed recovered lease by closing its original owning handle.
+  public func cancelEnrolledRecovery(_ attempt: KagemushaEnrolledRecoveryAttemptV1) throws {
+    _ = try invoke(.initialEnrollment, fields: [KagemushaCoreCoordinatorFrameV1.u32(11), attempt.attemptID])
   }
 
   /// Query native Core's retained committed terminal and original assertion before lane advance.

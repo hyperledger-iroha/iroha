@@ -5,8 +5,9 @@
 //! This projection does not authorize a transition or replace qualified snapshot recovery.
 
 use super::*;
-#[cfg(test)]
-use crate::kagemusha_v1_recursion::kagemusha_candidate_envelope_digest_v1;
+use crate::kagemusha_v1_recursion::{
+    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, kagemusha_candidate_envelope_digest_v1,
+};
 
 /// Maximum canonical State public-input archive accepted by the native testnet observer.
 pub const KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1: usize = 4 * 1024;
@@ -31,7 +32,29 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
-    #[cfg(test)]
+    pub(crate) fn original_terminal_envelope(
+        &self,
+        operation_id: DigestV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        let journal = &self.outgoing_candidate_journal;
+        journal.validate_recovered(
+            &self.state,
+            self.journal_revision,
+            &self.sender_outbox_capacity,
+            &self.proof_release,
+            self.proof_release.artifacts,
+            &self.recursive_verifier,
+        )?;
+        let record = journal
+            .operation_index()
+            .lookup(operation_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if record.phase != KagemushaOutgoingOperationPhaseV1::Installed {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(journal.expose(record.outbox_reservation_id)?.to_vec())
+    }
+
     /// Export the original State proof and its exact public inputs for a live outgoing operation.
     ///
     /// Candidate, committed, and installed operations retain the proof inside the hardware-anchored

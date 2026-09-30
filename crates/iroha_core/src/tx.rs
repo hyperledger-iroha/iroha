@@ -5327,6 +5327,7 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
         runtime::RuntimeUpgradeManifest,
+        smart_contract::ContractArtifactId,
         transaction::{TransactionBuilder, executable::ContractInvocation},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -9711,7 +9712,7 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -9924,7 +9925,7 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x5A;
         tx1.world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -10132,7 +10133,10 @@ pub mod tests {
         .signed(&fixture.keypair);
         tx1.world
             .contract_manifests
-            .insert(code_hash, manifest.clone());
+            .insert(
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+                manifest.clone(),
+            );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept

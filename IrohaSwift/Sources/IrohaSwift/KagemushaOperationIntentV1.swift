@@ -55,6 +55,7 @@ public struct KagemushaOperationIntentV1: Codable, Equatable, Sendable {
   public var canonicalCommand: Data?
   public var canonicalReply: Data?
   public var responseAuthenticator: Data?
+  public var originalResponse: Data?
   public var canonicalResult: Data?
   public var authenticatedSnapshotEvidence: KagemushaObservationEvidenceV1?
   public var acknowledged: Bool
@@ -85,6 +86,8 @@ public struct KagemushaOperationIntentV1: Codable, Equatable, Sendable {
       canonicalCommand?.isEmpty != true, canonicalReply?.isEmpty != true,
       (canonicalCommand?.count ?? 0) <= 65_536, (canonicalReply?.count ?? 0) <= 65_536,
       (canonicalReply == nil) == (responseAuthenticator == nil),
+      (canonicalReply == nil) == (originalResponse == nil),
+      (originalResponse?.count ?? 0) <= 65_716,
       canonicalReply == nil || canonicalCommand != nil,
       responseAuthenticator == nil || responseAuthenticator?.count == 64,
       (canonicalResult?.count ?? 0) <= 65_536, canonicalResult?.isEmpty != true,
@@ -93,6 +96,17 @@ public struct KagemushaOperationIntentV1: Codable, Equatable, Sendable {
       throw KagemushaAuthenticatedHardwareProviderErrorV1.invalidContract("invalid durable operation intent")
     }
     if let responseAuthenticator { _ = try KagemushaDeviceSignatureV1(rawBytes: responseAuthenticator) }
+    if let originalResponse {
+      guard let expectedOperation = KagemushaDeviceLifecycleOperationV1(rawValue: operation) else {
+        throw KagemushaAuthenticatedHardwareProviderErrorV1.invalidContract("unknown response operation")
+      }
+      let original = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(originalResponse,
+        expectedOperation: expectedOperation, expectedRequestID: operationID)
+      guard original.status == .success, original.payload == canonicalReply,
+        original.authenticator == responseAuthenticator else {
+        throw KagemushaAuthenticatedHardwareProviderErrorV1.invalidContract("durable original response binding changed")
+      }
+    }
     if let authenticatedSnapshotEvidence {
       try authenticatedSnapshotEvidence.validate()
       guard authenticatedSnapshotEvidence.operation == 21, canonicalReply != nil else {
@@ -107,6 +121,7 @@ public struct KagemushaOperationIntentV1: Codable, Equatable, Sendable {
     identity.canonicalCommand = prior.canonicalCommand
     identity.canonicalReply = prior.canonicalReply
     identity.responseAuthenticator = prior.responseAuthenticator
+    identity.originalResponse = prior.originalResponse
     identity.canonicalResult = prior.canonicalResult
     identity.authenticatedSnapshotEvidence = prior.authenticatedSnapshotEvidence
     identity.acknowledged = prior.acknowledged
@@ -114,6 +129,7 @@ public struct KagemushaOperationIntentV1: Codable, Equatable, Sendable {
       prior.canonicalCommand == nil || canonicalCommand == prior.canonicalCommand,
       prior.canonicalReply == nil || canonicalReply == prior.canonicalReply,
       prior.responseAuthenticator == nil || responseAuthenticator == prior.responseAuthenticator,
+      prior.originalResponse == nil || originalResponse == prior.originalResponse,
       prior.canonicalResult == nil || canonicalResult == prior.canonicalResult,
       prior.authenticatedSnapshotEvidence == nil || authenticatedSnapshotEvidence == prior.authenticatedSnapshotEvidence,
       !prior.acknowledged || acknowledged else {
@@ -209,7 +225,7 @@ public final class KagemushaOperationIntentOwnerV1: @unchecked Sendable {
   }
 
   func accepted(operation: UInt8, operationID: Data, command: Data, reply: Data,
-    authenticator: Data, qualificationScope: Data) throws {
+    authenticator: Data, originalResponse: Data, qualificationScope: Data) throws {
     try locked {
       guard var value = try store.load(operation: operation, operationID: operationID),
         value.applicationScope == store.applicationScope,
@@ -219,13 +235,15 @@ public final class KagemushaOperationIntentOwnerV1: @unchecked Sendable {
       }
       try value.validate()
       if let original = value.canonicalReply {
-        guard original == reply, value.responseAuthenticator == authenticator else {
+        guard original == reply, value.responseAuthenticator == authenticator,
+          value.originalResponse == originalResponse else {
           throw invalid("authenticated retry changed its result or authenticator")
         }
         return
       }
       value.canonicalReply = reply
       value.responseAuthenticator = authenticator
+      value.originalResponse = Data(originalResponse)
       try persist(value)
     }
   }

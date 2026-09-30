@@ -2250,7 +2250,6 @@ mod tests {
             publication.publication_hash().expect("publication hashes")
         );
     }
-    #[cfg(feature = "json")]
     #[test]
     fn transparency_proof_round_trip_via_json() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];

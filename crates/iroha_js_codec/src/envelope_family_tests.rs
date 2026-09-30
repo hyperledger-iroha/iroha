@@ -195,11 +195,11 @@ const ROUTING_CASES: [(&str, &str); 52] = [
     ),
     (
         r#"{"RegisterSmartContractBytes":{}}"#,
-        "RegisterSmartContractBytes.code_hash field missing",
+        "RegisterSmartContractBytes.artifact_id field missing",
     ),
     (
         r#"{"RemoveSmartContractBytes":{}}"#,
-        "RemoveSmartContractBytes.code_hash field missing",
+        "RemoveSmartContractBytes.artifact_id field missing",
     ),
     (r#"{"zk":{}}"#, "unsupported zk instruction variant"),
     (
@@ -622,6 +622,10 @@ fn kaigi_participant_and_relay_envelopes_roundtrip_native_frames() {
 fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
     let code_hash = Hash::new(b"envelope-family-code");
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code_hash,
+    );
     let cases: [(&str, InstructionBox); 5] = [
         (
             "ProposeDeployContract",
@@ -645,7 +649,7 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RegisterSmartContractBytes",
             Box::new(RegisterSmartContractBytes {
-                code_hash,
+                artifact_id,
                 code: vec![0x49, 0x56, 0x4d, 0x00],
             })
             .into_instruction_box(),
@@ -653,7 +657,7 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
-                code_hash,
+                artifact_id,
                 reason: Some("superseded".to_owned()),
             })
             .into_instruction_box(),
@@ -661,7 +665,7 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
-                code_hash,
+                artifact_id,
                 reason: None,
             })
             .into_instruction_box(),

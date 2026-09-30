@@ -66,6 +66,9 @@ zk-tests = ["test-utils"]
 # qualification. Keeping it out of `cfg(test)` avoids code-generating the full unit-test
 # harness merely to execute this one proof.
 kagemusha-real-proof-harness = ["zk-halo2-ipa"]
+# Genuine native proving from an authenticated Core selection and release-pinned keys.
+# This enables neither key generation nor experimental/test qualification constructors.
+kagemusha-production-prover = ["zk-halo2-ipa"]
 
 [dependencies]
 iroha_model_base = { workspace = true }

@@ -129,6 +129,7 @@ pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_polynomial_store_v1;
+pub mod kagemusha_sender_wire;
 /// Shared paired field-native Poseidon relations for Kagemusha V1.
 pub(crate) mod kagemusha_v1_poseidon;
 /// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.
@@ -4914,20 +4915,26 @@ mod stark_backend_tag_tests {
                     "non-portable STARK alias {malformed_alias:?} must fail closed"
                 );
             }
-            for near_miss in [
-                format!("halo2/pasta/ipa/generic-{label}"),
-                format!("halo2/pasta/ipa/{label}-generic"),
-            ] {
+            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                let halo2_circuit_id = format!("halo2/pasta/ipa/{near_miss}");
                 assert!(
-                    !halo2_open_verify_circuit_id_is_production_v1(&near_miss),
-                    "unregistered Halo2 near miss {near_miss:?} must fail closed"
+                    !halo2_open_verify_circuit_id_is_production_v1(&halo2_circuit_id),
+                    "unregistered Halo2 near miss {halo2_circuit_id:?} must fail closed"
                 );
                 assert!(
                     !stark_open_verify_circuit_id_matches_backend(
                         ZK_BACKEND_STARK_FRI_V1,
-                        &near_miss,
+                        &halo2_circuit_id,
                     ),
-                    "unqualified STARK circuit {near_miss:?} must fail closed"
+                    "unqualified STARK circuit {halo2_circuit_id:?} must fail closed"
+                );
+                let cross_family_id = format!("{ZK_BACKEND_STARK_FRI_V1}:{halo2_circuit_id}");
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &cross_family_id,
+                    ),
+                    "STARK generic admission must reject Halo2 circuit id {cross_family_id:?}"
                 );
                 let circuit_id = format!("{ZK_BACKEND_STARK_FRI_V1}:{near_miss}");
                 assert!(

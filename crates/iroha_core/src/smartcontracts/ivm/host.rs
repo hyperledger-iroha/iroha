@@ -10209,10 +10209,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         .parse_account_alias(alias_literal)?;
                     let replacement: AccountId =
                         Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+                    let request_generation = std::num::NonZeroU64::new(vm.register(12))
+                        .ok_or(ivm::VMError::DecodeError)?;
                     let instruction =
                         iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
                             alias,
                             new_controller: replacement.controller().clone(),
+                            request_generation,
                         };
                     self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
                 }
@@ -10227,20 +10230,25 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         .get()
                         .ok_or(ivm::VMError::PermissionDenied)?
                         .parse_account_alias(alias_literal)?;
+                    let request_generation = std::num::NonZeroU64::new(vm.register(11))
+                        .ok_or(ivm::VMError::DecodeError)?;
                     let instruction = match number {
                         ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
                             iroha_data_model::isi::account_recovery::ApproveAccountRecovery {
                                 alias,
+                                request_generation,
                             },
                         ),
                         ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL => InstructionBox::from(
                             iroha_data_model::isi::account_recovery::CancelAccountRecovery {
                                 alias,
+                                request_generation,
                             },
                         ),
                         ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => InstructionBox::from(
                             iroha_data_model::isi::account_recovery::FinalizeAccountRecovery {
                                 alias,
+                                request_generation,
                             },
                         ),
                         _ => unreachable!("matched account-recovery syscall"),
@@ -14947,6 +14955,7 @@ mod tests {
         privacy::PrivacyProtocolIdV1,
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
+        smart_contract::ContractArtifactId,
         zk::BackendTag,
     };
     use iroha_executor_data_model::permission::account::{
@@ -15413,10 +15422,12 @@ seiyaku StaleRuntimeBinding {
             .get(contract_address)
             .copied()
             .expect("installed contract binding");
+        let artifact_id = ContractArtifactId::for_address(contract_address, code_hash)
+            .expect("installed contract has an exact artifact dataspace");
         let code = view
             .world()
             .contract_code()
-            .get(&code_hash)
+            .get(&artifact_id)
             .expect("installed contract code");
         let parsed = ivm::ProgramMetadata::parse(code).expect("parse installed contract");
         let descriptor = parsed
@@ -19904,9 +19915,11 @@ seiyaku EffectfulView {
             .expect("next block height must fit in u64 and be non-zero");
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
+        let artifact_id = ContractArtifactId::for_address(&callee, record.code_hash)
+            .expect("callee retains its exact artifact dataspace");
         tx.world
             .contract_manifests
-            .insert(record.code_hash, malicious_manifest);
+            .insert(artifact_id, malicious_manifest);
         tx.apply();
         block
             .commit_world_overlay_for_testing()

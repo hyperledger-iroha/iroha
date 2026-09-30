@@ -7,6 +7,28 @@ transport and the locked original journals. A decoded snapshot, generic verifier
 application callback, Experimental host or caller checkpoint cannot supply it.
 The path-only C/JNI installer selects that retained owner. Open returns an opaque
 selection handle; it establishes no account possession or monetary authority.
+After initial phase 5, the concrete native bootstrap retains the consuming issuer
+admission. The independently installed platform supplies physical originals through
+`KagemushaNativeCoreBootstrapSourceV1`; it never implements software Core dispatch.
+The bridge initializes exact journals and publishes the original INITIAL checkpoint
+through the retained hardware transaction journal. Lost delivery or fresh-selection
+loss retains the same exclusive checkpoint for retry. Its next Open obtains the
+concrete recovered owner only after real paired-proof, hardware and journal admission.
+Independent monotonic handles prevent reused inner handles from reviving an earlier
+Open. Missing physical inputs refuse recovery without reopening the issuer journal.
+Exact phase-5 retries remain on their original handle until closed or superseded.
+The immutable enrollment binding now retains the nonzero Core authorization key
+reference authenticated by the original issuer certificate and complete hardware
+snapshot. The installed native public key must derive that exact reference. This
+Core key remains distinct from the eSE credential's device key reference.
+Recovery intake also requires the independently installed native Core authorization
+signing owner. Its original public key must equal the retained P256 selection;
+the hardware snapshot binds that key's reference. Before a command-7 signature,
+native code validates the exact typed transition, context, candidate and one-use
+authorization transcript. It independently verifies the returned fixed-width
+low-S P256 signature and the complete maintained command-7 body before forwarding
+any bytes. The public key does not supply private signing custody, and the Rust
+platform callback cannot replace the installed key or renew a native lease.
 
 Method 12 uses the existing `IKGMCOR1` schema-2 frame, little-endian scalar fields,
 16 fields maximum, 96 KiB maximum per field, 256 KiB total request and 128 KiB total
@@ -38,8 +60,12 @@ pending attempt or completed session. No second attempt starts under that Open.
 Native registry ownership serializes calls and preserves revocation during queued
 hardware work.
 
-After possession, this adapter grants only the actual native observation methods
-2, 3 and 11. It does not turn recovery possession into new monetary work, KYC
+After possession, this adapter grants native observation methods 2, 3 and 11,
+read-only original paired State proof export (14), bounded sender intent reservation
+(1) and native indexed intent creation (4). Intent creation retains original WAL
+identity and accepted credential context; it publishes no funds or device commit. Exported public
+proofs are rechecked against the still-retained native Core and original session.
+It does not turn recovery possession into new monetary work, KYC
 renewal, ledger inclusion or a fabricated wallet bootstrap. Monetary dispatch must
 remain bound to the separately authenticated concrete Core machine and its actual
 paired proofs, nonforking device transactions and original native journals.

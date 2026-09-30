@@ -27,8 +27,15 @@ pub use response_evidence_archive::{
 mod authenticated_core_owner;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use authenticated_core_owner::{
-    KagemushaAuthenticatedBootstrapStageV1, KagemushaAuthenticatedBootstrappedWalletV1,
-    KagemushaAuthenticatedCoreOwnerV1,
+    KagemushaAuthenticatedBootstrapProvingSelectionV1, KagemushaAuthenticatedBootstrapStageV1,
+    KagemushaAuthenticatedBootstrappedWalletV1,
+    KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1, KagemushaAuthenticatedCoreOwnerV1,
+    KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1,
+    KagemushaAuthenticatedCoreRecoveryV1, KagemushaAuthenticatedIncomingFoldV1,
+    KagemushaAuthenticatedIncomingProvingSelectionV1,
+    KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
+    KagemushaAuthenticatedOutgoingProvingSelectionV1,
+    KagemushaOriginalOutgoingHardwareCommitV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -79,15 +86,15 @@ pub use state_proof_archive_export::{
     KagemushaOutgoingStateProofArchivePairV1,
 };
 
-#[cfg(test)]
-pub use candidate_lifecycle::KagemushaOutgoingCommitCapabilityV1;
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+pub(crate) use candidate_lifecycle::KagemushaOutgoingCommitCapabilityV1;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use candidate_lifecycle::terminal_journal_canonical_layout_v1;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use candidate_lifecycle::terminal_journal_commitment_v1;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use candidate_lifecycle::terminal_recovery_canonical_frame_prefix_v1;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use candidate_lifecycle::terminal_recovery_commitment_v1;
@@ -106,14 +113,20 @@ pub use handoff_verification::{
 };
 pub use iroha_data_model::kagemusha::KagemushaOutboxReservationV1;
 pub use mint_fold_private_inputs::KagemushaMintFoldOpeningCapabilityV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldOpeningWitnessV1;
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldPrivateInputsV1;
 pub use mint_inbox::*;
 pub(crate) use mint_inbox::{
     KagemushaTestnetVerifiedMintProofsV1, verify_applied_top_up_mint_stage_experimental_v1,
 };
+#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
+pub(crate) use mint_inbox_operations::MintCreditStageOutcomeV1;
 #[cfg(test)]
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
@@ -132,10 +145,14 @@ pub use outgoing_operation_index::{
 };
 #[cfg(test)]
 pub use receive_fold::ReceiveFoldReplayRootUpdateInputV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 pub use receive_fold::{KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1, ReceiveFoldV1};
 pub use receive_fold::{KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1, ReceiveFoldCreditV1, ReceiveFoldErrorV1};
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 pub use receive_fold_operation::{PeerCreditFoldInputV1, PeerCreditFoldPreviewV1};
 pub use redemption_release::{
     KAGEMUSHA_REDEMPTION_TERMINAL_RECEIPT_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
@@ -151,6 +168,12 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
+use super::kagemusha_v1_recursion::canonical_prepared_transition_binding_digest_v1;
+#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
+use iroha_data_model::kagemusha::{
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, kagemusha_device_key_reference_v1,
+};
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -177,6 +200,16 @@ use iroha_data_model::{
         kagemusha_device_key_reference_v1,
     },
 };
+#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
+use iroha_data_model::{
+    account::AccountId,
+    kagemusha::{
+        KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
+        KagemushaEncryptedCreditEnvelopeV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+        KagemushaPaymentOutputV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+        kagemusha_ciphertext_digest_v1,
+    },
+};
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -199,7 +232,7 @@ pub use self::sparse_merkle::authenticated_history::{
 pub use self::sparse_merkle::authenticated_history::{
     KagemushaCommittedRootReadV1, KagemushaHistoryOverlayUsageV1,
 };
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryDualInsertPreparationV1, prepare_history_identity_pair_v1,
     require_history_proof_root_bridge_v1,
@@ -208,11 +241,11 @@ pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryIdentityClassificationV1, VerifiedKagemushaHistoryProofRootBridgeV1,
     classify_history_identity_v1, validate_committed_history_v1,
 };
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryInsertPreparationV1, prepare_history_identity_insert_v1,
 };
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaHistoryProofRootBridgeRequestV1, KagemushaHistoryRootSelectionCertificateV1,
     KagemushaHistoryRootSelectionSubjectV1,
@@ -222,6 +255,8 @@ use super::kagemusha_v1_poseidon::{
     KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, decode as decode_pasta, digest_limbs,
     encode as encode_pasta, from_u128 as pasta_from_u128, hash as pasta_hash,
 };
+#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
+use super::kagemusha_v1_recursion::kagemusha_incoming_proof_binding_digest_v1;
 use super::kagemusha_v1_recursion::{
     KagemushaGuardContextV1, KagemushaNormalizedGuardStatementV1, KagemushaRecursionArtifactsV1,
     KagemushaRecursiveVerifierV1, KagemushaStateRelationPublicInputsV1,
@@ -294,7 +329,7 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Durably prepare one consumed-credit replay insertion before hardware root selection.
     pub(crate) fn prepare_replay(
         &mut self,
@@ -311,7 +346,7 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Prepare one replay insertion and one terminal decision under a single atomic root CAS.
     pub(crate) fn prepare_replay_and_terminal_decision(
         &mut self,
@@ -331,7 +366,7 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Require this exact live attempt before requesting fresh hardware authority.
     pub(crate) fn require_prepared(
         &self,
@@ -340,7 +375,7 @@ where
         self.store.require_prepared(transaction)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Commit an already prepared CAS selected by a verified hardware certificate.
     pub(crate) fn commit_prepared(
         &mut self,
@@ -349,7 +384,7 @@ where
         self.store.commit_prepared(certificate)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Resolve a prepared CAS after restart using its verified hardware certificate.
     pub(crate) fn recover_prepared(
         &mut self,
@@ -358,7 +393,7 @@ where
         self.store.recover_prepared(certificate)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Abort one uncommitted CAS without changing either authoritative committed root.
     pub(crate) fn abort_prepared(
         &mut self,
@@ -367,7 +402,7 @@ where
         self.store.abort_prepared(transaction_id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Describe the exact SHA-256/Pasta relation required for a replay-changing state proof.
     pub(crate) fn proof_root_bridge_request(
         &self,
@@ -1225,12 +1260,13 @@ pub struct TransitionPreviewV1 {
     pub journal_revision_after: u128,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Caller-owned material needed to prepare one receiver-bound `SendSplit` transition.
 ///
 /// Core derives the amount and receiver binding directly from the signed request,
 /// then derives every state, lifecycle, credit, and proof-statement binding.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::SendSplitPreparationV1")]
 pub struct SendSplitPreparationV1 {
     /// Signed receiver request authenticated against the active proof release.
     pub request: KagemushaPaymentRequestV1,
@@ -1256,13 +1292,14 @@ pub struct SendSplitPreparationV1 {
     pub sealed_recovery_seeds: Vec<u8>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Caller-owned material needed to prepare one full or partial `RedeemSplit` intent.
 ///
 /// Core derives the private aggregate successor, terminal lifecycle, redemption identity,
 /// proof statement, and normalized guard binding. Public aggregate heads never enter the
 /// redemption statement.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::RedeemSplitPreparationV1")]
 pub struct RedeemSplitPreparationV1 {
     /// Positive amount to remove from the offline aggregate balance.
     pub amount: u128,
@@ -1318,7 +1355,7 @@ pub struct ConsumedCreditInsertWitnessV1 {
         [KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// A credit-fold transition and its exact private replay-tree insert witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreditFoldPreviewV1 {
@@ -1335,7 +1372,7 @@ pub struct CreditFoldPreviewV1 {
     trusted_commit_time_ms: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 impl CreditFoldPreviewV1 {
     /// Borrow the opaque recursive-opening capability from this exact checked preview.
     #[must_use]
@@ -1413,7 +1450,7 @@ pub struct DurableAcknowledgementV1 {
 }
 
 impl DurableAcknowledgementV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn from_acknowledgement(
         acknowledgement: KagemushaAcknowledgementV1,
         request: &KagemushaPaymentRequestV1,
@@ -1480,7 +1517,7 @@ pub struct PaymentStageAuthorizationV1 {
     pub acknowledgement: KagemushaAcknowledgementV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Durable staging outcome for an inbound public payment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StagePaymentOutcomeV1 {
@@ -2401,7 +2438,7 @@ where
             .classify_existing_prepare(request)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Derive one complete, recoverable `SendSplit` intent without mutating monetary state.
     ///
     /// The signed request supplies the exact amount and recipient. Core authenticates its
@@ -2709,7 +2746,7 @@ where
         Ok(preview)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Derive one complete, recoverable full or partial `RedeemSplit` intent.
     ///
     /// Core derives the private aggregate successor, terminal lifecycle, redemption ID, proof
@@ -2841,7 +2878,7 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Atomically bind a caller ID, reserve sender bytes, and prepare the exact transition.
     ///
     /// Both authenticated identity arguments must come from a qualified native session. Core
@@ -2849,7 +2886,7 @@ where
     /// authorization keys. Call
     /// [`Self::classify_outgoing_operation_prepare`] before deriving a new candidate so a lost
     /// response recovers an existing operation at any phase without invoking preparation again.
-    pub fn prepare_indexed_outgoing_candidate(
+    pub(crate) fn prepare_indexed_outgoing_candidate(
         &mut self,
         operation_id: DigestV1,
         authenticated_credential_id: DigestV1,
@@ -2886,9 +2923,9 @@ where
         Ok((indexed_outcome, reservation_outcome, capability))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Reissue authority for one exact caller-indexed preparation after authenticated recovery.
-    pub fn recover_indexed_outgoing_commit_capability(
+    pub(crate) fn recover_indexed_outgoing_commit_capability(
         &self,
         operation_id: DigestV1,
     ) -> Result<KagemushaOutgoingCommitCapabilityV1, KagemushaStateErrorV1> {
@@ -2914,9 +2951,9 @@ where
         KagemushaOutgoingCommitCapabilityV1::for_prepared(prepared)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Verify and persist a private redemption candidate proof before hardware consumes state.
-    pub fn persist_outgoing_redemption_candidate(
+    pub(crate) fn persist_outgoing_redemption_candidate(
         &mut self,
         capability: &KagemushaOutgoingCommitCapabilityV1,
         candidate_proof: KagemushaPairedProofV1,
@@ -2935,7 +2972,7 @@ where
         self.persist_verified_outgoing_candidate(candidate)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn persist_verified_outgoing_candidate(
         &mut self,
         candidate: PersistedOutgoingCandidateV1,
@@ -2957,12 +2994,12 @@ where
         Ok(candidate)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Atomically install the hardware-certified successor exactly once.
     ///
     /// A committed predecessor can therefore never coexist with its old monetary head in a
     /// canonical snapshot.
-    pub fn commit_outgoing_candidate(
+    pub(crate) fn commit_outgoing_candidate(
         &mut self,
         capability: KagemushaOutgoingCommitCapabilityV1,
         commit_certificate: KagemushaCommitCertificateV1,
@@ -3008,9 +3045,9 @@ where
         Ok(committed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Verify and persist the redemption proof and canonical voucher for byte-identical retry.
-    pub fn finalize_outgoing_redemption(
+    pub(crate) fn finalize_outgoing_redemption(
         &mut self,
         proof: KagemushaRedemptionProofV1,
         retry_metadata: Vec<u8>,
@@ -3026,7 +3063,7 @@ where
         self.install_finalized_outgoing_envelope(finalized)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn committed_candidate_for_finalization(
         &self,
     ) -> Result<CommittedOutgoingCandidateV1, KagemushaStateErrorV1> {
@@ -3047,7 +3084,7 @@ where
         Ok(committed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn install_finalized_outgoing_envelope(
         &mut self,
         finalized: DurableOutgoingEnvelopeV1,
@@ -3066,10 +3103,10 @@ where
         self.pending_credits.len() + self.mint_inbox.pending_count()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Preview folding one finalized mint credit into the aggregate and durably prepare its
     /// external replay-root CAS.
-    pub fn preview_mint_fold(
+    pub(crate) fn preview_mint_fold(
         &mut self,
         credit: &KagemushaMintCreditV1,
         successor_state_nonce_commitment: DigestV1,
@@ -3146,7 +3183,7 @@ where
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn derive_mint_fold_transition(
         &self,
         credit: &KagemushaMintCreditV1,
@@ -3258,9 +3295,9 @@ where
         ))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the exact qualified-hardware message selecting a mint's external replay root.
-    pub fn mint_fold_history_root_selection_signing_bytes(
+    pub(crate) fn mint_fold_history_root_selection_signing_bytes(
         &self,
         preview: &CreditFoldPreviewV1,
     ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
@@ -3278,10 +3315,10 @@ where
         .map_err(map_authenticated_history_error)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Authenticate and attach the hardware-selected replay root after verifying the paired mint
     /// transition proof for the same logical operation.
-    pub fn authorize_mint_fold_history(
+    pub(crate) fn authorize_mint_fold_history(
         &self,
         preview: &CreditFoldPreviewV1,
         mut authorization: TransitionAuthorizationV1,
@@ -3321,9 +3358,9 @@ where
         Ok(authorization)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Verify and atomically apply one durably prepared finalized mint credit.
-    pub fn mint_fold_prepared(
+    pub(crate) fn mint_fold_prepared(
         &mut self,
         credit: KagemushaMintCreditV1,
         preview: CreditFoldPreviewV1,
@@ -3333,9 +3370,9 @@ where
         self.install_mint_fold(credit, preview, mint_finality, authorization, false)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Release the byte-bounded WAL entry for an abandoned, uncommitted mint preview.
-    pub fn abandon_mint_fold_preview(
+    pub(crate) fn abandon_mint_fold_preview(
         &mut self,
         preview: &CreditFoldPreviewV1,
     ) -> Result<(), KagemushaStateErrorV1> {
@@ -3352,7 +3389,7 @@ where
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn install_mint_fold(
         &mut self,
         credit: KagemushaMintCreditV1,
@@ -3482,7 +3519,7 @@ where
         Ok(self.state.clone())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn validate_mint_fold_history_preview(
         &self,
         preview: &CreditFoldPreviewV1,
@@ -3518,9 +3555,9 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Preview the exact receiver journal statement for a new public payment.
-    pub fn preview_stage_payment(
+    pub(crate) fn preview_stage_payment(
         &self,
         request: &KagemushaPaymentRequestV1,
         payment: &KagemushaPaymentV1,
@@ -3551,12 +3588,12 @@ where
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Durably stage or idempotently classify one inbound credit.
     ///
     /// Request expiry is checked only against the sender's trusted commit time inside the credit.
     /// `staged_at_ms` may be arbitrarily later without invalidating committed value.
-    pub fn stage_payment(
+    pub(crate) fn stage_payment(
         &mut self,
         request: KagemushaPaymentRequestV1,
         payment: KagemushaPaymentV1,
@@ -4265,7 +4302,7 @@ where
         Ok(recovered)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn validate_peer_payment(
         &self,
         request: &KagemushaPaymentRequestV1,
@@ -4280,7 +4317,7 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn ensure_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4292,7 +4329,7 @@ where
         self.ensure_non_mint_credit_id_available(credit_id, envelope_digest)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn ensure_non_mint_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4315,7 +4352,7 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn ensure_peer_credit_id_available(
         &self,
         credit_id: CreditIdV1,
@@ -4664,7 +4701,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn terminal_lifecycle_binding_v1(
     state: &KagemushaStateV1,
     operation_kind: KagemushaOperationKindV1,

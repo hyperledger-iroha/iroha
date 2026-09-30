@@ -57,15 +57,16 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     for start, call, (profile, sdkroot, triple) in zip(
         call_starts, calls, expected_slices, strict=True
     ):
-        assert len(call) == 5
+        assert len(call) == 6
         assert lines[start - 1].strip() == f'if should_build_apple_slice "{triple}"; then'
         assert call[1].strip() == f'{profile} "{sdkroot}" \\'
         assert (
             call[2].strip()
-            == 'build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \\'
+            == 'rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \\'
         )
-        assert call[3].strip() == f'--target "{triple}" \\'
-        assert call[4].strip().startswith('"${CARGO_FEATURE_ARGS[@]+')
+        assert call[3].strip() == '--crate-type staticlib --profile apple-release \\'
+        assert call[4].strip() == f'--target "{triple}" \\'
+        assert call[5].strip().startswith('"${CARGO_FEATURE_ARGS[@]+')
 
     assert "CARGO_BUILD_DIR_" not in source
     assert "local cargo_target_dir" not in source
@@ -77,7 +78,7 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     assert source.count('--set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT"') == 1
     assert source.count('"embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT"') == 2
     assert (
-        'source_library="$CARGO_TARGET_DIR/$target_triple/release/'
+        'source_library="$CARGO_TARGET_DIR/$target_triple/apple-release/'
         'lib${LIB_CRATE_NAME}.a"'
     ) in source
     assert not any(

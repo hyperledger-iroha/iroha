@@ -10,11 +10,15 @@
 use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{
-    state::{State, StateReadOnly, StateView, is_stable_state_view_generation},
+    state::{
+        AssetDefinitionAliasBindingRecord, State, StateReadOnly, StateView, WorldReadOnly,
+        is_stable_state_view_generation,
+    },
     sumeragi::certified_chain::CommittedBlock,
 };
 use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedBuffer};
 use iroha_data_model::{
+    account::AccountId,
     asset::{AssetDefinition, AssetDefinitionId},
     kagemusha::KagemushaGovernedVerifierRegistryV1,
     nexus::AxtAssetIncarnationV1,
@@ -245,6 +249,58 @@ fn require_target(
     Ok(())
 }
 
+fn require_complete_table_count(
+    snapshot: &WorldStateSnapshotV1,
+    field: &str,
+    count: usize,
+) -> Result<(), String> {
+    let mut certified = 0usize;
+    for entry in &snapshot.entries {
+        if entry.field_id == field {
+            if entry.kind != WorldStateElementKindV1::Table || entry.key_hash.is_none() {
+                return Err(format!(
+                    "World names original {field} has an incompatible native field kind"
+                ));
+            }
+            certified = certified
+                .checked_add(1)
+                .ok_or("World names original count overflows")?;
+        }
+    }
+    if certified != count {
+        return Err(format!(
+            "World names original {field} omits or adds certified keys"
+        ));
+    }
+    Ok(())
+}
+
+fn require_names_read_authority(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> Result<(), String> {
+    world
+        .account(authority)
+        .map_err(|_| "World names read authority is not registered")?;
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::query::CanReadAllLedgerData.into();
+    let direct = world
+        .account_permissions_iter(authority)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .any(|stored| stored == &permission);
+    let assigned = world.account_roles_iter(authority).any(|id| {
+        world
+            .roles()
+            .get(id)
+            .is_some_and(|role| role.permissions().any(|stored| stored == &permission))
+    });
+    if !direct && !assigned {
+        return Err("World names originals require existing native CanReadAllLedgerData".into());
+    }
+    Ok(())
+}
+
 fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), String> {
     let native = view
         .native_execution_tip()
@@ -300,6 +356,151 @@ impl State {
             &KagemushaGovernedVerifierRegistryV1,
         ) -> Result<T, String>,
     ) -> Result<T, String> {
+        self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
+            let definition = world
+                .asset_definitions
+                .get(asset_id)
+                .ok_or("World snapshot exact asset definition is absent")?;
+            let incarnation = world
+                .axt_asset_incarnations
+                .get(asset_id)
+                .ok_or("World snapshot exact asset incarnation is absent")?;
+            for (field, kind, key, value) in [
+                (
+                    "world.asset_definitions",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(asset_id)?),
+                    hash_value(definition)?,
+                ),
+                (
+                    "world.axt_asset_incarnations",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(asset_id)?),
+                    hash_value(incarnation)?,
+                ),
+                (
+                    "world.kagemusha_verifier_registry",
+                    WorldStateElementKindV1::Cell,
+                    None,
+                    hash_value(world.kagemusha_verifier_registry.get())?,
+                ),
+            ] {
+                require_target(snapshot, field, kind, key, value)?;
+            }
+            consume(
+                snapshot,
+                definition,
+                incarnation,
+                world.kagemusha_verifier_registry.get(),
+            )
+        })
+    }
+
+    /// Publish complete canonical alias bindings and smart-contract key originals
+    /// to a currently registered native ledger-wide reader at one certified cut.
+    ///
+    /// The signed HTTP corridor must authenticate `authority` independently.
+    /// This method requires its exact existing `CanReadAllLedgerData` token under
+    /// the same locked World overlay, including directly held or assigned-role
+    /// permissions. It never grants or delegates that genesis-only capability.
+    /// All canonical binding values and all smart-contract keys must match the
+    /// reconstructed certified snapshot. Only dataspace SNS values are exposed;
+    /// unrelated smart-contract values remain withheld. Callback storage and all
+    /// snapshot entries are charged to the caller's original finite operation pool.
+    ///
+    /// # Errors
+    /// Absent or revoked read root, uncertified/changed cut, incomplete originals,
+    /// post-result changed originals, finite allocation or canonical wire bounds.
+    pub fn with_native_resource_names_snapshot_v1<T>(
+        &self,
+        tip: &CommittedBlock,
+        authority: &AccountId,
+        budget: &AllocationBudget,
+        consume: impl FnOnce(
+            &WorldStateSnapshotV1,
+            &[(&AssetDefinitionId, &AssetDefinitionAliasBindingRecord)],
+            &[&iroha_model_base::state_path::StatePath],
+            &[(&iroha_model_base::state_path::StatePath, &Vec<u8>)],
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_native_world_state_snapshot_cut_v1(
+            tip,
+            Some(authority),
+            budget,
+            |snapshot, world| {
+                let aliases_len = world.asset_definition_alias_bindings.iter().count();
+                let keys_len = world.smart_contract_state.iter().count();
+                let _prefix_charge = budget
+                    .try_reserve_bytes(64)
+                    .map_err(|error| error.to_string())?;
+                let mut prefix = String::new();
+                prefix
+                    .try_reserve_exact(64)
+                    .map_err(|error| error.to_string())?;
+                use std::fmt::Write as _;
+                write!(
+                    &mut prefix,
+                    "sns/records/{}/",
+                    iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID
+                )
+                .map_err(|error| error.to_string())?;
+                let sns_len = world
+                    .smart_contract_state
+                    .iter()
+                    .filter(|(key, _)| key.as_ref().starts_with(&prefix))
+                    .count();
+                require_complete_table_count(
+                    snapshot,
+                    "world.asset_definition_alias_bindings",
+                    aliases_len,
+                )?;
+                require_complete_table_count(snapshot, "world.smart_contract_state", keys_len)?;
+                let mut aliases =
+                    ChargedBuffer::new(aliases_len, budget).map_err(|e| e.to_string())?;
+                let mut keys = ChargedBuffer::new(keys_len, budget).map_err(|e| e.to_string())?;
+                let mut sns = ChargedBuffer::new(sns_len, budget).map_err(|e| e.to_string())?;
+                for (key, value) in world.asset_definition_alias_bindings.iter() {
+                    require_target(
+                        snapshot,
+                        "world.asset_definition_alias_bindings",
+                        WorldStateElementKindV1::Table,
+                        Some(hash_value(key)?),
+                        hash_value(value)?,
+                    )?;
+                    aliases.push_reserved((key, value));
+                }
+                for (key, value) in world.smart_contract_state.iter() {
+                    // Even withheld values must match this cut: no post-tail key or
+                    // value can be relabeled as an original certified projection.
+                    require_target(
+                        snapshot,
+                        "world.smart_contract_state",
+                        WorldStateElementKindV1::Table,
+                        Some(hash_value(key)?),
+                        hash_value(value)?,
+                    )?;
+                    keys.push_reserved(key);
+                    if key.as_ref().starts_with(&prefix) {
+                        sns.push_reserved((key, value));
+                    }
+                }
+                consume(
+                    snapshot,
+                    aliases.as_slice(),
+                    keys.as_slice(),
+                    sns.as_slice(),
+                )
+            },
+        )
+    }
+
+    fn with_native_world_state_snapshot_cut_v1<T>(
+        &self,
+        tip: &CommittedBlock,
+        read_authority: Option<&AccountId>,
+        budget: &AllocationBudget,
+        consume: impl FnOnce(&WorldStateSnapshotV1, &WorldBlock<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
         let generation = self.state_view_generation();
         if generation % 2 != 0 {
             return Err("World snapshot publication is busy".into());
@@ -339,43 +540,12 @@ impl State {
             if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
                 return Err("World snapshot acquired another complete applied World".into());
             }
-            let definition = world
-                .asset_definitions
-                .get(asset_id)
-                .ok_or("World snapshot exact asset definition is absent")?;
-            let incarnation = world
-                .axt_asset_incarnations
-                .get(asset_id)
-                .ok_or("World snapshot exact asset incarnation is absent")?;
+            if let Some(authority) = read_authority {
+                require_names_read_authority(&world, authority)?;
+            }
             let captured = capture(&world, expected, budget)?;
             let certified = reconstruct(&captured, &cut, budget)?;
-            require_target(
-                &certified.snapshot,
-                "world.asset_definitions",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),
-                hash_value(definition)?,
-            )?;
-            require_target(
-                &certified.snapshot,
-                "world.axt_asset_incarnations",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),
-                hash_value(incarnation)?,
-            )?;
-            require_target(
-                &certified.snapshot,
-                "world.kagemusha_verifier_registry",
-                WorldStateElementKindV1::Cell,
-                None,
-                hash_value(world.kagemusha_verifier_registry.get())?,
-            )?;
-            consume(
-                &certified.snapshot,
-                definition,
-                incarnation,
-                world.kagemusha_verifier_registry.get(),
-            )
+            consume(&certified.snapshot, &world)
         };
         let view = self
             .try_view_once()
@@ -388,6 +558,9 @@ impl State {
         result
     }
 }
+
+#[path = "world_state_snapshot/authority_originals.rs"]
+mod authority_originals;
 
 #[cfg(test)]
 #[path = "world_state_snapshot_tests.rs"]

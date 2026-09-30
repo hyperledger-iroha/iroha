@@ -9,7 +9,7 @@
 use super::*;
 use iroha_data_model::kagemusha::{KagemushaHardwareCredentialV1, KagemushaMintAuthorizationV1};
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Exact private mint material forwarded from authenticated staging to the recursive witness.
 ///
 /// The custom debug representation omits the plaintext opening, authorization and credit. This
@@ -30,7 +30,11 @@ pub(crate) struct KagemushaMintFoldPrivateInputsV1 {
 /// provenance; it is not presented as circuit authority.
 #[derive(Clone, Copy)]
 #[cfg_attr(
-    not(any(test, feature = "kagemusha-real-proof-harness")),
+    not(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        all(unix, feature = "zk-halo2-ipa")
+    )),
     expect(
         dead_code,
         reason = "opening fields are consumed only by test and harness recursive witnesses"
@@ -43,7 +47,7 @@ pub(crate) struct KagemushaMintFoldOpeningWitnessV1<'a> {
     credit: &'a KagemushaMintCreditV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 impl std::fmt::Debug for KagemushaMintFoldOpeningWitnessV1<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -78,7 +82,11 @@ impl std::fmt::Debug for KagemushaMintFoldOpeningCapabilityV1<'_> {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 impl<'a> KagemushaMintFoldOpeningCapabilityV1<'a> {
     /// Reveal the private recursive witness only inside `iroha_core`.
     pub(crate) fn opening(self) -> KagemushaMintFoldOpeningWitnessV1<'a> {
@@ -86,7 +94,11 @@ impl<'a> KagemushaMintFoldOpeningCapabilityV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 impl<'a> KagemushaMintFoldOpeningWitnessV1<'a> {
     /// Exact paired recipient authorization selected by authenticated staging.
     pub(crate) fn authorization(self) -> &'a KagemushaMintAuthorizationV1 {
@@ -109,7 +121,7 @@ impl<'a> KagemushaMintFoldOpeningWitnessV1<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 impl std::fmt::Debug for KagemushaMintFoldPrivateInputsV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -130,9 +142,9 @@ impl std::fmt::Debug for KagemushaMintFoldPrivateInputsV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 impl KagemushaMintFoldPrivateInputsV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Clone a record only after the state machine has authenticated that exact pending entry.
     ///
     /// This constructor is state-module-private. Its caller must select the record from the
@@ -165,30 +177,30 @@ impl KagemushaMintFoldPrivateInputsV1 {
     }
 
     /// Exact authorization, including the proof whose assigned bytes the circuit must hash.
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(crate) fn authorization(&self) -> &KagemushaMintAuthorizationV1 {
         &self.authorization
     }
 
     /// Original enrolled credential; ordinary rotation must not rewrite committed provenance.
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(crate) fn recipient_credential(&self) -> &KagemushaHardwareCredentialV1 {
         &self.recipient_credential
     }
 
     /// Plaintext commitment openings known only after authenticated recipient decryption.
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(crate) fn credit_opening(&self) -> &KagemushaCreditOpeningV1 {
         &self.credit_opening
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Exact finalized credit whose complete canonical envelope enters the replay leaf.
     pub(crate) fn credit(&self) -> &KagemushaMintCreditV1 {
         &self.credit
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Borrow the sole public capability derived from this checked pending entry.
     pub(super) fn opening_capability(&self) -> KagemushaMintFoldOpeningCapabilityV1<'_> {
         KagemushaMintFoldOpeningCapabilityV1 {
@@ -196,7 +208,7 @@ impl KagemushaMintFoldPrivateInputsV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Borrow the recursive witness projection retained inside the opaque capability.
     fn recursive_witness(&self) -> KagemushaMintFoldOpeningWitnessV1<'_> {
         KagemushaMintFoldOpeningWitnessV1 {

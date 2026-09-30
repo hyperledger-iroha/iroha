@@ -37,8 +37,14 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
             );
             world.tx_sequences.insert(ALICE_ID.clone(), 7);
             world.tx_sequences.insert(BOB_ID.clone(), 11);
-            let removed = Hash::new(b"removed contract");
-            let inserted = Hash::new(b"inserted contract");
+            let removed = ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                Hash::new(b"removed contract"),
+            );
+            let inserted = ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                Hash::new(b"inserted contract"),
+            );
             world.contract_code.insert(removed, vec![0xA1]);
             let account_values: Vec<_> = world
                 .accounts

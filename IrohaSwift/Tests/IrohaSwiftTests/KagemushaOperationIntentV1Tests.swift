@@ -33,6 +33,19 @@ final class KagemushaOperationIntentV1Tests: XCTestCase {
   private func bootstrap(_ id: Data) throws -> Data {
     try KagemushaDeviceOperationCodecV1.encodeControlCommand(.bootstrapAggregateState(operationID: id))
   }
+  func testExpandedDurableIntentUsesOnlyFirstReleaseVersionOne() throws {
+    let value = try KagemushaOperationIntentV1(applicationScope: Data([1]),
+      qualificationScope: scope, operation: 20, operationID: Data(repeating: 1, count: 32),
+      purpose: "internal-20", arguments: Data(), publicBinding: Data([2]))
+    XCTAssertEqual(value.version, 1)
+    let current = try JSONEncoder().encode(value)
+    XCTAssertNoThrow(try JSONDecoder().decode(KagemushaOperationIntentV1.self, from: current).validate())
+    let alternateTag = Data(String(decoding: current, as: UTF8.self)
+      .replacingOccurrences(of: "\"version\":1", with: "\"version\":2").utf8)
+    XCTAssertNotEqual(alternateTag, current)
+    XCTAssertThrowsError(try JSONDecoder().decode(KagemushaOperationIntentV1.self,
+      from: alternateTag).validate())
+  }
   func testLostSaveResponseAndOwnerRestartResumeExactInternalIDAndCommand() throws {
     let store = TestOperationIntentStore()
     let first = KagemushaOperationIntentOwnerV1(store: store, generateID: { Data(repeating: 1, count: 32) })
@@ -74,7 +87,10 @@ final class KagemushaOperationIntentV1Tests: XCTestCase {
       qualificationScope: scope, command: bootstrap)
     XCTAssertThrowsError(try owner.acknowledge(operation: 20, operationID: value.operationID, canonicalReply: Data([4])))
     try owner.accepted(operation: 20, operationID: value.operationID, command: value.canonicalCommand!,
-      reply: Data([4]), authenticator: Data(repeating: 1, count: 64), qualificationScope: scope)
+      reply: Data([4]), authenticator: Data(repeating: 1, count: 64),
+      originalResponse: try testSignedDeviceResponseFrame(operation: 20, status: .success,
+        requestID: value.operationID, payload: Data([4]), authenticator: Data(repeating: 1, count: 64)),
+      qualificationScope: scope)
     XCTAssertThrowsError(try owner.acknowledge(operation: 20, operationID: value.operationID, canonicalReply: Data([5])))
     XCTAssertThrowsError(try owner.acknowledge(operation: 20, operationID: value.operationID, canonicalReply: Data([4])))
     try owner.completedResult(operation: 20, operationID: value.operationID, canonicalResult: Data([8]))
@@ -104,7 +120,10 @@ final class KagemushaOperationIntentV1Tests: XCTestCase {
     let command = try XCTUnwrap(value.canonicalCommand)
     let reply = Data([4]), authenticator = Data(repeating: 1, count: 64)
     try original.accepted(operation: 20, operationID: value.operationID, command: command,
-      reply: reply, authenticator: authenticator, qualificationScope: scope)
+      reply: reply, authenticator: authenticator,
+      originalResponse: try testSignedDeviceResponseFrame(operation: 20, status: .success,
+        requestID: value.operationID, payload: reply, authenticator: authenticator),
+      qualificationScope: scope)
 
     // Recreate both store contents and owner from serialized records, with no retained client state.
     let archive = try JSONEncoder().encode(originalStore.records)
@@ -123,12 +142,17 @@ final class KagemushaOperationIntentV1Tests: XCTestCase {
     ] {
       XCTAssertThrowsError(try reopened.accepted(operation: 20, operationID: value.operationID,
         command: command, reply: changedReply, authenticator: changedAuthenticator,
+        originalResponse: try testSignedDeviceResponseFrame(operation: 20, status: .success,
+          requestID: value.operationID, payload: changedReply, authenticator: changedAuthenticator),
         qualificationScope: changedQualification))
       XCTAssertEqual(reopenedStore.records, saved, "Conflicting accepted evidence cannot replace the original")
     }
     reopenedStore.failAfterSave = true
     try reopened.accepted(operation: 20, operationID: value.operationID, command: command,
-      reply: reply, authenticator: authenticator, qualificationScope: scope)
+      reply: reply, authenticator: authenticator,
+      originalResponse: try testSignedDeviceResponseFrame(operation: 20, status: .success,
+        requestID: value.operationID, payload: reply, authenticator: authenticator),
+      qualificationScope: scope)
     XCTAssertEqual(reopenedStore.records, saved, "An exact retry neither rewrites nor acknowledges evidence")
     XCTAssertFalse(try XCTUnwrap(reopenedStore.load(operation: 20, operationID: value.operationID)).acknowledged)
   }

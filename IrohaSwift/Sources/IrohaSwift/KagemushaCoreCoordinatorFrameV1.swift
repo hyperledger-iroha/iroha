@@ -10,6 +10,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case initialEnrollment
   case acknowledgeCommittedAppAttest
   case exportOutgoingStateProof
+  case prepareIncomingFold, completeIncomingFold, stageIncomingOriginal
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -125,8 +126,15 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try digest(fields, 0)
       let end = try senderInputs(fields, 1)
       try count(fields, end + 5); try qualification(fields, end)
-    case .provePreparedSenderTransition, .buildTerminalEnvelope, .recoverTerminalEnvelope:
+    case .provePreparedSenderTransition, .recoverTerminalEnvelope:
       try count(fields, 2); try nonempty(fields, 0); try nonempty(fields, 1)
+    case .buildTerminalEnvelope:
+      try count(fields, 2); try nonempty(fields, 0); try bounded(fields, 1, 65_716)
+      let candidate = try KagemushaCoreCoordinatorArchiveV1.decodeCandidateShapeExact(fields[0])
+      let original = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(fields[1],
+        expectedOperation: .commitVerifiedCandidateAndSignTerminal,
+        expectedRequestID: candidate.preparation.operationID)
+      try require(original.status == .success, "terminal completion requires original signed op7 success")
     case .acceptInstalledTerminal:
       try count(fields, 5)
       for index in fields.indices { try nonempty(fields, index) }
@@ -155,6 +163,14 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         try count(fields, 4); try ticket(fields, 1)
         try require(fields[2].count == 64, "invalid account signature")
         try bounded(fields, 3, 65_716)
+      case 9:
+        try count(fields, 1)
+      case 10:
+        try count(fields, 4); try ticket(fields, 1)
+        try require(fields[2].count == 64, "invalid recovered account signature")
+        try bounded(fields, 3, 65_716)
+      case 11:
+        try count(fields, 2); try ticket(fields, 1)
       case 4, 6:
         try count(fields, 2); try ticket(fields, 1)
       case 5:
@@ -176,6 +192,15 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try digest(fields, 5); try digest(fields, 6)
     case .exportOutgoingStateProof:
       try count(fields, 1); try digest(fields, 0)
+    case .prepareIncomingFold:
+      try count(fields, 2); _ = try kind(fields, 0); try digest(fields, 1)
+    case .completeIncomingFold:
+      try count(fields, 4); try digest(fields, 0); try bounded(fields, 1, 8192)
+      try bounded(fields, 2, 96 * 1024)
+      _ = try KagemushaDeviceSignatureV1(rawBytes: fields[3])
+    case .stageIncomingOriginal:
+      try count(fields, 2); try require(number(fields, 0) <= 2, "invalid incoming stage kind")
+      try digest(fields, 1)
     }
   }
 
@@ -217,7 +242,18 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         try digest(response, 1); try bounded(response, 2, 83_124)
       case 5:
         try count(response, 2); try equal(response, 0, request, 1); try digest(response, 1)
-      case 6:
+      case 9:
+        try count(response, 5); try ticket(response, 0)
+        try bounded(response, 1, KagemushaEnrolledOpenAccountChallengeV1.maximumCanonicalBytes)
+        try digest(response, 2); try bounded(response, 3, 2 * 1024); try digest(response, 4)
+        let challenge = try KagemushaEnrolledOpenAccountChallengeV1.decodeCanonicalExact(response[1])
+        try require(challenge.accountSigningMessage() == response[2]
+          && challenge.nonce == response[4], "recovered challenge correlation mismatch")
+        let command = try KagemushaDeviceOperationCodecV1.encodeControlCommand(.readActiveHardwareCredential)
+        try require(response[3] == command, "recovered command is not the original operation-1 read")
+      case 10:
+        try count(response, 1); try equal(response, 0, request, 1)
+      case 6, 11:
         try count(response, 0)
       case 8:
         try count(response, 1); try digest(response, 0)
@@ -239,6 +275,18 @@ public enum KagemushaCoreCoordinatorFrameV1 {
     case .exportOutgoingStateProof:
       try count(response, 3); try equal(response, 0, request, 0)
       try bounded(response, 1, 4096); try bounded(response, 2, 6528)
+    case .prepareIncomingFold:
+      try count(response, 10); try digest(response, 0); try digest(response, 1)
+      try equal(response, 1, request, 1); try bounded(response, 2, 8192)
+      try digest(response, 3); try digest(response, 4); try bounded(response, 5, 32768)
+      try digest(response, 6)
+      let generation = try field(response, 7)
+      try require(generation.count == 16 && generation.contains { $0 != 0 }, "invalid incoming epoch generation")
+      try digest(response, 8); try bounded(response, 9, 8192)
+    case .completeIncomingFold:
+      try count(response, 1); try equal(response, 0, request, 0)
+    case .stageIncomingOriginal:
+      try count(response, 1); try equal(response, 0, request, 1)
     }
   }
 

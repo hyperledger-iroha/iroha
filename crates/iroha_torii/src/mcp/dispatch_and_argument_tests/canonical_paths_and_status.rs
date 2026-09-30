@@ -470,12 +470,34 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
     assert!(!object.contains_key("submit"));
 }
 #[test]
-fn extract_code_hash_argument_requires_canonical_path_field() {
+fn contract_artifact_route_requires_canonical_scoped_path_fields() {
+    let hash = hex::encode(iroha_crypto::Hash::new(b"canonical scoped artifact").as_ref());
     let args = norito::json!({
-        "path": { "code_hash": "cafebabe" }
+        "path": { "dataspace_id": "7", "code_hash": (hash.clone()) }
     });
-    let hash = extract_code_hash_argument(args.as_object().expect("object")).expect("hash");
-    assert_eq!(hash, "cafebabe");
+    let artifact =
+        crate::routing::parse_contract_artifact_path("7", &hash).expect("typed scoped artifact");
+    assert_eq!(artifact.dataspace_id.as_u64(), 7);
+    assert_eq!(hex::encode(artifact.code_hash.as_ref()), hash);
+    assert_eq!(
+        contract_artifact_route(args.as_object().expect("object"), false).unwrap(),
+        format!("/v1/contracts/artifacts/7/{hash}")
+    );
+    assert_eq!(
+        contract_artifact_route(args.as_object().expect("object"), true).unwrap(),
+        format!("/v1/contracts/artifacts/7/{hash}/bytes")
+    );
+    for retired in [
+        norito::json!({ "code_hash": (hash.clone()), "dataspace_id": "7" }),
+        norito::json!({ "hash": (hash.clone()), "dataspace_id": "7" }),
+        norito::json!({ "path": { "code_hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "7", "hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "07", "code_hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "7", "code_hash": "cafebabe" } }),
+    ] {
+        contract_artifact_route(retired.as_object().expect("object"), false)
+            .expect_err("missing scope, retired hash aliases and noncanonical artifact IDs reject");
+    }
 }
 #[test]
 fn extract_contract_address_argument_requires_canonical_path_field() {
@@ -511,15 +533,7 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 }
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
-        (
-            norito::json!({ "code_hash": "cafebabe" }),
-            extract_code_hash_argument,
-        ),
-        (
-            norito::json!({ "hash": "cafebabe" }),
-            extract_code_hash_argument,
-        ),
+    let cases: [(Value, fn(&Map) -> Result<String, String>); 9] = [
         (
             norito::json!({ "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw" }),
             extract_contract_address_argument,

@@ -194,7 +194,9 @@ where
 }
 
 #[test]
-fn terminal_reciprocal_audit_binds_39_41_in_both_parities_without_table8() {
+fn terminal_reciprocal_audit_binds_41_43_in_both_parities_without_table8() {
+    assert_eq!(public_instance::EQ_DEFERRED_AUDIT_LO, 41);
+    assert_eq!(public_instance::EP_DEFERRED_AUDIT_LO, 43);
     fn check<C>(parity: KagemushaPastaParityV1, offset: usize)
     where
         C: CurveAffineExt,
@@ -273,11 +275,21 @@ fn terminal_reciprocal_audit_binds_39_41_in_both_parities_without_table8() {
     let eq_worker = std::thread::Builder::new()
         .name("kagemusha-terminal-reciprocal-audit-eq".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| check::<EqAffine>(KagemushaPastaParityV1::Eq, 39));
+        .spawn(|| {
+            check::<EqAffine>(
+                KagemushaPastaParityV1::Eq,
+                public_instance::EQ_DEFERRED_AUDIT_LO,
+            )
+        });
     let ep_worker = std::thread::Builder::new()
         .name("kagemusha-terminal-reciprocal-audit-ep".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| check::<EpAffine>(KagemushaPastaParityV1::Ep, 41));
+        .spawn(|| {
+            check::<EpAffine>(
+                KagemushaPastaParityV1::Ep,
+                public_instance::EP_DEFERRED_AUDIT_LO,
+            )
+        });
     let eq_result = eq_worker.map(|worker| worker.join());
     let ep_result = ep_worker.map(|worker| worker.join());
     eq_result
@@ -349,11 +361,21 @@ fn terminal_reciprocal_audit_binds_every_claim_carrier_tail_cell_in_both_paritie
     let eq_worker = std::thread::Builder::new()
         .name("kagemusha-terminal-claim-carrier-binding-eq".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| check::<EqAffine>(KagemushaPastaParityV1::Eq, 39));
+        .spawn(|| {
+            check::<EqAffine>(
+                KagemushaPastaParityV1::Eq,
+                public_instance::EQ_DEFERRED_AUDIT_LO,
+            )
+        });
     let ep_worker = std::thread::Builder::new()
         .name("kagemusha-terminal-claim-carrier-binding-ep".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| check::<EpAffine>(KagemushaPastaParityV1::Ep, 41));
+        .spawn(|| {
+            check::<EpAffine>(
+                KagemushaPastaParityV1::Ep,
+                public_instance::EP_DEFERRED_AUDIT_LO,
+            )
+        });
     let eq_result = eq_worker.map(|worker| worker.join());
     let ep_result = ep_worker.map(|worker| worker.join());
     eq_result

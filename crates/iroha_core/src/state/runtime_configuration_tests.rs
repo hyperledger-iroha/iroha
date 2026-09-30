@@ -151,13 +151,18 @@ fn execution_pool_handle_preserves_original_identity_and_reservations() {
             LiveQueryStore::start_test(),
         );
         let original = state.ivm_execution_budget();
+        // State retains its admitted native execution identity in this same pool.
+        let retained_bytes = original.reserved_bytes();
         let borrowed = state.ivm_execution_budget();
         assert!(borrowed.same_pool(&original));
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes);
         let held = borrowed.try_reserve_bytes(1).expect("original pool charge");
         assert!(held.belongs_to(&original));
-        assert_eq!(original.reserved_bytes(), 1);
+        assert_eq!(original.reserved_bytes(), retained_bytes + 1);
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes + 1);
         drop(held);
-        assert_eq!(original.reserved_bytes(), 0);
+        assert_eq!(original.reserved_bytes(), retained_bytes);
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes);
     });
 }
 

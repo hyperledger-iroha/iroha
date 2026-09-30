@@ -1,0 +1,8 @@
+{
+  "scope": "Known diagnostic P256 key; public signed frame only, no authentic Core candidate/Guard/monetary authority.",
+  "signedResponseHex": "",
+  "canonicalCommandHex": "",
+  "devicePublicKeyHex": "",
+  "hardwarePolicyDigestHex": "",
+  "qualificationReportDigestHex": ""
+}

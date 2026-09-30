@@ -4824,11 +4824,32 @@ fn lower_surface_builtin_call(
         | Builtin::NumericGeDirect
         | Builtin::SetAssetTransferDailyLimit
         | Builtin::SetAssetHoldingLimit
-        | Builtin::AccountRecoveryPropose
+        | Builtin::ContractSubject => lower_direct_helper_call(ctx, builtin, args, vars),
+        Builtin::AccountRecoveryPropose
         | Builtin::AccountRecoveryApprove
         | Builtin::AccountRecoveryCancel
-        | Builtin::AccountRecoveryFinalize
-        | Builtin::ContractSubject => lower_direct_helper_call(ctx, builtin, args, vars),
+        | Builtin::AccountRecoveryFinalize => {
+            let generation_index = if builtin == Builtin::AccountRecoveryPropose {
+                2
+            } else {
+                1
+            };
+            let mut lowered_args = Vec::with_capacity(args.len());
+            for (index, argument) in args.iter().enumerate() {
+                lowered_args.push(if index == generation_index {
+                    lower_expr_as_u64(ctx, argument, vars)
+                } else {
+                    lower_expr(ctx, argument, vars)
+                });
+            }
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DirectHelperSyscall {
+                dest,
+                syscall: direct_builtin_syscall(builtin),
+                args: lowered_args,
+            });
+            dest
+        }
         Builtin::SetAssetTransferAvailability => {
             let account = lower_expr(ctx, &args[0], vars);
             let asset_definition = lower_expr(ctx, &args[1], vars);
@@ -7876,6 +7897,52 @@ mod tests {
             json_field_getters, 0,
             "the wrapper must not decode the transport JSON per parameter"
         );
+    }
+    #[test]
+    fn recovery_syscalls_lower_generation_as_checked_unsigned_scalar() {
+        let source = include_str!(
+            "ir/test_sources/recovery_syscalls_lower_generation_as_checked_unsigned_scalar_1.ko"
+        );
+        let program = parse(source).expect("parse native recovery generation fixture");
+        let typed = analyze(&program).expect("analyze native recovery generation fixture");
+        let ir = lower(&typed).expect("lower native recovery generation fixture");
+        let instructions = ir
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let checked_scalars = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::IntTryToU64 { dest, .. } => Some(*dest),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let recovery_calls = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::DirectHelperSyscall { syscall, args, .. }
+                    if matches!(
+                        *syscall,
+                        ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+                            | ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+                            | ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+                            | ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
+                    ) =>
+                {
+                    Some((*syscall, args))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(recovery_calls.len(), 4);
+        for (syscall, args) in recovery_calls {
+            assert!(
+                checked_scalars.contains(args.last().expect("explicit request generation")),
+                "recovery syscall {syscall:#x} must receive a checked u64, not an int handle"
+            );
+        }
     }
     include!("ir/tests/public_argument_record_abi.rs");
     #[test]

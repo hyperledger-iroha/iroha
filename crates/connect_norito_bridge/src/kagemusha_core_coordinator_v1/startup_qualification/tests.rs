@@ -189,6 +189,7 @@ pub(in crate::kagemusha_core_coordinator_v1) fn enrollment_binding(
     };
     KagemushaRecoveryEnrollmentBindingV1 {
         enrollment_id: owner.enrollment_id().unwrap(),
+        core_authorization_key_reference: qualification.core_authorization_key_reference,
         owner,
     }
 }
@@ -1465,12 +1466,13 @@ fn enrolled_wallet_projection_requires_the_complete_canonical_owner_identity() {
         NativeStartupQualificationOwnerV1::enrolled_wallet_context(&enrollment).unwrap(),
         wallet_context(&qualification)
     );
-    for mutation in 0..3 {
+    for mutation in 0..4 {
         let mut changed = enrollment.clone();
         match mutation {
             0 => changed.enrollment_id = [99; 32],
             1 => changed.owner.lane_id = [0; 32],
-            _ => changed.owner.runtime.scale = u32::MAX,
+            2 => changed.owner.runtime.scale = u32::MAX,
+            _ => changed.core_authorization_key_reference = [0; 32],
         }
         assert_eq!(
             NativeStartupQualificationOwnerV1::enrolled_wallet_context(&changed),

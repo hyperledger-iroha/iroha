@@ -121,7 +121,7 @@ async fn pipeline_status_string_query_preserves_decimal_hash_and_whitespace() {
     let padded_hash = format!(" {hash} ");
     let request = axum::http::Request::builder()
         .uri(format!(
-            "/v1/pipeline/transactions/status?hash=+{hash}+&scope=%20local%20"
+            "/v1/pipeline/transactions/status?hash=+{hash}+&scope=+local+"
         ))
         .body(())
         .expect("pipeline status request");

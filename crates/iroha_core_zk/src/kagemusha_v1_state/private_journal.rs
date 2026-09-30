@@ -53,7 +53,6 @@ pub(crate) struct PrivateJournal {
     verified_recovery_prefix: Cell<Option<super::KagemushaRecoveryJournalPrefixV1>>,
     poisoned: Cell<bool>,
     // A consumer cannot recursively materialize another record through this same owner.
-    #[cfg(test)]
     scanning: Cell<bool>,
     #[cfg(test)]
     pub(crate) failure: Cell<Option<TestPersistenceFailure>>,
@@ -177,7 +176,6 @@ impl PrivateJournal {
             previous_frame_hash: [0; 32],
             verified_recovery_prefix: Cell::new(None),
             poisoned: Cell::new(false),
-            #[cfg(test)]
             scanning: Cell::new(false),
             #[cfg(test)]
             failure: Cell::new(None),
@@ -343,6 +341,58 @@ impl PrivateJournal {
         Ok(offset == expected.byte_len && previous == expected.head)
     }
 
+    /// Recheck a single immutable snapshot record through the held descriptor.
+    /// This bounded byte comparison grants no snapshot or hardware authority.
+    pub(crate) fn require_single_record(&self, expected: &[u8]) -> Result<(), PrivateJournalError> {
+        let result = (|| {
+            let prefix = self.recovery_prefix()?;
+            if prefix.sequence != 1
+                || expected.is_empty()
+                || expected.len() as u64 > self.format.maximum_payload_bytes
+                || prefix.byte_len != FRAME_HEADER_BYTES as u64 + expected.len() as u64
+            {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let mut header = [0_u8; FRAME_HEADER_BYTES];
+            self.journal
+                .read_exact_at(&mut header, 0)
+                .map_err(storage_error)?;
+            let parsed = validate_frame_header(&header, self.format, 0, [0; 32])?;
+            if parsed.length != expected.len() as u64 || parsed.hash != prefix.head {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let mut digest = Sha256::new();
+            digest.update(self.format.hash_domain);
+            digest.update(&header[..56]);
+            let mut buffer = [0_u8; 8192];
+            let mut offset = 0_usize;
+            while offset < expected.len() {
+                let count = buffer.len().min(expected.len() - offset);
+                self.journal
+                    .read_exact_at(
+                        &mut buffer[..count],
+                        FRAME_HEADER_BYTES as u64 + offset as u64,
+                    )
+                    .map_err(storage_error)?;
+                if buffer[..count] != expected[offset..offset + count] {
+                    return Err(PrivateJournalError::Corrupt);
+                }
+                digest.update(&buffer[..count]);
+                offset += count;
+            }
+            let actual: DigestV1 = digest.finalize().into();
+            if actual != parsed.hash {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            self.check_owned()
+        })();
+        if result.is_err() {
+            self.poisoned.set(true);
+            self.verified_recovery_prefix.set(None);
+        }
+        result
+    }
+
     /// Visit every complete record through this owner's original locked descriptor.
     ///
     /// The journal must already be fully replayed. The complete end/head are captured once;
@@ -362,8 +412,8 @@ impl PrivateJournal {
     /// read/framing/ownership errors, callback errors and unwinding poison the owner and clear
     /// its cached prefix. Success leaves it usable. No path initializes, appends, fsyncs,
     /// truncates or retires journal records; the caller must discard partial callback results.
-    // TODO: connect the held complete scan to its stored-prover consumer before shipping it.
-    #[cfg(test)]
+    // Concrete incoming/outgoing recovery owners authenticate each original schema and proof;
+    // this shared scan grants byte custody only.
     pub(crate) fn scan_complete(
         &self,
         mut consume: impl FnMut(u64, &[u8]) -> Result<(), PrivateJournalError>,
@@ -569,17 +619,14 @@ impl PrivateJournal {
 }
 
 // Completion is deliberately local to one scan, not a retained authentication receipt.
-#[cfg(test)]
 struct CompleteScanLease<'a> {
     journal: &'a PrivateJournal,
     complete: bool,
 }
-#[cfg(test)]
 impl Drop for CompleteScanLease<'_> {
     fn drop(&mut self) {
         if !self.complete {
             self.journal.poisoned.set(true);
-            #[cfg(test)]
             self.journal.verified_recovery_prefix.set(None);
         }
         self.journal.scanning.set(false);
@@ -941,3 +988,7 @@ mod tests {
 #[cfg(test)]
 #[path = "private_journal_held_scan_tests.rs"]
 mod held_scan_tests;
+
+#[cfg(test)]
+#[path = "private_journal_single_record_tests.rs"]
+mod single_record_tests;

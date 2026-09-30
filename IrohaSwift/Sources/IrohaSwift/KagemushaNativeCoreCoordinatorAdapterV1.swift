@@ -35,7 +35,7 @@ public protocol KagemushaOutgoingStateProofExportingCoreV1: KagemushaNativeCoreC
 /// capabilities. Opening this adapter does not qualify a hardware provider or supply a
 /// software monetary backend. Missing native authority continues to fail closed.
 public final class KagemushaNativeCoreCoordinatorAdapterV1:
-  KagemushaOutgoingStateProofExportingCoreV1, @unchecked Sendable {
+  KagemushaOutgoingStateProofExportingCoreV1, KagemushaNativeIncomingCoreCoordinatorV1, @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -47,6 +47,21 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
 
   /// Revoke this wallet's native handle on logout or account switch.
   public func close() throws { try bridge.close() }
+
+  /// Begin the native dual-possession recovery; opening alone supplies no monetary lease.
+  public func beginEnrolledRecovery() throws -> KagemushaEnrolledRecoveryAttemptV1 {
+    try bridge.beginEnrolledRecovery()
+  }
+
+  public func completeEnrolledRecovery(_ attempt: KagemushaEnrolledRecoveryAttemptV1,
+    accountSignature: Data, originalDeviceResponse: Data) throws {
+    try bridge.completeEnrolledRecovery(attempt, accountSignature: accountSignature,
+      originalDeviceResponse: originalDeviceResponse)
+  }
+
+  public func cancelEnrolledRecovery(_ attempt: KagemushaEnrolledRecoveryAttemptV1) throws {
+    try bridge.cancelEnrolledRecovery(attempt)
+  }
 
   /// Ask the installed native owner to authenticate the original committed App Attest assertion.
   public func acknowledgeCommittedAppAttest(
@@ -73,6 +88,22 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     let fields = try bridge.invoke(.exportOutgoingStateProof, fields: [operationID])
     return try KagemushaOutgoingStateProofArchivesV1(
       operationID: fields[0], publicInputsArchive: fields[1], pairedProofArchive: fields[2])
+  }
+
+  public func prepareIncomingFold(selector: KagemushaPendingCreditSelectorV1) throws -> KagemushaNativeIncomingFoldWorkV1 {
+    let fields = try bridge.invoke(.prepareIncomingFold,
+      fields: [u32(selector.kind.rawValue), selector.creditID])
+    return try KagemushaNativeIncomingFoldWorkV1(selector: selector, nativeFields: fields)
+  }
+
+  public func completeIncomingFold(work: KagemushaNativeIncomingFoldWorkV1,
+    evidence: KagemushaOriginalIncomingFoldEvidenceV1) throws {
+    _ = try bridge.invoke(.completeIncomingFold, fields: [work.historyID, work.nativePairedProof,
+      evidence.canonicalHardwareCertificate, evidence.deviceRootSelectionSignature])
+  }
+
+  public func stageIncomingOriginal(kind: KagemushaNativeIncomingStageKindV1, creditID: Data) throws {
+    _ = try bridge.invoke(.stageIncomingOriginal, fields: [u32(kind.rawValue), creditID])
   }
 
   public func acceptQualification(
@@ -114,10 +145,12 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
   }
 
   public func terminalEnvelope(
-    candidate: KagemushaNativeSenderCandidateV1, authenticatedCommitReply: Data
+    candidate: KagemushaNativeSenderCandidateV1, originalSignedCommitResponse: Data
   ) throws -> Data {
+    // Framing checks preserve the original response; native Core independently verifies
+    // its signature and exact original command/candidate before any monetary mutation.
     let envelope = try bridge.invoke(.buildTerminalEnvelope,
-      fields: [KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), authenticatedCommitReply])[0]
+      fields: [KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), originalSignedCommitResponse])[0]
     _ = try KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(envelope)
     return envelope
   }

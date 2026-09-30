@@ -60,8 +60,11 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertEqual(try core.beginSenderTransition(operationID: id, inputs: f.archive.inputs, qualification: f.qualification), f.archive.preparation)
     endpoint.expect(.provePreparedSenderTransition, [prep, Data([5])], [candidate])
     XCTAssertEqual(try core.provePreparedSenderTransition(preparation: f.archive.preparation, authenticatedPreparationReply: Data([5])), f.archive.candidate)
-    endpoint.expect(.buildTerminalEnvelope, [candidate, Data([7])], [f.archive.payment])
-    XCTAssertEqual(try core.terminalEnvelope(candidate: f.archive.candidate, authenticatedCommitReply: Data([7])), f.archive.payment)
+    let originalCommit = try testSignedDeviceResponseFrame(operation: 7, status: .success,
+      requestID: id, payload: Data([7]), authenticator: responseAuthenticator)
+    endpoint.expect(.buildTerminalEnvelope, [candidate, originalCommit], [f.archive.payment])
+    XCTAssertEqual(try core.terminalEnvelope(candidate: f.archive.candidate,
+      originalSignedCommitResponse: originalCommit), f.archive.payment)
     try endpoint.expect(.acceptInstalledTerminal, [candidate, f.archive.payment, Data([9]), Data([10]), Data([21])], [f.archive.payment, f.aggregate])
     XCTAssertEqual(try core.acceptInstalledTerminal(candidate: f.archive.candidate, canonicalEnvelope: f.archive.payment,
       authenticatedInstallReply: Data([9]), authenticatedInstalledReply: Data([10]), authenticatedWalletSnapshotReply: Data([21])).aggregateState, try f.aggregate)
@@ -195,11 +198,11 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       default: throw TestError.unexpectedCall
       }
     }
-    let transport = Transport(qualification: qualification) { operation, _, _, acceptedKey in
+    let transport = Transport(qualification: qualification) { operation, requestID, _, acceptedKey in
       if operation == 1 { XCTAssertNil(acceptedKey) }
       else { XCTAssertEqual(acceptedKey, qualification.credential.devicePublicKey.sec1Bytes) }
-      return try KagemushaAuthenticatedDeviceResponseV1(operation: operation, status: .success,
-        canonicalReply: operation == 1 ? qualificationReply : requestReply, authenticator: responseSignature(operation))
+      return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+        canonicalReply: operation == 1 ? qualificationReply : requestReply, authenticator: responseSignature(operation), requestID: requestID)
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
     XCTAssertEqual(try provider.createPaymentRequest(operationID: request.requestID, recipient: request.recipient,
@@ -233,8 +236,8 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     var sawHistoricalRelease = false
     let transport = Transport(qualification: qualification) { operation, requestID, command, acceptedKey in
       if operation == 1 {
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: operation, status: .success,
-          canonicalReply: qualificationReply, authenticator: responseSignature(operation))
+        return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+          canonicalReply: qualificationReply, authenticator: responseSignature(operation), requestID: requestID)
       }
       XCTAssertEqual(operation, 12)
       XCTAssertEqual(acceptedKey, qualification.credential.devicePublicKey.sec1Bytes)
@@ -243,8 +246,8 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       XCTAssertEqual(decoded.operationID, f.archive.preparation.operationID)
       sawHistoricalRelease = true
       // Stop at the actual hardware boundary: this test does not fabricate a monetary success.
-      return try KagemushaAuthenticatedDeviceResponseV1(operation: operation, status: .unavailable,
-        canonicalReply: Data(), authenticator: Data())
+      return try testAuthenticatedDeviceResponse(operation: operation, status: .unavailable,
+        canonicalReply: Data(), authenticator: Data(), requestID: requestID)
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
     XCTAssertThrowsError(try provider.recordAcknowledgement(creditID: f.terminalID,
@@ -303,19 +306,19 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       switch operation {
       case 1:
         XCTAssertNil(acceptedKey)
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: 1, status: .success,
-          canonicalReply: rotated ? currentReply : oldReply, authenticator: responseSignature(1))
+        return try testAuthenticatedDeviceResponse(operation: 1, status: .success,
+          canonicalReply: rotated ? currentReply : oldReply, authenticator: responseSignature(1), requestID: id)
       case 19:
         rotationRequests.append(id)
         XCTAssertEqual(acceptedKey, old.credential.devicePublicKey.sec1Bytes)
         if !rotated { rotated = true; throw TestError.unexpectedCall }
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: 19, status: .success,
-          canonicalReply: rotationReply, authenticator: responseSignature(19))
+        return try testAuthenticatedDeviceResponse(operation: 19, status: .success,
+          canonicalReply: rotationReply, authenticator: responseSignature(19), requestID: id)
       case 21:
         snapshots.append(id)
         XCTAssertEqual(acceptedKey, current.credential.devicePublicKey.sec1Bytes)
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: 21, status: .success,
-          canonicalReply: snapshotReply, authenticator: responseSignature(21))
+        return try testAuthenticatedDeviceResponse(operation: 21, status: .success,
+          canonicalReply: snapshotReply, authenticator: responseSignature(21), requestID: id)
       default: throw TestError.unexpectedCall
       }
     }
@@ -361,8 +364,8 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertEqual(store.records.values.filter { $0.operation == 19 }.count, 1)
   }
 
-  func testRecoverAutomaticallyReplaysLostFoldAndRotationUnderOriginalQualification() throws {
-    for operation: UInt8 in [17, 19] {
+  func testRecoverAutomaticallyReplaysLostRotationUnderOriginalQualification() throws {
+    for operation: UInt8 in [19] {
       let f = try Fixture(), originalQualification = try f.qualification
       let currentQualification = try f.makeQualification(generation: operation == 19 ? 2 : 1,
         devicePublicKey: operation == 19 ? KagemushaDevicePublicKeyV1(sec1Bytes:
@@ -416,8 +419,8 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
           events.append("snapshot"); bytes = snapshotReply
         default: throw TestError.unexpectedCall
         }
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: observed, status: .success,
-          canonicalReply: bytes, authenticator: responseSignature(observed))
+        return try testAuthenticatedDeviceResponse(operation: observed, status: .success,
+          canonicalReply: bytes, authenticator: responseSignature(observed), requestID: id)
       }
       let original = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
         intentOwner: KagemushaOperationIntentOwnerV1(store: store))
@@ -466,15 +469,15 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     }
     let transport = Transport(qualification: old) { operation, id, _, acceptedKey in
       if operation == 1 {
-        return try KagemushaAuthenticatedDeviceResponseV1(operation: 1, status: .success,
-          canonicalReply: rotated ? currentReply : oldReply, authenticator: responseSignature(1))
+        return try testAuthenticatedDeviceResponse(operation: 1, status: .success,
+          canonicalReply: rotated ? currentReply : oldReply, authenticator: responseSignature(1), requestID: id)
       }
       XCTAssertEqual(operation, 22); XCTAssertEqual(id, request.requestID)
       XCTAssertEqual(acceptedKey, old.credential.devicePublicKey.sec1Bytes)
       requests += 1
       if !rotated { rotated = true; throw TestError.unexpectedCall }
-      return try KagemushaAuthenticatedDeviceResponseV1(operation: 22, status: .success,
-        canonicalReply: requestReply, authenticator: responseSignature(22))
+      return try testAuthenticatedDeviceResponse(operation: 22, status: .success,
+        canonicalReply: requestReply, authenticator: responseSignature(22), requestID: id)
     }
     func provider() throws -> KagemushaAuthenticatedHardwareProviderV1 {
       KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
@@ -511,13 +514,13 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
         if loseFirst { loseFirst = false; throw TestError.unexpectedCall }
         if replayOld {
           replayOld = false
-          return try KagemushaAuthenticatedDeviceResponseV1(operation: operation, status: .success,
-            canonicalReply: snapshotReply, authenticator: oldAuthenticator!)
+          return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+            canonicalReply: snapshotReply, authenticator: oldAuthenticator!, requestID: nonce)
         }
         oldAuthenticator = signature
       }
-      return try KagemushaAuthenticatedDeviceResponseV1(operation: operation, status: .success,
-        canonicalReply: operation == 1 ? credentialReply : snapshotReply, authenticator: signature)
+      return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+        canonicalReply: operation == 1 ? credentialReply : snapshotReply, authenticator: signature, requestID: nonce)
     }
     func endpoint(seed: UInt8) -> Endpoint {
       let endpoint = Endpoint()
@@ -567,6 +570,95 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertTrue(store.records.isEmpty)
   }
 
+  func testUncertainCommitRetriesExactOp7AndPassesOriginalSuccessToCore() throws {
+    try exerciseExactOp7Retry(secondStatus: .success)
+  }
+
+  func testUnavailableExactCommitRetryKeepsOriginalIntentWithoutTerminalAdmission() throws {
+    try exerciseExactOp7Retry(secondStatus: .unavailable)
+  }
+
+  private func exerciseExactOp7Retry(secondStatus: KagemushaDeviceLifecycleStatusV1) throws {
+    // This scripted route stops at method6. It provides no authenticated hardware,
+    // proof, fund mutation or installed terminal; it tests exact transport ownership.
+    let fixture = try Fixture(), q = try fixture.qualification
+    let id = fixture.archive.preparation.operationID
+    let store = TestOperationIntentStore(), endpoint = Endpoint()
+    let qualification = try qualificationReply(q)
+    let preparation = try fixture.archive.bytes("preparation")
+    let candidate = try fixture.archive.bytes("candidate")
+    var operations: [UInt8] = [], commitCommands: [Data] = [], terminalOriginals: [Data] = []
+    var fullSuccess: Data?
+    endpoint.responseHandler = { method, fields in
+      switch method {
+      case .reserveOperationID: return [fields[1]]
+      case .beginObservation: return [self.digestForRetry(0x45)]
+      case .acceptQualification, .acceptAuthenticatedReply: return []
+      case .beginSenderTransition: return [id, preparation]
+      case .provePreparedSenderTransition: return [candidate]
+      case .buildTerminalEnvelope:
+        terminalOriginals.append(fields[1]); throw TestError.unexpectedCall
+      default: throw TestError.unexpectedCall
+      }
+    }
+    let context = try thirdCompactField(try XCTUnwrap(noritoDecodeFrame(preparation)).payload)
+    let transport = Transport(qualification: q) { operation, requestID, command, _ in
+      operations.append(operation)
+      if operation == 1 {
+        return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+          canonicalReply: qualification, authenticator: responseSignature(operation), requestID: requestID)
+      }
+      XCTAssertTrue(operation == 5 || operation == 7)
+      let payload = self.replyArchive("sender-reply", [Data([1, 0]), Data([operation]), requestID,
+        context, Data(repeating: 0, count: 16), u32(0) + self.compactField(Data([0]))], alignment: 16)
+      var status = KagemushaDeviceLifecycleStatusV1.success
+      if operation == 7 {
+        XCTAssertEqual(requestID, id); commitCommands.append(command)
+        status = commitCommands.count == 1 ? .recoveryRequired : secondStatus
+      }
+      let response = try testAuthenticatedDeviceResponse(operation: operation, status: status,
+        canonicalReply: status == .success ? payload : Data(),
+        authenticator: status == .success ? responseSignature(operation) : Data(), requestID: requestID)
+      if operation == 7 && status == .success { fullSuccess = response.canonicalResponseFrame }
+      return response
+    }
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+    XCTAssertThrowsError(try provider.prepareProveCommitPayment(operationID: id,
+      canonicalRequest: fixture.archive.paymentRequest))
+    XCTAssertEqual(operations, [1, 5, 7, 7])
+    XCTAssertEqual(commitCommands.count, 2)
+    XCTAssertEqual(commitCommands[0], commitCommands[1])
+    let persisted = try XCTUnwrap(store.load(operation: 7, operationID: id))
+    XCTAssertEqual(persisted.canonicalCommand, commitCommands[0])
+    XCTAssertFalse(persisted.acknowledged)
+    if secondStatus == .success {
+      XCTAssertEqual(terminalOriginals, [try XCTUnwrap(fullSuccess)])
+      XCTAssertEqual(persisted.originalResponse, fullSuccess)
+    } else {
+      XCTAssertTrue(terminalOriginals.isEmpty)
+      XCTAssertNil(persisted.originalResponse)
+    }
+  }
+
+  private func digestForRetry(_ byte: UInt8) -> Data { Data(repeating: byte, count: 32) }
+
+  private func thirdCompactField(_ payload: Data) throws -> Data {
+    let bytes = [UInt8](payload); var cursor = 0
+    for index in 0..<3 {
+      var length = 0, shift = 0
+      while true {
+        guard cursor < bytes.count && shift < 64 else { throw TestError.unexpectedCall }
+        let byte = bytes[cursor]; cursor += 1; length |= Int(byte & 0x7f) << shift
+        if byte < 128 { break }; shift += 7
+      }
+      guard length <= bytes.count - cursor else { throw TestError.unexpectedCall }
+      let field = Data(bytes[cursor..<(cursor + length)]); cursor += length
+      if index == 2 { return field }
+    }
+    throw TestError.unexpectedCall
+  }
+
   private func compactField(_ value: Data) -> Data {
     var size = value.count, bytes = Data()
     repeat { let byte = UInt8(size & 0x7f); size >>= 7; bytes.append(size == 0 ? byte : byte | 0x80) } while size != 0
@@ -599,6 +691,119 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     try KagemushaNativeCoreCoordinatorAdapterV1(bridge: .openEndpoint(storagePath: "/test/store", endpoint: endpoint))
   }
 
+  func testIncomingAdapterPreservesExactNativeProofAndPhysicalCompletionOriginals() throws {
+    let endpoint = Endpoint(), core = try adapter(endpoint)
+    let selector = try KagemushaPendingCreditSelectorV1(kind: .receive, creditID: digest(41))
+    let fields = incomingFields(selector.creditID)
+    endpoint.expect(.prepareIncomingFold, [u32(1), selector.creditID], fields)
+    let work = try core.prepareIncomingFold(selector: selector)
+    let evidence = try KagemushaOriginalIncomingFoldEvidenceV1(canonicalHardwareCertificate: Data([11]),
+      deviceRootSelectionSignature: responseSignature(1))
+    endpoint.expect(.completeIncomingFold, [work.historyID, fields[9], Data([11]), responseSignature(1)], [work.historyID])
+    try core.completeIncomingFold(work: work, evidence: evidence)
+    endpoint.expect(.stageIncomingOriginal, [u32(2), selector.creditID], [selector.creditID])
+    try core.stageIncomingOriginal(kind: .stagePeer, creditID: selector.creditID)
+    XCTAssertEqual(endpoint.calls, 3)
+  }
+
+  func testMissingIncomingEvidenceProviderRefusesBeforeNativePreparationOrPhysicalDispatch() throws {
+    let endpoint = Endpoint(), f = try Fixture()
+    var dispatches = 0
+    let transport = Transport(qualification: try f.qualification) { _, _, _, _ in
+      dispatches += 1; throw TestError.unexpectedCall
+    }
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+      core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
+    let selector = try KagemushaPendingCreditSelectorV1(kind: .receive, creditID: digest(41))
+    XCTAssertThrowsError(try provider.foldPendingCredit(selector: selector)) {
+      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    }
+    XCTAssertEqual(endpoint.calls, 0); XCTAssertEqual(dispatches, 0)
+  }
+
+  func testIncomingFoldRetainsNativeProofAndOriginalEvidenceThroughUncertainCompletionAndSnapshot() throws {
+    let f = try Fixture(), endpoint = Endpoint()
+    let selector = try KagemushaPendingCreditSelectorV1(kind: .receive, creditID: digest(41))
+    let fields = incomingFields(selector.creditID), q = try f.qualification
+    let qualification = try qualificationReply(q), aggregate = try f.aggregate
+    var length = UInt64(aggregate.count).littleEndian
+    let vector = withUnsafeBytes(of: &length) { Data($0) } + aggregate
+    let snapshot = replyArchive("wallet-recovery-snapshot-reply", [Data([1, 0]), Data([21]),
+      Data([1]) + compactField(vector), Data(repeating: 0, count: 16), Data(repeating: 0, count: 16),
+      Data(repeating: 0, count: 16)], alignment: 16)
+    let evidenceProvider = IncomingEvidence()
+    var preparations = 0, completions: [[Data]] = [], snapshots = 0, operations: [UInt8] = []
+    endpoint.responseHandler = { method, request in
+      switch method {
+      case .prepareIncomingFold: preparations += 1; return fields
+      case .completeIncomingFold:
+        completions.append(request)
+        if completions.count == 1 { throw TestError.unexpectedCall }
+        return [fields[0]]
+      case .beginObservation: return [digest(UInt8(endpoint.calls + 20))]
+      case .acceptQualification, .acceptAuthenticatedReply: return []
+      default: throw TestError.unexpectedCall
+      }
+    }
+    let transport = Transport(qualification: q) { operation, requestID, _, _ in
+      operations.append(operation)
+      if operation == 21 { snapshots += 1; if snapshots == 1 { throw TestError.unexpectedCall } }
+      guard operation == 1 || operation == 21 else { throw TestError.unexpectedCall }
+      return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
+        canonicalReply: operation == 1 ? qualification : snapshot, authenticator: responseSignature(operation),
+        requestID: requestID)
+    }
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+      core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: evidenceProvider)
+    XCTAssertThrowsError(try provider.foldPendingCredit(selector: selector))
+    let other = try KagemushaPendingCreditSelectorV1(kind: .mint, creditID: selector.creditID)
+    XCTAssertThrowsError(try provider.foldPendingCredit(selector: other))
+    XCTAssertEqual(preparations, 1); XCTAssertEqual(completions.count, 1)
+    XCTAssertThrowsError(try provider.foldPendingCredit(selector: selector))
+    XCTAssertEqual(completions.count, 2); XCTAssertEqual(completions[0], completions[1])
+    XCTAssertEqual(try provider.foldPendingCredit(selector: selector).aggregateState, aggregate)
+    XCTAssertEqual(preparations, 1); XCTAssertEqual(completions.count, 2)
+    XCTAssertEqual(evidenceProvider.acquisitions, 1)
+    XCTAssertTrue(evidenceProvider.works.allSatisfy { $0.nativePairedProof == fields[9] })
+    XCTAssertFalse(operations.contains(17)); XCTAssertEqual(snapshots, 2)
+  }
+
+  func testRetiredPersistedDirectFoldIntentCannotReplayOrDispatchOnRecovery() throws {
+    let f = try Fixture(), endpoint = Endpoint(), store = TestOperationIntentStore()
+    let owner = KagemushaOperationIntentOwnerV1(store: store), id = digest(41)
+    let prior = try KagemushaOperationIntentV1(applicationScope: store.applicationScope,
+      qualificationScope: Data([1]), operation: 17, operationID: id, purpose: "internal-17",
+      arguments: Data([1]), publicBinding: Data([2]), canonicalCommand: Data([3]))
+    try store.save(prior)
+    var dispatches = 0
+    let transport = Transport(qualification: try f.qualification) { _, _, _, _ in
+      dispatches += 1; throw TestError.unexpectedCall
+    }
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+      core: try adapter(endpoint), intentOwner: owner)
+    XCTAssertThrowsError(try provider.recover()) {
+      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    }
+    XCTAssertEqual(endpoint.calls, 0); XCTAssertEqual(dispatches, 0)
+    XCTAssertEqual(try store.load(operation: 17, operationID: id), prior)
+  }
+
+  private func incomingFields(_ credit: Data) -> [Data] {
+    [digest(42), credit, Data([3]), digest(4), digest(5), Data([6]), digest(7),
+      KagemushaUInt128V1(8).littleEndianBytes, digest(9), Data([10])]
+  }
+
+  private final class IncomingEvidence: KagemushaIncomingFoldEvidenceProviderV1 {
+    var acquisitions = 0
+    var works: [KagemushaNativeIncomingFoldWorkV1] = []
+    func recheckOriginals(for work: KagemushaNativeIncomingFoldWorkV1) { works.append(work) }
+    func originalEvidence(for work: KagemushaNativeIncomingFoldWorkV1) throws -> KagemushaOriginalIncomingFoldEvidenceV1 {
+      acquisitions += 1
+      return try KagemushaOriginalIncomingFoldEvidenceV1(canonicalHardwareCertificate: Data([11]),
+        deviceRootSelectionSignature: responseSignature(1))
+    }
+  }
+
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
     var calls = 0
     var closeCalls = 0
@@ -609,7 +814,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     func expect(_ method: KagemushaCoreCoordinatorMethodV1, _ request: [Data]?, _ response: [Data]) {
       self.method = method; expected = request; self.response = response
     }
-    func contract() -> [UInt32] { [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
+    func contract() -> [UInt32] { [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17] }
     func install(storagePath: Data) throws {}
     func open(storagePath: Data) -> UInt64 { 1 }
     func close(handle: UInt64) { XCTAssertEqual(handle, 1); closeCalls += 1 }

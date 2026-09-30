@@ -175,7 +175,20 @@ fn deployment(name: &'static str) -> Value {
         ]),
         _ => panic!("deployment variant"),
     };
-    fields(&mut payload).insert("code_hash".into(), hash());
+    if name == "CommitContractDeployment" {
+        fields(&mut payload).insert("code_hash".into(), hash());
+    } else {
+        let address = parse_model(contract_address(), "fixture contract address").unwrap();
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &address,
+            Hash::new(b"lifecycle-codec-test"),
+        )
+        .expect("same deployment address and code hash");
+        fields(&mut payload).insert(
+            "artifact_id".into(),
+            render_artifact_id(&artifact_id).unwrap(),
+        );
+    }
     named(name, payload)
 }
 
@@ -279,6 +292,32 @@ fn contract_deployment_instructions_roundtrip_frames_and_archives() {
         "CommitContractDeployment",
     ] {
         roundtrip(&deployment(name));
+    }
+}
+
+#[test]
+fn deployment_artifact_identity_is_exact_and_keeps_full_u64_dataspace() {
+    for name in [
+        "UploadSmartContractCodeChunk",
+        "FinalizeSmartContractCodeUpload",
+    ] {
+        let original = deployment(name);
+        let mut full_width = original.clone();
+        let payload = fields(fields(&mut full_width).get_mut(name).unwrap());
+        fields(payload.get_mut("artifact_id").unwrap())
+            .insert("dataspace_id".into(), Value::String(u64::MAX.to_string()));
+        roundtrip(&full_width);
+        for field in ["dataspace_id", "code_hash"] {
+            let mut missing = original.clone();
+            let payload = fields(fields(&mut missing).get_mut(name).unwrap());
+            fields(payload.get_mut("artifact_id").unwrap()).remove(field);
+            rejects(&missing);
+        }
+        let mut retired = original.clone();
+        let payload = fields(fields(&mut retired).get_mut(name).unwrap());
+        payload.remove("artifact_id");
+        payload.insert("code_hash".into(), hash());
+        rejects(&retired);
     }
 }
 

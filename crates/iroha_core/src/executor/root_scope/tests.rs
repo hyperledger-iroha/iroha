@@ -13,7 +13,7 @@ use iroha_data_model::{
     NetworkId, Registrable,
     account::Account,
     block::BlockHeader,
-    isi::{Register, SetParameter},
+    isi::{CustomInstruction, SetParameter},
     nexus::{DataSpaceCatalog, DataSpaceMetadata},
     smart_contract::ContractAddress,
     transaction::{Executable, IvmBytecode, IvmProved},
@@ -106,10 +106,8 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
     };
     let instruction = InstructionBox::from(MultisigInstructionBox::Propose(propose));
     assert!(ensure_instruction_scope(&instruction, &tx).is_err());
-    let no_scope: InstructionBox = Register::peer(iroha_model_base::peer::PeerId::new(
-        ALICE_KEYPAIR.public_key().clone(),
-    ))
-    .into();
+    let no_scope: InstructionBox =
+        CustomInstruction::new("unreviewed private-root operation").into();
     assert!(
         matches!(ensure_instruction_scope(&no_scope, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
     );

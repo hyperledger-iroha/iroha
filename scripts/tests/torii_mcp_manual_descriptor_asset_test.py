@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 106_534
-EXPECTED_ASSET_SHA256 = "4a61d276b2e5310c06b7c90bd795f53019819fe1835e9d40cbf6eb9da4d4709e"
-EXPECTED_SEMANTIC_SHA256 = "5d380c3bb92e52c66336265ee652d73997c2170be962ec8278092cb2c34a1ff9"
+EXPECTED_ASSET_LENGTH = 146_844
+EXPECTED_ASSET_SHA256 = "cd3b270475903372c4c44f8df24eb7edc7becc7fd97e6d136285866241c910a6"
+EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -546,6 +546,35 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                     (1, 100, 25),
                 )
             self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
+
+    def test_contract_artifacts_require_exact_dataspace_and_hash(self) -> None:
+        descriptors = {record["name"]: record for record in _parse_asset(self.asset)["descriptors"]}
+        for name, suffix in (("iroha.contracts.code.get", ""), ("iroha.contracts.code.bytes.get", "/bytes")):
+            with self.subTest(name=name):
+                record = descriptors[name]
+                self.assertEqual(record["method"], "GET")
+                self.assertEqual(record["effect"], "read")
+                self.assertEqual(record["path_template"], "/v1/contracts/artifacts/{dataspace_id}/{code_hash}" + suffix)
+                schema = record["input_schema"]
+                self.assertEqual(schema["required"], ["path"])
+                self.assertIs(schema["additionalProperties"], False)
+                path = schema["properties"]["path"]
+                self.assertEqual(path["required"], ["dataspace_id", "code_hash"])
+                self.assertIs(path["additionalProperties"], False)
+                self.assertEqual(path["properties"], {
+                    "dataspace_id": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$"},
+                    "code_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                })
+        for old, new in (
+            (b'/v1/contracts/artifacts/{dataspace_id}/{code_hash}', b'/v1/contracts/code/{code_hash}'),
+            (b'"dataspace_id",', b''),
+            (b'^(0|[1-9][0-9]{0,19})$', b'^[0-9]+$'),
+            (b'^[0-9a-f]{64}$', b'^[0-9a-fA-F]{64}$'),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, self.asset)
+                with self.assertRaises(GuardError):
+                    validate(self.source, self.asset.replace(old, new, 1))
 
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (

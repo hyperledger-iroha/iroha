@@ -12,6 +12,30 @@ use crate::kagemusha_v1_recursion::{
     KagemushaHardwareTransactionVerifierV1,
 };
 
+#[path = "authenticated_bootstrap_proving.rs"]
+mod bootstrap_proving;
+pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
+
+#[path = "authenticated_core_dispatch.rs"]
+mod dispatch;
+pub use dispatch::KagemushaAuthenticatedOutgoingProvingSelectionV1;
+pub use dispatch::KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1;
+#[path = "authenticated_core_publication.rs"]
+mod publication;
+pub use publication::{KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1, KagemushaAuthenticatedCoreRecoveryV1};
+#[path = "authenticated_core_outgoing.rs"]
+mod outgoing;
+pub use outgoing::{KagemushaAuthenticatedOutgoingCommitV1, KagemushaAuthenticatedOutgoingCommitRecoveryV1};
+#[path = "authenticated_core_incoming.rs"]
+mod incoming;
+pub use incoming::{KagemushaAuthenticatedIncomingFoldV1, KagemushaAuthenticatedIncomingProvingSelectionV1};
+#[path = "authenticated_core_mutation.rs"]
+mod mutation;
+use mutation::Mutation;
+#[path = "authenticated_core_device_commit.rs"]
+mod device_commit;
+pub use device_commit::KagemushaOriginalOutgoingHardwareCommitV1;
+
 /// Concrete machine type; caller-defined accepting verifiers cannot construct this owner.
 type Machine = KagemushaStateMachineV1<
     Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
@@ -25,6 +49,8 @@ pub struct KagemushaAuthenticatedCoreOwnerV1 {
     machine: Machine,
     journals: KagemushaPendingRecoveryJournalsV1,
     transactions: KagemushaHardwareTransactionJournalV1,
+    selected_publication: Option<publication::HeldOriginal>,
+    committed_authorization: Option<outgoing::CommitAuthorizationOriginal>,
 }
 
 /// Concrete verified bootstrap stage. Its constructor requires real production proof authority.
@@ -93,6 +119,8 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             machine,
             journals,
             transactions,
+            selected_publication: None,
+            committed_authorization: None,
         })
     }
 
@@ -224,6 +252,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id: subject.enrollment_id,
                 owner: subject.owner.clone(),
+                core_authorization_key_reference: subject.issuance.core_authorization_key_reference,
             },
             durable_capacity,
             authenticated_history,
@@ -300,6 +329,8 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             machine,
             journals,
             transactions,
+            selected_publication: None,
+            committed_authorization: None,
         })
     }
 
@@ -311,6 +342,9 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     pub fn current_recovery_selection(
         &self,
     ) -> Result<KagemushaCurrentRecoverySelectionV1<'_>, KagemushaStateErrorV1> {
+        if let Some(original) = &self.selected_publication {
+            original.require_selected(&self.machine)?;
+        }
         self.journals.validate_pair(&self.machine)?;
         self.transactions
             .recovery_prefix()
@@ -320,6 +354,9 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
         self.transactions
             .recovery_prefix()
             .map_err(KagemushaStateErrorV1::RecoveryMaterial)?;
+        if let Some(original) = &self.selected_publication {
+            original.require_selected(&self.machine)?;
+        }
         Ok(selection)
     }
 
@@ -330,9 +367,15 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     /// Rejects changed held journals or absent native production release authority.
     pub fn authenticated_release(
         &self,
-    ) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, KagemushaStateErrorV1> {
+    ) -> Result<
+        Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+        KagemushaStateErrorV1,
+    > {
         self.journals.validate_pair(&self.machine)?;
-        let release = self.machine.guard_verifier.authenticated_release()
+        let release = self
+            .machine
+            .guard_verifier
+            .authenticated_release()
             .map_err(|error| KagemushaStateErrorV1::GuardRejected(error.to_string()))?;
         self.journals.validate_pair(&self.machine)?;
         Ok(release)
@@ -392,7 +435,7 @@ mod tests {
             release_id: machine.proof_release.release_id(),
             hardware_policy_digest: [0x91; 32],
             core_authorization_key_reference: [0x92; 32],
-            credential: machine.accepted_credential_floor().credential,
+            credential: machine.accepted_credential_floor().credential.clone(),
         };
         let subject = KagemushaRetailEnrollmentSubjectV1 {
             version: 1,

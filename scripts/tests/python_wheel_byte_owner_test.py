@@ -8,6 +8,7 @@ binary executes; the original harness owns its explicitly inert loader fixture.
 from __future__ import annotations
 
 import ast
+import base64
 from dataclasses import FrozenInstanceError
 import hashlib
 import io
@@ -18,6 +19,7 @@ import subprocess
 import stat
 import sys
 import zipfile
+import warnings
 
 ROOT = Path(__file__).resolve().parents[2]
 VERIFIER = ROOT / "ci/verify_privacy_python_wheel.py"
@@ -272,6 +274,68 @@ def _identity(path: Path) -> dict[str, object]:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
 
 
+def load_pure_harness_builders(fixture_root: Path) -> dict:
+    """Run all original import controls in a fresh process; retain only pure ZIP helpers.
+
+    The parent may already own a real native package. It neither unloads that
+    package nor lends its installed distribution to these inert fixture imports.
+    """
+    source = SHELL_HARNESS.read_bytes()
+    verifier_before = _identity(VERIFIER)
+    body = extract_original_harness(source)
+    child = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()),
+         "--fixture-builders", str(fixture_root)],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    if child.returncode or "two-wheel bounded archive, installed-origin, loader, missing-owner and tamper checks passed" not in child.stdout:
+        raise AssertionError("original isolated wheel harness failed:\n" + child.stdout + child.stderr)
+    rows = [row.removeprefix("WHEEL_FIXTURE_BUILDERS=") for row in child.stdout.splitlines()
+            if row.startswith("WHEEL_FIXTURE_BUILDERS=")]
+    if len(rows) != 1:
+        raise AssertionError("original isolated wheel harness has no unique fixture receipt")
+    report = json.loads(rows[0])
+    if (report["harness_sha256"] != hashlib.sha256(body.encode()).hexdigest()
+            or report["python_flags"] != {"isolated": 1, "no_site": 1}
+            or report["verifier"] != verifier_before
+            or SHELL_HARNESS.read_bytes() != source or _identity(VERIFIER) != verifier_before):
+        raise AssertionError("original fixture source or interpreter owner changed")
+    names = {"member", "write_wheel", "record_hash", "with_record", "valid_entries"}
+    definitions = [node for node in ast.parse(body).body
+                   if isinstance(node, ast.FunctionDef) and node.name in names]
+    if len(definitions) != len(names) or {node.name for node in definitions} != names:
+        raise AssertionError("original pure fixture builders changed ownership")
+    namespace = {"base64": base64, "hashlib": hashlib, "stat": stat,
+                 "warnings": warnings, "zipfile": zipfile}
+    for key in ("package_bytes", "sibling_bytes", "native_bytes"):
+        namespace[key] = base64.b64decode(report[key], validate=True)
+    # Compile the exact maintained definitions, never the harness's package
+    # loading statements, in the normally collected parent process.
+    exec(compile(ast.Module(body=definitions, type_ignores=[]),
+                 str(SHELL_HARNESS) + ":pure-fixture-builders", "exec"), namespace)
+    with zipfile.ZipFile(fixture_root / "sdk.whl") as sdk:
+        namespace["sdk_entries"] = [(info, sdk.read(info)) for info in sdk.infolist()]
+    return namespace
+
+
+def export_fixture_builders(fixture_root: Path) -> dict:
+    """Execute the unchanged original harness with real no-site isolation."""
+    if not sys.flags.isolated or not sys.flags.no_site:
+        raise AssertionError("fixture imports require real isolated no-site Python")
+    source = SHELL_HARNESS.read_bytes()
+    before = _identity(VERIFIER)
+    body = extract_original_harness(source)
+    original = {"__name__": "__main__", "__file__": str(SHELL_HARNESS)}
+    sys.argv = [str(SHELL_HARNESS), str(VERIFIER), str(fixture_root)]
+    exec(compile(body, str(SHELL_HARNESS) + ":unchanged-wheel-harness", "exec"), original)
+    if SHELL_HARNESS.read_bytes() != source or _identity(VERIFIER) != before:
+        raise AssertionError("original fixture source changed")
+    return {"harness_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "verifier": before, "python_flags": {"isolated": sys.flags.isolated,
+            "no_site": sys.flags.no_site}, **{key: base64.b64encode(original[key]).decode("ascii")
+            for key in ("package_bytes", "sibling_bytes", "native_bytes")}}
+
+
 def run_isolated(fixture_root: Path) -> dict:
     """Execute unchanged canonical harness source and bind the precise inputs."""
     sources = {"verifier": VERIFIER, "harness": SHELL_HARNESS, "controls": Path(__file__).resolve()}
@@ -295,7 +359,7 @@ def run_isolated(fixture_root: Path) -> dict:
 def test_original_wheel_harness_and_captured_bytes(tmp_path: Path) -> None:
     """Preserve every original assertion and add exact byte/path refusal parity."""
     result = subprocess.run(
-        [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--run", str(tmp_path / "wheels")],
+        [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--run", str(tmp_path / "wheels")],
         capture_output=True, text=True, timeout=120, check=False,
     )
     (tmp_path / "controls.log").write_text(result.stdout + result.stderr)
@@ -327,7 +391,50 @@ def test_harness_extraction_requires_its_exact_unique_source_owner() -> None:
             raise AssertionError("invalid original harness owner was accepted")
 
 
+def test_pure_builders_preserve_parent_cached_owners_and_distribution(tmp_path, monkeypatch) -> None:
+    """The real child cannot borrow or disturb the collected parent's native cache."""
+    cached = {name: object() for name in ("iroha_native", "iroha_native._crypto",
+                                          "iroha_python", "norito", "iroha_torii_client")}
+    for name, module in cached.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    foreign = tmp_path / "parent-site"
+    metadata = foreign / "iroha_native-9.9.9.dist-info"
+    metadata.mkdir(parents=True)
+    (metadata / "METADATA").write_text("Metadata-Version: 2.3\nName: iroha-native\nVersion: 9.9.9\n")
+    monkeypatch.syspath_prepend(str(foreign))
+    path_before = sys.path[:]
+    helpers = load_pure_harness_builders(tmp_path / "original-fixtures")
+    assert sys.path == path_before
+    assert all(sys.modules[name] is module for name, module in cached.items())
+    entries = helpers["valid_entries"]()
+    destination = helpers["write_wheel"](tmp_path / "pure-builder.whl", entries)
+    with zipfile.ZipFile(destination) as archive:
+        assert archive.read("iroha_native/__init__.py") == helpers["package_bytes"]
+        assert archive.read("iroha_native/_crypto.abi3.so") == helpers["native_bytes"]
+    assert {entry.filename for entry, _raw in helpers["sdk_entries"]} >= {
+        "iroha_python/__init__.py", "iroha_python-0.0.0.dist-info/RECORD"}
+
+
+def test_pure_builders_report_child_failure_without_parent_fallback(tmp_path, monkeypatch) -> None:
+    """A child assertion refusal cannot turn into successful local fixture execution."""
+    def refused_child(command, **_kwargs):
+        assert command[1:4] == ["-I", "-S", "-B"]
+        return subprocess.CompletedProcess(command, 1, "original isolated assertion failed", "")
+    monkeypatch.setattr(subprocess, "run", refused_child)
+    try:
+        load_pure_harness_builders(tmp_path / "unproduced-fixtures")
+    except AssertionError as error:
+        assert "original isolated assertion failed" in str(error)
+    else:
+        raise AssertionError("failed original fixture child was admitted")
+    assert not (tmp_path / "unproduced-fixtures").exists()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] != "--run":
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--fixture-builders"):
         raise SystemExit("usage: python_wheel_byte_owner_test.py --run FRESH_FIXTURE_DIRECTORY")
-    print("WHEEL_BYTE_OWNER_RESULT=" + json.dumps(run_isolated(Path(sys.argv[2])), sort_keys=True))
+    operation, fixture_root = sys.argv[1], Path(sys.argv[2])
+    if operation == "--fixture-builders":
+        print("WHEEL_FIXTURE_BUILDERS=" + json.dumps(export_fixture_builders(fixture_root), sort_keys=True))
+    else:
+        print("WHEEL_BYTE_OWNER_RESULT=" + json.dumps(run_isolated(fixture_root), sort_keys=True))

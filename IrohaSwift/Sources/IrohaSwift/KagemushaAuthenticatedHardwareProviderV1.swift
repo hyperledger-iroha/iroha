@@ -18,12 +18,16 @@ public struct KagemushaAuthenticatedDeviceResponseV1: Equatable, Sendable {
   public let status: KagemushaDeviceLifecycleStatusV1
   public let canonicalReply: Data
   public let authenticator: Data
+  /// Exact original IKGMJRS1 frame retained after native authentication.
+  public let canonicalResponseFrame: Data
 
   public init(
     operation: UInt8,
     status: KagemushaDeviceLifecycleStatusV1,
     canonicalReply: Data,
-    authenticator: Data
+    authenticator: Data,
+    requestID: Data,
+    canonicalResponseFrame: Data
   ) throws {
     guard (1...22).contains(operation) else {
       throw authenticatedProviderInvalid("operation is outside the frozen KAGEMUSHA V1 inventory")
@@ -41,7 +45,30 @@ public struct KagemushaAuthenticatedDeviceResponseV1: Equatable, Sendable {
     self.operation = operation
     self.status = status
     self.canonicalReply = Data(canonicalReply)
+    guard let expectedOperation = KagemushaDeviceLifecycleOperationV1(rawValue: operation) else {
+      throw authenticatedProviderInvalid("response operation is outside the native inventory")
+    }
+    let original = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(
+      canonicalResponseFrame, expectedOperation: expectedOperation, expectedRequestID: requestID)
+    guard original.status == status, original.payload == canonicalReply,
+      original.authenticator == authenticator else {
+      throw authenticatedProviderInvalid("original response differs from the authenticated fields")
+    }
     self.authenticator = Data(authenticator)
+    self.canonicalResponseFrame = Data(canonicalResponseFrame)
+  }
+
+  // A transport must not substitute a frame authenticated for a different request.
+  func recheckOriginal(requestID: Data) throws {
+    guard let expectedOperation = KagemushaDeviceLifecycleOperationV1(rawValue: operation) else {
+      throw authenticatedProviderInvalid("response operation is outside the native inventory")
+    }
+    let original = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(
+      canonicalResponseFrame, expectedOperation: expectedOperation, expectedRequestID: requestID)
+    guard original.status == status, original.payload == canonicalReply,
+      original.authenticator == authenticator else {
+      throw authenticatedProviderInvalid("original response differs from the authenticated fields")
+    }
   }
 }
 
@@ -99,7 +126,8 @@ extension KagemushaDeviceLifecycleBridgeV1: KagemushaNativeAuthenticatedDeviceTr
       operation: result.operation.rawValue,
       status: result.status,
       canonicalReply: result.payload,
-      authenticator: result.authenticator
+      authenticator: result.authenticator,
+      requestID: requestID, canonicalResponseFrame: result.canonicalResponseFrame
     )
   }
 }
@@ -314,7 +342,7 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
   /// Verify operation 7/8 and construct the final proof-bearing terminal envelope.
   func terminalEnvelope(
     candidate: KagemushaNativeSenderCandidateV1,
-    authenticatedCommitReply: Data
+    originalSignedCommitResponse: Data
   ) throws -> Data
 
   /// Expose a terminal result only after operations 9, 10, and 21 agree.
@@ -424,7 +452,8 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     }
     try intentOwner.accepted(operation: pending.operation, operationID: pending.requestID,
       command: pending.command, reply: pending.response.canonicalReply,
-      authenticator: pending.response.authenticator, qualificationScope: pending.qualificationScope)
+      authenticator: pending.response.authenticator, originalResponse: pending.response.canonicalResponseFrame,
+      qualificationScope: pending.qualificationScope)
     pendingCoreAcceptance = nil
     if pending.operation == 19 { session = nil }
   }
@@ -638,6 +667,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       canonicalCommand: command,
       acceptedDevicePublicKey: nil
     )
+    try response.recheckOriginal(requestID: requestID)
     guard response.operation == operation else {
       throw authenticatedProviderInvalid("device response substituted operation 1")
     }
@@ -724,6 +754,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       canonicalCommand: command,
       acceptedDevicePublicKey: responseKey
     )
+    try response.recheckOriginal(requestID: requestID)
     guard response.operation == rawOperation else {
       throw authenticatedProviderInvalid("device response substituted operation \(rawOperation)")
     }
@@ -778,6 +809,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       canonicalCommand: command,
       reply: reply,
       canonicalReply: response.canonicalReply,
+      canonicalResponseFrame: response.canonicalResponseFrame,
       observationEvidence: observation ? try KagemushaObservationEvidenceV1(operation: rawOperation,
         nonce: requestID, qualificationScope: currentScope, canonicalCommand: command,
         canonicalReply: response.canonicalReply, responseAuthenticator: response.authenticator) : nil
@@ -806,6 +838,7 @@ private struct AuthenticatedCall {
   let canonicalCommand: Data
   let reply: KagemushaDeviceAuthenticatedReplyV1?
   let canonicalReply: Data?
+  var canonicalResponseFrame: Data? = nil
   var observationEvidence: KagemushaObservationEvidenceV1? = nil
 }
 
@@ -815,18 +848,29 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
 {
   private let client: KagemushaAuthenticatedDeviceClientV1
   private let lock = NSRecursiveLock()
+  private let incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)?
+  private var pendingIncomingFold: PendingIncomingFold?
 
-  public init(client: KagemushaAuthenticatedDeviceClientV1) {
+  private struct PendingIncomingFold {
+    let work: KagemushaNativeIncomingFoldWorkV1
+    var evidence: KagemushaOriginalIncomingFoldEvidenceV1?
+    var completionConfirmed = false
+  }
+
+  public init(client: KagemushaAuthenticatedDeviceClientV1,
+    incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)? = nil) {
     self.client = client
+    self.incomingFoldEvidenceProvider = incomingFoldEvidenceProvider
   }
 
   public convenience init(
     transport: any KagemushaNativeAuthenticatedDeviceTransportV1,
     core: any KagemushaNativeCoreCoordinatorV1,
-    intentOwner: KagemushaOperationIntentOwnerV1
+    intentOwner: KagemushaOperationIntentOwnerV1,
+    incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)? = nil
   ) {
     self.init(client: KagemushaAuthenticatedDeviceClientV1(transport: transport, core: core,
-      intentOwner: intentOwner))
+      intentOwner: intentOwner), incomingFoldEvidenceProvider: incomingFoldEvidenceProvider)
   }
 
   public func qualification() throws -> KagemushaHardwareQualificationV1 {
@@ -857,12 +901,16 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
 
   public func recover() throws -> KagemushaHardwareRecoveryV1 {
     try locked {
+      // Retired direct op17 intents cannot establish the new native proof/Guard path.
+      guard try client.intentOwner.pendingInternal(operation: 17).isEmpty else {
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
       var snapshot = try readRecoverySnapshot()
       // An absent aggregate cannot turn a persisted pre-dispatch bootstrap intent into approval.
       // Wallet.open reuses that exact intent only after its current allowBootstrap gate passes.
       if snapshot.recovery.aggregateState != nil {
         var replayed = false
-        for operation in [UInt8(17), 19, 20] {
+        for operation in [UInt8(19), 20] {
           for intent in try client.intentOwner.pendingInternal(operation: operation) where intent.canonicalReply == nil {
             try client.replayUnacceptedInternalMutation(intent)
             replayed = true
@@ -898,7 +946,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
   }
 
   private func acknowledgeInstalledAggregate(_ aggregate: Data, evidence: KagemushaObservationEvidenceV1) throws {
-    for operation in [UInt8(17), 19, 20] {
+    for operation in [UInt8(19), 20] {
       for intent in try client.intentOwner.pendingInternal(operation: operation) {
         guard let reply = intent.canonicalReply else { continue }
         try client.authenticateRetainedMutation(intent)
@@ -907,10 +955,6 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         let call = AuthenticatedCall(operation: operation, status: .success,
           canonicalCommand: intent.canonicalCommand!, reply: decoded, canonicalReply: reply)
         var reader = try payloadReader(call, operation: operation)
-        if operation == 17 {
-          _ = try reader.pendingCreditKindField()
-          _ = try reader.digestField()
-        }
         let installed = try reader.vectorField(maximum: KagemushaWireV1.maximumAggregateStateBytes)
         try reader.finish()
         if installed == aggregate {
@@ -1066,6 +1110,9 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       guard decoded.inboxReceipt.creditID == creditID,
         decoded.inboxReceipt.receiptCommitment == receipt.receiptCommitment
       else { throw authenticatedProviderInvalid("acknowledgement receipt binding mismatch") }
+      // Native owner admits the actual retained peer originals before the acknowledgment
+      // can escape to the sender. Missing physical source never becomes stage authority.
+      try stageIncomingOriginal(kind: .stagePeer, creditID: creditID)
       try client.intentOwner.completedResult(operation: 11, operationID: creditID,
         canonicalResult: acknowledgement)
       return try KagemushaHardwarePaymentStageV1(
@@ -1100,6 +1147,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         canonicalReply,
         against: commandModel
       )
+      try stageIncomingOriginal(kind: .stageMint, creditID: result.creditID)
       return try KagemushaHardwareMintStageV1(
         disposition: result.disposition == .staged ? .staged : .exactDuplicate,
         creditID: result.creditID
@@ -1137,28 +1185,52 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     selector: KagemushaPendingCreditSelectorV1
   ) throws -> KagemushaHardwareReceiveFoldV1 {
     try locked {
-      let credit = try authenticatedProviderDigest(selector.creditID, "creditID")
-      var publicBinding = Data([UInt8(selector.kind.rawValue)])
-      publicBinding.append(credit)
-      let call = try client.internalControl(operation: 17, arguments: publicBinding) {
-        .foldReceiveCredit(operationID: $0, selector: selector)
+      guard let evidenceProvider = incomingFoldEvidenceProvider,
+        let core = client.core as? any KagemushaNativeIncomingCoreCoordinatorV1
+      else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+      _ = try authenticatedProviderDigest(selector.creditID, "creditID")
+      if let pending = pendingIncomingFold {
+        guard pending.work.kind == selector.kind && pending.work.creditID == selector.creditID else {
+          throw authenticatedProviderInvalid("another incoming fold is retained")
+        }
+      } else {
+        pendingIncomingFold = PendingIncomingFold(work: try core.prepareIncomingFold(selector: selector))
       }
-      var reader = try payloadReader(requireSuccess(call), operation: 17)
-      guard try reader.pendingCreditKindField() == selector.kind,
-        try reader.digestField() == credit
-      else {
-        throw authenticatedProviderInvalid("pending-fold selector mismatch")
+      guard let pending = pendingIncomingFold else {
+        throw authenticatedProviderInvalid("missing retained incoming fold")
       }
-      let aggregate = try reader.vectorField(
-        maximum: KagemushaWireV1.maximumAggregateStateBytes
-      )
-      try reader.finish()
-      _ = try KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
-      return try KagemushaHardwareReceiveFoldV1(
-        aggregateState: aggregate,
-        selector: selector
-      )
+      try evidenceProvider.recheckOriginals(for: pending.work)
+      if pending.evidence == nil {
+        let evidence = try evidenceProvider.originalEvidence(for: pending.work)
+        try evidenceProvider.recheckOriginals(for: pending.work)
+        pendingIncomingFold?.evidence = evidence
+      }
+      guard let evidence = pendingIncomingFold?.evidence else {
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+      if pendingIncomingFold?.completionConfirmed != true {
+        try evidenceProvider.recheckOriginals(for: pending.work)
+        // Preserve the exact native pair and physical original evidence across any
+        // uncertain return. Native WAL independently retains and authenticates retry.
+        try core.completeIncomingFold(work: pending.work, evidence: evidence)
+        pendingIncomingFold?.completionConfirmed = true
+      }
+      try evidenceProvider.recheckOriginals(for: pending.work)
+      let snapshot = try readRecoverySnapshot()
+      guard let aggregate = snapshot.recovery.aggregateState else {
+        throw authenticatedProviderInvalid("completed incoming fold has no authenticated aggregate")
+      }
+      let result = try KagemushaHardwareReceiveFoldV1(aggregateState: aggregate, selector: selector)
+      pendingIncomingFold = nil
+      return result
     }
+  }
+
+  private func stageIncomingOriginal(kind: KagemushaNativeIncomingStageKindV1, creditID: Data) throws {
+    guard let core = client.core as? any KagemushaNativeIncomingCoreCoordinatorV1 else {
+      throw KagemushaCoreCoordinatorErrorV1.unavailable
+    }
+    try core.stageIncomingOriginal(kind: kind, creditID: creditID)
   }
 
   /// Persist the exact identity and intent the caller saved before committing.
@@ -1410,6 +1482,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       guard authorization.statement.context.operationID == operationID else {
         throw authenticatedProviderInvalid("mint authorization operation ID mismatch")
       }
+      try stageIncomingOriginal(kind: .reserveMint, creditID: authorization.statement.creditID)
       return try KagemushaMintConstructionBundleV1(
         canonicalAuthorization: canonical,
         encryptedCredit: encryptedCredit
@@ -1440,6 +1513,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       guard authorization.statement.context.operationID == operationID else {
         throw authenticatedProviderInvalid("recovered mint authorization ID mismatch")
       }
+      try stageIncomingOriginal(kind: .reserveMint, creditID: authorization.statement.creditID)
       return try KagemushaMintConstructionBundleV1(
         canonicalAuthorization: canonical,
         encryptedCredit: encryptedCredit
@@ -1494,35 +1568,29 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       preparation: preparation,
       authenticatedPreparationReply: preparedReply
     )
-    var committed = try client.sender(
-      KagemushaDeviceSenderCommandV1(
-        operation: 7,
-        operationID: operationID,
-        context: preparation.context,
-        body: .commit(
-          selector: candidate.selector,
-          candidateDigest: candidate.candidateDigest,
-          hardwareAuthorization: candidate.hardwareCommitAuthorization
-        )
+    let commitCommand = try KagemushaDeviceSenderCommandV1(
+      operation: 7,
+      operationID: operationID,
+      context: preparation.context,
+      body: .commit(
+        selector: candidate.selector,
+        candidateDigest: candidate.candidateDigest,
+        hardwareAuthorization: candidate.hardwareCommitAuthorization
       )
     )
+    var committed = try client.sender(commitCommand)
     if committed.status == .recoveryRequired || committed.status == .staleOrConcurrent {
-      committed = try client.sender(
-        KagemushaDeviceSenderCommandV1(
-          operation: 8,
-          operationID: operationID,
-          context: preparation.context,
-          body: .recoverTerminal(inputsDigest: preparation.inputsDigest)
-        )
-      )
+      // The native terminal admission requires the original signed op7. Retry the exact
+      // command, authorization, one-use nonce and operation ID; op8 is not an op7 original.
+      committed = try client.sender(commitCommand)
     }
     try requireSuccess(committed)
-    guard let committedReply = committed.canonicalReply else {
-      throw authenticatedProviderInvalid("committed transition omitted its authenticated reply")
+    guard let originalResponse = committed.canonicalResponseFrame else {
+      throw authenticatedProviderInvalid("committed transition omitted its original signed response")
     }
     let envelope = try client.core.terminalEnvelope(
       candidate: candidate,
-      authenticatedCommitReply: committedReply
+      originalSignedCommitResponse: originalResponse
     )
     guard !envelope.isEmpty else {
       throw authenticatedProviderInvalid("native Core returned an empty terminal envelope")

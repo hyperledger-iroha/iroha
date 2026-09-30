@@ -87,6 +87,14 @@ check_binary_symbols test-only-library test-only-inventory "$2"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("is missing " + missing, result.stderr)
 
+    def test_missing_coordinator_installation_is_rejected(self) -> None:
+        c_export = "connect_norito_kagemusha_core_coordinator_install_v1"
+        for mode in ("apple", "elf"):
+            with self.subTest(mode=mode):
+                result = self.check(mode, c_export)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("is missing " + c_export, result.stderr)
+
     def test_missing_finalized_mint_and_value_admission_are_rejected(self) -> None:
         for missing in (
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",

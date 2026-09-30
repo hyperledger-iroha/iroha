@@ -1854,7 +1854,7 @@ fn append_usize_slice(bytes: &mut Vec<u8>, values: &[usize]) -> Result<(), Strin
     Ok(())
 }
 
-fn read_eq_state_vk(
+pub(super) fn read_eq_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1865,7 +1865,7 @@ fn read_eq_state_vk(
     )
 }
 
-fn read_ep_state_vk(
+pub(super) fn read_ep_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1876,7 +1876,7 @@ fn read_ep_state_vk(
     )
 }
 
-fn read_eq_inner_state_vk(
+pub(super) fn read_eq_inner_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1887,7 +1887,7 @@ fn read_eq_inner_state_vk(
     )
 }
 
-fn read_ep_inner_state_vk(
+pub(super) fn read_ep_inner_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1928,7 +1928,7 @@ fn read_ep_guard_vk(
     )
 }
 
-fn read_eq_terminal_authorization_vk(
+pub(super) fn read_eq_terminal_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1939,7 +1939,7 @@ fn read_eq_terminal_authorization_vk(
     )
 }
 
-fn read_ep_terminal_authorization_vk(
+pub(super) fn read_ep_terminal_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1950,14 +1950,14 @@ fn read_ep_terminal_authorization_vk(
     )
 }
 
-fn read_eq_commit_wrapper_vk(
+pub(super) fn read_eq_commit_wrapper_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
     read_eq_recursive_vk::<KagemushaCommitWrapperEqCircuitV1>(bytes, params, "commit-wrapper")
 }
 
-fn read_ep_commit_wrapper_vk(
+pub(super) fn read_ep_commit_wrapper_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {

@@ -86,6 +86,26 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
 
 
+def test_native_filesystem_owner_selects_real_custody_consumers() -> None:
+    """A native custody change selects its actual deployment and storage consumers."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    assert manifest.package_lane["iroha_fs"] == "foundation"
+    result = rust_ci.classify_paths(
+        ["crates/iroha_fs/src/lib.rs"], metadata=metadata, manifest=manifest, root=ROOT,
+    )
+    assert result.changed_packages == ("iroha_fs",)
+    assert result.foundation_only and not result.full
+    assert {
+        "iroha_fs", "iroha_contract_deploy", "iroha_deploy",
+        "iroha_kagami", "iroha_storage_client",
+    } <= set(result.impacted_packages)
+    assert result.lane_packages["foundation"] == ("iroha_fs",)
+    assert "iroha_storage_client" in result.lane_packages["services"]
+    assert "iroha_deploy" in result.lane_packages["node"]
+
+
 def test_package_change_expands_reverse_dependency_closure(tmp_path: Path) -> None:
     """A foundation edit selects its node and integration dependants."""
 

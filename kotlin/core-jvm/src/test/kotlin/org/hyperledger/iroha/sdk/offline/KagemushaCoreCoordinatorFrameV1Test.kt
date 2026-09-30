@@ -197,6 +197,51 @@ class KagemushaCoreCoordinatorFrameV1Test {
     }
 
     @Test
+    fun `recovered enrollment preserves exact attempt and bounded original challenge and signatures`() {
+        val method = KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT
+        val ticket = KagemushaCoreCoordinatorFrameV1.u32(7) + KagemushaCoreCoordinatorFrameV1.u32(0)
+        val begin = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(9)))
+        val reply = listOf(ticket, ByteArray(16 * 1024) { 1 }, ByteArray(32) { 2 },
+            ByteArray(2 * 1024) { 3 }, ByteArray(32) { 4 })
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin,
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, reply))
+        for ((index, changed) in listOf(0 to ByteArray(8), 1 to ByteArray(16 * 1024 + 1),
+            2 to ByteArray(31), 3 to ByteArray(2 * 1024 + 1), 4 to ByteArray(31))) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
+                    reply.mapIndexed { i, original -> if (i == index) changed else original })
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(9), ticket))
+        }
+        val proof = listOf(KagemushaCoreCoordinatorFrameV1.u32(10), ticket,
+            ByteArray(64) { 5 }, ByteArray(65_716) { 6 })
+        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, proof)
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request,
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, listOf(ticket)))
+        for ((index, changed) in listOf(1 to ByteArray(8), 2 to ByteArray(63), 3 to ByteArray(65_717))) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                    proof.mapIndexed { i, original -> if (i == index) changed else original })
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(8) + KagemushaCoreCoordinatorFrameV1.u32(0)))
+        }
+        val cancel = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(11), ticket))
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, cancel,
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, cancel, emptyList()))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, cancel, listOf(ticket))
+        }
+    }
+
+    @Test
     fun `App Attest commit acknowledgment binds every original byte and exact next counter`() {
         val method = KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)

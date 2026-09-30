@@ -30,6 +30,8 @@ class KagemushaOperationIntentV1(
     canonicalReplyQualification: ByteArray? = null,
     reconciliationEvidence: ByteArray? = null,
     canonicalResult: ByteArray? = null,
+    canonicalSenderCandidate: ByteArray? = null,
+    canonicalResponseFrame: ByteArray? = null,
     @JvmField val acknowledged: Boolean = false,
 ) {
     private val scopeValue = scope.copyOf()
@@ -42,6 +44,8 @@ class KagemushaOperationIntentV1(
     private val replyQualification = canonicalReplyQualification?.copyOf()
     private val reconciliation = reconciliationEvidence?.copyOf()
     private val result = canonicalResult?.copyOf()
+    private val candidate = canonicalSenderCandidate?.copyOf()
+    private val responseFrame = canonicalResponseFrame?.copyOf()
 
     init {
         require(scopeValue.isNotEmpty() && scopeValue.size <= 4096)
@@ -56,6 +60,14 @@ class KagemushaOperationIntentV1(
         if (purpose == KagemushaOperationIntentPurposeV1.INTERNAL) require(operation in setOf(17, 19, 20))
         require(reconciliation == null || (operation in setOf(10, 17, 19, 20) && reply != null))
         require(result == null || (operation == 10 && reply != null))
+        require(candidate == null || (operation == 7 && candidate.size in 1..KagemushaCoreCoordinatorArchiveV1.MAXIMUM_ARCHIVE_BYTES))
+        require(operation != 7 || command == null || candidate != null) { "operation 7 requires its retained native candidate before dispatch" }
+        require(responseFrame == null || (operation == 7 && reply != null))
+        require(operation != 7 || reply == null || responseFrame != null) { "operation 7 requires its complete original signed response" }
+        responseFrame?.let {
+            KagemushaDeviceResponseFrameV1.requireTuple(it, operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS,
+                checkNotNull(reply), checkNotNull(authenticator), id)
+        }
         require(!acknowledged || purpose != KagemushaOperationIntentPurposeV1.INTERNAL || reconciliation != null)
     }
 
@@ -69,6 +81,8 @@ class KagemushaOperationIntentV1(
     fun canonicalReplyQualification(): ByteArray? = replyQualification?.copyOf()
     fun reconciliationEvidence(): ByteArray? = reconciliation?.copyOf()
     fun canonicalResult(): ByteArray? = result?.copyOf()
+    fun canonicalSenderCandidate(): ByteArray? = candidate?.copyOf()
+    fun canonicalResponseFrame(): ByteArray? = responseFrame?.copyOf()
 
     /** Check a replacement before a store makes it durable. Identity and accepted history never change. */
     fun requireSuccessor(next: KagemushaOperationIntentV1) {
@@ -81,19 +95,25 @@ class KagemushaOperationIntentV1(
         replyQualification?.let { require(it.contentEquals(next.replyQualification)) }
         reconciliation?.let { require(it.contentEquals(next.reconciliation)) }
         result?.let { require(it.contentEquals(next.result)) }
+        candidate?.let { require(it.contentEquals(next.candidate)) }
+        responseFrame?.let { require(it.contentEquals(next.responseFrame)) }
         require(!acknowledged || next.acknowledged)
     }
 
     internal fun dispatched(command: ByteArray, qualification: ByteArray): KagemushaOperationIntentV1 =
         replacement(command = command, qualification = this.qualification ?: qualification)
 
-    internal fun accepted(reply: ByteArray, authenticator: ByteArray, qualification: ByteArray): KagemushaOperationIntentV1 {
+    internal fun accepted(reply: ByteArray, authenticator: ByteArray, qualification: ByteArray,
+        responseFrame: ByteArray? = null): KagemushaOperationIntentV1 {
         this.reply?.let { require(it.contentEquals(reply)) { "device retry changed the accepted canonical reply" } }
         this.authenticator?.let { require(it.contentEquals(authenticator)) { "device retry changed the accepted authenticator" } }
         this.replyQualification?.let { require(it.contentEquals(qualification)) { "device retry changed the accepted reply qualification" } }
+        this.responseFrame?.let { require(it.contentEquals(responseFrame)) { "device retry changed the original signed response" } }
         return replacement(reply = this.reply ?: reply, authenticator = this.authenticator ?: authenticator,
-            replyQualification = this.replyQualification ?: qualification)
+            replyQualification = this.replyQualification ?: qualification, responseFrame = this.responseFrame ?: responseFrame)
     }
+
+    internal fun senderCandidate(candidate: ByteArray): KagemushaOperationIntentV1 = replacement(candidate = candidate)
 
     internal fun acknowledged(): KagemushaOperationIntentV1 = replacement(acknowledged = true)
     internal fun reconciled(evidence: ByteArray): KagemushaOperationIntentV1 =
@@ -108,9 +128,11 @@ class KagemushaOperationIntentV1(
         replyQualification: ByteArray? = this.replyQualification,
         reconciliation: ByteArray? = this.reconciliation,
         result: ByteArray? = this.result,
+        candidate: ByteArray? = this.candidate,
+        responseFrame: ByteArray? = this.responseFrame,
         acknowledged: Boolean = this.acknowledged,
     ): KagemushaOperationIntentV1 = KagemushaOperationIntentV1(
-        scopeValue, operation, id, purpose, binding, command, qualification, reply, authenticator, replyQualification, reconciliation, result, acknowledged,
+        scopeValue, operation, id, purpose, binding, command, qualification, reply, authenticator, replyQualification, reconciliation, result, candidate, responseFrame, acknowledged,
     ).also(::requireSuccessor)
 }
 
@@ -146,7 +168,7 @@ object KagemushaOperationIntentCodecV1 {
             encoder.writeUInt(if (value.acknowledged) 1 else 0, 8)
             listOf(value.scope(), value.operationId(), value.publicBinding(), value.canonicalCommand(),
                 value.canonicalQualification(), value.canonicalReply(), value.responseAuthenticator(), value.canonicalReplyQualification(),
-                value.reconciliationEvidence(), value.canonicalResult()).forEach {
+                value.reconciliationEvidence(), value.canonicalResult(), value.canonicalSenderCandidate(), value.canonicalResponseFrame()).forEach {
                 encoder.writeUInt((it?.size ?: 0).toLong(), 32)
                 if (it != null) encoder.writeBytes(it)
             }
@@ -158,9 +180,9 @@ object KagemushaOperationIntentCodecV1 {
             require(purpose in 0..1)
             val acknowledged = decoder.readUInt(8)
             require(acknowledged in 0..1)
-            val fields = (0..9).map {
+            val fields = (0..11).map {
                 val size = decoder.readUInt(32)
-                require(size in 0..65536)
+                require(size in 0..KagemushaDeviceResponseFrameV1.MAXIMUM_BYTES.toLong())
                 decoder.readBytes(size.toInt())
             }
             return KagemushaOperationIntentV1(fields[0], operation, fields[1],
@@ -168,7 +190,8 @@ object KagemushaOperationIntentCodecV1 {
                 fields[3].takeIf { it.isNotEmpty() }, fields[4].takeIf { it.isNotEmpty() },
                 fields[5].takeIf { it.isNotEmpty() }, fields[6].takeIf { it.isNotEmpty() },
                 fields[7].takeIf { it.isNotEmpty() }, fields[8].takeIf { it.isNotEmpty() },
-                fields[9].takeIf { it.isNotEmpty() }, acknowledged == 1L)
+                fields[9].takeIf { it.isNotEmpty() }, fields[10].takeIf { it.isNotEmpty() },
+                fields[11].takeIf { it.isNotEmpty() }, acknowledged == 1L)
         }
     }
     private const val QUALIFICATION_SCHEMA = "iroha::sdk::offline::OperationQualificationV1"
@@ -286,9 +309,15 @@ internal class KagemushaOperationIntentOwnerV1(private val store: KagemushaOpera
         previous.dispatched(command, qualification).also(::save)
     }
 
-    fun accepted(operation: Int, id: ByteArray, reply: ByteArray, authenticator: ByteArray, qualification: ByteArray) = lock.withLock {
+    fun accepted(operation: Int, id: ByteArray, reply: ByteArray, authenticator: ByteArray, qualification: ByteArray,
+        responseFrame: ByteArray? = null) = lock.withLock {
         requireNotNull(load(operation, id)) { "dispatched operation intent is missing" }
-            .accepted(reply, authenticator, qualification).also(::save)
+            .accepted(reply, authenticator, qualification, responseFrame).also(::save)
+    }
+
+    /** Sync the exact native candidate before any operation-7 dispatch can consume hardware. */
+    fun retainSenderCandidate(id: ByteArray, command: ByteArray, candidate: ByteArray) = lock.withLock {
+        reserve(7, id, command).senderCandidate(candidate).also(::save)
     }
 
     fun acknowledge(operation: Int, id: ByteArray) = lock.withLock {

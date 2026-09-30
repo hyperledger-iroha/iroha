@@ -17,6 +17,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     INITIAL_ENROLLMENT(12),
     ACKNOWLEDGE_COMMITTED_APP_ATTEST(13),
     EXPORT_OUTGOING_STATE_PROOF(14),
+    PREPARE_INCOMING_FOLD(15), COMPLETE_INCOMING_FOLD(16), STAGE_INCOMING_ORIGINAL(17),
 }
 
 /**
@@ -115,6 +116,18 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateRequestFields(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
+                count(fields, 2); kind(fields, 0); digest(fields, 1)
+            }
+            KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD -> {
+                count(fields, 4); digest(fields, 0); bounded(fields, 1, 8192)
+                KagemushaNoritoV1.decodePairedProofShapeExact(field(fields, 1))
+                bounded(fields, 2, 96 * 1024)
+                KagemushaP256Codec.requireRawLowSSignature(field(fields, 3))
+            }
+            KagemushaCoreCoordinatorMethodV1.STAGE_INCOMING_ORIGINAL -> {
+                count(fields, 2); require(number(fields, 0) in 0..2); digest(fields, 1)
+            }
             KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID -> {
                 count(fields, 3); operation(fields, 0); digest(fields, 1); nonempty(fields, 2)
                 require(number(fields, 0) !in setOf(1, 13, 18, 21)) { "read operations require a transient native observation" }
@@ -139,8 +152,12 @@ object KagemushaCoreCoordinatorFrameV1 {
                 val end = senderInputs(fields, 1)
                 count(fields, end + 5); qualification(fields, end)
             }
+            KagemushaCoreCoordinatorMethodV1.BUILD_TERMINAL_ENVELOPE -> {
+                count(fields, 2)
+                val candidate = KagemushaCoreCoordinatorArchiveV1.decodeCandidateShapeExact(field(fields, 0))
+                KagemushaDeviceResponseFrameV1.requireSuccessShape(field(fields, 1), 7, candidate.preparation.operationId())
+            }
             KagemushaCoreCoordinatorMethodV1.PROVE_PREPARED_SENDER_TRANSITION,
-            KagemushaCoreCoordinatorMethodV1.BUILD_TERMINAL_ENVELOPE,
             KagemushaCoreCoordinatorMethodV1.RECOVER_TERMINAL_ENVELOPE -> {
                 count(fields, 2); nonempty(fields, 0); nonempty(fields, 1)
             }
@@ -207,6 +224,20 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateResponseFields(method: KagemushaCoreCoordinatorMethodV1, request: List<ByteArray>, response: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
+                count(response, 10); equal(response, 1, request, 1)
+                listOf(0, 1, 3, 4, 6, 8).forEach { digest(response, it) }
+                bounded(response, 2, 8192); bounded(response, 5, 32768)
+                require(field(response, 7).size == 16 && field(response, 7).any { it != 0.toByte() })
+                bounded(response, 9, 8192)
+                KagemushaNoritoV1.decodePairedProofShapeExact(field(response, 9))
+            }
+            KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD -> {
+                count(response, 1); equal(response, 0, request, 0)
+            }
+            KagemushaCoreCoordinatorMethodV1.STAGE_INCOMING_ORIGINAL -> {
+                count(response, 1); equal(response, 0, request, 1)
+            }
             KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID -> {
                 count(response, 1); digest(response, 0); equal(response, 0, request, 1)
             }

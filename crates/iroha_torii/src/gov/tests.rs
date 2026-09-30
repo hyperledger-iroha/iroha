@@ -2569,18 +2569,30 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
     )
     .await
     .expect_err("incomplete active state must fail closed");
-    assert!(error.to_string().contains("incomplete code"));
+    let crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error
+    else {
+        panic!("incomplete active state must fail with its internal invariant: {error:?}");
+    };
+    assert_eq!(
+        message,
+        "active contract has incomplete code, manifest, alias, or subject bindings"
+    );
 }
 #[tokio::test]
 async fn governed_contract_read_rejects_removed_manifest_provenance() {
     let harness = mk_governance_harness(true);
     let (contract_address, code_hash) = install_governed_contract_for_test(&harness);
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+        &contract_address,
+        code_hash,
+    )
+    .expect("exact governed contract artifact scope");
     let mut manifest = harness
         .state
         .view()
         .world()
         .contract_manifests()
-        .get(&code_hash)
+        .get(&artifact_id)
         .cloned()
         .expect("registered manifest");
     manifest.provenance = None;
@@ -2590,7 +2602,7 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     transaction
         .world_mut_for_testing()
         .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+        .insert(artifact_id, manifest);
     transaction.apply();
     block
         .commit_world_overlay_for_testing()
@@ -2601,7 +2613,11 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     )
     .await
     .expect_err("unsigned active manifest must fail closed");
-    assert!(error.to_string().contains("signed provenance"));
+    let crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error
+    else {
+        panic!("unsigned active manifest must fail with its internal invariant: {error:?}");
+    };
+    assert_eq!(message, "active contract manifest has no signed provenance");
 }
 #[tokio::test]
 async fn propose_deploy_rejected_without_permission() {

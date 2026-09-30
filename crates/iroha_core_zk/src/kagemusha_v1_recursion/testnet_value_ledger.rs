@@ -37,24 +37,26 @@ enum Record {
 }
 
 /// Canonical disk facts; these bytes never act as a credit capability by themselves.
+/// Digest fields spell their fixed byte-array type so the canonical derive retains byte
+/// payloads instead of applying generic element framing to an opaque alias.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_recursion::testnet_value_ledger::CreditFacts")]
 struct CreditFacts {
     scope: KagemushaTestnetStateObservationScopeV1,
-    operation_id: DigestV1,
-    credit_id: DigestV1,
+    operation_id: [u8; 32],
+    credit_id: [u8; 32],
     amount: u128,
-    mint_envelope_digest: DigestV1,
-    candidate_envelope_digest: DigestV1,
-    successor_state_commitment: DigestV1,
-    finality_network_id: DigestV1,
+    mint_envelope_digest: [u8; 32],
+    candidate_envelope_digest: [u8; 32],
+    successor_state_commitment: [u8; 32],
+    finality_network_id: [u8; 32],
     finality_block_height: u64,
     // Comparison facts are rederived from the independent full anchor on every replay.
-    finality_block_hash: DigestV1,
-    finality_core_hash: DigestV1,
-    finality_result: DigestV1,
+    finality_block_hash: [u8; 32],
+    finality_core_hash: [u8; 32],
+    finality_result: [u8; 32],
 }
 
 impl CreditFacts {

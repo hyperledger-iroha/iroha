@@ -21,6 +21,16 @@ pub struct KagemushaPendingRecoveryJournalsV1 {
 }
 
 impl KagemushaPendingRecoveryJournalsV1 {
+    // Only native State owners can borrow these actual locked descriptors. The
+    // public mobile interface never receives a journal or an append capability.
+    pub(super) fn coordinator(&self) -> &KagemushaCoordinatorOperationStoreV1 {
+        &self.coordinator
+    }
+
+    pub(super) fn coordinator_mut(&mut self) -> &mut KagemushaCoordinatorOperationStoreV1 {
+        &mut self.coordinator
+    }
+
     // Only the concrete authenticated bootstrap owner takes its already held descriptor pair.
     // Bundling descriptors does not authenticate them; the consumer validates the complete pair
     // against the opaque native machine and its fresh hardware checkpoint before returning.
@@ -102,6 +112,19 @@ impl KagemushaPendingRecoveryJournalsV1 {
         machine.current_recovery_selection()?;
         self.validate_pair(&machine)?;
         Ok((machine, self.coordinator, self.responses))
+    }
+
+    pub(super) fn current_prefixes(
+        &self,
+        selected: &super::KagemushaRecoveryJournalsV1,
+    ) -> Result<super::KagemushaRecoveryJournalsV1, KagemushaStateErrorV1> {
+        Ok(super::KagemushaRecoveryJournalsV1 {
+            coordinator: self.coordinator.recovery_prefix().map_err(material_error)?,
+            responses: self.responses.recovery_prefix().map_err(material_error)?,
+            // Appending evidence does not authorize hardware response retirement.
+            response_history_root: selected.response_history_root,
+            retirement_transition_id: selected.retirement_transition_id,
+        })
     }
 
     pub(super) fn validate_pair<R, G, H>(

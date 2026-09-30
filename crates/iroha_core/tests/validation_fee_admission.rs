@@ -900,15 +900,20 @@ fn install_canonical_post_enactment_validation_fee_state(
     Grant::account_permission(register_permission, authority.clone())
         .execute(authority, &mut state_transaction)
         .expect("grant payout-contract registration authority");
+    let payout_dataspace = payout_contract_address()
+        .dataspace_id()
+        .expect("payout contract has an exact native dataspace");
     let (contract_artifact, contract_manifest) = payout_contract_artifact();
     let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+        payout_dataspace,
         contract_artifact,
         &mut state_transaction,
     )
     .expect("register payout-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+        payout_dataspace,
         contract_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )
@@ -929,15 +934,20 @@ fn install_canonical_post_enactment_validation_fee_state(
     )
     .expect("activate immutable payout-contract subject");
 
+    let pool_dataspace = pool_contract_address()
+        .dataspace_id()
+        .expect("pool contract has an exact native dataspace");
     let (pool_artifact, pool_manifest) = pool_contract_artifact();
     let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+        pool_dataspace,
         pool_artifact,
         &mut state_transaction,
     )
     .expect("register pool-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+        pool_dataspace,
         pool_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )

@@ -12,8 +12,9 @@ use iroha_data_model::{
             CommitContractDeployment, FinalizeSmartContractCodeUpload, UploadSmartContractCodeChunk,
         },
     },
-    smart_contract::manifest::ContractManifest,
+    smart_contract::{ContractArtifactId, manifest::ContractManifest},
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::{
     codec::Encode,
@@ -419,6 +420,8 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     let address = "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
         .parse()
         .expect("canonical contract address");
+    let artifact_id = ContractArtifactId::for_address(&address, code_hash)
+        .expect("exact contract artifact dataspace");
     let manifest = ContractManifest {
         seiyaku_name: None,
         code_hash: Some(code_hash),
@@ -435,7 +438,7 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     };
     let instructions: Vec<InstructionBox> = vec![
         Box::new(UploadSmartContractCodeChunk {
-            code_hash,
+            artifact_id,
             total_size: 4,
             chunk_index: 0,
             chunk_count: 1,
@@ -443,13 +446,17 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
         })
         .into_instruction_box(),
         Box::new(FinalizeSmartContractCodeUpload {
-            code_hash,
+            artifact_id,
             total_size: 4,
             chunk_count: 1,
         })
         .into_instruction_box(),
-        Box::new(CancelSmartContractCodeUpload { code_hash }).into_instruction_box(),
-        Box::new(RegisterSmartContractCode { manifest }).into_instruction_box(),
+        Box::new(CancelSmartContractCodeUpload { artifact_id }).into_instruction_box(),
+        Box::new(RegisterSmartContractCode {
+            artifact_id,
+            manifest,
+        })
+        .into_instruction_box(),
         Box::new(CommitContractDeployment {
             expected_deploy_nonce: u64::MAX,
             contract_address: address,
@@ -466,7 +473,16 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     }
     let cancel = object([(
         "CancelSmartContractCodeUpload",
-        object([("code_hash", json::to_value(&code_hash).expect("hash JSON"))]),
+        object([(
+            "artifact_id",
+            object([
+                (
+                    "dataspace_id",
+                    Value::String(artifact_id.dataspace_id.as_u64().to_string()),
+                ),
+                ("code_hash", json::to_value(&code_hash).expect("hash JSON")),
+            ]),
+        )]),
     )]);
     let proposed = custom_json_value(object([(
         "Propose",
@@ -481,7 +497,23 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     assert_strict_rejection(&object([("CancelSmartContractCodeUpload", object([]))]));
     assert_strict_rejection(&object([(
         "CancelSmartContractCodeUpload",
-        object([("code_hash", Value::String("not-a-hash".to_owned()))]),
+        object([(
+            "code_hash",
+            json::to_value(&code_hash).expect("retired hash field"),
+        )]),
+    )]));
+    assert_strict_rejection(&object([(
+        "CancelSmartContractCodeUpload",
+        object([(
+            "artifact_id",
+            object([
+                (
+                    "dataspace_id",
+                    Value::String(artifact_id.dataspace_id.as_u64().to_string()),
+                ),
+                ("code_hash", Value::String("not-a-hash".to_owned())),
+            ]),
+        )]),
     )]));
 }
 
@@ -790,7 +822,10 @@ fn structured_asset_holding_limit_roundtrips_the_existing_model_json_contract() 
 fn deployment_json_rejects_noncanonical_integer_and_incomplete_payloads() {
     let valid = instruction_to_json_value(
         &Box::new(FinalizeSmartContractCodeUpload {
-            code_hash: Hash::new(b"strict-upload"),
+            artifact_id: ContractArtifactId::new(
+                DataSpaceId::new(u64::MAX),
+                Hash::new(b"strict-upload"),
+            ),
             total_size: 4,
             chunk_count: 1,
         })
@@ -1057,9 +1092,10 @@ fn sole_instruction_payload_requires_a_single_envelope_field() {
 }
 
 fn register_code_payload() -> Value {
+    let code_hash = Hash::new(b"precedence-code");
     let manifest = ContractManifest {
         seiyaku_name: None,
-        code_hash: Some(Hash::new(b"precedence-code")),
+        code_hash: Some(code_hash),
         abi_hash: Some(Hash::new(b"precedence-abi")),
         compiler_fingerprint: Some("codec-fixture".to_owned()),
         features_bitmap: Some(0),
@@ -1071,10 +1107,22 @@ fn register_code_payload() -> Value {
         error_types: None,
         provenance: None,
     };
-    object([(
-        "manifest",
-        json::to_value(&manifest).expect("manifest JSON"),
-    )])
+    object([
+        (
+            "artifact_id",
+            object([
+                ("dataspace_id", Value::String("0".to_owned())),
+                (
+                    "code_hash",
+                    json::to_value(&code_hash).expect("artifact hash JSON"),
+                ),
+            ]),
+        ),
+        (
+            "manifest",
+            json::to_value(&manifest).expect("manifest JSON"),
+        ),
+    ])
 }
 
 #[test]

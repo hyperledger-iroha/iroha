@@ -125,7 +125,6 @@ impl KagemushaNativeEnrollmentProvisionerV1 for Provisioner {
         }
         let selected = template();
         KagemushaNativeEnrollmentProvisioningV1::from_trusted_platform(
-            Arc::new(Inner),
             Arc::new(MemoryStore::default()),
             self.context.clone(),
             selected.policy,
@@ -135,18 +134,38 @@ impl KagemushaNativeEnrollmentProvisionerV1 for Provisioner {
             fixture::journal_pins().hardware_profile_id,
         )
     }
-    fn retain_fresh_admission(
+    fn bootstrap_source(
         &self,
         path: &str,
         handle: u64,
-        admission: FreshIssuerAdmissionV1,
-    ) -> Result<(), Error> {
+    ) -> Result<Arc<dyn super::super::KagemushaNativeCoreBootstrapSourceV1>, Error> {
         assert_eq!(path, "/durable/enrollment");
-        assert_eq!(handle, 7);
-        admission.require_live().map_err(|_| Error::Rejected)?;
+        assert_eq!(handle, 1);
         self.handoffs.fetch_add(1, Ordering::SeqCst);
+        if self.fail_handoff.load(Ordering::SeqCst) {
+            return Err(Error::Rejected);
+        }
+        Ok(Arc::new(MissingPhysicalInputs {
+            trusted_native_time: self.trusted_native_time.load(Ordering::SeqCst),
+        }))
+    }
+}
+
+struct MissingPhysicalInputs {
+    trusted_native_time: u64,
+}
+impl super::super::KagemushaNativeCoreBootstrapSourceV1 for MissingPhysicalInputs {
+    fn recheck_originals(&self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn inputs_for_admission(
+        &self,
+        path: &str,
+        admission: &FreshIssuerAdmissionV1,
+    ) -> Result<super::super::KagemushaNativeCoreBootstrapInputsV1, Error> {
+        assert_eq!(path, "/durable/enrollment");
         let (enrollment, possession) = admission
-            .into_current_bootstrap_evidence(self.trusted_native_time.load(Ordering::SeqCst))
+            .current_bootstrap_evidence(self.trusted_native_time)
             .map_err(|_| Error::Rejected)?;
         assert_eq!(
             enrollment.authenticated_at_ms(),
@@ -156,11 +175,9 @@ impl KagemushaNativeEnrollmentProvisionerV1 for Provisioner {
             enrollment.certificate().subject.challenge_evidence_digest,
             possession.evidence_digest()
         );
-        if self.fail_handoff.load(Ordering::SeqCst) {
-            Err(Error::Rejected)
-        } else {
-            Ok(())
-        }
+        // Signed issuer fixtures and memory stores have no genuine recursive proof,
+        // nonforking physical transport or native private-key custody.
+        Err(Error::Unavailable)
     }
 }
 
@@ -179,14 +196,14 @@ fn installed(source: Arc<Provisioner>) -> Arc<dyn KagemushaCoreCoordinatorBacken
 fn select(
     backend: &dyn KagemushaCoreCoordinatorBackendV1,
 ) -> KagemushaEnrollmentJournalSelectionV1 {
-    assert_eq!(backend.open("/durable/enrollment"), Ok(7));
+    assert_eq!(backend.open("/durable/enrollment"), Ok(1));
     let account = fixture::journal_account();
     let begin = kagemusha_core_coordinator_encode_request_v1(&[
         1_u32.to_le_bytes().to_vec(),
         account.as_bytes().to_vec(),
     ])
     .unwrap();
-    let reply = backend.invoke_initial_enrollment(7, &begin).unwrap();
+    let reply = backend.invoke_initial_enrollment(1, &begin).unwrap();
     let fields = kagemusha_core_coordinator_decode_response_v1(&reply).unwrap();
     KagemushaEnrollmentJournalSelectionV1 {
         account_i105: account,
@@ -210,7 +227,7 @@ fn qualify(
     .unwrap();
     let response = backend
         .invoke(
-            7,
+            1,
             KagemushaCoreCoordinatorMethodV1::BeginObservation,
             &begin,
         )
@@ -222,7 +239,7 @@ fn qualify(
     let qualification = fixture::journal_qualification_fields(selected);
     backend
         .invoke(
-            7,
+            1,
             KagemushaCoreCoordinatorMethodV1::AcceptQualification,
             &kagemusha_core_coordinator_encode_request_v1(&qualification).unwrap(),
         )
@@ -239,7 +256,7 @@ fn qualify(
     fields.extend(qualification[..5].iter().cloned());
     backend
         .invoke(
-            7,
+            1,
             KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply,
             &kagemusha_core_coordinator_encode_request_v1(&fields).unwrap(),
         )
@@ -256,10 +273,10 @@ fn prepare_finish(backend: &dyn KagemushaCoreCoordinatorBackendV1) -> Vec<u8> {
         challenge[2].clone(),
     ])
     .unwrap();
-    backend.invoke_initial_enrollment(7, &preparation).unwrap();
+    backend.invoke_initial_enrollment(1, &preparation).unwrap();
     backend
         .invoke_initial_enrollment(
-            7,
+            1,
             &kagemusha_core_coordinator_encode_request_v1(&challenge).unwrap(),
         )
         .unwrap();
@@ -270,7 +287,7 @@ fn prepare_finish(backend: &dyn KagemushaCoreCoordinatorBackendV1) -> Vec<u8> {
     let signature = Signature::from(proof.account_signature);
     backend
         .invoke_initial_enrollment(
-            7,
+            1,
             &kagemusha_core_coordinator_encode_request_v1(&[
                 3_u32.to_le_bytes().to_vec(),
                 selection.ticket.to_le_bytes().to_vec(),
@@ -374,21 +391,88 @@ fn complete_native_enrollment_transfers_one_consuming_admission_and_replays_only
     let source = Arc::new(Provisioner::default());
     let backend = installed(source.clone());
     let finish = prepare_finish(backend.as_ref());
-    let original = backend.invoke_initial_enrollment(7, &finish).unwrap();
-    assert_eq!(backend.invoke_initial_enrollment(7, &finish), Ok(original));
+    let original = backend.invoke_initial_enrollment(1, &finish).unwrap();
+    assert_eq!(backend.invoke_initial_enrollment(1, &finish), Ok(original));
     assert_eq!(source.handoffs.load(Ordering::SeqCst), 1);
     let mut changed = finish.clone();
     let last = changed.len() - 1;
     changed[last] ^= 1;
     assert_eq!(
-        backend.invoke_initial_enrollment(7, &changed),
+        backend.invoke_initial_enrollment(1, &changed),
         Err(Error::Rejected)
     );
     // Successful enrollment is not a fabricated monetary owner or qualifying read authority.
     assert_eq!(
-        backend.invoke(7, KagemushaCoreCoordinatorMethodV1::BeginObservation, &[]),
+        backend.invoke(1, KagemushaCoreCoordinatorMethodV1::BeginObservation, &[]),
         Err(Error::Unavailable)
     );
+}
+
+#[test]
+fn issuer_completion_cannot_reopen_recovery_without_concrete_authenticated_core() {
+    let source = Arc::new(Provisioner::default());
+    let backend = installed(source.clone());
+    let finish = prepare_finish(backend.as_ref());
+    backend.invoke_initial_enrollment(1, &finish).unwrap();
+    backend.close(1).unwrap();
+    assert_eq!(backend.open("/durable/enrollment"), Err(Error::Unavailable));
+    // Retry neither reopens the issuer journal nor silently starts a new enrollment.
+    assert_eq!(backend.open("/durable/enrollment"), Err(Error::Unavailable));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(source.handoffs.load(Ordering::SeqCst), 1);
+    let recovered =
+        kagemusha_core_coordinator_encode_request_v1(&[9_u32.to_le_bytes().to_vec()]).unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(1, &recovered),
+        Err(Error::Rejected)
+    );
+}
+
+#[test]
+fn installed_wrapper_virtual_handles_revoke_older_inner_handle_reuse() {
+    let source = Arc::new(Provisioner::default());
+    // Explicit test-only repeated inner handle; the production factory instead composes
+    // NativeInitialSelectionBackend and never accepts this application-defined backend.
+    let adapter = Arc::new(
+        KagemushaEnrollmentPhaseOneBackendV1::new(
+            Arc::new(Inner),
+            Arc::new(
+                KagemushaEnrollmentAttemptJournalV1::open(Arc::new(MemoryStore::default()))
+                    .unwrap(),
+            ),
+            fixture::journal_pins(),
+            "/durable/enrollment",
+        )
+        .unwrap(),
+    );
+    let backend = InstalledEnrollmentBackend {
+        adapter,
+        provisioner: source,
+        path: "/durable/enrollment".into(),
+        handoff: Mutex::new(None),
+        bootstrap: Mutex::new(None),
+        recovered: Mutex::new(None),
+        routes: Mutex::new(InstalledRoutes {
+            next: 1,
+            opening: false,
+            current: None,
+        }),
+    };
+    assert_eq!(backend.open("/durable/enrollment"), Ok(1));
+    backend.close(1).unwrap();
+    assert_eq!(backend.open("/durable/enrollment"), Ok(2));
+    // This synthetic inner always returns7. Its reused handle must not revive the old Open.
+    let request = kagemusha_core_coordinator_encode_request_v1(&[
+        1_u32.to_le_bytes().to_vec(),
+        fixture::journal_account().as_bytes().to_vec(),
+    ])
+    .unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(1, &request),
+        Err(Error::Rejected)
+    );
+    assert_eq!(backend.close(1), Err(Error::Rejected));
+    backend.invoke_initial_enrollment(2, &request).unwrap();
 }
 
 #[test]
@@ -398,12 +482,12 @@ fn lost_admission_handoff_cannot_be_reconstructed_from_published_certificate() {
     let backend = installed(source.clone());
     let finish = prepare_finish(backend.as_ref());
     assert_eq!(
-        backend.invoke_initial_enrollment(7, &finish),
+        backend.invoke_initial_enrollment(1, &finish),
         Err(Error::Rejected)
     );
     source.fail_handoff.store(false, Ordering::SeqCst);
     assert_eq!(
-        backend.invoke_initial_enrollment(7, &finish),
+        backend.invoke_initial_enrollment(1, &finish),
         Err(Error::Rejected)
     );
     assert_eq!(source.handoffs.load(Ordering::SeqCst), 1);
@@ -425,7 +509,7 @@ fn provisioning_policies_cannot_be_replaced_by_a_later_context_response() {
     .unwrap();
     assert_eq!(
         backend.invoke(
-            7,
+            1,
             KagemushaCoreCoordinatorMethodV1::BeginObservation,
             &frame
         ),
@@ -439,14 +523,48 @@ fn historical_issuer_response_cannot_bootstrap_at_expired_native_service_time() 
     let backend = installed(source.clone());
     let finish = prepare_finish(backend.as_ref());
     source.trusted_native_time.store(500_000, Ordering::SeqCst);
-    assert_eq!(
-        backend.invoke_initial_enrollment(7, &finish),
-        Err(Error::Rejected)
-    );
+    // Historical issuer completion is retained, while current bootstrap evidence is checked
+    // at the independently selected physical time when a new owner is requested.
+    backend.invoke_initial_enrollment(1, &finish).unwrap();
+    backend.close(1).unwrap();
+    assert_eq!(backend.open("/durable/enrollment"), Err(Error::Rejected));
     source.trusted_native_time.store(1_500, Ordering::SeqCst);
-    assert_eq!(
-        backend.invoke_initial_enrollment(7, &finish),
-        Err(Error::Rejected)
-    );
+    assert_eq!(backend.open("/durable/enrollment"), Err(Error::Rejected));
+    // The retained selection is immutable; a later callback time cannot replace it.
     assert_eq!(source.handoffs.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn pinned_concrete_provisioner_consumes_only_original_path_and_selection() {
+    struct TestCustody(AtomicBool);
+    impl KagemushaNativeEnrollmentOriginalCustodyV1 for TestCustody {
+        fn recheck_originals(&self) -> Result<(), Error> {
+            if self.0.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(Error::Rejected)
+            }
+        }
+    }
+    let fixture = Provisioner::default();
+    let selected = fixture.provision("/durable/enrollment").unwrap();
+    let custody = Arc::new(TestCustody(AtomicBool::new(true)));
+    let concrete = KagemushaPinnedNativeEnrollmentProvisionerV1::from_original_selection(
+        "/durable/enrollment".into(),
+        selected,
+        custody.clone(),
+        Arc::new(MissingPhysicalInputs {
+            trusted_native_time: 1_500,
+        }),
+    )
+    .unwrap();
+    assert!(concrete.provision("/another-owner").is_err());
+    custody.0.store(false, Ordering::SeqCst);
+    assert!(concrete.provision("/durable/enrollment").is_err());
+    custody.0.store(true, Ordering::SeqCst);
+    assert!(concrete.provision("/durable/enrollment").is_ok());
+    assert!(concrete.provision("/durable/enrollment").is_err());
+    assert!(concrete.bootstrap_source("/durable/enrollment", 0).is_err());
+    assert!(concrete.bootstrap_source("/another-owner", 1).is_err());
+    assert!(concrete.bootstrap_source("/durable/enrollment", 1).is_ok());
 }

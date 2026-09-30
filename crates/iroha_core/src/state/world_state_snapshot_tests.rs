@@ -5,7 +5,9 @@ use crate::{
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
-use iroha_data_model::{Identifiable, asset::AssetBalancePolicy, domain::Domain, isi::Register};
+use iroha_data_model::{
+    Identifiable, Registrable, asset::AssetBalancePolicy, domain::Domain, isi::Register,
+};
 use iroha_model_base::domain::DomainId;
 use std::cell::Cell;
 
@@ -495,4 +497,230 @@ fn publisher_requires_original_capture_after_snapshot_restore_or_raw_commit() {
         .unwrap_err();
     assert!(error.contains("requires native replay"));
     assert!(!called.get());
+}
+
+fn names_chain() -> (CertifiedTestChain, AccountId, AssetDefinitionId) {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{IntoKeyValue, account::Account};
+    use std::collections::BTreeSet;
+    let mut world = World::new();
+    let key = KeyPair::from_seed(vec![0x35; 32], Algorithm::Ed25519);
+    let reader = AccountId::new(key.public_key().clone());
+    let (id, value) = Account::new(reader.clone()).build(&reader).into_key_value();
+    world.accounts.insert(id, value);
+    world.account_permissions.insert(
+        reader.clone(),
+        BTreeSet::from([iroha_executor_data_model::permission::query::CanReadAllLedgerData.into()]),
+    );
+    let domain = DomainId::try_new("snapshot", "universal").unwrap();
+    let asset = AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    // Startup rebuilds alias indexes before genesis instructions execute. The
+    // initial binding must therefore reference actual initial native entities.
+    world
+        .domains
+        .insert(domain.clone(), Domain::new(domain).build(&reader));
+    world.asset_definitions.insert(
+        asset.clone(),
+        AssetDefinition::numeric(
+            asset.clone(),
+            "Names original fixture",
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&reader),
+    );
+    world.asset_definition_alias_bindings.insert(
+        asset.clone(),
+        AssetDefinitionAliasBindingRecord {
+            alias: "coin#snapshot.universal".parse().unwrap(),
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 1_000,
+        },
+    );
+    world
+        .smart_contract_state
+        .insert("sns/records/4099/is2".parse().unwrap(), vec![1, 2, 3]);
+    world
+        .smart_contract_state
+        .insert("customer/private-key-name".parse().unwrap(), vec![99, 98]);
+    let config = TestChainConfig::new(world, 1_000);
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    chain.commit_at(2_000, Vec::new());
+    (chain, reader, asset)
+}
+
+#[test]
+fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals() {
+    let (chain, reader, asset) = names_chain();
+    let state = chain.state();
+    let tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let generation = state.state_view_generation();
+    state
+        .with_native_resource_names_snapshot_v1(
+            &tip,
+            &reader,
+            &budget,
+            |snapshot, aliases, keys, names| {
+                assert_eq!(
+                    snapshot.schema_hash,
+                    State::native_world_schema_hash_v1().unwrap()
+                );
+                assert_eq!(
+                    snapshot.root().unwrap(),
+                    tip.commitment().execution.world_state_root
+                );
+                assert_eq!(tip.block_time_ms(), 2_000);
+                assert_eq!(aliases.len(), 1);
+                assert_eq!(aliases[0].0, &asset);
+                assert_eq!(aliases[0].1.alias.to_string(), "coin#snapshot.universal");
+                require_complete_table_count(
+                    snapshot,
+                    "world.asset_definition_alias_bindings",
+                    aliases.len(),
+                )
+                .unwrap();
+                require_complete_table_count(snapshot, "world.smart_contract_state", keys.len())
+                    .unwrap();
+                assert!(
+                    keys.iter()
+                        .any(|key| key.as_ref() == "customer/private-key-name")
+                );
+                assert_eq!(
+                    names.len(),
+                    1,
+                    "unrelated values must be withheld even from the full reader"
+                );
+                assert_eq!(names[0].0.as_ref(), "sns/records/4099/is2");
+                assert_eq!(names[0].1, &vec![1, 2, 3]);
+                assert!(
+                    require_complete_table_count(
+                        snapshot,
+                        "world.smart_contract_state",
+                        keys.len() - 1
+                    )
+                    .is_err()
+                );
+                assert!(budget.reserved_bytes() > 0);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        generation,
+        state.state_view_generation(),
+        "read-only capture publishes no effects"
+    );
+    let called = Cell::new(false);
+    let error = state
+        .with_native_resource_names_snapshot_v1(
+            &tip,
+            chain.genesis_account(),
+            &budget,
+            |_, _, _, _| {
+                called.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    assert!(error.contains("CanReadAllLedgerData"), "{error}");
+    assert!(
+        !called.get(),
+        "registered genesis identity does not imply a read root"
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(
+        state
+            .with_native_resource_names_snapshot_v1(
+                &tip,
+                &reader,
+                &AllocationBudget::new(0),
+                |_, _, _, _| {
+                    called.set(true);
+                    Ok(())
+                }
+            )
+            .is_err()
+    );
+    assert!(!called.get());
+}
+
+#[test]
+fn names_publisher_refuses_retired_cut_and_callback_generation_change() {
+    let (mut chain, reader, _) = names_chain();
+    let tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let state = chain.state();
+    let called = Cell::new(false);
+    let error = state
+        .with_native_resource_names_snapshot_v1(&tip, &reader, &budget, |_, _, _, _| {
+            called.set(true);
+            let mut publication = state.state_view_publication();
+            let _writer = publication.begin();
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(called.get());
+    assert!(error.contains("generation changed"), "{error}");
+    assert_eq!(budget.reserved_bytes(), 0);
+    chain.commit_at(3_000, Vec::new());
+    called.set(false);
+    assert!(
+        chain
+            .state()
+            .with_native_resource_names_snapshot_v1(&tip, &reader, &budget, |_, _, _, _| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn names_read_root_checks_direct_role_and_revocation_without_inferred_grants() {
+    use crate::role::RoleIdWithOwner;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{IntoKeyValue, Registrable, account::Account, role::Role};
+    use std::collections::BTreeSet;
+    let mut world = World::new();
+    let reader = AccountId::new(
+        KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let (id, value) = Account::new(reader.clone()).build(&reader).into_key_value();
+    world.accounts.insert(id, value);
+    assert!(require_names_read_authority(&world.block(), &reader).is_err());
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::query::CanReadAllLedgerData.into();
+    world
+        .account_permissions
+        .insert(reader.clone(), BTreeSet::from([permission.clone()]));
+    assert!(require_names_read_authority(&world.block(), &reader).is_ok());
+    {
+        let mut permissions = world.account_permissions.block();
+        permissions.remove(reader.clone());
+        permissions.commit();
+    }
+    assert!(require_names_read_authority(&world.block(), &reader).is_err());
+    let role_id: iroha_data_model::role::RoleId = "names_reader".parse().unwrap();
+    let role = Role::new(role_id.clone(), reader.clone())
+        .add_permission(permission)
+        .build(&reader);
+    world.roles.insert(role_id.clone(), role);
+    // An existing role alone is not assignment to the authenticated reader.
+    assert!(require_names_read_authority(&world.block(), &reader).is_err());
+    let assignment = RoleIdWithOwner::new(reader.clone(), role_id);
+    world.account_roles.insert(assignment.clone(), ());
+    assert!(require_names_read_authority(&world.block(), &reader).is_ok());
+    {
+        let mut roles = world.account_roles.block();
+        roles.remove(assignment);
+        roles.commit();
+    }
+    assert!(require_names_read_authority(&world.block(), &reader).is_err());
 }

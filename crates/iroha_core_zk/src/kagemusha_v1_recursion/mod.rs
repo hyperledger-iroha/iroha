@@ -48,9 +48,15 @@ mod relation;
 mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(all(
+    any(test, feature = "kagemusha-production-prover"),
+    feature = "zk-halo2-ipa"
+))]
 mod terminal_body_commitment;
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(all(
+    any(test, feature = "kagemusha-production-prover"),
+    feature = "zk-halo2-ipa"
+))]
 mod terminal_durable_commitments;
 #[cfg(feature = "zk-halo2-ipa")]
 mod testnet_observation;
@@ -111,9 +117,18 @@ pub(crate) use generation::generate_kagemusha_mint_hash_artifacts_for_guarded_te
 pub fn run_guarded_real_mint_authority_proof_v1() {
     real_handoff_qualification_tests::run_guarded_real_mint_authority_proof_v1();
 }
+#[cfg(feature = "kagemusha-production-prover")]
+pub use generation::KagemushaAppAttestRecursiveSelectionWitnessV1;
 pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
+#[cfg(feature = "kagemusha-production-prover")]
+pub use generation::production_prover::{
+    KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
+    KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
+    KagemushaProductionProverV1, KagemushaProductionTerminalProofV1,
+    register_kagemusha_native_outgoing_witness_source_v1,
+};
 #[cfg(feature = "zk-halo2-ipa")]
 #[cfg(test)]
 pub use generation::{
@@ -137,6 +152,17 @@ pub use generation::{
     generate_kagemusha_terminal_authorization_artifacts_v1, prove_kagemusha_commit_wrapper_v1,
     prove_kagemusha_terminal_authorization_hash_claim_v1,
     prove_kagemusha_terminal_authorization_v1,
+};
+#[cfg(all(feature = "kagemusha-production-prover", not(test)))]
+pub use generation::{
+    KagemushaCommitEvidenceOpeningGenerationV1, KagemushaGeneratedPaymentProofV1,
+    KagemushaGeneratedRedemptionProofV1, KagemushaTerminalAuthorizationEpGenerationWitnessV1,
+    KagemushaTerminalAuthorizationEqGenerationWitnessV1,
+    KagemushaTerminalAuthorizationGenerationWitnessV1,
+    KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1,
+    KagemushaTerminalAuthorizationHashClaimParityWitnessV1,
+    KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
+    KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use generation::{
@@ -166,6 +192,14 @@ pub use generation::{
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
     generate_kagemusha_recursive_state_artifacts_v1, prove_kagemusha_recursive_state_hash_claim_v1,
     prove_kagemusha_recursive_state_v1,
+};
+#[cfg(all(
+    feature = "kagemusha-production-prover",
+    not(any(test, feature = "kagemusha-real-proof-harness"))
+))]
+pub use generation::{
+    KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 #[doc(hidden)]
@@ -228,7 +262,7 @@ pub use state_relation::{
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use terminal_authorization::{
     KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpWitnessV1,
     KagemushaTerminalAuthorizationEqWitnessV1, KagemushaTerminalAuthorizationWitnessV1,
@@ -237,12 +271,15 @@ pub(crate) use terminal_authorization::{
     derive_kagemusha_commit_wrapper_deferred_audits_v1,
     derive_kagemusha_terminal_authorization_deferred_audits_v1,
 };
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(all(
+    any(test, feature = "kagemusha-production-prover"),
+    feature = "zk-halo2-ipa"
+))]
 pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationEpCircuitV1, KagemushaTerminalAuthorizationEqCircuitV1,
     TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationPrivateTransitionV1,
     TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,

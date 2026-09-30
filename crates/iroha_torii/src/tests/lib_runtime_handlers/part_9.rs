@@ -1132,20 +1132,45 @@ async fn app_api_vk_and_proofs_lists_ok() {
 }
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
-    let app = mk_app_state_for_tests();
-    let headers = HeaderMap::new();
-    // Contract code by hash (non-existent)
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
+    let caller = AccountId::new(key_pair.public_key().clone());
+    let world = world_with_root_scope_for_token_test(world_with_account(&caller), false);
+    let mut app = mk_app_state_for_tests_with_world(world);
+    let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());
+    let method = axum::http::Method::GET;
+    let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{code_hash}")
+        .parse()
+        .expect("canonical scoped artifact URI");
+    let headers = signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &key_pair,
+        &method,
+        &uri,
+        &[],
+    );
+    let verified = crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        &headers,
+        &method,
+        &uri,
+        &[],
+        Some(&caller),
+    )
+    .expect("canonical artifact request verifies")
+    .expect("signed artifact caller");
+    // Exact universal-dataspace artifact (non-existent), after real read admission.
     let resp = super::handler_get_contract_code(
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        axum::extract::Path(
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        ),
+        axum::extract::Path(("0".to_string(), code_hash.clone())),
+        axum::Extension(verified),
     )
     .await
-    .expect("ok mapping")
-    .into_response();
+    .unwrap_or_else(|error| error.into_response());
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     // VK by backend/name (non-existent)
     let resp = super::handler_get_vk_by_backend_name(
@@ -1172,6 +1197,48 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .expect("ok mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    // Authenticated artifact reads still pass through the finite route limiter.
+    Arc::get_mut(&mut app)
+        .expect("read fixture retains the sole app reference")
+        .rate_limiter = limits::RateLimiter::new_without_refill_for_tests(std::num::NonZeroU32::MIN);
+    for expected in [
+        axum::http::StatusCode::NOT_FOUND,
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &caller,
+            &key_pair,
+            &method,
+            &uri,
+            &[],
+        );
+        let verified = crate::app_auth::verify_canonical_network_request(
+            &app.state,
+            app.state.network_id_ref(),
+            &headers,
+            &method,
+            &uri,
+            &[],
+            Some(&caller),
+        )
+        .expect("fresh rate-limited request verifies")
+        .expect("signed rate-limited caller");
+        let response = super::handler_get_contract_code(
+            State(app.clone()),
+            headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(("0".to_string(), code_hash.clone())),
+            axum::Extension(verified),
+        )
+        .await
+        .unwrap_or_else(|error| error.into_response());
+        assert_eq!(
+            response.status(),
+            expected,
+            "canonical admission retains the finite read budget"
+        );
+    }
 }
 struct RuntimeApiRouterFixture {
     router: crate::TestApiRouterRuntime,

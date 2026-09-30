@@ -532,6 +532,27 @@ fn outgoing_state_proof_archive_export_uses_only_retained_core_pair() {
     recovered
         .finalize_outgoing_redemption(terminal_proof, Vec::new())
         .unwrap();
+    let original_terminal = recovered
+        .outgoing_candidate_journal
+        .expose(
+            committed
+                .candidate
+                .prepared
+                .outbox_reservation
+                .reservation_id,
+        )
+        .unwrap()
+        .to_vec();
+    assert_eq!(
+        recovered.original_terminal_envelope(operation_id).unwrap(),
+        original_terminal,
+        "installed operation returns the exact authenticated canonical retry bytes"
+    );
+    assert_eq!(
+        recovered.original_terminal_envelope(id(95)),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage),
+        "another operation cannot select the retained terminal envelope"
+    );
     assert_eq!(
         recovered
             .export_outgoing_state_proof_archives(operation_id)
@@ -540,6 +561,20 @@ fn outgoing_state_proof_archive_export_uses_only_retained_core_pair() {
         "installed envelope keeps the original observer pair until release"
     );
     recovered.state.logical_sequence -= 1;
+    assert_eq!(
+        recovered.original_terminal_envelope(operation_id),
+        Err(KagemushaStateErrorV1::StateCommitmentMismatch),
+        "a mutated sequence without its commitment is corrupt State"
+    );
+    let (components, commitment) = recovered.state.recompute_commitment().unwrap();
+    recovered.state.state_commitment_components = components;
+    recovered.state.state_commitment = commitment;
+    assert_eq!(recovered.state.validate(), Ok(()));
+    assert_eq!(
+        recovered.original_terminal_envelope(operation_id),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        "an installed terminal envelope ahead of the actual State cannot be exposed"
+    );
     assert_eq!(
         recovered.export_outgoing_state_proof_archives(operation_id),
         Err(KagemushaStateErrorV1::SnapshotIntegrity),
@@ -554,6 +589,24 @@ fn released_sender_index_cannot_export_prepared_state_proof() {
     let intent = intent(&machine, credential, beneficiary, operation_id);
     prepare(&mut machine, &intent);
     release_index_fixture(&mut machine, operation_id);
+    assert_eq!(
+        machine
+            .outgoing_candidate_journal
+            .operation_index()
+            .lookup(operation_id)
+            .unwrap()
+            .phase,
+        KagemushaOutgoingOperationPhaseV1::Released
+    );
+    assert!(matches!(
+        machine.outgoing_candidate_journal.stage(),
+        KagemushaOutgoingJournalStageV1::Prepared(_)
+    ));
+    assert_eq!(
+        machine.original_terminal_envelope(operation_id),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        "the release-index-only fixture retains an inconsistent Prepared journal"
+    );
     assert_eq!(
         machine.export_outgoing_state_proof_archives(operation_id),
         Err(KagemushaStateErrorV1::InvalidCandidateStage)

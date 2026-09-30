@@ -26,6 +26,16 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
  * qualified non-forking hardware service.
  */
 object KagemushaNoritoV1 {
+    /** Encode the original paired State proof structurally; no verifier authority is granted. */
+    @JvmStatic
+    fun encodePairedProofShape(value: KagemushaPairedProofV1): ByteArray =
+        bounded(raw(value, PROOF_SCHEMA, PROOF_ADAPTER), 8192)
+
+    /** Decode only the exact first-release paired State proof archive. */
+    @JvmStatic
+    fun decodePairedProofShapeExact(bytes: ByteArray): KagemushaPairedProofV1 =
+        decodeExact(bytes, 8192, PROOF_SCHEMA, PROOF_ADAPTER, ::encodePairedProofShape)
+
     /** Maximum canonical bytes for the request embedded in `TopUpKagemushaV1`. */
     const val MAXIMUM_TOP_UP_REQUEST_BYTES: Int = 16 * 1024
 

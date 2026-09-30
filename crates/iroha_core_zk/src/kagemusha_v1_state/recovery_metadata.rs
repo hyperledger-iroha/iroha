@@ -141,7 +141,6 @@ impl KagemushaRecoveryJournalPrefixV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn follows(self, previous: Self) -> bool {
         (self == previous)
             || (self.sequence > previous.sequence
@@ -178,7 +177,6 @@ impl KagemushaRecoveryJournalsV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn validate_successor(&self, previous: &Self) -> Result<(), KagemushaStateErrorV1> {
         self.validate()?;
         if !self.coordinator.follows(previous.coordinator)
@@ -294,7 +292,7 @@ impl KagemushaRecoveryCheckpointIdentityV1 {
         snapshot_commitment: [0; 32],
     };
 
-    fn from_anchor(anchor: &DurabilityAnchorStatementV1) -> Self {
+    pub(super) fn from_anchor(anchor: &DurabilityAnchorStatementV1) -> Self {
         Self {
             revision: anchor.metadata_revision,
             snapshot_commitment: anchor.snapshot_commitment,
@@ -314,6 +312,10 @@ pub struct KagemushaRecoveryEnrollmentBindingV1 {
     pub enrollment_id: DigestV1,
     /// Immutable account, FI, dataspace, network, asset and hardware-lane scope.
     pub owner: iroha_data_model::kagemusha::KagemushaRetailEnrollmentOwnerV1,
+    /// Independently provisioned Core authorization key selected by the verified enrollment.
+    /// This is distinct from the secure element's device-key reference. The complete snapshot
+    /// and hardware checkpoint retain this immutable binding across process restart.
+    pub core_authorization_key_reference: DigestV1,
 }
 
 impl KagemushaRecoveryEnrollmentBindingV1 {
@@ -321,11 +323,12 @@ impl KagemushaRecoveryEnrollmentBindingV1 {
         &self,
         state: &KagemushaStateV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if self.enrollment_id
-            != self
-                .owner
-                .enrollment_id()
-                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
+        if self.core_authorization_key_reference == [0; 32]
+            || self.enrollment_id
+                != self
+                    .owner
+                    .enrollment_id()
+                    .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
             || self.owner.lane_id != state.lane.device_lane_id
             || self.owner.runtime.network_id != state.lane.network_id
             || self.owner.runtime.asset != state.lane.asset
@@ -531,7 +534,6 @@ impl KagemushaStateSnapshotV1 {
         }
     }
 
-    #[cfg(test)]
     fn recompute_commitment(&mut self) -> Result<(), KagemushaStateErrorV1> {
         self.snapshot_commitment = canonical_poseidon_digest(
             SNAPSHOT_COMMITMENT_DOMAIN,
@@ -565,10 +567,10 @@ impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
         &self.recovery_metadata.enrollment
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Borrow the exact checkpointed credential floor; only opaque machines expose this view.
     #[must_use]
-    pub fn accepted_credential_floor(&self) -> &KagemushaAcceptedCredentialFloorV1 {
+    pub(crate) fn accepted_credential_floor(&self) -> &KagemushaAcceptedCredentialFloorV1 {
         &self.recovery_metadata.accepted_credential
     }
 
@@ -628,8 +630,7 @@ where
         self.prepare_checkpoint(operation_id, journals, floor)
     }
 
-    #[cfg(test)]
-    fn prepare_checkpoint(
+    pub(super) fn prepare_checkpoint(
         &self,
         operation_id: DigestV1,
         journals: KagemushaRecoveryJournalsV1,

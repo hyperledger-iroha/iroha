@@ -8346,6 +8346,8 @@ const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
+// Reject oversized embedded assets at compile time as well as in the loader.
+const _: () = assert!(MANUAL_STATIC_TOOL_ASSET.len() <= MANUAL_STATIC_TOOL_ASSET_MAX_BYTES);
 
 #[derive(Clone)]
 struct ManualStaticToolDescriptor {
@@ -10646,7 +10648,7 @@ mod contract_artifact_route_tests {
     #[test]
     fn artifact_tools_require_exact_full_width_scope() {
         let hash = hex::encode(iroha_crypto::Hash::new(b"MCP artifact").as_ref());
-        let arguments = norito::json::json!({"path": {"dataspace_id": "18446744073709551615", "code_hash": (hash.clone())}});
+        let arguments = norito::json!({"path": {"dataspace_id": "18446744073709551615", "code_hash": (hash.clone())}});
         let arguments = arguments.as_object().unwrap();
         assert_eq!(
             contract_artifact_route(arguments, false).unwrap(),
@@ -10657,10 +10659,10 @@ mod contract_artifact_route_tests {
             format!("/v1/contracts/artifacts/{}/{hash}/bytes", u64::MAX)
         );
         for dataspace in ["", "00", "18446744073709551616", "../0"] {
-            let bad = norito::json::json!({"path": {"dataspace_id": dataspace, "code_hash": (hash.clone())}});
+            let bad = norito::json!({"path": {"dataspace_id": dataspace, "code_hash": (hash.clone())}});
             assert!(contract_artifact_route(bad.as_object().unwrap(), false).is_err());
         }
-        let missing = norito::json::json!({"path": {"code_hash": hash}});
+        let missing = norito::json!({"path": {"code_hash": hash}});
         assert!(contract_artifact_route(missing.as_object().unwrap(), true).is_err());
     }
 }

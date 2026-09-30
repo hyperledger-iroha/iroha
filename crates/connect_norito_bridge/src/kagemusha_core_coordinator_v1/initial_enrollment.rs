@@ -29,7 +29,6 @@ use iroha_data_model::kagemusha::{
 use rand::{TryRngCore as _, rngs::OsRng};
 use sha2::{Digest as _, Sha256};
 
-#[cfg(test)]
 use super::native_deadline::NativeDeadlineV1;
 use super::{
     enrollment_attempt_journal::{
@@ -317,6 +316,9 @@ impl PendingIssuerEnrollmentV1 {
         Ok((
             KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id,
+                core_authorization_key_reference: hardware_authorization_key_reference_v1(
+                    native_authorization_public_key,
+                ),
                 owner: owner.clone(),
             },
             qualification,
@@ -340,9 +342,11 @@ impl PendingIssuerEnrollmentV1 {
         if let Some(live) = &self.live_selection {
             return live.deadline().map_err(map_journal_error);
         }
-        self.deadline
-            .clone()
-            .ok_or(InitialEnrollmentErrorV1::Binding)
+        #[cfg(test)]
+        if let Some(deadline) = &self.deadline {
+            return Ok(deadline.clone());
+        }
+        Err(InitialEnrollmentErrorV1::Binding)
     }
 
     fn require_unexpired(&self) -> Result<()> {
@@ -744,6 +748,16 @@ impl FreshIssuerAdmissionV1 {
         iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,
         iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentPossessionV1,
     )> {
+        self.current_bootstrap_evidence(trusted_native_now_ms)
+    }
+
+    pub(super) fn current_bootstrap_evidence(
+        &self,
+        trusted_native_now_ms: u64,
+    ) -> Result<(
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentPossessionV1,
+    )> {
         self.require_live()?;
         let certificate = KagemushaRetailEnrollmentCertificateV1::decode_canonical_exact(
             &self.canonical_certificate,
@@ -812,7 +826,6 @@ impl FreshIssuerAdmissionV1 {
     pub fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
         &self.pending.enrollment
     }
-    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.pending.deadline()
     }

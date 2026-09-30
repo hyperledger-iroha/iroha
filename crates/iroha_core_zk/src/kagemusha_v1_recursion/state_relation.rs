@@ -11,27 +11,55 @@
 
 #[path = "transition_statement_flat.rs"]
 mod transition_statement_flat;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 pub(super) use transition_statement_flat::constrain_transition_statement_digest_v1;
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_base::gates::GateInstructions as _;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_base::{
     AssignedValue, Context,
     QuantumCell::Constant,
     gates::{RangeChip, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use iroha_data_model::kagemusha::{KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HALO2_K_V1};
 use iroha_data_model::kagemusha::{KagemushaCreditOpeningV1, KagemushaPastaStateCommitmentV1};
 
 use super::{KagemushaOperationV1, KagemushaReplayInsertWitnessV1};
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::kagemusha_v1_poseidon::empty_replay_root;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::kagemusha_v1_poseidon::{KAGEMUSHA_FP_MODULUS_LOW_V1, KAGEMUSHA_FQ_MODULUS_LOW_V1};
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::{
     kagemusha_v1_poseidon::{
         KAGEMUSHA_REPLAY_EMPTY_DOMAIN_V1, KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1,
@@ -51,9 +79,17 @@ pub(super) const PUBLIC_INSTANCE_COUNT: usize = 85;
 /// The recursive State proof additionally exposes the transition digest and three prepared-intent
 /// digests. Terminal use still requires opening the preparation transcript and both sealed streams.
 pub(super) const RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT: usize = PUBLIC_INSTANCE_COUNT + 8;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 pub(super) const KAGEMUSHA_RECEIVE_FOLD_ARITY_V1: usize = 1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 
 /// Public-instance positions shared by both state-proof parities.
@@ -309,7 +345,11 @@ impl KagemushaPreparedIntentCommitmentsV1 {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Assign the three carried digest pairs with an in-circuit outgoing-only presence rule.
 ///
 /// This authenticates their public values in the State proof. It does not prove the native
@@ -727,7 +767,11 @@ impl KagemushaStateRelationWitnessV1 {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     fn operation_tag(&self) -> u64 {
         KagemushaStateRelationPublicInputsV1::operation_tag(self.operation)
     }
@@ -1038,7 +1082,11 @@ impl KagemushaStateRelationPublicInputsV1 {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[derive(Clone, Copy)]
 pub(super) struct AssignedState<F: KagemushaPoseidonFieldV1> {
     pub(super) protocol_version: AssignedValue<F>,
@@ -1066,7 +1114,11 @@ pub(super) struct AssignedState<F: KagemushaPoseidonFieldV1> {
     pub(super) lane_id: [AssignedValue<F>; 2],
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Assigned cells for the singular received credit.
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaAssignedReceiveFoldCreditV1<F: KagemushaPoseidonFieldV1> {
@@ -1088,7 +1140,11 @@ pub(super) struct KagemushaAssignedReceiveFoldCreditV1<F: KagemushaPoseidonField
     pub(super) envelope_digest: [AssignedValue<F>; 2],
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Assigned state-transition cells shared with the recursive GuardBundle relation.
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaAssignedStateRelationV1<F: KagemushaPoseidonFieldV1> {
@@ -1118,7 +1174,11 @@ pub(super) struct KagemushaAssignedStateRelationV1<F: KagemushaPoseidonFieldV1> 
     pub(super) replay_envelope_digest: [AssignedValue<F>; 2],
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 pub(super) fn relation_builder_with_bindings<F>(
     witness: Option<&KagemushaStateRelationWitnessV1>,
 ) -> Result<(BaseCircuitBuilder<F>, KagemushaAssignedStateRelationV1<F>), String>
@@ -2036,7 +2096,11 @@ where
     ))
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assign_replay_path_v1<F>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2101,7 +2165,11 @@ where
     (credit_limbs, envelope_limbs, empty_path, present_path)
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assign_state<F>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2305,7 +2373,11 @@ where
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assign_u128<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2316,7 +2388,11 @@ fn assign_u128<F: KagemushaPoseidonFieldV1>(
     assigned
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assign_digest<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2330,7 +2406,11 @@ fn assign_digest<F: KagemushaPoseidonFieldV1>(
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assert_component_canonical<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2350,7 +2430,11 @@ fn assert_component_canonical<F: KagemushaPoseidonFieldV1>(
     assert_if_equal(ctx, range, active, canonical, Constant(F::ONE));
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn compose_component<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2366,7 +2450,11 @@ fn compose_component<F: KagemushaPoseidonFieldV1>(
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assert_if_equal<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2379,7 +2467,11 @@ fn assert_if_equal<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &selected, &F::ZERO);
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assert_if_nonzero<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2391,7 +2483,11 @@ fn assert_if_nonzero<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &selected, &F::ZERO);
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn assert_if_digest_different<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2412,7 +2508,11 @@ fn canonical_component<F: KagemushaPoseidonFieldV1>(
     decode(F::select_component(pair)).ok_or_else(|| "noncanonical Pasta component".to_owned())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn canonical_component_or_zero<F: KagemushaPoseidonFieldV1>(
     pair: KagemushaPastaStateCommitmentV1,
 ) -> F {

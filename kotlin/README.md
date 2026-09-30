@@ -465,6 +465,15 @@ same native owner remains live. A failed dispatch or response publication revoke
 that owner and prevents readback or cancellation retries. Successful cancellation
 retries retain the original ticket. Closing the native owner revokes cached enrollment phases before
 another account can use them. These typed frames do not install a qualified backend.
+For a completed owner selected by the independently installed native provisioner,
+`recoveredEnrollment()` uses method-12 phases 9–11. It retains the exact canonical
+account challenge and native 32-byte signing message, checks the device request
+nonce and exact canonical operation-1 read command, and submits the original Ed25519 account signature and complete signed
+device response. Exact retries preserve the original deadline and proof. Native
+Core authenticates its retained checkpoint, journal, hardware and owner before
+granting only an observation lease; application caches never restore that authority.
+Recovery rejection never falls back to initial enrollment. Closing the adapter
+revokes both initial and recovered scopes.
 Device-reply admission retains the original 64-byte response authenticator so
 native Core independently verifies the exact response transcript.
 The sole JNI verifier is `nativeVerifyCommandResponseV1`: its response signature

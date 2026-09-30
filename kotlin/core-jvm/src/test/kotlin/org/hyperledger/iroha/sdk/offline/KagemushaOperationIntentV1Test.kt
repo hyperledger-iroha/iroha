@@ -7,6 +7,55 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class KagemushaOperationIntentV1Test {
+    @Test fun `operation7 retains exact candidate and full original through durable recreation`() {
+        val store = TestOperationIntentStoreV1()
+        val owner = KagemushaOperationIntentOwnerV1(store)
+        val id = ByteArray(32) { 7 }
+        val command = byteArrayOf(3)
+        val candidate = byteArrayOf(4)
+        owner.retainSenderCandidate(id, command, candidate)
+        owner.dispatched(7, id, command, byteArrayOf(5))
+        val reply = ByteArray(64 * 1024) { 6 }
+        val signature = ByteArray(64).also { it[31] = 1; it[63] = 1 }
+        val frame = structuralDeviceResponseFrame(7, id, reply, signature)
+        owner.accepted(7, id, reply, signature, byteArrayOf(5), frame)
+        val encoded = KagemushaOperationIntentCodecV1.encode(store.load(7, id)!!)
+        val retained = KagemushaOperationIntentCodecV1.decodeExact(encoded)
+        assertContentEquals(candidate, retained.canonicalSenderCandidate())
+        assertContentEquals(frame, retained.canonicalResponseFrame())
+        retained.canonicalResponseFrame()!!.fill(0)
+        assertContentEquals(frame, KagemushaOperationIntentOwnerV1(store).load(7, id)!!.canonicalResponseFrame())
+        assertFailsWith<IllegalArgumentException> { owner.retainSenderCandidate(id, command, byteArrayOf(9)) }
+        assertFailsWith<IllegalArgumentException> { owner.accepted(7, id, reply, signature, byteArrayOf(5),
+            structuralDeviceResponseFrame(8, id, reply, signature)) }
+        assertContentEquals(encoded, KagemushaOperationIntentCodecV1.encode(store.load(7, id)!!))
+    }
+
+    @Test fun `operation7 cannot dispatch before candidate sync or accept an inner reply alone`() {
+        val store = TestOperationIntentStoreV1()
+        val owner = KagemushaOperationIntentOwnerV1(store)
+        val id = ByteArray(32) { 7 }
+        assertFailsWith<IllegalArgumentException> { owner.dispatched(7, id, byteArrayOf(3), byteArrayOf(5)) }
+        owner.retainSenderCandidate(id, byteArrayOf(3), byteArrayOf(4))
+        owner.dispatched(7, id, byteArrayOf(3), byteArrayOf(5))
+        assertFailsWith<IllegalArgumentException> { owner.accepted(7, id, byteArrayOf(6),
+            ByteArray(64).also { it[31] = 1; it[63] = 1 }, byteArrayOf(5)) }
+        assertNull(store.load(7, id)!!.canonicalReply())
+    }
+
+    @Test fun `lost candidate sync acknowledgement preserves exact retry and blocks another candidate`() {
+        val store = TestOperationIntentStoreV1()
+        val owner = KagemushaOperationIntentOwnerV1(store)
+        val id = ByteArray(32) { 7 }
+        owner.reserve(7, id, byteArrayOf(3))
+        store.throwAfterSave = true
+        assertFailsWith<IllegalStateException> { owner.retainSenderCandidate(id, byteArrayOf(3), byteArrayOf(4)) }
+        store.throwAfterSave = false
+        val resumed = KagemushaOperationIntentOwnerV1(store)
+        assertContentEquals(byteArrayOf(4), resumed.retainSenderCandidate(id, byteArrayOf(3), byteArrayOf(4)).canonicalSenderCandidate())
+        assertFailsWith<IllegalArgumentException> { resumed.retainSenderCandidate(id, byteArrayOf(3), byteArrayOf(9)) }
+    }
+
     @Test fun `lost sync response retains exact ID and command across owner recreation`() {
         val store = TestOperationIntentStoreV1().apply { throwAfterSave = true }
         val original = KagemushaOperationIntentOwnerV1(store)

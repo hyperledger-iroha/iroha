@@ -1197,6 +1197,7 @@ HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad_lib", "--lib"]),
     "config-fixtures": ("native configuration loading fixtures", "iroha_config_integration", "test", ["-p", "iroha_config", "--test", "iroha_config_integration"]),
     "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
+    "deploy": ("native generated genesis and localnet contracts", "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
@@ -1224,10 +1225,14 @@ HARNESS_TARGETS = {
 
 
 KAGAMI_STAGES = (("native Taira genesis and independent localnet profiles", (
-    "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
     "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
     "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
+)),)
+
+
+DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
+    "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
@@ -2324,7 +2329,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
-        "kagami": KAGAMI_STAGES,
+        "kagami": KAGAMI_STAGES, "deploy": DEPLOY_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES, "core-zk": CORE_ZK_STAGES,
         "sumeragi": CURRENT_CONSENSUS_STAGES, "schema": SCHEMA_STAGES,

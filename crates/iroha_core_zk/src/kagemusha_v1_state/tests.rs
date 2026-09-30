@@ -181,6 +181,8 @@ pub(super) fn snapshot_enrollment_binding(
     KagemushaRecoveryEnrollmentBindingV1 {
         enrollment_id: owner.enrollment_id().unwrap(),
         owner,
+        // Explicit synthetic Core key, separate from the fixture device credential.
+        core_authorization_key_reference: [212; 32],
     }
 }
 

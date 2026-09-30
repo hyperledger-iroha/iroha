@@ -407,10 +407,11 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010200 SET_ASSET_TRANSFER_AVAILABILITY — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<String>` → 0 — Gas: G_sci + bytes
 - 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
 - 0x010202 SET_ASSET_HOLDING_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
-- 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
-- 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
-- 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
-- 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
+- 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation` → 0 — Gas: G_sci + bytes
+- 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias), r11=request_generation` → 0 — Gas: G_sci + bytes
+- 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias), r11=request_generation` → 0 — Gas: G_sci + bytes
+- 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias), r11=request_generation` → 0 — Gas: G_sci + bytes
+  - Every mutation binds a nonzero alias-specific request generation. PROPOSE requires the next generation after retained terminal history; APPROVE, CANCEL, and FINALIZE require the exact pending generation. Policy replacement or clearing does not reset the sequence. A signature for an earlier request cannot authorize a later request for the same alias.
 - 0x010031 STATE_HAS — Args: `r10=&NoritoBytes(StatePath)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&NoritoBytes(StatePath)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
@@ -829,10 +830,10 @@ node enforces that policy unconditionally.
 | 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

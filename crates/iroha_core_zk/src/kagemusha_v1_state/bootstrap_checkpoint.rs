@@ -368,6 +368,23 @@ where
         mut self,
         guard_bundle: Vec<u8>,
     ) -> Result<KagemushaBootstrappedWalletV1<R, G, H>, KagemushaStateErrorV1> {
+        self.finish_attempt(guard_bundle)?;
+        Ok(self.into_wallet())
+    }
+
+    /// Retain the exact exclusive initialized owner when hardware or fresh selection is lost.
+    /// No previous machine or alternate initialization escapes through this retry path.
+    pub fn finish_or_retain(
+        mut self,
+        original_guard_bundle: Vec<u8>,
+    ) -> Result<KagemushaBootstrappedWalletV1<R, G, H>, (Box<Self>, KagemushaStateErrorV1)> {
+        match self.finish_attempt(original_guard_bundle) {
+            Ok(()) => Ok(self.into_wallet()),
+            Err(error) => Err((Box::new(self), error)),
+        }
+    }
+
+    fn finish_attempt(&mut self, guard_bundle: Vec<u8>) -> Result<(), KagemushaStateErrorV1> {
         self.manifest.check_owned().map_err(material_error)?;
         // Recheck the actual descriptor-owned prefixes immediately before publication verification.
         if self
@@ -390,11 +407,15 @@ where
         }
         self.machine
             .install_recovery_checkpoint(&self.candidate, guard_bundle)?;
-        Ok(KagemushaBootstrappedWalletV1 {
+        Ok(())
+    }
+
+    fn into_wallet(self) -> KagemushaBootstrappedWalletV1<R, G, H> {
+        KagemushaBootstrappedWalletV1 {
             machine: self.machine,
             coordinator: self.coordinator,
             responses: self.responses,
-        })
+        }
     }
 }
 

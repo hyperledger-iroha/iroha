@@ -26,6 +26,115 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /** Scripted endpoints test mapping and rejection, never manufacture qualified native evidence. */
 @Tag("host-native")
 class KagemushaNativeCoreCoordinatorAdapterV1Test {
+    @Test fun `lost operation7 retries the retained candidate command and native nonce after provider recreation`() {
+        val f = Fixture()
+        val store = TestOperationIntentStoreV1()
+        val command = KagemushaDeviceOperationCodecV1.encodeSenderCommand(KagemushaDeviceSenderCommandV1(operation = 7, operationId = f.id,
+            context = f.candidate.preparation.context, body = KagemushaDeviceSenderCommandBodyV1.Commit(f.candidate.selector,
+                f.candidate.candidateDigest(), f.candidate.hardwareCommitAuthorization())))
+        store.save(KagemushaOperationIntentV1(store.scope(), 7, f.id, KagemushaOperationIntentPurposeV1.CALLER,
+            command, canonicalSenderCandidate = f.candidateBytes))
+        val operations = mutableListOf<Int>()
+        val commands = mutableListOf<ByteArray>()
+        var loseResponse = true
+        val qualificationReply = testArchive("iroha.kagemusha.device.v1.active-hardware-credential-reply",
+            testFields(byteArrayOf(1, 0), byteArrayOf(1), f.q.releaseId(), f.q.hardwarePolicyDigest(),
+                f.q.coreAuthorizationKeyReference(), NoritoHeader.decode(f.qFields[2], null).payload,
+                NoritoHeader.decode(f.qFields[3], null).payload))
+        val transport = object : KagemushaNativeAuthenticatedDeviceTransportV1 {
+            override fun hardwarePolicyId() = f.q.hardwarePolicyDigest()
+            override fun qualificationReportDigest() = f.q.profile.qualificationReportDigest()
+            override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 {
+                operations += operation
+                if (operation == 1) return testResponse(operation, requestId, qualificationReply, testSignature())
+                assertEquals(7, operation, "original commit recovery must never use operation8")
+                assertContentEquals(f.id, requestId)
+                assertContentEquals(f.candidateBytes, store.load(7, requestId)!!.canonicalSenderCandidate())
+                assertContentEquals(command, store.load(7, requestId)!!.canonicalCommand())
+                assertContentEquals(command, canonicalCommand)
+                commands += canonicalCommand.copyOf()
+                if (loseResponse) { loseResponse = false; error("lost original response after physical dispatch") }
+                return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.RECOVERY_REQUIRED,
+                    byteArrayOf(), byteArrayOf(), byteArrayOf())
+            }
+        }
+        fun provider(): KagemushaAuthenticatedHardwareProviderV1 {
+            val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
+                override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
+                override fun install(storagePath: String) = 0
+                override fun open(storagePath: String) = 1L
+                override fun close(handle: Long) = 0
+                override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>) = when (method) {
+                    11 -> arrayOf(digest(97))
+                    2, 3 -> emptyArray()
+                    else -> error("retained commit must not request a new preparation or authorization: $method")
+                }
+            }
+            return KagemushaAuthenticatedHardwareProviderV1(transport,
+                KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {})
+        }
+        val first = assertFailsWith<KagemushaOriginalCommitResponseUnavailableV1> { provider().commitPayment(f.id, f.requestBytes) }
+        val second = assertFailsWith<KagemushaOriginalCommitResponseUnavailableV1> { provider().commitPayment(f.id, f.requestBytes) }
+        assertContentEquals(f.id, first.operationId())
+        assertContentEquals(f.id, second.operationId())
+        assertEquals(listOf(1, 7, 1, 7), operations)
+        assertContentEquals(commands[0], commands[1])
+        assertNull(store.load(7, f.id)!!.canonicalResponseFrame())
+        assertFalse(store.load(7, f.id)!!.acknowledged)
+    }
+
+    @Test fun `retained original operation7 reaches method6 byte exactly without another hardware dispatch`() {
+        val f = Fixture()
+        val store = TestOperationIntentStoreV1()
+        val command = KagemushaDeviceOperationCodecV1.encodeSenderCommand(KagemushaDeviceSenderCommandV1(operation = 7, operationId = f.id,
+            context = f.candidate.preparation.context, body = KagemushaDeviceSenderCommandBodyV1.Commit(f.candidate.selector,
+                f.candidate.candidateDigest(), f.candidate.hardwareCommitAuthorization())))
+        val original = testResponse(7, f.id, byteArrayOf(7), testSignature()).canonicalResponseFrame()
+        store.save(KagemushaOperationIntentV1(store.scope(), 7, f.id, KagemushaOperationIntentPurposeV1.CALLER,
+            command, canonicalCommand = command, canonicalQualification = byteArrayOf(5), canonicalReply = byteArrayOf(7),
+            responseAuthenticator = testSignature(), canonicalReplyQualification = byteArrayOf(5),
+            canonicalSenderCandidate = f.candidateBytes, canonicalResponseFrame = original))
+        val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
+            var invoked = false
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
+            override fun install(storagePath: String) = 0
+            override fun open(storagePath: String) = 1L
+            override fun close(handle: Long) = 0
+            override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> {
+                assertEquals(6, method)
+                assertContentEquals(f.candidateBytes, fields[0])
+                assertContentEquals(original, fields[1])
+                invoked = true
+                // Do not grant a terminal result using this structural, unsigned test endpoint.
+                error("stop at independent native original authentication")
+            }
+        }
+        val transport = object : KagemushaNativeAuthenticatedDeviceTransportV1 {
+            override fun hardwarePolicyId(): ByteArray = error("stored original must reach native verification first")
+            override fun qualificationReportDigest(): ByteArray = error("stored original must reach native verification first")
+            override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 = error("no repeated hardware dispatch")
+        }
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {})
+        assertFailsWith<IllegalStateException> { provider.commitPayment(f.id, f.requestBytes) }
+        assertTrue(endpoint.invoked)
+        assertContentEquals(original, store.load(7, f.id)!!.canonicalResponseFrame())
+        assertFalse(store.load(7, f.id)!!.acknowledged)
+    }
+
+    @Test fun `method6 refuses an inner reply signedoperation8 or foreign operation before native invoke`() {
+        val f = Fixture()
+        val endpoint = Endpoint()
+        val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint)
+        listOf(byteArrayOf(7), testResponse(8, f.id, byteArrayOf(7), testSignature()).canonicalResponseFrame(),
+            testResponse(7, digest(99), byteArrayOf(7), testSignature()).canonicalResponseFrame()).forEach {
+            assertFailsWith<IllegalArgumentException> { core.terminalEnvelope(f.candidate, it) }
+        }
+        assertEquals(0, endpoint.calls)
+    }
+
     @Test fun `pre enrollment op1 retains original framed qualification and exact authenticated native fields`() {
         exercisePreEnrollmentQualification()
     }
@@ -65,7 +174,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             f.q.profile.hardwareProfileId(), f.credential.laneCommitment(), digest(2), u64(120_007))
         val methods = mutableListOf<Int>()
         val native = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -164,8 +273,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         val preparation = core.beginSenderTransition(f.id, f.inputs, f.q)
         endpoint.expect(5, listOf(f.preparationBytes, byteArrayOf(5)), listOf(f.candidateBytes))
         val candidate = core.provePreparedSenderTransition(preparation, byteArrayOf(5))
-        endpoint.expect(6, listOf(f.candidateBytes, byteArrayOf(7)), listOf(f.paymentBytes))
-        assertContentEquals(f.paymentBytes, core.terminalEnvelope(candidate, byteArrayOf(7)))
+        val original = testResponse(7, f.id, byteArrayOf(7), testSignature()).canonicalResponseFrame()
+        endpoint.expect(6, listOf(f.candidateBytes, original), listOf(f.paymentBytes))
+        assertContentEquals(f.paymentBytes, core.terminalEnvelope(candidate, original))
         endpoint.expect(7, listOf(f.candidateBytes, f.paymentBytes, byteArrayOf(9), byteArrayOf(10), byteArrayOf(21)),
             listOf(f.paymentBytes, f.aggregateBytes))
         assertContentEquals(f.aggregateBytes, core.acceptInstalledTerminal(candidate, f.paymentBytes,
@@ -318,7 +428,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.requestBytes.size.toLong()).array() + f.requestBytes))
         val admitted = mutableListOf<Pair<Int, ByteArray>>()
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -338,7 +448,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 {
                 if (operation == 1) assertNull(acceptedDevicePublicKey)
                 else assertContentEquals(f.credential.devicePublicKey.sec1Bytes(), acceptedDevicePublicKey)
-                return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS,
+                return testResponse(operation, requestId,
                     if (operation == 1) qualificationReply else requestReply, authenticator(operation))
             }
         }
@@ -390,7 +500,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
     @Test fun `terminal and recovery envelopes reject one byte beyond the native bound`() {
         val f = Fixture()
         assertFailsWith<IllegalArgumentException> {
-            responding(6, listOf(ByteArray(7_937))).terminalEnvelope(f.candidate, byteArrayOf(7))
+            responding(6, listOf(ByteArray(7_937))).terminalEnvelope(f.candidate,
+                testResponse(7, f.id, byteArrayOf(7), testSignature()).canonicalResponseFrame())
         }
         val recovery = KagemushaCoreCoordinatorArchiveV1.decodeRecoveryShapeExact(f.recoveryBytes)
         assertFailsWith<IllegalArgumentException> {
@@ -416,7 +527,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 active.coreAuthorizationKeyReference(), NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareProfileShape(active.profile), null).payload,
                 NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareCredentialShape(active.credential), null).payload))
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -434,8 +545,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             override fun qualificationReportDigest() = active.profile.qualificationReportDigest()
             override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray,
                 acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 {
-                if (operation == 1) return KagemushaAuthenticatedDeviceResponseV1(operation,
-                    KagemushaAuthenticatedDeviceStatusV1.SUCCESS, qualificationReply,
+                if (operation == 1) return testResponse(operation, requestId, qualificationReply,
                     ByteArray(64).also { it[31] = 1; it[63] = 1 })
                 assertEquals(12, operation)
                 assertContentEquals(active.credential.devicePublicKey.sec1Bytes(), acceptedDevicePublicKey)
@@ -445,7 +555,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 releaseReachedDevice = true
                 // Stop before any hardware monetary success; this is an orchestration test.
                 return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE,
-                    byteArrayOf(), byteArrayOf())
+                    byteArrayOf(), byteArrayOf(), byteArrayOf())
             }
         }
         val adapter = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint)
@@ -475,7 +585,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         fun expect(method: Int, request: List<ByteArray>?, response: List<ByteArray>) {
             this.method = method; this.request = request; this.response = response
         }
-        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
         override fun close(handle: Long): Int { closeCalls++; assertEquals(1L, handle); return 0 }
@@ -625,7 +735,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         val lane = InternalTransitionLane(17, initiallyInstalled = true)
         lane.provider().recover()
         lane.replayNextSnapshot = true
-        assertFailsWith<IllegalStateException> { lane.provider().recover() }
+        val replay = assertFailsWith<IllegalArgumentException> { lane.provider().recover() }
+        assertEquals("original device response substituted its authenticated tuple", replay.message)
         lane.provider().recover()
         assertTrue(lane.store.events.isEmpty())
     }
@@ -675,7 +786,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         private var outstandingObservation: Triple<Int, ByteArray, ByteArray>? = null
         private var terminalReply: ByteArray? = null
         private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String): Long { outstandingObservation = null; return 1L }
             override fun close(handle: Long) = 0
@@ -741,7 +852,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                         snapshotReply(aggregate)
                     }
                     18 -> return KagemushaAuthenticatedDeviceResponseV1(18,
-                        KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE, byteArrayOf(), byteArrayOf())
+                        KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE, byteArrayOf(), byteArrayOf(), byteArrayOf())
                     transition -> {
                         operationIds += requestId.copyOf()
                         val intent = checkNotNull(store.load(operation, requestId))
@@ -758,8 +869,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                     }
                     else -> error("unexpected operation $operation")
                 }
-                return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS,
-                    reply, if (operation in setOf(1, 13, 18, 21)) observationAuthenticator(requestId)
+                return testResponse(operation, requestId, reply, if (operation in setOf(1, 13, 18, 21)) observationAuthenticator(requestId)
                     else ByteArray(64).also { it[31] = if (operation == 19) 1 else 2; it[63] = 1 })
                     .also { if (operation == 21) previousSnapshot = it }
             }
@@ -868,6 +978,16 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
     }
 
     companion object {
+        // Scripted structural frames are test inputs, never native/hardware qualification.
+        private fun testSignature() = ByteArray(64).also { it[31] = 1; it[63] = 1 }
+        private fun testResponse(operation: Int, id: ByteArray, payload: ByteArray, signature: ByteArray): KagemushaAuthenticatedDeviceResponseV1 {
+            val frame = ByteBuffer.allocate(116 + payload.size + signature.size).order(ByteOrder.LITTLE_ENDIAN)
+                .put("IKGMJRS1".toByteArray(Charsets.US_ASCII)).putShort(1).put(operation.toByte()).put(0)
+                .put(id).putInt(payload.size).putInt(signature.size)
+                .put(java.security.MessageDigest.getInstance("SHA-256").digest(payload))
+                .put(java.security.MessageDigest.getInstance("SHA-256").digest(signature)).put(payload).put(signature).array()
+            return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS, payload, signature, frame)
+        }
         private fun digest(value: Int) = ByteArray(32) { value.toByte() }
         private fun u64(value: Long) = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
         private fun u32(value: Int) = KagemushaCoreCoordinatorFrameV1.u32(value)

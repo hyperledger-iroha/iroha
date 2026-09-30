@@ -25,6 +25,9 @@ mod private_settlement;
 mod repair;
 mod reputation_journal;
 mod reserve;
+mod resource_names_state;
+mod authority_originals;
+pub use authority_originals::NativeAuthorityOriginalsReadV1;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
 pub mod sccp;

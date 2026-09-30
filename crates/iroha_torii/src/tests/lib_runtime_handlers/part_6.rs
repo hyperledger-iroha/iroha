@@ -2752,6 +2752,10 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
 }
 
 fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
+    mk_app_state_for_tests_with_world(world_with_root_scope_for_token_test(World::new(), private))
+}
+
+fn world_with_root_scope_for_token_test(world: World, private: bool) -> World {
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
         parameter::{
@@ -2762,7 +2766,6 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
             },
         },
     };
-    let world = World::new();
     let validators = iroha_core::sumeragi::test_chain::fixture_validators()
         .into_iter()
         .map(|(validator, _)| ValidatorPower {
@@ -2790,14 +2793,18 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
     };
     metadata.validate().unwrap();
     {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            Json::new(metadata),
-        )));
-        parameters.commit();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
+        transaction
+            .parameters_mut_for_testing()
+            .set_parameter(Parameter::Custom(CustomParameter::new(
+                consensus_metadata::handshake_meta_id(),
+                Json::new(metadata),
+            )));
+        transaction.apply();
+        block.commit();
     }
-    mk_app_state_for_tests_with_world(world)
+    world
 }
 
 #[tokio::test]

@@ -57,6 +57,26 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
         bridge.close()
     }
 
+    override fun stageIncomingOriginal(kind: KagemushaIncomingStageKindV1, creditId: ByteArray): ByteArray =
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.STAGE_INCOMING_ORIGINAL,
+            listOf(u32(kind.code), creditId)).single()
+
+    override fun prepareIncomingFold(selector: KagemushaPendingCreditSelectorV1): KagemushaNativeIncomingFoldPreparationV1 {
+        val response = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD,
+            listOf(u32(selector.kind.ordinal), selector.creditId()))
+        return KagemushaNativeIncomingFoldPreparationV1(selector.kind, response[0], response[1], response[2],
+            response[3], response[4], response[5], response[6], BigInteger(1, response[7].reversedArray()),
+            response[8], response[9])
+    }
+
+    override fun completeIncomingFold(preparation: KagemushaNativeIncomingFoldPreparationV1,
+        evidence: KagemushaIncomingFoldEvidenceV1): ByteArray {
+        preparation.requireEvidence(evidence)
+        return bridge.invoke(KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD,
+            listOf(preparation.historyOperationId(), preparation.canonicalPairedProof(),
+                evidence.canonicalHardwareTransitionCertificate(), evidence.deviceRootSelectionSignature())).single()
+    }
+
     override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION,
             listOf(u32(operation), canonicalCommand)).single().also {
@@ -150,9 +170,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
         }
     }
 
-    override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, authenticatedCommitReply: ByteArray): ByteArray =
+    override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, originalCommitResponseFrame: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.BUILD_TERMINAL_ENVELOPE,
-            listOf(KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), authenticatedCommitReply))
+            listOf(KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), originalCommitResponseFrame))
             .single().also { KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(it) }
 
     override fun acceptInstalledTerminal(

@@ -76,7 +76,7 @@ pub(crate) fn parse_artifact_id(value: Value, context: &str) -> CodecResult<iroh
     let mut fields = object(value, &["dataspace_id", "code_hash"], context)?;
     let dataspace_id = parse_u64_text(take(&mut fields, "dataspace_id", context)?, &format!("{context}.dataspace_id"))?;
     let code_hash = parse_model(take(&mut fields, "code_hash", context)?, &format!("{context}.code_hash"))?;
-    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_data_model::nexus::DataSpaceId::new(dataspace_id), code_hash))
+    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(dataspace_id), code_hash))
 }
 
 /// Render the SDK's exact decimal dataspace projection.
