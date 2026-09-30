@@ -34,6 +34,7 @@ fn kagemusha_policy_install_proposal() -> KagemushaVerifierPolicyInstallProposal
 
 #[test]
 fn kagemusha_initial_policy_proposal_is_canonical_and_binds_every_field() {
+    const LEGACY_HEAD_DOMAIN: &[u8] = b"iroha.governance.parliament.expected_head.root.v1";
     let payload = kagemusha_policy_install_proposal();
     payload.validate().expect("valid initial proposal");
     assert_eq!(
@@ -50,7 +51,6 @@ fn kagemusha_initial_policy_proposal_is_canonical_and_binds_every_field() {
     let empty_head = parliament_expected_head_root_v1(&payload.expected_predecessor);
     // Parity with the former Core-owned head-root preimage used by every
     // Parliament compare-and-set subject before the shared helper moved here.
-    const LEGACY_HEAD_DOMAIN: &[u8] = b"iroha.governance.parliament.expected_head.root.v1";
     assert_eq!(
         crate::governance_fingerprint::PARLIAMENT_EXPECTED_HEAD_ROOT_V1,
         LEGACY_HEAD_DOMAIN

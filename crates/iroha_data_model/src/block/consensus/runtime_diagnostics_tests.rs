@@ -70,6 +70,7 @@ fn diagnostics_binary_rejects_retired_empty_commitment_slots() {
     // Empty vectors have the same encoding for every element type. This hostile
     // layout preserves the exact retired slot positions without restoring DTOs.
     #[derive(Encode)]
+    #[expect(clippy::struct_excessive_bools, reason = "The rejection fixture must retain each separate retired wire slot.")]
     struct RetiredCommitmentDiagnostics {
         tx_queue_depth: u64,
         tx_queue_capacity: u64,

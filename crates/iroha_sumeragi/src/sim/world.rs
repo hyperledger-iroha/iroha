@@ -18,7 +18,7 @@ use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
     driver::{
-        Clock, Executor, Io, OwnedWrite, Write, block_exec, decode_txs, divergent_exec,
+        Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec,
         encode_tx_flagged, payload_mints,
     },
     host::{Done, Host, Op, Start, fake_host},
@@ -237,6 +237,7 @@ enum Ev {
     Script(usize),
     Restart(usize),
     TxGen(usize),
+    AmxTick,
     ByzTick(usize),
     Evict(usize),
 }
@@ -322,6 +323,8 @@ pub struct World {
     /// Write completions per machine so far.
     pub io_completions: Vec<u64>,
     workload: Option<Workload>,
+    /// Toy two-phase application and independent O-AMX observations, when configured.
+    pub amx: Option<super::amx::AmxWorld>,
     /// Submitted transactions per instance.
     pub txs: Vec<TxLog>,
     next_tx: u64,
@@ -582,6 +585,7 @@ impl World {
             io_kill: sc.io_kill,
             io_completions: vec![0; machines_n],
             workload: sc.workload,
+            amx: None,
             txs: Vec::new(),
             next_tx: 0,
             stats: Stats::default(),
@@ -594,6 +598,12 @@ impl World {
         world.nonce_source.set(world.rng.next_u64());
         world.txs = vec![BTreeMap::new(); world.instances.len()];
         world.oracle.init(&world.instances);
+        world.amx = sc
+            .amx
+            .map(|config| super::amx::AmxWorld::new(config, &world.instances));
+        if world.amx.is_some() {
+            world.schedule(super::amx::TICK, Ev::AmxTick);
+        }
         if sc.prebuilt > 0 {
             world.prebuild(sc.prebuilt, &sc.prebuilt_holders);
         }
@@ -791,6 +801,10 @@ impl World {
                 }
             }
             Ev::TxGen(inst) => self.gen_tx(inst),
+            Ev::AmxTick => {
+                self.amx_tick();
+                self.schedule(self.now + super::amx::TICK, Ev::AmxTick);
+            }
             Ev::ByzTick(r) => {
                 self.byz_tick(r);
                 self.schedule(self.now + 100, Ev::ByzTick(r));
@@ -1635,11 +1649,7 @@ impl World {
             let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
                 divergent_exec(&tip_result, block.payload().as_slice(), &bh)
             } else {
-                block_exec(
-                    &tip_result,
-                    block,
-                    &self.instances[inst].config(height).epoch,
-                )
+                self.app_exec(inst, &tip_result, block)
             };
             match outcome {
                 ExecOutcome::Valid(res) => Some(res),
@@ -1739,13 +1749,7 @@ impl World {
         } else if profile.divergent && !block.payload().as_slice().is_empty() {
             divergent_exec(parent, block.payload().as_slice(), bh)
         } else {
-            block_exec(
-                parent,
-                block,
-                &self.instances[self.replicas[r].inst]
-                    .config(block.header().height)
-                    .epoch,
-            )
+            self.app_exec(self.replicas[r].inst, parent, block)
         };
         (outcome, self.exec_latency(m, block))
     }
@@ -2122,11 +2126,7 @@ impl World {
                     let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
                         divergent_exec(&tip_result, block.payload().as_slice(), &qc.block_hash)
                     } else {
-                        block_exec(
-                            &tip_result,
-                            &block,
-                            &self.instances[self.replicas[r].inst].config(height).epoch,
-                        )
+                        self.app_exec(self.replicas[r].inst, &tip_result, &block)
                     };
                     let result = match outcome {
                         ExecOutcome::Valid(res) => Some(res),

@@ -801,24 +801,6 @@ mod tests {
 
     #[test]
     fn nonce_bound_issuer_evidence_requires_signed_possession_and_exact_commitment() {
-        let (f, app_policy) = app_bound_fixture();
-        let mut c = challenge(&f);
-        let verified_app = verified_app_for_challenge(&c, &app_policy);
-        c.app_attestation_digest = verified_app.digest();
-        let p = proof(&f, &c);
-        let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
-            let mut certificate = f.certificate.clone();
-            certificate.subject.challenge_evidence_digest =
-                proof.canonical_evidence_digest().unwrap();
-            certificate.subject.app_attestation_digest = proof.challenge.app_attestation_digest;
-            certificate.subject.issued_at_ms = time;
-            certificate.signature = SignatureOf::try_new(
-                f.issuer.private_key(),
-                &certificate.subject.approval_payload().unwrap(),
-            )
-            .unwrap();
-            certificate
-        };
         fn verify_issuer(
             f: &Fixture,
             proof: &KagemushaRetailEnrollmentPossessionProofV1,
@@ -839,6 +821,24 @@ mod tests {
                 verified_app,
             )
         }
+        let (f, app_policy) = app_bound_fixture();
+        let mut c = challenge(&f);
+        let verified_app = verified_app_for_challenge(&c, &app_policy);
+        c.app_attestation_digest = verified_app.digest();
+        let p = proof(&f, &c);
+        let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
+            let mut certificate = f.certificate.clone();
+            certificate.subject.challenge_evidence_digest =
+                proof.canonical_evidence_digest().unwrap();
+            certificate.subject.app_attestation_digest = proof.challenge.app_attestation_digest;
+            certificate.subject.issued_at_ms = time;
+            certificate.signature = SignatureOf::try_new(
+                f.issuer.private_key(),
+                &certificate.subject.approval_payload().unwrap(),
+            )
+            .unwrap();
+            certificate
+        };
         let certificate = seal(&p, 1000);
         let evidence = verify_issuer(&f, &p, &certificate, c.client_nonce, &verified_app).unwrap();
         assert_eq!(evidence.certificate(), &certificate);

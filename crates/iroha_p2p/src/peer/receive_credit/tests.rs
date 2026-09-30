@@ -229,7 +229,7 @@ fn private_grant_survives_another_peers_same_class_and_global_scratch_reservatio
         .unwrap()
         .expect("B has its own fully funded fallback");
     let reservation = second.consume(&grant.with_kind(Kind::Data)).unwrap();
-    assert!(reservation.retention._class_bytes.is_none());
+    assert!(reservation.retention.class_bytes.is_none());
     assert_eq!(
         used(&second.source.reserve) - before,
         3 * (maximum + ENVELOPE_BYTES)

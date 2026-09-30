@@ -356,12 +356,6 @@ mod canonical_output_inclusion_tests {
     }
     #[test]
     fn committed_query_rejects_retired_parallel_result_and_merge_wire() {
-        let (_, committed) = execution_fixture();
-        let mut json = norito::json::to_value(&committed).unwrap();
-        json.as_object_mut()
-            .unwrap()
-            .insert("merge_inclusion".into(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
         #[derive(norito::codec::Encode)]
         struct RetiredCommitted {
             block_hash: HashOf<crate::block::BlockHeader>,
@@ -373,6 +367,12 @@ mod canonical_output_inclusion_tests {
             result: crate::transaction::TransactionResult,
             merge_inclusion: Option<()>,
         }
+        let (_, committed) = execution_fixture();
+        let mut json = norito::json::to_value(&committed).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("merge_inclusion".into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
         let result = committed.result().clone();
         let old = RetiredCommitted {
             block_hash: committed.block_hash,

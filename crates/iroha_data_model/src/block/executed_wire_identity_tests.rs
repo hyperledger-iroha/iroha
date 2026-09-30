@@ -147,6 +147,13 @@ fn executed_identity_preserves_ambient_flags() {
 /// The original archive cap still applies to payload bytes and error exits restore flags.
 #[test]
 fn executed_identity_rejects_archive_cap_in_isolated_process() {
+    /// Restore the process ceiling even when an assertion fails in this isolated child.
+    struct RestoreCap(u64);
+    impl Drop for RestoreCap {
+        fn drop(&mut self) {
+            norito::core::set_max_archive_len(self.0);
+        }
+    }
     const CHILD: &str = "IROHA_DATA_MODEL_EXECUTED_IDENTITY_CAP_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -163,13 +170,6 @@ fn executed_identity_rejects_archive_cap_in_isolated_process() {
             String::from_utf8_lossy(&output.stderr)
         );
         return;
-    }
-    /// Restore the process ceiling even when an assertion fails in this isolated child.
-    struct RestoreCap(u64);
-    impl Drop for RestoreCap {
-        fn drop(&mut self) {
-            norito::core::set_max_archive_len(self.0);
-        }
     }
     let _restore = RestoreCap(norito::core::max_archive_len());
     let block = executed_fixture();

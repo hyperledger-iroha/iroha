@@ -361,7 +361,11 @@ fn custody_and_observer_time_bounds_are_finite_without_a_config_clock() {
                 &format!("{SIGNER_PREFIX}.{field} must be within 1..="),
             );
         }
-        let start = if prefix == "attester" { 800_000 } else { 900_000 };
+        let start = if prefix == "attester" {
+            800_000
+        } else {
+            900_000
+        };
         for end in [start - 1, start] {
             rejects(
                 &replaced_field(&format!("{prefix}.active_until_unix_ms"), end.to_string()),

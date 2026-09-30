@@ -8,11 +8,6 @@ use iroha_schema::IntoSchema;
 
 #[test]
 fn compact_result_roundtrips_complete_boundary_without_repeated_epoch_wire() {
-    let value = boundary_result(10);
-    let bytes = value.preimage().unwrap();
-    assert!(bytes.len() <= MAX_RESULT_PREIMAGE_BYTES);
-    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
-
     // There is one first-release result layout; the former repeated graph is not accepted.
     #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
@@ -23,6 +18,11 @@ fn compact_result_roundtrips_complete_boundary_without_repeated_epoch_wire() {
         beacon: Option<FinalizedGlobalThresholdBeaconPulseV1>,
         native_lanes: NativeLaneStateProof,
     }
+    let value = boundary_result(10);
+    let bytes = value.preimage().unwrap();
+    assert!(bytes.len() <= MAX_RESULT_PREIMAGE_BYTES);
+    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
+
     let repeated = norito::encode_canonical(&RepeatedResult {
         height: value.height,
         execution: value.execution,

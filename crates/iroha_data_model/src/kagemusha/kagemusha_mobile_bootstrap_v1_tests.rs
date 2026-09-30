@@ -177,7 +177,7 @@ fn rejects_native_network_scope_and_release_substitution() {
             5 => changed.release_id = [9; 32],
             _ => changed.release_attestation_digest = [9; 32],
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, &changed).is_err());
     }
 }
 
@@ -192,7 +192,7 @@ fn authenticates_native_checkpoint_and_freshness_fields_in_signature() {
             2 => changed.checkpoint.issued_at_ms += 1,
             _ => changed.checkpoint.expires_at_ms += 1,
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), &pins(&policy)).is_err());
     }
 }
 
@@ -214,7 +214,7 @@ fn rejects_even_threshold_signed_invalid_checkpoint_scope_version_and_freshness(
         let changed = signed(checkpoint.clone(), &keys[..2]);
         let mut changed_pins = pins(&policy);
         changed_pins.scope = checkpoint.scope;
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), changed_pins).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), &changed_pins).is_err());
     }
 }
 
@@ -229,15 +229,15 @@ fn rejects_package_selected_key_and_changed_authority_policy() {
     changed
         .approvals
         .sort_by(|a, b| a.public_key.cmp(&b.public_key));
-    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), &pins(&policy)).is_err());
     let mut changed_policy = policy.clone();
     changed_policy.authority_set_id = [99; 32];
     assert!(
-        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&changed_policy)).is_err()
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), &pins(&changed_policy)).is_err()
     );
     changed_policy.threshold = 0;
     assert!(
-        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&changed_policy)).is_err()
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), &pins(&changed_policy)).is_err()
     );
 }
 
@@ -258,7 +258,7 @@ fn rejects_duplicate_unordered_insufficient_and_invalid_approvals() {
                 .expect("wrong signing key");
             }
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), &pins(&policy)).is_err());
     }
 }
 
@@ -271,7 +271,7 @@ fn rejects_cross_domain_signature_replay() {
         approval.signature =
             SignatureOf::try_new(key.private_key(), &payload).expect("other domain");
     }
-    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&policy)).is_err());
+    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), &pins(&policy)).is_err());
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
         let mut changed = pins(&policy);
         changed.trusted_now_ms = time;
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&bytes, &changed).is_ok(),
             accepted
         );
     }
@@ -295,7 +295,7 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
         let mut changed = pins(&policy);
         changed.minimum_sequence = floor;
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&bytes, &changed).is_ok(),
             accepted
         );
     }
@@ -306,7 +306,7 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
     let (keys, policy, package) = fixture();
     let accepted = KagemushaMobileBootstrapReplayPinV1 {
         sequence: package.checkpoint.sequence,
-        checkpoint_digest: verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&policy))
+        checkpoint_digest: verify_kagemusha_mobile_bootstrap_v1(&archive(&package), &pins(&policy))
             .expect("first accepted package"),
     };
     for (sequence, checkpoint_height, succeeds) in
@@ -319,7 +319,7 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
         let mut changed_pins = pins(&policy);
         changed_pins.previous = Some(accepted);
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), changed_pins).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), &changed_pins).is_ok(),
             succeeds
         );
     }
@@ -335,7 +335,7 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
     ] {
         let mut changed_pins = pins(&policy);
         changed_pins.previous = Some(previous);
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), changed_pins).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), &changed_pins).is_err());
     }
 }
 

@@ -818,7 +818,7 @@ mod tests {
         let (instruction_box_pair, pair_flags) = norito::codec::encode_with_header_flags(&boxed);
         assert_eq!(pair_flags, header_flags);
         let pair_decoded = {
-            let guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
             let (decoded, used) = InstructionBox::decode_from_slice(&instruction_box_pair)
                 .expect("decode bare InstructionBox pair");
             assert_eq!(used, instruction_box_pair.len());

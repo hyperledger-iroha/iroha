@@ -1187,14 +1187,19 @@ mod tests {
 
         let (app_profile, app_credential, expected_app_binding, app_policy, app_evidence) =
             app_attest_fixture();
-        let signer = KagemushaFixtureSignerV1::from_repeated_byte(18);
+        let fixture_key = KagemushaFixtureSignerV1::from_repeated_byte(18);
         let direct_app_signature = KagemushaSignedHardwareTransitionSelectionV1 {
             subject: app_evidence.subject,
-            signature: signer.sign(&app_evidence.subject.canonical_signing_bytes().unwrap()),
+            signature: fixture_key.sign(&app_evidence.subject.canonical_signing_bytes().unwrap()),
         };
         assert!(
             direct_app_signature
-                .verify_against(&app_credential, &app_profile, &app_policy, expected_app_binding)
+                .verify_against(
+                    &app_credential,
+                    &app_profile,
+                    &app_policy,
+                    expected_app_binding
+                )
                 .is_err()
         );
     }

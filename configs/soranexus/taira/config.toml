@@ -1,6 +1,6 @@
 # Sora Taira (testnet) validator configuration
 # Whole-validator fixture, not a private DPN dataspace definition.
-# The private dataspace input is dataspaces/dpn.toml; CLI integration is pending.
+# Private dataspace input: dataspaces/dpn.toml (iroha dataspace plan/apply/status).
 # Network and deployment overrides; omitted values use iroha_config defaults.
 # Network prefix: `taira`
 # This is a checked-in product-profile fixture consumed by Kagami and tests.

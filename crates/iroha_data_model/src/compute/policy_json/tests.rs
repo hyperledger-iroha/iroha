@@ -4,7 +4,8 @@ use super::*;
 
 fn check_policy<T>(value: T, label: &str, tag: &str, discriminant: u32)
 where
-    T: Copy + json::JsonSerialize
+    T: Copy
+        + json::JsonSerialize
         + json::JsonDeserialize
         + norito::NoritoSerialize
         + for<'a> norito::NoritoDeserialize<'a>

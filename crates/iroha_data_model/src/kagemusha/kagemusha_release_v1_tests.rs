@@ -169,12 +169,14 @@ fn authority_policy_validation_counts_the_complete_canonical_frame() {
 
     // Every admitted public key has a bounded payload and at most 32 signers
     // are permitted. Keep a conservative framing allowance below the policy cap.
-    assert!(
-        KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1
-            * (iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1_024)
-            + 4_096
-            < KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1
-    );
+    const {
+        assert!(
+            KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1
+                * (iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1_024)
+                + 4_096
+                < KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1
+        );
+    }
 }
 
 #[test]
@@ -388,13 +390,14 @@ fn signed_experimental_purpose_binds_one_testnet_asset_and_reserve() {
 
 #[test]
 fn experimental_receipt_rejects_production_only_evidence() {
+    type ReceiptMutation = (&'static str, fn(&mut KagemushaInternalValidationReceiptV1));
     let mut baseline = receipt(&artifacts());
     reduce_to_experimental_receipt(&mut baseline);
     baseline
         .validate_experimental()
         .expect("zero production-only evidence is accepted");
 
-    let mutations: &[(&str, fn(&mut KagemushaInternalValidationReceiptV1))] = &[
+    let mutations: &[ReceiptMutation] = &[
         ("security review digest", |r| {
             r.security_review_report.sha256 = [1; 32]
         }),

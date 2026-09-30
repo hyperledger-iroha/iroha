@@ -3478,6 +3478,7 @@ mod tests {
 
     #[test]
     fn native_seal_message_roundtrips_and_binds_every_original_commit_coordinate() {
+        use norito::codec::DecodeAll as _;
         let message = KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             epoch_authorization: genesis_authorization(),
@@ -3492,7 +3493,6 @@ mod tests {
             kagemusha_top_up_count: 1,
             next_epoch_authorization: None,
         };
-        use norito::codec::DecodeAll as _;
 
         // This nested V1 message uses the fixed V1 bare layout through Encode/DecodeAll.
         // Its enclosing transport owns framing; no second standalone frame is introduced.

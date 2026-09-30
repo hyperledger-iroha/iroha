@@ -548,11 +548,27 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
             &original
         ));
         blocks.append(&block, &qc).unwrap();
-        blocks.append(&block, &alternate).unwrap();
+        let original_wire = chain
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(2).unwrap())
+            .unwrap()
+            .encode_wire()
+            .unwrap();
+        assert!(
+            blocks.append(&block, &alternate).is_err(),
+            "durable retry cannot replace the prepared certificate"
+        );
+        blocks.append(&block, &qc).unwrap();
+        assert_eq!(blocks.committed_body(2).unwrap().unwrap().1, qc);
         assert_eq!(
-            blocks.committed_body(2).unwrap().unwrap().1,
-            qc,
-            "an idempotent retry with another valid quorum retains the original certificate"
+            chain
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(2).unwrap())
+                .unwrap()
+                .encode_wire()
+                .unwrap(),
+            original_wire,
+            "refusal and exact retry retain the complete original durable frame"
         );
         worker.commit(&block, &qc).unwrap();
     });
@@ -1957,19 +1973,19 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                 .is_local_refusal()
         );
         let overlay = std::ptr::from_ref(original.overlay.as_ref());
-        // The move-only result shell can move from Finishing to Live; its funded
-        // committee backing and exact result must survive without reconstruction.
-        let result = original
-            .phase
-            .ready()
-            .unwrap()
-            .get()
+        let commitment = original.phase.ready().unwrap().get();
+        let authority = commitment.schedule.current.committee.as_ptr();
+        let proofs: Vec<_> = commitment
             .schedule
             .current
             .committee
-            .as_ptr();
+            .iter()
+            .map(|member| member.proof_of_possession.as_ptr())
+            .collect();
+        let canonical_result = norito::encode_canonical(commitment).unwrap();
         let witness = iroha_crypto::HashOf::new(&original.witness);
         let budget = worker.state.ivm_execution_budget();
+        assert!(original.phase.ready().unwrap().belongs_to(&budget));
         let held = budget.reserved_bytes();
         for _ in 0..2 {
             assert!(matches!(
@@ -1988,7 +2004,22 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                     .current
                     .committee
                     .as_ptr(),
-                result
+                authority
+            );
+            let commitment = retained.phase.ready().unwrap().get();
+            assert_eq!(
+                commitment
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                proofs
+            );
+            assert_eq!(
+                norito::encode_canonical(commitment).unwrap(),
+                canonical_result
             );
             assert_eq!(iroha_crypto::HashOf::new(&retained.witness), witness);
             assert!(
@@ -2000,6 +2031,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             );
             assert!(retained.native_contexts.is_none());
             assert_eq!(budget.reserved_bytes(), held);
+            assert!(retained.phase.ready().unwrap().belongs_to(&budget));
             assert!(!worker.results.contains_key(&block_hash));
             assert!(worker.recovery.is_none());
         }
@@ -2013,9 +2045,26 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             std::ptr::from_ref(live.overlay.as_deref().unwrap()),
             overlay
         );
+        // RetainedPayload's inline value moves into Live. Its original heap allocations,
+        // complete canonical value and allocation-pool custody must survive that move.
         assert_eq!(
             live.commitment.get().schedule.current.committee.as_ptr(),
-            result
+            authority
+        );
+        assert_eq!(
+            live.commitment
+                .get()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|member| member.proof_of_possession.as_ptr())
+                .collect::<Vec<_>>(),
+            proofs
+        );
+        assert_eq!(
+            norito::encode_canonical(live.commitment.get()).unwrap(),
+            canonical_result
         );
         assert!(live.commitment.belongs_to(&budget));
         assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
@@ -2140,8 +2189,6 @@ fn native_context_archive_failure_preserves_original_bytes_until_durable_acknowl
 #[test]
 fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting() {
     with_worker(|chain, worker, _blocks, events| {
-        let block = proposal(chain, worker);
-        let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
         let archive_files = || {
             std::fs::read_dir(chain.kura().store_root().join("native-contexts"))
                 .unwrap()
@@ -2151,7 +2198,24 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                 })
                 .collect::<BTreeMap<_, _>>()
         };
-        let before = archive_files();
+        let original_archives = archive_files();
+        assert_eq!(
+            original_archives.len(),
+            1,
+            "original genesis context is durable"
+        );
+        let genesis_context = worker
+            .context
+            .native_context_archive
+            .read_exact(1, chain.genesis().hash())
+            .unwrap();
+        assert_eq!(
+            original_archives.values().next().unwrap().as_slice(),
+            genesis_context.as_slice()
+        );
+        drop(genesis_context);
+        let block = proposal(chain, worker);
+        let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
         let foreign_budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let foreign = NativeContextArchive::open(
             chain.kura(),
@@ -2165,17 +2229,20 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             worker.prepare_original_result().unwrap();
             let original = worker.finishing.as_ref().unwrap();
             original_overlay = Some(std::ptr::from_ref(original.overlay.as_ref()));
-            original_result = Some(
-                original
-                    .phase
-                    .ready()
-                    .unwrap()
+            let result = original.phase.ready().unwrap();
+            assert!(result.belongs_to(&worker.state.ivm_execution_budget()));
+            original_result = Some((
+                result.get().schedule.current.committee.as_ptr(),
+                result
                     .get()
                     .schedule
                     .current
                     .committee
-                    .as_ptr(),
-            );
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                norito::encode_canonical(result.get()).unwrap(),
+            ));
             assert!(matches!(
                 foreign.prepare(
                     &original.overlay,
@@ -2187,11 +2254,7 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             ));
             assert_eq!(foreign_budget.reserved_bytes(), 0);
             assert!(original.native_contexts.is_none());
-            assert_eq!(
-                archive_files(),
-                before,
-                "retain the original genesis archive unchanged"
-            );
+            assert_eq!(archive_files(), original_archives);
             worker.finish_execution_with_encoder(encode_result_preimage)
         });
         assert!(matches!(outcome, ExecOutcome::Valid(_)));
@@ -2201,15 +2264,25 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             original_overlay
         );
         assert_eq!(
-            Some(
+            Some((
                 retained
                     .commitment
                     .get()
                     .schedule
                     .current
                     .committee
-                    .as_ptr()
-            ),
+                    .as_ptr(),
+                retained
+                    .commitment
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                norito::encode_canonical(retained.commitment.get()).unwrap(),
+            )),
             original_result
         );
         assert!(
@@ -2218,6 +2291,11 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                 .belongs_to(&worker.state.ivm_execution_budget())
         );
         assert!(retained.native_contexts.is_some());
+        assert_eq!(
+            archive_files(),
+            original_archives,
+            "preparation publishes no H2 archive"
+        );
         assert_eq!(foreign_budget.reserved_bytes(), 0);
         assert_eq!(worker.state.view().height(), 1);
         assert!(events.try_recv().is_err());

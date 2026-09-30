@@ -376,7 +376,8 @@ fn execution_output_preserves_sealed_outer_source_and_inner_call_identity() {
             .unwrap(),
         Hash::from(inner)
     );
-    validate_execution_outputs_v1(&[network()], proposal(), 8, std::slice::from_ref(&first)).unwrap();
+    validate_execution_outputs_v1(&[network()], proposal(), 8, std::slice::from_ref(&first))
+        .unwrap();
     let mut second_row = network();
     if let ExecutionOutputV1::Network(NetworkExecutionOutputV1 { input_index, .. }) =
         &mut second_row
@@ -504,14 +505,18 @@ fn rejected_network_output_cannot_retain_rolled_back_callback_completions() {
     };
     output.result = rejected();
     assert!(row.validate_structure(8, &inputs).is_err());
-    assert!(validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err());
+    assert!(
+        validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err()
+    );
 
     let ExecutionOutputV1::Network(output) = &mut row else {
         unreachable!("Network fixture");
     };
     output.completions[0].outcome = TriggerCompletedOutcome::Failure("rolled back".into());
     assert!(row.validate_structure(8, &inputs).is_err());
-    assert!(validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err());
+    assert!(
+        validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err()
+    );
 
     let ExecutionOutputV1::Network(output) = &mut row else {
         unreachable!("Network fixture");
@@ -547,7 +552,8 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
             completions[0].outcome =
                 TriggerCompletedOutcome::Failure("whole invocation failed".into());
             failed.validate_structure(8, &[]).unwrap();
-            validate_execution_outputs_v1(std::slice::from_ref(&failed), proposal(), 8, &[]).unwrap();
+            validate_execution_outputs_v1(std::slice::from_ref(&failed), proposal(), 8, &[])
+                .unwrap();
 
             for mutation in 0..6 {
                 let mut invalid = failed.clone();
@@ -778,8 +784,13 @@ fn pipeline_network_event_requires_actual_signed_transaction_source_kind() {
         payload,
         key.private_key(),
     ));
-    validate_execution_outputs_v1(&[network(), pipeline()], proposal(), 8, std::slice::from_ref(&sealed))
-        .unwrap();
+    validate_execution_outputs_v1(
+        &[network(), pipeline()],
+        proposal(),
+        8,
+        std::slice::from_ref(&sealed),
+    )
+    .unwrap();
     let mut event = pipeline();
     if let ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) = &mut event {
         invocation.event = PipelineEventPositionV1::Network(0);
@@ -870,6 +881,14 @@ fn execution_input_validation_uses_bounded_random_access() {
 fn trigger_use_rejects_retired_parallel_authority_slot() {
     use norito::codec::DecodeAll as _;
 
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::block::execution_output::TriggerUseV1")]
+    struct RetiredTriggerUse {
+        trigger_id: TriggerId,
+        authority: AccountId,
+        registered_at_height: u64,
+        action_hash: Hash,
+    }
     let current = trigger();
     let json = norito::json::to_value(&current).unwrap();
     assert!(!json.as_object().unwrap().contains_key("authority"));
@@ -885,14 +904,6 @@ fn trigger_use_rejects_retired_parallel_authority_slot() {
         assert!(norito::json::from_value::<TriggerUseV1>(retired).is_err());
     }
 
-    #[derive(Encode, norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::block::execution_output::TriggerUseV1")]
-    struct RetiredTriggerUse {
-        trigger_id: TriggerId,
-        authority: AccountId,
-        registered_at_height: u64,
-        action_hash: Hash,
-    }
     let retired = RetiredTriggerUse {
         trigger_id: current.trigger_id.clone(),
         authority: input().authority().clone(),

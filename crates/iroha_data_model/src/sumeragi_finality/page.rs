@@ -146,7 +146,14 @@ mod tests {
         assert_eq!(page.checkpoint().height(), 2);
         assert_eq!(checkpoint.height(), 1);
         let promoted = page.into_checkpoint();
-        verify_checkpoint_page(f.network, &promoted, std::slice::from_ref(&f.second), 64, CAP).unwrap();
+        verify_checkpoint_page(
+            f.network,
+            &promoted,
+            std::slice::from_ref(&f.second),
+            64,
+            CAP,
+        )
+        .unwrap();
     }
     #[test]
     fn native_page_rejects_missing_anchor_wrong_network_gaps_and_tampering() {
@@ -163,7 +170,16 @@ mod tests {
         let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
             b"foreign native network",
         )));
-        assert!(verify_checkpoint_page(foreign, &checkpoint, std::slice::from_ref(&f.first), 64, CAP).is_err());
+        assert!(
+            verify_checkpoint_page(
+                foreign,
+                &checkpoint,
+                std::slice::from_ref(&f.first),
+                64,
+                CAP
+            )
+            .is_err()
+        );
         let mut changed = f.second.clone();
         let last = changed.block_wire.len() - 1;
         changed.block_wire[last] ^= 1;
@@ -172,9 +188,25 @@ mod tests {
                 .is_err()
         );
         assert!(
-            verify_checkpoint_page(f.network, &checkpoint, std::slice::from_ref(&f.first), 0, CAP).is_err()
+            verify_checkpoint_page(
+                f.network,
+                &checkpoint,
+                std::slice::from_ref(&f.first),
+                0,
+                CAP
+            )
+            .is_err()
         );
-        assert!(verify_checkpoint_page(f.network, &checkpoint, std::slice::from_ref(&f.first), 64, 1).is_err());
+        assert!(
+            verify_checkpoint_page(
+                f.network,
+                &checkpoint,
+                std::slice::from_ref(&f.first),
+                64,
+                1
+            )
+            .is_err()
+        );
         assert_eq!(checkpoint.height(), 1);
     }
     #[test]

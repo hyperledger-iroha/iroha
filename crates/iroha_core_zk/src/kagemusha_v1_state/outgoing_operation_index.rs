@@ -480,7 +480,9 @@ pub struct KagemushaOutgoingOperationRecordV1 {
 }
 
 impl KagemushaOutgoingOperationRecordV1 {
-    fn validate(&self) -> KagemushaOutgoingOperationIndexResultV1<()> {
+    /// Validate the retained index invariants before recovery or journal retirement.
+    /// External receipt and current hardware authority remain the caller's responsibility.
+    pub(super) fn validate(&self) -> KagemushaOutgoingOperationIndexResultV1<()> {
         self.context.validate_shape()?;
         if [
             self.operation_id,
@@ -557,17 +559,6 @@ impl KagemushaOutgoingOperationRecordV1 {
             return Err(KagemushaOutgoingOperationIndexErrorV1::SnapshotIntegrity);
         }
         Ok(())
-    }
-
-    /// Recheck the authenticated record before an operation-specific terminal release.
-    ///
-    /// The payment and redemption release modules must validate their own external receipt, but
-    /// neither may bypass the retained operation-index invariants first established during
-    /// snapshot recovery.
-    pub(super) fn validate_terminal_release_state(
-        &self,
-    ) -> KagemushaOutgoingOperationIndexResultV1<()> {
-        self.validate()
     }
 
     pub(super) fn validate_against_prepared(

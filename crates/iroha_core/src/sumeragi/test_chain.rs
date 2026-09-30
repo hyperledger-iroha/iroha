@@ -1649,6 +1649,16 @@ pub(super) fn prepare_configured_genesis(
     ),
     StartFailure,
 > {
+    // LaneConfig is derived runtime geometry. Rebuild it from the authoritative catalog
+    // before signing, exactly as the pre-genesis State constructor does, so both owners
+    // authenticate the same height-one DA policies even when a caller changes the catalog.
+    let normalized_nexus = nexus_config.map(|nexus| {
+        let mut nexus = nexus.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus
+    });
+    let nexus_config = normalized_nexus.as_ref();
     let da_policies =
         nexus_config.map(|nexus| crate::da::active_proof_policy_bundle_at_height(nexus, 1));
     let confidential = zk.map_or_else(
@@ -1937,6 +1947,8 @@ mod tests {
             pipeline::{BlockStatus, PipelineEventBox},
         };
 
+        // Omit the currency in the original signed genesis. Removing an authenticated
+        // live definition would violate AXT incarnation custody before boundary execution.
         let mut chain = CertifiedTestChain::npos_boundary_fixture_with_currency(false);
         let currency = chain
             .state()
@@ -2140,6 +2152,96 @@ mod tests {
         let mut foreign = CertifiedTestChain::start(foreign_config).unwrap();
         assert!(foreign.replay_from(&source).is_err());
         assert_eq!(foreign.height(), 1);
+    }
+
+    #[test]
+    fn configured_genesis_derives_da_geometry_before_signing_and_rejects_wrong_policy() {
+        use iroha_crypto::HashOf;
+        use iroha_data_model::{da::commitment::DaProofPolicyBundle, nexus::LaneCatalog};
+
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let key = config.genesis_key.clone();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.fees.base_fee = 0_u32.into();
+        nexus.fees.per_byte_fee = 0_u32.into();
+        nexus.fees.per_instruction_fee = 0_u32.into();
+        nexus.fees.per_gas_unit_fee = 0_u32.into();
+        nexus.lane_catalog = LaneCatalog::new(
+            std::num::NonZeroU32::new(1).unwrap(),
+            vec![iroha_data_model::nexus::LaneConfig {
+                alias: "configured-primary".to_owned(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        // Deliberately retain the prior derived table: the configured catalog is the source.
+        let stale_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
+        assert!(stale_policies.policies.is_empty());
+        config.nexus = Some(nexus);
+        let prepared = CertifiedTestChain::prepare(config)
+            .expect("custom catalog policies are signed before original genesis execution");
+        let original = prepared.genesis.block();
+        let actual_nexus = prepared.state.nexus_snapshot();
+        let expected = crate::da::active_proof_policy_bundle_at_height(&actual_nexus, 1);
+        assert_eq!(expected.policies.len(), 1);
+        assert_eq!(expected.policies[0].alias, "configured-primary");
+        assert_eq!(original.da_proof_policies(), Some(&expected));
+        assert_eq!(
+            original.header().da_proof_policies_hash(),
+            Some(HashOf::new(&expected))
+        );
+        assert_ne!(expected, stale_policies);
+        let original_wire = prepared.genesis.canonical_wire().to_vec();
+
+        // Independently sign the wrong policy; do not mutate a signed header or bypass
+        // signature validation. The production policy check must reject it without output.
+        let wrong_policy = DaProofPolicyBundle::new(Vec::new());
+        let wrong = prepared
+            .manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &key,
+                Some(wrong_policy.clone()),
+                Some(crate::state::default_genesis_confidential_policy_hash()),
+                1_000,
+            )
+            .unwrap()
+            .0;
+        let topology = super::super::network_topology::Topology::new(
+            prepared
+                .validator_keys
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone())),
+        );
+        {
+            let validation = crate::block::ValidBlock::validate_signed_genesis(
+                wrong,
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &TimeSource::new_system(),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {});
+            let (rejected, error) = match validation {
+                Ok(_) => panic!("signed policy outside the configured catalog must be rejected"),
+                Err(rejected) => rejected,
+            };
+            assert!(matches!(
+                *error,
+                crate::block::BlockValidationError::ProofPolicyHashMismatch { expected: hash, actual }
+                    if hash == HashOf::new(&expected) && actual == Some(HashOf::new(&wrong_policy))
+            ));
+            assert!(rejected.execution_outputs().is_empty());
+        }
+        assert_eq!(prepared.state.view().height(), 0);
+        assert_eq!(prepared.kura.blocks_count(), 0);
+
+        let chain = CertifiedTestChain::from_prepared(prepared)
+            .expect("the original custom-catalog genesis applies unchanged");
+        assert_eq!(chain.height(), 1);
+        assert_eq!(chain.genesis().encode_wire().unwrap(), original_wire);
     }
 
     fn prepared_config() -> PreparedTestChainConfig {

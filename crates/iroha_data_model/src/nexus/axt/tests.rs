@@ -383,10 +383,10 @@ fn source_success_receipt_and_ordered_transfer_occurrence_commit_every_field() {
         .validate()
         .expect("all occurrence digests present");
     AxtSourceTransferOccurrenceV1 {
-        source_tx_index: u32::try_from((MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1)).unwrap(),
-        transcript_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
-        delta_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
-        pair_ordinal: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
+        source_tx_index: u32::try_from(MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1).unwrap(),
+        transcript_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1).unwrap(),
+        delta_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1).unwrap(),
+        pair_ordinal: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1).unwrap(),
         ..occurrence
     }
     .validate()
@@ -1012,9 +1012,9 @@ fn source_transfer_replay_key_uses_physical_coordinate_independent_of_issuer_non
         Err(AxtSourceTransferReplayKeyValidationErrorV1::TransactionIndex)
     );
     AxtSourceTransferReplayKeyV1 {
-        source_tx_index: u32::try_from((MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1)).unwrap(),
-        transcript_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
-        delta_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
+        source_tx_index: u32::try_from(MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1).unwrap(),
+        transcript_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1).unwrap(),
+        delta_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1).unwrap(),
         ..key
     }
     .validate()

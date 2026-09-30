@@ -86,6 +86,7 @@ impl Chain {
             parent_hash: Hash32([1; 32]),
             parent_result: Hash32([2; 32]),
             payload_hash: Hash32([3; 32]),
+            availability_digest: Hash32([4; 32]),
             payload_len: 0,
             proposer: 0,
             skipped_leaders: Vec::new(),

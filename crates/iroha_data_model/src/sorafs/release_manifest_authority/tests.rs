@@ -5,11 +5,11 @@ use sorafs_manifest::signer::protocol::SignerOperationCustodyV1;
 
 #[test]
 fn release_manifest_outcome_and_action_keep_inline_v1_payloads() {
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestOutcomeV1>() <= 512);
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestActionV1>() <= 1536);
     fn assert_copy<T: Copy>() {}
     assert_copy::<ReleaseManifestOutcomeV1>();
     assert_copy::<ReleaseManifestOperationV1>();
-    const _: () = assert!(core::mem::size_of::<ReleaseManifestOutcomeV1>() <= 512);
-    const _: () = assert!(core::mem::size_of::<ReleaseManifestActionV1>() <= 1536);
 
     let outcome_schema = ReleaseManifestOutcomeV1::schema();
     let iroha_schema::Metadata::Enum(outcomes) = outcome_schema
@@ -122,14 +122,14 @@ fn fixture_floor() -> ReleaseManifestFloorV1 {
     }
 }
 
-fn fixture_check(phase: ReleaseManifestCheckPhaseV1) -> ReleaseManifestCheckV1 {
+fn fixture_check(phase: &ReleaseManifestCheckPhaseV1) -> ReleaseManifestCheckV1 {
     ReleaseManifestCheckV1 {
         challenge: [14; 32],
         network_id: [15; 32],
         expected_operator: fixture_operator(),
         floor: fixture_floor(),
         reviewed: fixture_review(),
-        phase,
+        phase: *phase,
     }
 }
 
@@ -160,7 +160,7 @@ fn release_manifest_actions_have_one_bounded_canonical_norito_surface() {
             operation_id: [1; 32],
             reservation: fixture_reservation(),
         }),
-        ReleaseManifestActionV1::Check(fixture_check(ReleaseManifestCheckPhaseV1::Current(
+        ReleaseManifestActionV1::Check(fixture_check(&ReleaseManifestCheckPhaseV1::Current(
             fixture_audit(),
         ))),
     ];
@@ -218,7 +218,7 @@ fn release_manifest_actions_have_one_strict_json_and_schema_surface() {
             operation_id: [1; 32],
             reservation: fixture_reservation(),
         }),
-        ReleaseManifestActionV1::Check(fixture_check(ReleaseManifestCheckPhaseV1::Current(
+        ReleaseManifestActionV1::Check(fixture_check(&ReleaseManifestCheckPhaseV1::Current(
             fixture_audit(),
         ))),
     ];
@@ -234,7 +234,7 @@ fn release_manifest_actions_have_one_strict_json_and_schema_surface() {
             action
         );
     }
-    let check = fixture_check(ReleaseManifestCheckPhaseV1::Current(fixture_audit()));
+    let check = fixture_check(&ReleaseManifestCheckPhaseV1::Current(fixture_audit()));
     let json = norito::json::to_json(&check).expect("check JSON");
     let foreign = json.replacen("\"challenge\":", "\"extra\":1,\"challenge\":", 1);
     assert_ne!(foreign, json);
@@ -428,9 +428,9 @@ fn release_manifest_check_rejects_round_substitution_and_forged_phase() {
         ReleaseManifestCheckPhaseV1::BeforeRelease(completed),
     ];
     for phase in phases {
-        assert_eq!(check_claim(&fixture_check(phase)), Ok(()));
+        assert_eq!(check_claim(&fixture_check(&phase)), Ok(()));
     }
-    let current = fixture_check(ReleaseManifestCheckPhaseV1::Current(fixture_audit()));
+    let current = fixture_check(&ReleaseManifestCheckPhaseV1::Current(fixture_audit()));
     assert_eq!(
         validate_release_manifest_check_claim_v1(
             &current,
@@ -455,19 +455,19 @@ fn release_manifest_check_rejects_round_substitution_and_forged_phase() {
         check_claim(&wrong_review),
         Err(ReleaseManifestClaimErrorV1::Review)
     );
-    let forged = fixture_check(ReleaseManifestCheckPhaseV1::AfterCommit(reserved));
+    let forged = fixture_check(&ReleaseManifestCheckPhaseV1::AfterCommit(reserved));
     assert_eq!(
         check_claim(&forged),
         Err(ReleaseManifestClaimErrorV1::Phase)
     );
-    let forged = fixture_check(ReleaseManifestCheckPhaseV1::BeforeProvider(completed));
+    let forged = fixture_check(&ReleaseManifestCheckPhaseV1::BeforeProvider(completed));
     assert_eq!(
         check_claim(&forged),
         Err(ReleaseManifestClaimErrorV1::Phase)
     );
     let mut changed_row = reserved;
     changed_row.reviewed.intent.operation_id = [22; 32];
-    let forged = fixture_check(ReleaseManifestCheckPhaseV1::BeforeProvider(changed_row));
+    let forged = fixture_check(&ReleaseManifestCheckPhaseV1::BeforeProvider(changed_row));
     assert_eq!(
         check_claim(&forged),
         Err(ReleaseManifestClaimErrorV1::Phase)
@@ -477,7 +477,7 @@ fn release_manifest_check_rejects_round_substitution_and_forged_phase() {
         signatures_digest: [0; 32],
         ..fixture_completion()
     });
-    let forged = fixture_check(ReleaseManifestCheckPhaseV1::BeforeRelease(
+    let forged = fixture_check(&ReleaseManifestCheckPhaseV1::BeforeRelease(
         changed_completion,
     ));
     assert_eq!(

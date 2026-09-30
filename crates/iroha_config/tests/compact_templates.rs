@@ -256,8 +256,22 @@ fn minamoto_inherits_complete_da_retention_policy() {
     );
     assert_eq!(policy.overrides.len(), 3);
     for (entry, (class, hot, cold, replicas, storage, tag)) in policy.overrides.iter().zip([
-        ("taikai_segment", 86400, 1_209_600, 5, "hot", "da.taikai.live"),
-        ("nexus_lane_sidecar", 21600, 604_800, 4, "warm", "da.sidecar"),
+        (
+            "taikai_segment",
+            86400,
+            1_209_600,
+            5,
+            "hot",
+            "da.taikai.live",
+        ),
+        (
+            "nexus_lane_sidecar",
+            21600,
+            604_800,
+            4,
+            "warm",
+            "da.sidecar",
+        ),
         (
             "governance_artifact",
             43200,

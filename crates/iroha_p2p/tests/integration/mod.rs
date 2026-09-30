@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-/// Build a low-cost fixture for the mandatory SoraNet admission handshake.
+/// Build a low-cost fixture for the mandatory `SoraNet` admission handshake.
 fn low_cost_test_soranet_handshake() -> SoranetHandshake {
     let mut handshake = SoranetHandshake::default();
     handshake.pow.difficulty = 1;

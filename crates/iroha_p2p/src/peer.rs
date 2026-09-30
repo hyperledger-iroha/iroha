@@ -2437,12 +2437,23 @@ impl Default for InboundDispatchByteBudgets {
 }
 #[derive(Clone, Debug)]
 struct InboundFrameRetention {
-    _source: Arc<InboundFrameSourceLeases>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retains source custody until its final owner drops"
+        )
+    )]
+    source: Arc<InboundFrameSourceLeases>,
     frame_queue_overhead_bytes: usize,
 }
 #[derive(Debug)]
 struct InboundFrameSourceLeases {
-    _leases: Vec<SharedByteLease>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "RAII leases retain the original physical backing")
+    )]
+    leases: Vec<SharedByteLease>,
     #[cfg(test)]
     retained_bytes: usize,
 }
@@ -2451,30 +2462,30 @@ impl InboundFrameRetention {
     fn new(source: SharedByteLease, frame_queue_overhead_bytes: usize) -> Self {
         let retained_bytes = source.bytes;
         Self {
-            _source: Arc::new(InboundFrameSourceLeases {
-                _leases: vec![source],
+            source: Arc::new(InboundFrameSourceLeases {
+                leases: vec![source],
                 retained_bytes,
             }),
             frame_queue_overhead_bytes,
         }
     }
     fn retained_bytes(&self) -> usize {
-        self._source.retained_bytes
+        self.source.retained_bytes
     }
     fn extend(&mut self, source: SharedByteLease) -> Option<()> {
-        let owned = Arc::get_mut(&mut self._source)?;
+        let owned = Arc::get_mut(&mut self.source)?;
         let retained_bytes = owned.retained_bytes.checked_add(source.bytes)?;
         if let Some(existing) = owned
-            ._leases
+            .leases
             .iter_mut()
             .find(|existing| existing.same_owner(&source))
         {
             existing.merge(source).ok()?;
         } else {
-            owned._leases.push(source);
+            owned.leases.push(source);
         }
         debug_assert!(
-            owned._leases.len() <= SOURCE_RETENTION_MAX_LEASES,
+            owned.leases.len() <= SOURCE_RETENTION_MAX_LEASES,
             "one frame may retain only the shared and PeerId source owners"
         );
         owned.retained_bytes = retained_bytes;
@@ -2657,7 +2668,7 @@ mod shared_byte_budget_tests {
         retention
             .extend(second_peer)
             .expect("peer-owner chunk coalesces");
-        assert_eq!(retention._source._leases.len(), SOURCE_RETENTION_MAX_LEASES);
+        assert_eq!(retention.source.leases.len(), SOURCE_RETENTION_MAX_LEASES);
         assert_eq!(retention.retained_bytes(), 4);
         assert_eq!(shared.retained_total(), 2);
         assert_eq!(peer.retained_total(), 2);
@@ -6599,8 +6610,8 @@ mod run {
     }
     #[test]
     fn captured_original_p2p_scalar_message_frames() {
-        assert_captured_p2p_message("message_u32", "scalar", 0x12345678_u32);
-        assert_captured_p2p_message("message_u64", "scalar", 0x0123456789abcdef_u64);
+        assert_captured_p2p_message("message_u32", "scalar", 0x1234_5678_u32);
+        assert_captured_p2p_message("message_u64", "scalar", 0x0123_4567_89ab_cdef_u64);
     }
     #[cfg(test)]
     mod admission_class_tests;
@@ -6968,7 +6979,7 @@ mod run {
             for alignment in [1, 2, 4, 8, 16, 32, 64, 128] {
                 for length in [0, 1, 7, 257, 1024, 3] {
                     let payload = (0..length)
-                        .map(|index| (index % 251) as u8)
+                        .map(|index| u8::try_from(index % 251).unwrap())
                         .collect::<Vec<_>>();
                     let decoded = super::copy_to_aligned_scratch(&mut scratch, &payload, alignment);
                     assert_eq!(decoded, payload);
@@ -11384,8 +11395,8 @@ mod run {
                 .current_frame_retention
                 .as_ref()
                 .expect("complete synthetic frame retention")
-                ._source
-                ._leases
+                .source
+                .leases
                 .len();
             assert_eq!(
                 reservations, 1,
@@ -13612,7 +13623,7 @@ pub mod message {
     /// corresponding inbound byte-budget reservation and any attached
     /// authenticated-source queue credit.
     pub struct PeerMessageRetentionGuard {
-        _retention: Option<PeerMessageRetention>,
+        retention: Option<PeerMessageRetention>,
         authenticated_via: PeerId,
         _source_credit: Option<AuthenticatedSourceCreditGuard>,
         _delivery_drain: Option<InboundDeliveryDrainGuard>,
@@ -13779,7 +13790,7 @@ pub mod message {
                 payload_bytes,
                 reply_route,
                 PeerMessageRetentionGuard {
-                    _retention: retention,
+                    retention,
                     authenticated_via,
                     _source_credit: source_credit,
                     _delivery_drain: delivery_drain,
@@ -13947,7 +13958,7 @@ pub mod message {
         /// Return the class authorized by the consumed, pre-reserved data grant.
         /// Synthetic messages have no grant. This never reclassifies from caller priority.
         pub fn granted_admission_class(&self) -> Option<crate::TransportAdmissionClass> {
-            match &self._retention {
+            match &self.retention {
                 Some(PeerMessageRetention::Granted(retention)) => Some(retention.class),
                 _ => None,
             }

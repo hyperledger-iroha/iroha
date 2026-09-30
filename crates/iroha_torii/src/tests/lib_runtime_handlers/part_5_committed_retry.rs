@@ -13,10 +13,15 @@ fn committed_retry_fixture(
     let key = checked_torii_test_ed25519_keypair(0x29, "committed retry authority");
     let authority = AccountId::new(key.public_key().clone());
     let genesis_ms = if live {
-        u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis())
-            .unwrap()
-            .checked_sub(1)
-            .unwrap()
+        u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+        .checked_sub(1)
+        .unwrap()
     } else {
         1_000
     };
@@ -28,12 +33,15 @@ fn committed_retry_fixture(
         )
         .into()
     };
-    let (app, hash, chain) = executed_history_test_fixture(
+    let (mut app, hash, chain) = executed_history_test_fixture(
         TestChainConfig::new(world_with_account(&authority), genesis_ms),
         &key,
         vec![instruction],
         applied,
     );
+    Arc::get_mut(&mut app)
+        .expect("unique committed retry fixture")
+        .local_peer_id = Some(chain.validators()[0].0.clone());
     let original = chain.committed(2);
     let transaction = original
         .block()
@@ -53,9 +61,10 @@ async fn committed_retry_acknowledges_exact_carrier_without_requeueing() {
     for applied in [true, false] {
         let (app, transaction, chain, _) = committed_retry_fixture(true, applied);
         let original = chain.committed(2).block().encode_wire().unwrap();
-        let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
-            .await
-            .expect("an exact committed retry acknowledges its original admission");
+        let response =
+            post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+                .await
+                .expect("an exact committed retry acknowledges its original admission");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         assert_eq!(
             torii_response_header(&response, "x-iroha-entrypoint-hash"),
@@ -78,8 +87,11 @@ async fn committed_retry_acknowledges_exact_carrier_without_requeueing() {
         .await
         .expect("batch ingress acknowledges both copies of the exact committed carrier");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert_eq!(torii_response_header(&response, "x-iroha-transactions-accepted"), Some("2"));
-        let sender = app.local_peer_id.clone().expect("native fixture validator");
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-transactions-accepted"),
+            Some("2")
+        );
+        let sender = chain.validators()[1].0.clone();
         let response = super::execute_incoming_torii_proxy_request(
             &app,
             ToriiProxyRequestV1 {
@@ -146,7 +158,8 @@ async fn committed_retry_requires_full_carrier_including_authorization() {
 async fn committed_retry_fails_closed_when_original_history_is_unavailable() {
     let (app, transaction, _chain, _) = committed_retry_fixture(true, true);
     app.kura
-        .corrupt_canonical_body_for_testing(NonZeroUsize::new(2).unwrap()).unwrap();
+        .corrupt_canonical_body_for_testing(NonZeroUsize::new(2).unwrap())
+        .unwrap();
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("membership is insufficient without authentic original history");
@@ -191,12 +204,15 @@ async fn committed_retry_revalidates_expiry_and_current_signature_policy() {
 
     let (app, transaction, _chain, _) = committed_retry_fixture(true, true);
     let mut crypto = app.state.crypto().as_ref().clone();
-    crypto.allowed_signing.retain(|algorithm| *algorithm != Algorithm::Ed25519);
+    crypto
+        .allowed_signing
+        .retain(|algorithm| *algorithm != Algorithm::Ed25519);
     app.state.set_crypto(crypto);
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("committed identity cannot bypass the current signing policy");
-    let Error::AcceptTransaction(AcceptTransactionFail::SignatureVerification(error)) = error else {
+    let Error::AcceptTransaction(AcceptTransactionFail::SignatureVerification(error)) = error
+    else {
         panic!("expected current signing-policy rejection");
     };
     assert_eq!(error.code(), SignatureRejectionCode::AlgorithmNotPermitted);
@@ -231,16 +247,25 @@ async fn committed_retry_preserves_full_queue_and_authority_rate_reservation() {
     .unwrap();
     let original_pending = lifecycle_pending_wire(&app);
     for _ in 0..2 {
-        let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
-            .await
-            .expect("committed retry needs no fresh queue slot or authority quota");
+        let response =
+            post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+                .await
+                .expect("committed retry needs no fresh queue slot or authority quota");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         assert_eq!(app.queue.active_len(), 1);
         assert_eq!(lifecycle_pending_wire(&app), original_pending);
         assert_native_pending_for_test(&app, &pending);
     }
-    assert!(app.tx_rate_limiter.allow(&transaction_verified_authority_key(&authority)).await);
-    assert!(!app.tx_rate_limiter.allow(&transaction_verified_authority_key(&authority)).await);
+    assert!(
+        app.tx_rate_limiter
+            .allow(&transaction_verified_authority_key(&authority))
+            .await
+    );
+    assert!(
+        !app.tx_rate_limiter
+            .allow(&transaction_verified_authority_key(&authority))
+            .await
+    );
 }
 
 #[tokio::test]
@@ -259,14 +284,10 @@ async fn committed_retry_rechecks_route_after_history_authentication() {
     let prepared = super::prepare_fresh_transaction_ingress(&app, accepted).unwrap();
     assert!(prepared.committed_replay);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
-    let error = super::submit_prepared_transaction_ingress(
-        &app,
-        prepared,
-        false,
-        ResponseFormat::Json,
-    )
-    .await
-    .expect_err("a changed route cannot reuse the previous acknowledgment route");
+    let error =
+        super::submit_prepared_transaction_ingress(&app, prepared, false, ResponseFormat::Json)
+            .await
+            .expect_err("a changed route cannot reuse the previous acknowledgment route");
     assert_ne!(error.into_response().status(), StatusCode::ACCEPTED);
     assert_eq!(calls.load(Ordering::Relaxed), 2);
     assert_eq!(app.queue.active_len(), 0);

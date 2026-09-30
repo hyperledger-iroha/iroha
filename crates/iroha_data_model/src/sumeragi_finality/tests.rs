@@ -189,20 +189,6 @@ pub(super) fn certify_successor(
 
 impl Fixture {
     pub(crate) fn new() -> Self {
-        let mut keys: Vec<_> = (1..=4)
-            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-            .collect();
-        keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
-        let validators: Vec<_> = keys
-            .iter()
-            .map(|key| FinalityValidator {
-                public_key: key.public_key().clone(),
-                proof_of_possession: bls_normal_pop_prove(key.private_key()).unwrap(),
-            })
-            .collect();
-        let (crypto, _) = ProofCrypto::new(&validators).unwrap();
-        let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
-        let account = AccountId::new(authority.public_key().clone());
         use crate::{
             block::consensus::SumeragiGenesisContextParameters,
             isi::{
@@ -220,6 +206,20 @@ impl Fixture {
                 },
             },
         };
+        let mut keys: Vec<_> = (1..=4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect();
+        keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+        let validators: Vec<_> = keys
+            .iter()
+            .map(|key| FinalityValidator {
+                public_key: key.public_key().clone(),
+                proof_of_possession: bls_normal_pop_prove(key.private_key()).unwrap(),
+            })
+            .collect();
+        let (crypto, _) = ProofCrypto::new(&validators).unwrap();
+        let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
+        let account = AccountId::new(authority.public_key().clone());
         let epoch_fixture = crate::sumeragi::epoch::tests::fixture(4);
         let metadata = ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
@@ -269,8 +269,7 @@ impl Fixture {
             0,
         );
         let mut first_block = genesis.clone();
-        output_test_support::install_network(&mut first_block, vec![Ok(Vec::default())])
-            .unwrap();
+        output_test_support::install_network(&mut first_block, vec![Ok(Vec::default())]).unwrap();
         let first_result = result(&first_block, &epoch);
         // Genesis is result-only: no consensus header, CommitQC or availability frame.
         first_block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
@@ -533,10 +532,6 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
 
 #[test]
 fn complete_result_roundtrip_rejects_retired_scalar_schedule_layout() {
-    let fixture = Fixture::new();
-    let value = fixture.second.decode_checked().unwrap().commitment;
-    let bytes = value.preimage().unwrap();
-    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
     #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
     struct RetiredResult {
@@ -544,6 +539,10 @@ fn complete_result_roundtrip_rejects_retired_scalar_schedule_layout() {
         next_committee_digest: [u8; 32],
         next_params: ChainParamsRecord,
     }
+    let fixture = Fixture::new();
+    let value = fixture.second.decode_checked().unwrap().commitment;
+    let bytes = value.preimage().unwrap();
+    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
     let retired = RetiredResult {
         execution: value.execution,
         next_committee_digest: [3; 32],

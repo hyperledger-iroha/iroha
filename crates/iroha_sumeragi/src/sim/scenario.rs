@@ -379,6 +379,8 @@ pub struct Scenario {
     pub io_kill: Option<IoKill>,
     /// Workload (per instance), `None` = idle.
     pub workload: Option<Workload>,
+    /// Optional toy AMX application over the same unmodified consensus instances.
+    pub amx: Option<super::amx::AmxConfig>,
     /// Committee schedule: from height → members as `(machine, key slot)`; the first entry
     /// must start at height 0 (it is the genesis committee).
     pub committees: CommitteeSchedule,
@@ -427,6 +429,7 @@ impl Scenario {
             churn: None,
             io_kill: None,
             workload: Some(Workload::default()),
+            amx: None,
             committees: vec![(0, (0..n).map(|m| (m, 0)).collect())],
             instance_committees: Vec::new(),
             follow_all_instances: false,

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     crypto::{SigSlot, SimSigner, aggregate, parse_preimage},
-    driver::{block_exec, decode_txs, encode_tx, reference_exec},
+    driver::{decode_txs, encode_tx, reference_exec},
     host::BacklogBound,
     scenario::Perf,
     world::{Inst, World},
@@ -1096,7 +1096,7 @@ impl World {
         if block.header().instance != instance.id {
             return Err("foreign instance".to_owned());
         }
-        match block_exec(&parent_result, block, &instance.config(h).epoch) {
+        match self.app_exec(inst, &parent_result, block) {
             ExecOutcome::Valid(expected) if expected == qc.result => {}
             other => return Err(format!("result {:?} but reference {other:?}", qc.result)),
         }
@@ -1507,6 +1507,7 @@ impl World {
     /// End-of-run checks: progress, P1 p99, P2/P4 frequencies, P5, O-TXP, O-CQ, O-MEM of the
     /// body stores.
     pub fn finish(&mut self) {
+        self.amx_finish();
         let honest = self.honest();
         for &r in &honest {
             if self.failure.is_some() {

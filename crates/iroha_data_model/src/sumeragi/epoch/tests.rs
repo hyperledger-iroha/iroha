@@ -36,7 +36,10 @@ const VESTA: [[u8; 32]; 10] = [
 
 pub fn fixture(count: usize) -> ValidatorEpochContextV1 {
     let mut pairs = (1..=count)
-        .map(|seed| KeyPair::try_from_seed(vec![u8::try_from(seed).unwrap(); 32], Algorithm::BlsNormal).unwrap())
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![u8::try_from(seed).unwrap(); 32], Algorithm::BlsNormal)
+                .unwrap()
+        })
         .collect::<Vec<_>>();
     pairs.sort_by_key(|pair| PeerId::new(pair.public_key().clone()));
     let committee = pairs
