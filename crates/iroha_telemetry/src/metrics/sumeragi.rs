@@ -583,6 +583,44 @@ mod tests {
         assert_eq!(metrics.view_changes.get(), 5);
     }
 
+    /// The exported `sumeragi_*` families of `metrics` (from their `# TYPE` lines).
+    fn families(metrics: &Metrics) -> std::collections::BTreeSet<String> {
+        metrics
+            .try_to_string()
+            .expect("render metrics")
+            .lines()
+            .filter_map(|line| line.strip_prefix("# TYPE "))
+            .filter_map(|line| line.split(' ').next())
+            .filter(|family| family.starts_with("sumeragi_"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Every registered `sumeragi_*` family has a live writer: it is either one of the
+    /// transaction-queue gauges (always exported, written by the node's queue telemetry) or a
+    /// family of [`InstanceSeries`] (written by the node's Sumeragi driver). The node crate
+    /// checks that those writers move every one of them off zero.
+    #[test]
+    fn registered_sumeragi_families_are_the_queue_gauges_and_the_instance_series() {
+        let registered: std::collections::BTreeSet<String> = include_str!("catalog_v2.tsv")
+            .lines()
+            .filter(|row| row.ends_with("\tregistered"))
+            .filter_map(|row| row.split('\t').nth(1))
+            .filter(|name| name.starts_with("sumeragi_"))
+            .map(str::to_owned)
+            .collect();
+        let metrics = Metrics::default();
+        let always = families(&metrics);
+        assert!(
+            always
+                .iter()
+                .all(|family| family.starts_with("sumeragi_tx_queue_")),
+            "{always:?}"
+        );
+        let _series = metrics.sumeragi_instance(GLOBAL_LANE);
+        assert_eq!(families(&metrics), registered);
+    }
+
     #[test]
     fn removing_an_instance_drops_only_its_series() {
         let metrics = Metrics::default();

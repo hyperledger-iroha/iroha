@@ -1,4 +1,9 @@
 //! Network configuration presets, topology metadata, and filesystem helpers.
+use iroha_config::base::{
+    attach::UnknownParameter,
+    read::{ConfigReader, Error as ReadError, FinalWrap, ReadConfig},
+    toml::TomlSource,
+};
 use iroha_data_model::{
     block::consensus::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
 };
@@ -331,6 +336,67 @@ impl PortAllocator {
         TcpListener::bind(addr).map(drop)
     }
 }
+/// Source name reported for a `[sumeragi]` overlay in schema diagnostics.
+const SUMERAGI_OVERLAY_SOURCE: &str = "[sumeragi] overlay";
+/// Reads a `[sumeragi]` table with the node's own `[sumeragi]` schema.
+struct SumeragiOverlay;
+impl ReadConfig for SumeragiOverlay {
+    fn read(reader: &mut ConfigReader) -> FinalWrap<Self> {
+        // Only the schema verdict matters here; the node resolves the values itself.
+        let _schema = reader.read_nested::<iroha_config::parameters::user::Sumeragi>("sumeragi");
+        FinalWrap::value_fn(|| Self)
+    }
+}
+/// Check a `[sumeragi]` peer-configuration overlay against the node's configuration schema.
+///
+/// The node reads only node-local Sumeragi settings (`iroha_config::parameters::user::Sumeragi`):
+/// the participation role, the consensus-key policy, the optional local-parameter overrides, the
+/// safety-record paths and the retired consensus keys. Consensus policy, committee geometry,
+/// block limits and payload limits come from signed genesis and committed state, so the node
+/// rejects every other key, including the retired `queues`, `block` and `da_enabled` settings,
+/// as an unknown parameter. Checking an overlay here keeps Mochi from writing a peer config the
+/// node would refuse at startup.
+///
+/// # Errors
+///
+/// Returns one message naming every rejected `sumeragi.*` key and unparsable value.
+pub fn validate_sumeragi_overlay(overlay: &toml::Table) -> Result<(), String> {
+    let mut root = toml::Table::new();
+    root.insert("sumeragi".to_owned(), toml::Value::Table(overlay.clone()));
+    let Err(report) = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::new(
+            PathBuf::from(SUMERAGI_OVERLAY_SOURCE),
+            root,
+        ))
+        .read_and_complete::<SumeragiOverlay>()
+    else {
+        return Ok(());
+    };
+    let mut problems = report
+        .frames()
+        .filter_map(|frame| {
+            if let Some(unknown) = frame.downcast_ref::<UnknownParameter>() {
+                return Some(unknown.to_string());
+            }
+            match frame.downcast_ref::<ReadError>() {
+                Some(error @ ReadError::ParseParameter(_)) => Some(error.to_string()),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    problems.sort();
+    problems.dedup();
+    if problems.is_empty() {
+        problems.push(format!("{report:#}"));
+    }
+    Err(format!(
+        "`[sumeragi]` accepts only node-local Sumeragi settings; consensus policy, committee \
+         geometry, block limits and payload limits come from signed genesis and committed \
+         state: {}",
+        problems.join("; ")
+    ))
+}
 fn consensus_mode_slug(mode: SumeragiConsensusMode) -> &'static str {
     match mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
@@ -509,5 +575,68 @@ mod tests {
             "allocator should wrap past u16::MAX, skip port 0, and continue probing"
         );
         assert_eq!(selected, 5);
+    }
+    fn overlay(text: &str) -> toml::Table {
+        toml::from_str(text).expect("overlay TOML")
+    }
+    #[test]
+    fn sumeragi_overlay_accepts_every_node_local_setting() {
+        let node_local = overlay(
+            r#"
+role = "observer"
+view_timeout_base_ms = 2500
+view_timeout_max_ms = 40000
+start_level_cap = 3
+start_level_decay_after = 6
+rebroadcast_interval_ms = 700
+status_keepalive_ms = 4000
+build_timeout_ms = 150
+fetch_retry_ms = 300
+sync_batch = 16
+sync_retry_ms = 900
+sync_max_bytes = 8388608
+max_observers = 12
+records_dir = "./records"
+installation_log = "./installation.log"
+retired_keys = []
+
+[keys]
+activation_lead_blocks = 5
+overlap_grace_blocks = 6
+expiry_grace_blocks = 7
+"#,
+        );
+        validate_sumeragi_overlay(&node_local).expect("node-local settings are admitted");
+        validate_sumeragi_overlay(&toml::Table::new()).expect("an empty overlay keeps defaults");
+    }
+    #[test]
+    fn sumeragi_overlay_rejects_retired_and_unknown_settings() {
+        for (text, rejected) in [
+            ("[queues]\ncommands = 1024\n", "sumeragi.queues"),
+            ("[block]\nmax_transactions = 512\n", "sumeragi.block"),
+            ("da_enabled = true\n", "sumeragi.da_enabled"),
+            ("consensus_mode = \"npos\"\n", "sumeragi.consensus_mode"),
+            ("extra_setting = \"keep\"\n", "sumeragi.extra_setting"),
+        ] {
+            let error = validate_sumeragi_overlay(&overlay(text))
+                .expect_err("the node rejects every key outside its node-local schema");
+            assert!(
+                error.contains(&format!("unknown parameter: `{rejected}`")),
+                "unexpected error for `{rejected}`: {error}"
+            );
+            assert!(
+                error.contains("accepts only node-local Sumeragi settings"),
+                "unexpected error for `{rejected}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn sumeragi_overlay_rejects_values_the_node_cannot_parse() {
+        let error = validate_sumeragi_overlay(&overlay("role = \"leader\"\n"))
+            .expect_err("an unknown participation role must fail");
+        assert!(
+            error.contains("`sumeragi.role`"),
+            "unexpected error: {error}"
+        );
     }
 }

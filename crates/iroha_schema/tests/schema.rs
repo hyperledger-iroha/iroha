@@ -1,6 +1,7 @@
 //! Aggregated integration tests for `iroha_schema`.
 
 mod common;
+mod enum_composite_fields;
 
 #[path = "architecture-dependent.rs"]
 mod architecture_dependent;

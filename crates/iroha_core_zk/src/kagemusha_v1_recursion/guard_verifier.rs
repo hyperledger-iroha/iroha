@@ -201,10 +201,12 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
         mut self,
         transactions: super::KagemushaHardwareTransactionVerifierV1,
     ) -> Result<Self> {
-        let (_, release) = self.authority.as_ref().ok_or(
-            KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable,
-        )?;
-        transactions.require_release_binding(release)
+        let (_, release) = self
+            .authority
+            .as_ref()
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        transactions
+            .require_release_binding(release)
             .map_err(|_| KagemushaGuardVerificationErrorV1::Binding)?;
         self.transactions = Some(transactions);
         Ok(self)
@@ -215,8 +217,12 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
     ///
     /// # Errors
     /// Rejects the private, test-only unadmitted sentinel.
-    pub fn authenticated_release(&self) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>> {
-        self.authority.as_ref().map(|(_, release)| Arc::clone(release))
+    pub fn authenticated_release(
+        &self,
+    ) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>> {
+        self.authority
+            .as_ref()
+            .map(|(_, release)| Arc::clone(release))
             .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)
     }
 
@@ -1291,7 +1297,10 @@ mod tests {
         let bytes = norito::encode_canonical(&wire).expect("shape-valid frame");
         // The private sentinel exercises the production trait's independent fail-closed check.
         // No authenticated constructor or test authority bypass is introduced.
-        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1 { authority: None, transactions: None };
+        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1 {
+            authority: None,
+            transactions: None,
+        };
         let expected =
             KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string();
         assert_eq!(

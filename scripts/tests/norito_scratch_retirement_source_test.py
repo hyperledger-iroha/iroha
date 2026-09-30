@@ -470,7 +470,7 @@ def _active_consumer_hits() -> tuple[str, ...]:
     arguments = ["grep", "--untracked", "-n", "-I", "-F"]
     for identifier in RETIRED_IDENTIFIERS:
         arguments.extend(("-e", identifier))
-    arguments.extend(("--", ".", ":(exclude)docs/history/**", f":(exclude){GUARD_PATH}"))
+    arguments.extend(("--", ".", f":(exclude){GUARD_PATH}"))
     result = _git(*arguments, check=False)
     _require(result.returncode in (0, 1), "active-consumer scan failed")
     if result.returncode == 1:

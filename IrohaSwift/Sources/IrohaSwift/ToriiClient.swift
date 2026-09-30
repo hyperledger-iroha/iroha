@@ -26216,6 +26216,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiPipelinePreflight.self, from: data)
     }
 
+    /// Return a healthy sampled network clock. Fallback, incomplete or unhealthy
+    /// snapshots are rejected before they can influence transaction timestamps.
     public func getTimeNow() async throws -> ToriiTimeSnapshot {
         let request = try makeRequest(path: "/v1/time/now")
         let (data, response) = try await send(request)

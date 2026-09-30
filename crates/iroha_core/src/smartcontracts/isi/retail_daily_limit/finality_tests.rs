@@ -14,7 +14,7 @@ use std::{
 };
 
 use iroha_config::parameters::actual;
-use iroha_crypto::{Algorithm, HashOf, KeyPair, bls_normal_pop_prove};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
@@ -47,6 +47,7 @@ use iroha_data_model::{
         Parameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
+    sumeragi::{PROTOCOL_VERSION, SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
         FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
         genesis_epoch,
@@ -86,7 +87,7 @@ use crate::{
         certified_chain::CertifiedChain,
         crypto::{BlsCrypto, KeyPairSigner},
         driver::{SharedCrypto, traits::BlockStore as _},
-        finality::build_proof,
+        finality::{build_attestation, build_proof},
         lanes::{
             Admission, LaneBatch, LaneChainView, LaneResult, admit,
             evidence::verify_lane_entry,
@@ -96,6 +97,7 @@ use crate::{
             registry::LaneStores,
             routing::RoutingSnapshot,
         },
+        node::NodeIdentity,
         payload::{self, Assembly},
         test_chain::{CertifiedTestChain, Signers, TestChainConfig, TestLaneStoreAuthorities},
     },
@@ -956,9 +958,12 @@ fn activation_evidence_refuses_substituted_coordinates_entries_and_carriers() {
     assert!(genesis_verifier(&foreign).verify(&prefix[0].0).is_err());
 }
 
-/// Print the served native proof of the merging global block as the harness retains it
-/// (`norito::json` value, compact). `scripts/tests/fixtures/native_finality/capture.json`
-/// records the command; script tests read the resulting fixture, never invented proof bytes.
+/// Print the served native finality JSON of the merging global block, which is the durable
+/// tip: its proof as the harness retains it, and the challenge-bound validator attestation
+/// that `build_attestation` signs over the same tip (both `norito::json` values, compact).
+/// The attestation's driver status is the one a running validator reports at an idle applied
+/// tip; the test chain runs no driver. `scripts/tests/fixtures/native_finality/capture.json`
+/// records the command; script tests read the resulting fixtures, never invented proof bytes.
 #[test]
 #[ignore = "explicit deterministic fixture capture, not a qualification gate"]
 fn capture_merged_lane_finality_proof_fixture() {
@@ -966,8 +971,55 @@ fn capture_merged_lane_finality_proof_fixture() {
     let prefix = verified_prefix(&fixture.chain);
     let (proof, verified) = &prefix[at(ACTIVATION_HEIGHT)];
     assert_eq!(verified.height(), ACTIVATION_HEIGHT);
-    let value = norito::json::to_value(proof).expect("proof JSON value");
-    let json = norito::json::to_string(&value).expect("compact proof JSON");
+    assert_eq!(fixture.chain.height(), ACTIVATION_HEIGHT);
+    let compact = |value: norito::json::Value| {
+        norito::json::to_string(&value).expect("compact finality JSON")
+    };
+    let json = compact(norito::json::to_value(proof).expect("proof JSON value"));
+
+    let signer = Keys::new().validators.swap_remove(0);
+    let identity = NodeIdentity {
+        node_id: PeerId::new(signer.public_key().clone()),
+        config_fingerprint: Hash::new(b"fixture effective consensus configuration"),
+    };
+    let status = SumeragiStatus {
+        protocol_version: PROTOCOL_VERSION,
+        config_fingerprint: identity.config_fingerprint,
+        beacon_horizon: None,
+        instance: fixture.chain.instance().0,
+        height: ACTIVATION_HEIGHT + 1,
+        view: 0,
+        stage: 0,
+        leader: None,
+        proxy_tail: None,
+        high_qc_view: None,
+        level: 0,
+        start_level: 0,
+        t_retx_ms: 100,
+        committed_height: ACTIVATION_HEIGHT,
+        applied_height: ACTIVATION_HEIGHT,
+        awaiting: false,
+        signer: Some(signer.public_key().clone()),
+        unanchored: false,
+        abstaining: false,
+        halted: None,
+        footprint: SumeragiFootprint::default(),
+    };
+    let attestation = build_attestation(
+        &fixture.chain.state().view(),
+        status,
+        &identity,
+        Hash::new(b"fixture validator executable"),
+        ACTIVATION_HEIGHT,
+        [0xA5; 32],
+        &signer,
+    )
+    .expect("challenge-bound durable-tip attestation");
+    attestation.verify().expect("the node's own signature");
+    assert_eq!(&attestation.body.finality_proof, proof);
+    let attestation_json =
+        compact(norito::json::to_value(&attestation).expect("attestation JSON value"));
+    let served = norito::json::to_json_pretty(&attestation).expect("Torii pretty JSON");
     println!(
         "NATIVE_FINALITY_CHAIN_ID={}",
         fixture.chain.state().view().chain_id()
@@ -975,4 +1027,6 @@ fn capture_merged_lane_finality_proof_fixture() {
     println!("NATIVE_FINALITY_NETWORK_ID={}", fixture.chain.network_id());
     println!("NATIVE_FINALITY_HEIGHT={ACTIVATION_HEIGHT}");
     println!("NATIVE_FINALITY_PROOF_JSON={json}");
+    println!("NATIVE_FINALITY_ATTESTATION_JSON={attestation_json}");
+    println!("NATIVE_FINALITY_ATTESTATION_SERVED_BYTES={}", served.len());
 }

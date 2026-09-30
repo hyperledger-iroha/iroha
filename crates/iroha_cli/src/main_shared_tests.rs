@@ -2268,7 +2268,7 @@ fn version_run_prints_localized_lines_in_text_mode() {
         ),
         i18n.t_with(
             "info.client_version",
-            &[("version", env!("CARGO_PKG_VERSION"))],
+            &[("version", build_metadata().version())],
         ),
         i18n.t_with("info.server_version", &[("version", "1.2.3")]),
     ];

@@ -220,9 +220,7 @@ exact scope and must fund every participating nested payload pool.
 Notification retains the original waiter cohort through callback unwind. If a
 wake or consumed-waker destructor panics, the remaining registrations are still
 notified outside the locks before the original panic propagates. A second panic
-during unwind retains normal Rust fail-stop semantics. The
-[refund notification record](../../docs/history/2026-09-20/refund-notification-custody.md)
-retains the reproduced lost-wakeup counterexample and scoped validation.
+during unwind retains normal Rust fail-stop semantics.
 
 Reserve each complete operation atomically. A capacity retry must not wait while
 retaining partial credits whose own release is necessary to admit its remainder.
@@ -264,14 +262,9 @@ controls require zero allocation calls through detach/retry/abort/publication,
 including the first commit without any prior reader. This does not claim that
 arbitrary payload destructors or other linear-cell implementations cannot allocate.
 
-The [charged shell and teardown record](../../docs/history/2026-09-20/linear-allocation-custody.md)
-tracks allocator-observed layouts, frees and refunds, concurrent reader release,
-reentrant wake tests, and remaining production admission boundaries.
-
 ## B+tree clone and separator lifetime correction
 
-The [current correction](../../docs/history/2026-09-20/bptree-allocation-lifetimes.md)
-removes the deliberate partial-clone leak and initialized-key overwrite, and keeps
+The B+tree implementation removes the deliberate partial-clone leak and initialized-key overwrite, and keeps
 separator movement valid across clone failures. New branches retain their Box
 through fallible debug verification. Tests track distinct nested payload
 allocations through every clone failure position, actual writer unwind, detached
@@ -279,7 +272,6 @@ abort, ordinary rebalancing and retained reader-generation reclamation. This rep
 real destruction paths needed by node charging. The subsequent typed-node
 implementation attaches charges to actual leaf/branch allocations; nested-payload
 credits and a funded production validator remain unfinished.
-
 
 ## Original writer input and concrete node charges
 
@@ -342,9 +334,7 @@ and reader custody is explicit; native mutex/runtime ownership, real model
 payload policies, remaining MV mutation paths and configured aggregate State
 integration remain open.
 Real callback-bearing charges need their original notification-deferral scope
-around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
-records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)
-records its multi-edit and root-ownership extension with separate validation.
+around physical guards and destruction.
 
 EBR Cell publication uses the original exclusive writer to transfer each allocation
 without entering the epoch collector. Opaque unlinked allocations remain owned
@@ -391,9 +381,7 @@ Successful publication transfers those owners without another lock acquisition
 and returns original cleanup plus reservations. Prepaid published cleanup retains
 the same borrowed scope as physical preparation. World keeps this cleanup in its
 original prepared boxes, and State retains the resulting field vector and runtime
-cleanup through its physical fences. See the [component boundary record](../../docs/history/2026-09-21/prepared-component-retirement.md);
-whole-State abort and effect-lock preparation remain open.
-
+cleanup through its physical fences.
 
 Prepared abort returns the original detached current/undo journal together with
 its original reader, writer and identity notifications and installation owner.

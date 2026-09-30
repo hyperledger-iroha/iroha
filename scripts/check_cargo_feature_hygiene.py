@@ -241,12 +241,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "dag-recovery-verify": (),
  "iroha_telemetry": ("dep:iroha_telemetry",),
  "schema-endpoint": ("iroha_torii/schema",)},
-    "iroha_cli_lib": {"default": ("cli",),
- "cli": ("bridge",
-         "offline-visual-codecs",
-         "iroha_core/node",
-         "iroha_crypto/consensus",
-         "norito/node-codec"),
+    "iroha_cli_lib": {"default": ("bridge", "offline-visual-codecs"),
  "bridge": (),
  "offline-visual-codecs": ("dep:image",)},
     "iroha": {
@@ -368,11 +363,11 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "telegram-alerts": ("telemetry", "irohad_lib/telegram-alerts"),
  "schema-endpoint": ("irohad_lib/schema-endpoint",),
  "profiling-endpoint": ("irohad_lib/profiling-endpoint",)},
-    "iroha_cli": {"default": ("cli",),
- "cli": ("iroha_cli_lib/cli", "bridge", "offline-visual-codecs"),
+    "iroha_cli": {"default": ("cli", "bridge", "offline-visual-codecs"),
+ "cli": (),
  "bridge": ("iroha_cli_lib/bridge",),
  "offline-visual-codecs": ("iroha_cli_lib/offline-visual-codecs",),
- "dev-tools": ("cli", "iroha_cli_lib/dev-tools"),
+ "dev-tools": ("cli",),
  "ids_projection": ("iroha_cli_lib/ids_projection",),
  "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
     "iroha_core_privacy": {"default": ("zk-stark", "simd"),
@@ -504,7 +499,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "test-network-parliament-signers",
  "test-network-private-settlement-route-control",
  "zk-stark"),
-    "iroha_cli_lib": ("cli_integration_harness", "dev-tools", "ids_projection"),
+    "iroha_cli_lib": ("cli_integration_harness", "ids_projection"),
     "iroha": (
         "ids_projection",
         "test-fixtures",
@@ -829,6 +824,40 @@ def _check_mandatory_model_json_dependencies(
     return errors
 
 
+# The CLI implementation always owns its complete runtime; only the thin
+# executable's target selection is controlled by its `cli` feature.
+MANDATORY_CLI_RUNTIME_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "iroha_core": ("node",),
+    "iroha_crypto": ("consensus",),
+    "norito": ("node-codec",),
+}
+
+
+def _check_mandatory_cli_runtime_dependencies(
+    document: dict[str, Any], manifest_path: Path
+) -> list[str]:
+    """Reject partial or optionally activated CLI runtime implementations."""
+    dependencies = document.get("dependencies", {})
+    errors: list[str] = []
+    for name, required in MANDATORY_CLI_RUNTIME_DEPENDENCIES.items():
+        specification = dependencies.get(name) if isinstance(dependencies, dict) else None
+        if not isinstance(specification, dict) or specification.get("optional", False) is not False:
+            errors.append(
+                f"{manifest_path}: mandatory CLI runtime dependency `{name}` must be "
+                "a non-optional normal dependency"
+            )
+            continue
+        selected = specification.get("features", [])
+        if (not isinstance(selected, list)
+                or not all(isinstance(feature, str) for feature in selected)
+                or not set(required).issubset(selected)):
+            errors.append(
+                f"{manifest_path}: mandatory CLI runtime dependency `{name}` must "
+                f"select {list(required)!r} unconditionally"
+            )
+    return errors
+
+
 def _check_expected_features(
     document: dict[str, Any], manifest_path: Path
 ) -> list[str]:
@@ -841,6 +870,8 @@ def _check_expected_features(
     errors: list[str] = []
     if package_name == "iroha_data_model":
         errors.extend(_check_mandatory_model_json_dependencies(document, manifest_path))
+    if package_name == "iroha_cli_lib":
+        errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
     try:
         actual_features = cargo_visible_features(document)
     except ValueError as error:

@@ -330,7 +330,10 @@ impl KagemushaHardwareTransactionVerifierV1 {
         })
     }
 
-    pub(crate) fn require_release_binding(&self, release: &KagemushaAuthenticatedReleaseV1) -> Result<(), String> {
+    pub(crate) fn require_release_binding(
+        &self,
+        release: &KagemushaAuthenticatedReleaseV1,
+    ) -> Result<(), String> {
         if self.release.release_id() != release.release_id()
             || self.release.attestation_digest() != release.attestation_digest()
             || self.release.authority_policy_digest() != release.authority_policy_digest()

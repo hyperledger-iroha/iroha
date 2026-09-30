@@ -499,3 +499,79 @@ fn instance_labels_switch_and_retirement_follow_the_node_registry() {
         assert!(exposition.contains("sumeragi_round_height{lane=\"global\"} 0"));
     }
 }
+
+/// The value of an exposition sample line of `family` (the family's own series, or the `_count`
+/// of a histogram family), if `line` is one.
+fn sample_value(line: &str, family: &str) -> Option<f64> {
+    let rest = line.strip_prefix(family)?;
+    let rest = rest.strip_prefix("_count").unwrap_or(rest);
+    let value = match rest.strip_prefix('{') {
+        Some(labelled) => labelled.split_once("} ")?.1,
+        None => rest.strip_prefix(' ')?,
+    };
+    value.parse().ok()
+}
+
+/// Every `sumeragi_*` family the node exports is written by live node code: the per-instance
+/// families by this recorder (the driver's only telemetry writer) and the transaction-queue
+/// gauges by the queue's backpressure telemetry. The telemetry crate pins that its registered
+/// `sumeragi_*` families are exactly these.
+#[test]
+fn live_writers_move_every_exported_sumeragi_family() {
+    let metrics = Arc::new(Metrics::default());
+    let mut recorder = recorder(&metrics);
+    let (body, source) = available_body();
+    let mut status = status();
+    recorder.observe(&status, &Backlog::default());
+    status.view += 1;
+    status.committed_height += 1;
+    recorder.observe(
+        &status,
+        &Backlog {
+            ingress_dropped: 1,
+            held_dropped: 1,
+            serve_dropped: 1,
+            ..Backlog::default()
+        },
+    );
+    recorder.action(1, &timeout(status.height, status.view, true));
+    recorder.action(
+        1,
+        &Action::FetchPayload {
+            source,
+            peers: vec![],
+        },
+    );
+    recorder.action(
+        2,
+        &Action::Execute {
+            block: body.clone(),
+            req: 1,
+        },
+    );
+    recorder.action(5, &commit(&body));
+    recorder.applied(9, body.header().height);
+    let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+    crate::telemetry::record_state_tx_queue_backpressure(
+        &telemetry, 3, 8, 64, 128, true, true, true, 700,
+    );
+
+    let exposition = metrics.try_to_string().unwrap();
+    let families: std::collections::BTreeSet<&str> = exposition
+        .lines()
+        .filter_map(|line| line.strip_prefix("# TYPE "))
+        .filter_map(|line| line.split(' ').next())
+        .filter(|family| family.starts_with("sumeragi_"))
+        .collect();
+    assert!(families.contains("sumeragi_commit_latency_ms"));
+    assert!(families.contains("sumeragi_tx_queue_depth"));
+    for family in families {
+        assert!(
+            exposition
+                .lines()
+                .filter_map(|line| sample_value(line, family))
+                .any(|value| value != 0.0),
+            "`{family}` is exported but no live writer sets it"
+        );
+    }
+}

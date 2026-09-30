@@ -6,7 +6,9 @@
 //! same contract ABI. This module renders and hashes the roots and supplies the
 //! block wire root ([`covered_wire_schema`], rooted at [`SignedBlock`]);
 //! `iroha_core::release_identity::wire_schema_hash` adds the consensus wire root
-//! (`iroha_sumeragi::message::WireMessage`) and is the identity executables report.
+//! (`iroha_sumeragi::message::WireMessage` and native `Evidence` frames), then the
+//! canonical `ExecutionResultCommitment` payload root. Executables report that
+//! combined identity.
 //! The value is independent of the compilation target and of process-local
 //! `TypeId` values, but it depends on the enabled features: for example
 //! `PublicKey`'s `Algorithm` lists its `bls`, `gost` and `sm` variants only when
@@ -394,6 +396,12 @@ mod tests {
             ABI,
         );
         assert_ne!(forward, split, "the root of each entry is bound");
+        let renamed = entry("First<0..=1>", Metadata::Bool);
+        assert_ne!(
+            hash_rendered_roots(vec![vec![render_entry(&names, &first)]], ABI),
+            hash_rendered_roots(vec![vec![render_entry(&names, &renamed)]], ABI),
+            "the name of each entry is bound, including the length bounds a byte domain names"
+        );
     }
 
     /// Roots that describe different types under one identifier stay distinguishable, the

@@ -1704,6 +1704,16 @@ let clock = try await operatorTorii.getTimeStatus()
 accounts must be exact canonical I105 ids; alias-shaped `name@domain` values
 fail decoding.
 
+`preflight.sumeragi` carries only `blockCadenceMs`, the signed-genesis target
+block time. Torii serves no stall threshold, so `preflight.stallThresholdMs` is
+derived as `ToriiPipelinePreflight.stallBlockCadences` (20) × `blockCadenceMs`,
+and `preflight.isStatusStalled(status)` reports a stall only when
+`status.queueSize > 0` and the time since the last non-empty block (or since
+the last block, before the first non-empty one) exceeds it. Twenty cadences
+cover one crashed leader's view change at the Sumeragi default timings; call
+`status.isQueueStalled(stallThresholdMs:)` directly when the deployment's local
+consensus timers are known.
+
 These helpers sign the exact `GET`, substituted path, query, and empty body,
 then dispatch once without redirects or retries. They reject bearer/API-token
 fallback and caller-supplied operator headers. Swift has no peer, policy, or

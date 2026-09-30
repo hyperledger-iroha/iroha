@@ -146,9 +146,11 @@ fingerprint, the build and configuration fingerprints, the genesis block hash,
 the genesis proof, the node's `SumeragiStatus` at the tip and the tip proof.
 The node signs `H("iroha:sumeragi-finality-attestation:v1\0" ‖ Norito(body))`
 with its BLS-normal node key. `SumeragiFinalityAttestation::verify` checks the
-body's internal bindings (challenge, identity, network, a running
-non-halted status whose committed and applied heights equal the tip, and the
-status instance) and the signature. Callers select the node independently
+body's internal bindings (nonzero challenge, node identity and fingerprint,
+genesis-derived network, a non-halted status of the current protocol version
+whose committed and applied heights equal the tip, the status instance, and
+the structural check of both embedded proofs) and the signature. Callers
+select the node independently
 and verify both embedded proofs with their own verifier; a statement from one
 node authenticates only that node's observation.
 

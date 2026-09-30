@@ -1,0 +1,91 @@
+rule_files:
+  - ../sumeragi_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sumeragi_halted{instance="peer0",lane="global",reason="apply_diverged"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sumeragi_halted{instance="peer0",lane="global",reason="driver_anomaly"}'
+        values: '0+0x19'
+      - series: 'sumeragi_commits_total{instance="peer1",lane="global"}'
+        values: '5+0x19'
+      - series: 'sumeragi_tx_queue_depth{instance="peer1"}'
+        values: '3+0x19'
+      - series: 'sumeragi_commits_total{instance="peer2",lane="global"}'
+        values: '0+1x19'
+      - series: 'sumeragi_tx_queue_depth{instance="peer2"}'
+        values: '3+0x19'
+      - series: 'sumeragi_commits_total{instance="peer3",lane="global"}'
+        values: '5+0x19'
+      - series: 'sumeragi_tx_queue_depth{instance="peer3"}'
+        values: '0+0x19'
+      - series: 'sumeragi_awaiting_configuration{instance="peer0",lane="7"}'
+        values: '1+0x19'
+      - series: 'sumeragi_awaiting_configuration{instance="peer2",lane="global"}'
+        values: '1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0'
+      - series: 'sumeragi_unanchored{instance="peer3",lane="global"}'
+        values: '1+0x19'
+    alert_rule_test:
+      - alertname: SumeragiInstanceHalted
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: SumeragiInstanceHalted
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              instance: peer0
+              lane: global
+              reason: apply_diverged
+              severity: critical
+            exp_annotations:
+              summary: "Sumeragi instance halted"
+              description: |
+                The Sumeragi instance lane=global on peer0
+                halted with reason=apply_diverged and signs nothing further.
+                Preserve its safety records, logs and /v1/sumeragi/status before
+                restarting the node.
+      - alertname: SumeragiCommitStalled
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              instance: peer1
+              severity: critical
+            exp_annotations:
+              summary: "Global Sumeragi commits stalled while transactions are queued"
+              description: |
+                peer1 committed no global block for 10 minutes while
+                its transaction queue held work. Compare committed heights, views and
+                halt flags across validators and confirm that at least 2f + 1 members
+                are reachable.
+      - alertname: SumeragiAwaitingApply
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SumeragiAwaitingApply
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              instance: peer0
+              lane: "7"
+              severity: warning
+            exp_annotations:
+              summary: "Sumeragi instance waits for application"
+              description: |
+                The Sumeragi instance lane=7 on peer0
+                committed its height but has waited 5 minutes for the next height's
+                configuration from block application. Inspect the executor and
+                storage of the node.
+      - alertname: SumeragiKeyUnanchored
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              instance: peer3
+              lane: global
+              severity: warning
+            exp_annotations:
+              summary: "Sumeragi signing key unanchored"
+              description: |
+                A consensus key of the Sumeragi instance lane=global on
+                peer3 has stayed unanchored for 15 minutes; the node
+                probes and signs nothing with it. Check the node's safety records and
+                its peers' reachability.

@@ -1212,6 +1212,52 @@ private fun decodePendingCreditWatermarkReply(
     ).also { reader.finish() }
 }
 
+/** Exact original op-1 report candidate; native retained policy admission grants its authority. */
+class KagemushaPreEnrollmentDeviceQualificationV1 private constructor(
+    val profile: KagemushaHardwareProfileV1,
+    val credential: KagemushaHardwareCredentialV1,
+    releaseId: ByteArray,
+    hardwarePolicyDigest: ByteArray,
+    canonicalPayload: ByteArray,
+    canonicalControlReply: ByteArray,
+    authenticator: ByteArray,
+) {
+    private val release = releaseId.copyOf()
+    private val policy = hardwarePolicyDigest.copyOf()
+    private val payload = canonicalPayload.copyOf()
+    private val control = canonicalControlReply.copyOf()
+    private val signature = authenticator.copyOf()
+    fun releaseId(): ByteArray = release.copyOf()
+    fun hardwarePolicyDigest(): ByteArray = policy.copyOf()
+    fun canonicalPayload(): ByteArray = payload.copyOf()
+    fun canonicalControlReply(): ByteArray = control.copyOf()
+    fun authenticator(): ByteArray = signature.copyOf()
+
+    companion object {
+        /** Structural decoding follows device response verification and precedes native policy admission. */
+        fun decodeAfterDeviceAuthentication(response: KagemushaAuthenticatedDeviceResponseV1,
+            capabilityPolicyId: ByteArray, capabilityReportDigest: ByteArray): KagemushaPreEnrollmentDeviceQualificationV1 {
+            require(response.operation == 1 && response.status == KagemushaAuthenticatedDeviceStatusV1.SUCCESS)
+            KagemushaP256Codec.requireRawLowSSignature(response.authenticator())
+            val reply = KagemushaDeviceOperationCodecV1.decodeControlReplyAfterAuthentication(1, response.canonicalReply())
+            val payload = reply.payload()
+            val decoded = decodeQualificationPayload(payload)
+            require(payload.size in 1..2 * 1024)
+            require(decoded.hardwarePolicyDigest.contentEquals(authenticatedDigest(capabilityPolicyId, "hardwarePolicyId")))
+            require(decoded.profile.qualificationReportDigest().contentEquals(authenticatedDigest(capabilityReportDigest, "qualificationReportDigest")))
+            require(decoded.profile.version == KagemushaWireV1.WIRE_VERSION &&
+                decoded.profile.protocolVersion == KagemushaWireV1.WIRE_VERSION &&
+                decoded.credential.version == KagemushaWireV1.WIRE_VERSION)
+            require(decoded.profile.hardwareProfileId().contentEquals(decoded.credential.hardwareProfileId()))
+            require(decoded.profile.policyEpoch == decoded.credential.policyEpoch)
+            // Ordinary app profiles are candidates here; paired native Core remains required
+            // before any monetary wallet readiness. This path never calls requireProductionReady.
+            return KagemushaPreEnrollmentDeviceQualificationV1(decoded.profile, decoded.credential,
+                decoded.releaseId, decoded.hardwarePolicyDigest, payload, reply.canonicalArchive(), response.authenticator())
+        }
+    }
+}
+
 private data class DecodedQualification(
     val releaseId: ByteArray,
     val hardwarePolicyDigest: ByteArray,

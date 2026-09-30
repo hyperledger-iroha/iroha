@@ -5,6 +5,15 @@ mod native;
 
 use super::*;
 
+fn unit_root_call_gas() -> u64 {
+    let callable = crate::ivm_test_support::unit_callable(0);
+    assert_eq!(callable.frame_bytes, 0);
+    let result_words = u64::try_from(callable.result_words.len()).unwrap();
+    // V1 root setup charges one logical byte per reserved result byte and one
+    // initialization bitmap byte per result word for this zero-byte frame.
+    result_words * ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + result_words
+}
+
 fn attempted(
     body: &[u32],
     steps: usize,
@@ -12,7 +21,14 @@ fn attempted(
     gas: u64,
 ) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let contract = contract(body);
-    let mut vm = IVM::new(gas);
+    // Root invocation allocates the authenticated Unit result table and its frame bitmap
+    // before diagnostic opcode recording begins. The supplied budget belongs to the
+    // scalar prefix, so fund that production work separately without bypassing it.
+    let root_gas = unit_root_call_gas();
+    let invocation_gas = gas
+        .checked_add(root_gas)
+        .expect("funded root and opcode budget");
+    let mut vm = IVM::new(invocation_gas);
     vm.load_prepared(&contract).unwrap();
     for (register, value) in inputs {
         vm.set_register(*register, *value);
@@ -23,8 +39,15 @@ fn attempted(
     let records = recorder
         .records()
         .get(..steps)
-        .expect("attempted scalar prefix")
+        .unwrap_or_else(|| {
+            panic!(
+                "attempted scalar prefix: requested {steps}, recorded {}, invocation {actual:?}",
+                recorder.records().len()
+            )
+        })
         .to_vec();
+    assert_eq!(records[0].before.gas_remaining, gas);
+    assert_eq!(invocation_gas - records[0].before.gas_remaining, root_gas);
     let outcome = match records[steps - 1].outcome {
         DiagnosticStepOutcome::Completed => SegmentOutcome::Continue,
         DiagnosticStepOutcome::Trapped(VmTrapKind::OutOfGas) => {
@@ -167,7 +190,7 @@ fn division_gas_precedes_arithmetic_and_traps_have_exact_opcode_boundary_state()
             (i64::MIN as u64, u64::MAX),
             (0xffff_ffff_0000_0001, 0xffff_ffff_0000_0001),
         ] {
-            for gas in [0, 9, 10, 11, 1 << 32, u64::MAX] {
+            for gas in [0, 9, 10, 11, 1 << 32, u64::MAX - unit_root_call_gas()] {
                 let (segment, records) = single(kind, a, b, gas);
                 let outcome = expected(kind, a, b, gas)
                     .err()
@@ -199,7 +222,7 @@ fn trapped_division_does_not_inherit_priced_gas_or_completed_cycle_carries() {
     for (kind, a, b, gas) in [
         (0, 17, 5, 9),
         (2, i64::MIN as u64, u64::MAX, 10),
-        (1, 17, 0, u64::MAX),
+        (1, 17, 0, u64::MAX - unit_root_call_gas()),
     ] {
         let (segment, mut records) = single(kind, a, b, gas);
         for cycles in [u64::from(u32::MAX), u64::MAX] {
@@ -219,6 +242,43 @@ fn trapped_division_does_not_inherit_priced_gas_or_completed_cycle_carries() {
             }
         }
     }
+}
+
+#[test]
+fn authenticated_root_gas_is_distinct_from_recorded_division_budget() {
+    let root_gas = unit_root_call_gas();
+    assert_eq!(root_gas, 9);
+    let instruction = enc::encode_rr(DIVISION_OPS[0], 8, 6, 7);
+    let prepared = contract(&[instruction]);
+    for invocation_gas in [0, root_gas - 1, root_gas] {
+        let mut vm = IVM::new(invocation_gas);
+        vm.load_prepared(&prepared).unwrap();
+        vm.set_register(6, 17);
+        vm.set_register(7, 5);
+        let budget = AllocationBudget::new(128 * std::mem::size_of::<DiagnosticStepRecord>());
+        let mut recorder = DiagnosticStepRecorder::try_new(128, &budget).unwrap();
+        assert!(matches!(
+            vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
+            Err(ivm::VMError::OutOfGas)
+        ));
+        if invocation_gas < root_gas {
+            assert!(recorder.records().is_empty());
+        } else {
+            assert_eq!(recorder.records().len(), 1);
+            assert_eq!(recorder.records()[0].before.gas_remaining, 0);
+            assert_eq!(recorder.records()[0].after.gas_remaining, 0);
+            assert_eq!(recorder.records()[0].opcode_gas, Some(10));
+            assert_eq!(
+                recorder.records()[0].outcome,
+                DiagnosticStepOutcome::Trapped(VmTrapKind::OutOfGas)
+            );
+        }
+    }
+    let (segment, records) = single(0, 17, 5, u64::MAX - root_gas);
+    assert_eq!(segment.before.gas_remaining, u64::MAX - root_gas);
+    assert_eq!(segment.after.gas_remaining, u64::MAX - root_gas - 10);
+    assert_eq!(records[0].opcode_gas, Some(10));
+    assert_rows(&segment, &segment.witness_rows(&records).unwrap());
 }
 
 #[test]

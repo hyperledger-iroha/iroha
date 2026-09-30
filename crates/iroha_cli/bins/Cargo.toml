@@ -21,11 +21,11 @@ build = "../../build-support/script.rs"
 workspace = true
 
 [features]
-default = ["cli"]
-cli = ["iroha_cli_lib/cli", "bridge", "offline-visual-codecs"]
+default = ["cli", "bridge", "offline-visual-codecs"]
+cli = []
 bridge = ["iroha_cli_lib/bridge"]
 offline-visual-codecs = ["iroha_cli_lib/offline-visual-codecs"]
-dev-tools = ["cli", "iroha_cli_lib/dev-tools"]
+dev-tools = ["cli"]
 ids_projection = ["iroha_cli_lib/ids_projection"]
 cli_integration_harness = ["iroha_cli_lib/cli_integration_harness"]
 

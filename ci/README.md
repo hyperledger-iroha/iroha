@@ -44,8 +44,8 @@ parser: it compares source bytes and `zk` modes against the PR merge base
 (`HEAD` for explicit local paths). Added, changed, deleted, or malformed
 executable examples request `koto`; prose edits around unchanged examples do
 not. Inventory changes and missing Git/read evidence select the check
-conservatively. `docs/history` is excluded from executable qualification and
-cannot supply required or normative examples.
+conservatively. Required and normative examples belong in the maintained
+document inventory.
 
 The Parliament lifecycle corridor is a separately selected consumer. It
 declares its existing `qualified_runner` and retains that runner's owned binary
@@ -72,15 +72,12 @@ scripts/dev_workflow.sh --full
 python3 scripts/rust_ci.py validate
 ```
 
-## Current documentation and historical evidence
+## Current documentation
 
-The PR classification job verifies the dated project archive before any node
-binary build. It reconstructs the exact captured dirty roots, checks page and
-occurrence hashes, and enforces the current 300-line status/roadmap limits and
-structured roadmap coverage. The archive integrity tests also exercise link
-rewriting, concurrent-edit protection and corruption rejection. Historical
-paragraphs never serve as current release assertions; executable component
-contracts and current outcome ownership remain authoritative.
+`status.md` summarizes current health and blockers; `roadmap.md` lists remaining
+outcomes, owners and completion criteria. Update them when those facts change.
+Routine progress and validation results belong in PR descriptions and CI
+artifacts. Executable component checks qualify the current source candidate.
 
 ## Compile-unit ratchet
 
@@ -123,9 +120,8 @@ The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
 pinned commit object. No trusted public key is part of this contract, so the
 guard does **not** claim cryptographic signer authentication. It disables Git
 configuration injection, replacement objects, and lazy fetching; callers must
-provide the required history locally. Production Sumeragi records the result
-with pinned isolated Python between identity checkpoints and seals its log
-read-only.
+provide the required history locally. The PR workflow and
+`ci/check_sorafs_cli_release.sh` run it before any Cargo work.
 
 ## Focused dependency-graph ratchet
 

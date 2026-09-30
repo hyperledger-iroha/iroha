@@ -3,7 +3,6 @@
 
 The stdlib-only guard rejects resurrected retired sources and declarations,
 and requires current replacement coverage and native target/module wiring.
-Historical preimages and fingerprints are retained in docs/history/.
 Mutations stay in memory.
 """
 
@@ -198,7 +197,7 @@ def _consumer_inventory() -> tuple[tuple[str, str], ...]:
     for raw_line in result.stdout.decode("utf-8").splitlines():
         path, _line, text = raw_line.split(":", 2)
         path = path.removeprefix("./")
-        if path in {GUARD_PATH, "status.md"} or path.startswith("docs/history/"):
+        if path in {GUARD_PATH, "status.md"}:
             continue
         rows.append((path, text))
     return tuple(sorted(rows))

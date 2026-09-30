@@ -105,7 +105,6 @@ The concrete read iterator types are exported by `bptree` for allocation-free
 consumer wrappers. Allocator regressions cover empty and multilevel trees,
 retained readers, removals, nested checkpoints and unsized `str` bounds.
 
-
 Writer construction consumes an explicit associated input from the original
 locked admission, joined with both shell charges in `WriterAdmission`. Unit-input
 convenience methods require `WriterInput = ()`; non-unit untracked callers pass an
@@ -128,7 +127,6 @@ lacks room. Shared reads and original clone probes use immutable references;
 thread traits include the actual charges and writer provider. Fixed-buffer
 construction is now connected to closed public insertion; its temporary
 non-test dead-code expectation has been removed.
-
 
 Every node-owned key/value copy now requires an explicit `NodeCloning` policy
 from the original funding provider. This includes leaf and branch cloning,
@@ -257,7 +255,7 @@ all cursor/base/charge cleanup remain retained through publication. Release only
 unlocks and returns cleanup. MV rotates its pair identity before unlocking and
 runs all retirement and notifications afterwards. Existing synchronous map commit
 uses this same engine; the retained-commit trait is sealed to the B+tree owner.
-See [joint Storage admission](../../docs/history/2026-09-20/joint-storage-admission.md).
+See joint Storage admission.
 
 EBR cells use the same prepare/publish/release separation for ordinary and MV
 publication. Exclusive writer custody protects the current load and atomic swap
@@ -312,7 +310,7 @@ same notification after releasing both physical locks and delivers it during
 cleanup, allowing aggregate publishers to finish their visibility interval first.
 Later cleanup unwind preserves the physical lock's earlier poison verdict. Native
 notification/control allocations and complete aggregate abort ordering remain
-separate obligations. See the [source-coupled record](../../docs/history/2026-09-21/native-reader-readiness.md).
+separate obligations.
 
 A release guard can transfer to a fallible prepared phase without notifying on
 success or refusal. `release_deferred` returns the original retained value and
@@ -320,35 +318,32 @@ same notification owner after physical unlock. Native prepared tree commits can
 abort while retaining the actual reader notification alongside their original
 writer; EBR prepared commits can return their original writer. These primitives
 allow MV to finish all physical preparation before component transfer and retain
-successful cleanup through aggregate fences. The [component boundary record](../../docs/history/2026-09-21/prepared-component-retirement.md)
-distinguishes this from unfinished whole-State failure handling.
+successful cleanup through aggregate fences.
 
 `DeferredReleaseBatch` retains actual releases from one original source in
 constant space. Empty batches never notify; foreign guard transfers return the
 unchanged guard. Repeated physical unlocks coalesce into a wake hint only after
 the caller releases its enclosing fences. Actual physical poison is recorded
-before any later cleanup unwind. See the [Kura cleanup record](../../docs/history/2026-09-21/kura-joint-release-cleanup.md).
+before any later cleanup unwind.
 
 `try_acquire_owned` returns an opaque actual writer before predecessor validation.
 Foreign roots and contention acquire nothing; stale or poisoned validation returns
 the same held owner. Aggregate callers bind its original notification before
 validation, then abort with deferred cleanup. Single-owner adoption composes the
-same phases without another implementation or publication authority. See the
-[acquisition record](../../docs/history/2026-09-21/actual-writer-acquisition.md).
+same phases without another implementation or publication authority.
 
 Fresh nonblocking writer construction likewise exposes its original acquired
 mutex before planning or invoking admission. Poison and refused input remain
 with that owner; success transfers it to the existing funded cursor. Standalone
 insertion and the charged constructor compose the same phases, while aggregate
 callers may bind their release source before callbacks. The fixed-payload current
-footprint planner is shared. See the [successor acquisition record](../../docs/history/2026-09-21/successor-acquisition-readiness.md).
+footprint planner is shared.
 
 Fresh acquired writers also expose the same no-edit and clear admission kernels,
 plus blocking untracked construction. Paired release guards can transfer both
 physical owners through one fallible conversion; callee failure releases both
 before either original notification, while success transfers without signaling.
 The shared pair release engine freezes actual poison before arbitrary wakes.
-See [fresh MV pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).
 
 The EBR acquired phase now retains the original physical writer before any
 admission or clone. Consuming charged cloning returns that same guard and exact
@@ -356,8 +351,7 @@ private allocation separately; refusal retains the guard, and callee unwind
 still poisons the actual mutex. Owned attachment refuses poison without losing
 either owner. Direct native construction delegates to the same clone kernel.
 Writer Drop unlocks before private payload reclamation; aggregates must also
-retain payloads until all sibling guards release. The [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
-describes the MV joint owner and scoped evidence.
+retain payloads until all sibling guards release.
 
 Caller-owned aggregate acquisition can now retain actual consumed-phase unwind
 notifications in the same original-source batch. Foreign batches preserve the

@@ -23,6 +23,10 @@ pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
     KagemushaResponseEvidenceContextV1,
 };
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod authenticated_core_owner;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use authenticated_core_owner::KagemushaAuthenticatedCoreOwnerV1;
 mod candidate_lifecycle;
 mod commitments;
 use commitments::*;

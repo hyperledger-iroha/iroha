@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Guard current typed Connect fixtures, direct assertions and protocol routes.
 
-Historical compaction postimages are retained under docs/history/2026-09-30.
 Current tests use strict typed relay strategies; retired aliases are absent.
 """
 

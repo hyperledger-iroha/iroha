@@ -81,7 +81,7 @@ can be divided by existing component ownership, with shared wire/config changes
 coordinated before consumers change. SDK and release-tooling development can run
 alongside service work, but G13 closes only against the final canonical surface.
 
-## G02 contract correction — 2026-09-13
+## G02 signing contract
 
 The provider-independent V1 contract correction is locally complete: shared custody and release
 schemas omit hardware/key-origin claims, stream-token configuration and runtime
@@ -90,24 +90,13 @@ pass the same authorization rules as optional hardware providers. The native
 configuration, enrollment, observation and receipt tests include positive
 software coverage and retain malformed, unauthorized, replayed and revoked
 rejection cases. The executable also fixes private receipt-file permissions and
-the APFS artifact-writer identity bug. See the
-[current validation checkpoint](v1_closure_ledger.md#2026-09-13-provider-independent-signer-correction)
-for passing scopes and repaired test failures.
+the APFS artifact-writer identity bug.
 
 G02's production adapters, current-state integration and deployment qualification
 remain open. HSM access, key-origin evidence and non-exportability are not
 prerequisites for those milestones or any other goal.
 
-## Earlier G02 checkpoint — 2026-09-13
-
-The [independent receipt-Check observer checkpoint](v1_closure_ledger.md#independent-receipt-check-observer-checkpoint)
-records **5,811 passes**, no failures and six named DataModel manual fixture
-printers ignored across the fresh nine-library selection. All 8,192 captured
-inputs, nine binaries and 91 controls remain unchanged. All thirteen new tests,
-84 mandatory native CI sentinels and **1,121 release/CI contracts** pass.
-Formatting, codec and diff checks pass; the corrected global source-budget guard
-retains the same 241 findings after the exact downward executor ratchet.
-Two actual Kagami generations agree on the 1,720-descriptor schema.
+## G02 native observation boundary
 
 The native receipt Check now binds an independent observer and original operator.
 The new deployment-scoped Check permission is distinct from Operate and account
@@ -125,10 +114,7 @@ qualification. Local checks cannot prevent revocation racing an in-flight key
 call. Four inner custody approvals, all seventeen genuine lanes, the foundational
 envelope, four-validator/provider/gateway deployment, load/24-hour soak and full
 workspace/SDK/strict-lint/security/release evidence remain required.
-No goal or lane is closed. Earlier configuration/primitives and Kagami prototype
-tests are excluded from this checkpoint; their scoped results and the exact
-[displaced excerpts](../../docs/history/2026-09-13/sorafs-before-receipt-check-observer.md)
-remain preserved.
+No goal or lane is closed.
 
 ## Next G02 execution milestones
 
@@ -236,20 +222,15 @@ must meet SF-5a/SLO limits with no proof failures, critical alerts or sensitive-
 leakage. Rehearse backup restoration, signer rotation, gateway/DAG failover and
 rollback; independently review security and reject critical/high findings.
 
-Each completed slice records its changed paths, exact validation command/result,
-candidate identity and remaining deployment prerequisites in the closure ledger.
+Update the owning goal and blocker when its outcome changes. Record detailed
+validation commands and results in the PR or CI artifacts.
 Missing external infrastructure does not stop independent local work. Synthetic
 fixtures, local broker mocks, historical logs and metadata claims cannot supply
 genuine deployment evidence. Operational checklists and future V2 guidance are
 not active implementation markers.
 
-## Initial checkpoint — 2026-09-06
+## Existing owners and open integration
 
-- The release dependency expectation already includes `blake3==1.0.9` in
-  `scripts/tests/check_sorafs_release_automation_test.py`, matching
-  `scripts/requirements.txt`; no duplicate pin fix is needed. Current release
-  regression progress and the first security fixes are recorded in the
-  [2026-09-06 closure checkpoint](v1_closure_ledger.md#2026-09-06-execution-checkpoint).
 - Existing native orderbook, reserve, repair and moderation instructions and
   finalized event queries mean Step 2 starts with validation/gap closure.
 - Quarantine AEAD/range/rewrap, exact integer privacy accounting, the C# native
@@ -272,4 +253,3 @@ not active implementation markers.
 - Both checked-in OpenAPI manifests currently contain `generator_dirty=true`;
   G13 must regenerate and sign them from the actual clean candidate rather than
   editing that metadata flag.
-- No new production evidence or release readiness is asserted by goal creation.

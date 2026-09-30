@@ -2425,6 +2425,32 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         XCTAssertEqual(snapshot.confidence_ms, 2)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTimeNowRejectsFallbackAndUnhealthyClock() async throws {
+        for field in ["fallback", "sample_count", "health"] {
+            var body: [String: Any] = ["now": 1_700_000_000_000, "offset_ms": 0,
+                "confidence_ms": 1, "sample_count": 6, "peer_count": 3,
+                "enforcement_mode": "reject", "fallback": false,
+                "health": ["healthy": true, "min_samples_ok": true, "offset_ok": true, "confidence_ok": true]]
+            switch field {
+            case "fallback": body[field] = true
+            case "sample_count": body[field] = 0
+            default: body[field] = ["healthy": false, "min_samples_ok": true, "offset_ok": true, "confidence_ok": false]
+            }
+            let payload = try JSONSerialization.data(withJSONObject: body)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                return (response, payload)
+            }
+            do {
+                _ = try await makeClient().getTimeNow()
+                XCTFail("\(field) must not supply authoritative transaction time")
+            } catch ToriiClientError.invalidPayload {
+                // The time endpoint cannot promote this snapshot to the SDK clock.
+            }
+        }
+    }
+
     func testGetTimeNowCompletion() {
         let expectation = expectation(description: "time-now")
         StubURLProtocol.handler = { request in

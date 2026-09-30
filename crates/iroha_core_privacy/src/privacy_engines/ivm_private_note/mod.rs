@@ -36,7 +36,7 @@ pub(crate) use air::{
     PRIVATE_NOTE_TRACE_LOG2_V1,
 };
 pub(crate) use codec::PRIVATE_PROGRAM_BYTES_V1;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 pub(crate) use codec::encode_private_program_v1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub use facade::verify_ivm_private_note_v1;

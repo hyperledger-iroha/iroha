@@ -24,6 +24,9 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofResponseV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofTerminalV1;
 import org.junit.Test;
 
 /** Exact one-shot transport tests for the Parliament timed-OVN casting-proof route. */
@@ -62,7 +65,7 @@ public final class HttpClientTransportParliamentCastingProofTests {
         canonicalRequestAuth();
     final String ballotId = repeat("33", 32);
 
-    final ParliamentApiV1.TimedOvnCastingProofResponse response =
+    final ParliamentTimedOvnCastingProofResponseV1 response =
         transport
             .getParliamentTimedOvnCastingProofPageV1(
                 ballotId, BigInteger.valueOf(17L), auth)
@@ -160,30 +163,35 @@ public final class HttpClientTransportParliamentCastingProofTests {
     final byte[] firstContext = filled(32, 0x11);
     final byte[] secondContext = filled(32, 0x22);
     final byte[] terminalContext = filled(32, 0x33);
+    final byte[] firstCheckpoint = signedCheckpointFixture("genesis-checkpoint.nrt");
+    final byte[] secondCheckpoint = signedCheckpointFixture("height-2-checkpoint.nrt");
+    final byte[] terminalCheckpoint = filled(131, 0x44);
+    assertTrue(firstCheckpoint.length != 32);
+    assertTrue(secondCheckpoint.length != 32);
     final AtomicInteger verifierCalls = new AtomicInteger();
-    final List<ParliamentApiV1.TimedOvnCastingProofPageVerification> persisted =
+    final List<ParliamentTimedOvnCastingProofPageVerificationV1> persisted =
         new java.util.ArrayList<>();
     final CompletableFuture<Void> firstPersistence = new CompletableFuture<>();
 
-    final CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal> future =
+    final CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> future =
         transport.requestParliamentTimedOvnCastingProofUntilTerminalV1(
             repeat("55", 32),
             7L,
-            firstContext,
+            firstCheckpoint,
             unpinnedCanonicalRequestAuth(),
             (response, height, context) -> {
               final int call = verifierCalls.getAndIncrement();
               if (call == 0) {
                 assertEquals(BigInteger.valueOf(7L), height);
-                assertArrayEquals(firstContext, context);
-                return new ParliamentApiV1.TimedOvnCastingProofPageVerification(
-                    BigInteger.valueOf(70L), secondContext, true);
+                assertArrayEquals(firstCheckpoint, context);
+                return new ParliamentTimedOvnCastingProofPageVerificationV1(
+                    BigInteger.valueOf(70L), secondContext, true, secondCheckpoint);
               }
               if (call == 1) {
                 assertEquals(BigInteger.valueOf(70L), height);
-                assertArrayEquals(secondContext, context);
-                return new ParliamentApiV1.TimedOvnCastingProofPageVerification(
-                    BigInteger.valueOf(75L), terminalContext, false);
+                assertArrayEquals(secondCheckpoint, context);
+                return new ParliamentTimedOvnCastingProofPageVerificationV1(
+                    BigInteger.valueOf(75L), terminalContext, false, terminalCheckpoint);
               }
               throw new AssertionError("unexpected casting-proof page");
             },
@@ -197,15 +205,21 @@ public final class HttpClientTransportParliamentCastingProofTests {
     assertEquals(1, executor.requests.size());
     assertTrue(!future.isDone());
     firstPersistence.complete(null);
-    final ParliamentApiV1.TimedOvnCastingProofTerminal terminal = future.join();
+    final ParliamentTimedOvnCastingProofTerminalV1 terminal = future.join();
 
     assertEquals(2, executor.requests.size());
     assertEquals(2, persisted.size());
-    assertEquals(2, terminal.verifiedPageCount);
-    assertEquals(BigInteger.valueOf(70L), terminal.verificationAnchorHeight);
-    assertArrayEquals(secondContext, terminal.verificationAnchorContextId());
-    assertEquals(BigInteger.valueOf(75L), terminal.verification.evaluatedBlockHeight);
-    assertTrue(!terminal.verification.moreAvailable);
+    assertEquals(2, terminal.getVerifiedPageCount());
+    assertEquals(BigInteger.valueOf(70L), terminal.getVerificationAnchorHeight());
+    assertArrayEquals(secondCheckpoint, terminal.verificationAnchorCheckpointNorito());
+    assertArrayEquals(secondCheckpoint, persisted.get(0).promotedCheckpointNorito());
+    assertArrayEquals(terminalCheckpoint, terminal.getVerification().promotedCheckpointNorito());
+    Arrays.fill(terminal.verificationAnchorCheckpointNorito(), (byte) 0);
+    Arrays.fill(persisted.get(0).promotedCheckpointNorito(), (byte) 0);
+    assertArrayEquals(secondCheckpoint, terminal.verificationAnchorCheckpointNorito());
+    assertArrayEquals(secondCheckpoint, persisted.get(0).promotedCheckpointNorito());
+    assertEquals(BigInteger.valueOf(75L), terminal.getVerification().getEvaluatedBlockHeight());
+    assertTrue(!terminal.getVerification().getMoreAvailable());
     assertArrayEquals(
         ParliamentApiV1.timedOvnCastingProofRequestNorito(7L),
         executor.requests.get(0).body());
@@ -235,8 +249,8 @@ public final class HttpClientTransportParliamentCastingProofTests {
                         filled(32, 0x11),
                         unpinnedCanonicalRequestAuth(),
                         (response, height, context) ->
-                            new ParliamentApiV1.TimedOvnCastingProofPageVerification(
-                                BigInteger.valueOf(71L), filled(32, 0x22), true),
+                            new ParliamentTimedOvnCastingProofPageVerificationV1(
+                                BigInteger.valueOf(71L), filled(32, 0x22), true, filled(131, 0x33)),
                         verification -> {
                           persistCalls.incrementAndGet();
                           return CompletableFuture.completedFuture(null);
@@ -245,6 +259,24 @@ public final class HttpClientTransportParliamentCastingProofTests {
     assertTrue(failure.getCause() instanceof IllegalArgumentException);
     assertEquals(0, persistCalls.get());
     assertEquals(1, executor.requests.size());
+  }
+
+  private static byte[] signedCheckpointFixture(final String name) {
+    java.io.File current;
+    try {
+      current = new java.io.File(".").getCanonicalFile();
+      while (current != null) {
+        final java.io.File candidate =
+            new java.io.File(current, "fixtures/sumeragi/native-finality/" + name);
+        if (candidate.isFile()) {
+          return java.nio.file.Files.readAllBytes(candidate.toPath());
+        }
+        current = current.getParentFile();
+      }
+    } catch (final java.io.IOException error) {
+      throw new AssertionError("cannot load signed native checkpoint fixture", error);
+    }
+    throw new AssertionError("cannot locate signed native checkpoint fixture " + name);
   }
 
   private static byte[] castingProofResponseFrame() {

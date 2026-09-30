@@ -55,6 +55,7 @@ use crate::{
                 SystemClock,
             },
         },
+        metrics::{InstanceMetrics, MetricsInstance},
         net::SumeragiIngress,
         node::{LogObserver, local_params, startup_nonce},
         records::{FileRecordStore, fresh_store_id},
@@ -321,6 +322,7 @@ impl Inner {
         for key in retired {
             if let Some(lane) = running.remove(&key) {
                 self.stop_lane(lane);
+                InstanceMetrics::retire(&self.inputs.state.telemetry, MetricsInstance::Lane(key.0));
                 self.inputs.stores.release(key.0, &key.1);
                 iroha_logger::info!(lane = %key.0, "sumeragi: lane instance retired");
             }
@@ -468,6 +470,7 @@ impl Inner {
         );
         let signer = KeyPairSigner::new(&inputs.key_pair).map_err(|error| error.to_string())?;
         let observer: Arc<dyn Observer> = Arc::new(LogObserver);
+        let metrics = MetricsInstance::Lane(record.lane);
         let driver = Driver::new(
             Arc::clone(&self.net),
             Arc::clone(&inputs.records),
@@ -477,6 +480,7 @@ impl Inner {
             executor,
             observer,
         )
+        .with_metrics(InstanceMetrics::for_node(&inputs.state.telemetry, metrics))
         .spawn(
             inputs.driver,
             DriverStart {
@@ -490,7 +494,11 @@ impl Inner {
                 verifier: Box::new(NoAttestation),
             },
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            // A lane that did not start exports no series.
+            InstanceMetrics::retire(&inputs.state.telemetry, metrics);
+            error.to_string()
+        })?;
         if let Some(ingress) = &inputs.ingress {
             ingress.register(instance, Arc::new(driver.handle()));
         }

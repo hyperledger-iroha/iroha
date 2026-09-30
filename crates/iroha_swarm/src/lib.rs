@@ -599,6 +599,10 @@ impl<'a, 'temp> ImageSettings<'a> {
 impl<'a> Swarm<'a> {
     /// Creates a deterministic development-only Swarm generator.
     ///
+    /// Every validator receives a BLS validator key and dedicated Ed25519 `SoraNet` transport and
+    /// streaming identities, all derived from `seed` and the validator index. The two Ed25519
+    /// identities use separate derivation domains, so no key serves two roles.
+    ///
     /// The generated manifest requires the signed genesis body, verifier key, and exact hash
     /// through explicit host-file environment variables. Production callers should use
     /// [`Self::from_prepared`] so the validator roster and signed artifacts come from one

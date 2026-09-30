@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Check the current typed WorldReadOnly schema and read-only emitter ownership.
 
-Completed accessor compaction snapshots are retained under docs/history.
 This guard checks enduring schema structure while permitting reviewed fields,
 Rustdoc and hand-written methods to evolve with the first-release model.
 """

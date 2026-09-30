@@ -1,7 +1,0 @@
-# Host proc-macro profile correction
-
-The authenticated JavaScript build reached a fresh host proc-macro dynamic library that macOS dyld refused to load because its Mach-O LINKEDIT string pool was misaligned. The artifact's signature and Rust metadata were valid; SDK evidence retains the exact failed bytes and loader diagnostic. This is the same stripping failure already guarded for release host builds and native SDK dynamic libraries.
-
-The shared Cargo development and test build-dependency profiles now specify `strip = "none"`, matching the existing release build-dependency profile. Debug, codegen, optimization, assertions, dependency graph and ordinary jobserver policy are unchanged. No SDK-only Rust flag workaround or artifact patch is introduced. Twelve unit controls cover the actual profile and reject missing/unsafe stripping and dev/test drift. The exact dependency source fingerprint was refreshed without changing any cost or architecture limit.
-
-`host-profile-input-changes.json` records every changed selected input since the preceding closed source review. These are the root manifest, its exact dependency fingerprint baseline and the new profile contract test; the prior source seal remains recorded in `host-profile-capture.json`. The existing closed-source selection, descriptors, trusted digest and all release-feature security controls remain unchanged. Apple and JavaScript builders must use fresh valid source receipts, including natural rejection of any invocation whose selected root manifest changed while it ran.

@@ -27,8 +27,6 @@ function and distinguish ordered and reversed execution proofs. Supplied proof
 records and transaction values are codec fixtures and carry no authorization or
 execution claim.
 
-The exact preceding fixture and original documentation are preserved under
-[the September 30 historical record](../../../../docs/history/2026-09-30/codec-fixtures-before-unit-repair/).
 Earlier component test counts apply only to their original candidate. Current
 captures and tests use the current canonical wire layout; historical frames are
 never decoder inputs or compatibility paths.

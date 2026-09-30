@@ -1315,16 +1315,16 @@ def require_beacon_parliament_pulse_fixtures(
             "derived pulse-slot indexes"
         )
 
-    # TODO(CG2): the native producer and execution fixtures seed
-    # `parliament_required_beacon_pulse_slots` directly instead of through
-    # `put_parliament_attempt`. Once they seed the request through canonical
-    # admission, require that here as the retired consumer fixtures did.
+    # Both native consumers start with canonical attempt admission; directly
+    # fabricating the derived pulse index would miss the production handoff.
     fixture = compact_rust(rust_item(
         producer_tests, "fn fixture() -> Fixture {", BEACON_PRODUCER_TESTS_PATH
     ))
     require_all(BEACON_PRODUCER_TESTS_PATH, fixture, (
-        ".parliament_required_beacon_pulse_slots.insert("
-        "(BeaconSessionId::for_network_v1(&chain.network_id()),9),",
+        "crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(),&roster,9)",
+        '.put_parliament_attempt(attempt).expect("admittheproducer\'sParliamentdemand");',
+        "&(BeaconSessionId::for_network_v1(&chain.network_id()),9)",
+        "Some(&BTreeSet::from([attempt_id]))",
     ))
     real_shares = compact_rust(rust_item(
         producer_tests,
@@ -1385,7 +1385,9 @@ def require_beacon_parliament_pulse_fixtures(
         BEACON_EXECUTION_TESTS_PATH,
     ))
     require_all(BEACON_EXECUTION_TESTS_PATH, predecessor, (
-        "ifdemand{transaction.world.parliament_required_beacon_pulse_slots.insert(slot,attempts);}",
+        "crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(),&roster,9)",
+        'ifdemand{transaction.world.put_parliament_attempt(attempt)'
+        '.expect("admitthereplay\'sParliamentdemand");}',
     ))
 
 

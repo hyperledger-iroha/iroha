@@ -1005,7 +1005,7 @@ impl std::error::Error for CodecError {}
 
 /// What was wrong with a signed proposal (§6.2 steps 3, 5, 6). Only signed-content defects
 /// produce evidence; an `Invalid` execution never does (§3.6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub enum Defect {
     /// `view == 0` but `justify` is present.
     UnexpectedJustify,
@@ -1046,7 +1046,7 @@ pub enum Defect {
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
-#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
 #[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {
@@ -1435,8 +1435,20 @@ mod tests {
                 sample_qc(VoteKind::Commit, 1),
             ),
         ];
-        for item in &evidence {
+        let evidence_schema = Evidence::schema();
+        let Some(iroha_schema::Metadata::Enum(evidence_variants)) =
+            evidence_schema.get::<Evidence>()
+        else {
+            panic!("native evidence schema");
+        };
+        assert_eq!(evidence_variants.variants.len(), evidence.len());
+        for (item, variant) in evidence.iter().zip(&evidence_variants.variants) {
             round_trip(item);
+            let payload = norito::codec::Encode::encode(item);
+            assert_eq!(
+                u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                variant.discriminant
+            );
         }
         let defects = [
             Defect::UnexpectedJustify,
@@ -1447,6 +1459,8 @@ mod tests {
             Defect::InvalidParentQc,
             Defect::HeaderInstance,
             Defect::HeaderHeight,
+            Defect::EpochContext,
+            Defect::BoundaryAttestation,
             Defect::ParentHash,
             Defect::ParentResult,
             Defect::PayloadTooLarge,
@@ -1456,7 +1470,18 @@ mod tests {
             Defect::SkippedLeaders,
             Defect::EmptyPayload,
         ];
-        for defect in defects {
+        let defect_schema = Defect::schema();
+        let Some(iroha_schema::Metadata::Enum(defect_variants)) = defect_schema.get::<Defect>()
+        else {
+            panic!("native defect schema");
+        };
+        assert_eq!(defect_variants.variants.len(), defects.len());
+        for (defect, variant) in defects.into_iter().zip(&defect_variants.variants) {
+            let payload = norito::codec::Encode::encode(&defect);
+            assert_eq!(
+                u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                variant.discriminant
+            );
             round_trip(&Evidence::InvalidProposal {
                 proposal: Box::new(sample_proposal()),
                 defect,

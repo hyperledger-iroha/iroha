@@ -181,10 +181,7 @@ legs. Its declared entry-count bound is not an execution quota. Ignoring a
 preparation error prevents transcript publication; rollback of earlier movements
 still belongs to the enclosing State transaction. The compiled source passes
 13 preparation, 30 reservation and 17 canonical measurement tests, including
-real balance rollback and exact fee-fragment accounting. The
-[scoped execution record](../docs/history/2026-09-12/fastpq-execution-and-six-lane.md)
-retains source/artifact identity and separates these 60 checks from release
-qualification.
+real balance rollback and exact fee-fragment accounting. These focused checks do not establish release qualification.
 
 Full-domain quantity preparation supports the ledger's nonnegative 512-bit
 mantissa and scales 0 through 28 using 19 little-endian `u32` limbs. Canonical

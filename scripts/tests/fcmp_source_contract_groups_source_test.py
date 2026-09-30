@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Guard current FCMP source-contract assets, direct assertions and owner wiring.
 
-Completed donor/postimage evidence is preserved under docs/history/2026-09-30.
 The active guard binds exact asset bytes to the current Rust consumer and rejects
 missing groups, malformed data, callback interpreters and assertion bypasses.
 """

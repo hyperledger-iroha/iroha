@@ -32,6 +32,7 @@ def run_guard(root):
     ("javascript/codec.mjs", 'await WebAssembly.instantiate(bytes);\n'),
     ("javascript/package.json", '{"scripts":{"build":"wasm-pack build"}}\n'),
     ("ci/build.sh", 'cargo build --target wasm32-unknown-unknown\n'),
+    ("docs/history/prior_build.sh", 'cargo build --target wasm32-unknown-unknown\n'),
     ("crates/app/src/vendor/runtime.rs", "use wasmtime::Engine;\n"),
     ("vendor/iroha_owned/src/lib.rs", "use wasmtime::Engine;\n"),
     ("crates/app/src/node_modules/runtime.rs", "use wasmtime::Engine;\n"),
@@ -93,7 +94,6 @@ def test_native_ivm_and_upstream_target_metadata_are_allowed(repository):
         "crates/gateway.rs": 'const ACTIVE_MIME: &str = "application/wasm";\n',
         "crates/model/tests.rs": 'assert!(from_json(r#"{\"allow_wasi\":true}"#).is_err());\n',
         "crates/model/removed_shape_tests.rs": 'for mode in ["IvmOnly", "WasiLite"] { assert!(reject(mode)); }\n',
-        "docs/history/2026-09-13/prior_build.sh": "cargo build --target wasm32-unknown-unknown\n",
         "javascript/package-lock.json": '{"packages":{"node_modules/wasm-bindgen":{"optional":true}}}\n',
     }
     for name, contents in files.items():

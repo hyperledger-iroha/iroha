@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on the typed Kotodama test-registry compaction contract."""
+"""Check the typed Kotodama registry fixtures, case inventories and semantics."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ IVM_REGION_SHA256 = "27c39d9fc502a22f13ebce08831547ee1898114f0791cec44892708c75f
 IR_REGION_SHA256 = "d361b6a6d5bacf917729bee90898e2a17cb23c4d6c4ad0a746bb5c325e11d17f"
 IVM_CODE_SHA256 = "75a857b41d94d0b890bd7aa3f79c04d50fb7b6027c1ec8c97d32738e5502c3f7"
 IR_CODE_SHA256 = "f1669b72eb08c6e27e2e7ae5c61235d630ace8a773e8cf595b81fa5fe67a3685"
-REGISTRY_HISTORY = ROOT / "docs/history/2026-09-30/source-size-gate-removal"
+REGISTRY_FIXTURES = ROOT / "fixtures/documentation/kotodama-registry"
 IVM_CASE_IDS_SHA256 = "9c2a8f00d546b43ea86589639998900a540961bdc6b4b4b9b4a6e2b4ce1c92cc"
 
 IVM_MACROS = (
@@ -149,13 +149,13 @@ class KotodamaTypedCaseRegistrySourceTest(unittest.TestCase):
     def test_typed_case_registry_contract(self) -> None:
         self._assert_registry_contract(_read_source(IVM_SOURCE), _read_source(IR_SOURCE))
 
-    def test_historical_registry_bytes_authenticate_current_semantic_seals(self) -> None:
+    def test_registry_fixture_bytes_authenticate_current_semantic_seals(self) -> None:
         for name, byte_digest, code_digest in (
             ("kotodama-ivm-registry-region.txt", IVM_REGION_SHA256, IVM_CODE_SHA256),
             ("kotodama-ir-registry-region.txt", IR_REGION_SHA256, IR_CODE_SHA256),
         ):
             with self.subTest(name=name):
-                region = (REGISTRY_HISTORY / name).read_text(encoding="utf-8")
+                region = (REGISTRY_FIXTURES / name).read_text(encoding="utf-8")
                 self.assertEqual(_sha256(region), byte_digest)
                 self.assertEqual(token_hash(region), code_digest)
 

@@ -7,8 +7,9 @@ import android.content.Context;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
-import org.hyperledger.iroha.android.client.ParliamentApiV1;
+import org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnCastingTrustAnchorV1;
 import org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnPublicRecordV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1;
 
 /**
  * Java Android facade for secret-local Parliament timed-OVN record generation.
@@ -110,7 +111,7 @@ public final class ParliamentTimedOvnWalletV1 {
   }
 
   /** Authenticates one bounded proof page without opening a seed handle. */
-  public ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPageV1(
+  public ParliamentTimedOvnCastingProofPageVerificationV1 verifyCastingProofPageV1(
       final byte[] castingProofResponseNorito,
       final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
     if (!backend.isAvailable()) {
@@ -126,7 +127,7 @@ public final class ParliamentTimedOvnWalletV1 {
     }
     final byte[] proofCopy = proof.clone();
     try {
-      final ParliamentApiV1.TimedOvnCastingProofPageVerification verification =
+      final ParliamentTimedOvnCastingProofPageVerificationV1 verification =
           backend.verifyCastingProofPage(
               proofCopy,
               Objects.requireNonNull(trustAnchor, "trustAnchor"));
@@ -246,7 +247,7 @@ public final class ParliamentTimedOvnWalletV1 {
 
     boolean deleteSeedHandle(Object handle);
 
-    default ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPage(
+    default ParliamentTimedOvnCastingProofPageVerificationV1 verifyCastingProofPage(
         final byte[] proofResponse,
         final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
       return null;
@@ -299,17 +300,10 @@ public final class ParliamentTimedOvnWalletV1 {
     }
 
     @Override
-    public ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPage(
+    public ParliamentTimedOvnCastingProofPageVerificationV1 verifyCastingProofPage(
         final byte[] proofResponse,
         final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
-      final org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1
-          verification =
-              delegate.verifyCastingProofPageV1(
-                  proofResponse, kotlinTrustAnchor(trustAnchor));
-      return new ParliamentApiV1.TimedOvnCastingProofPageVerification(
-          verification.getEvaluatedBlockHeight(),
-          verification.evaluatedContextId(),
-          verification.getMoreAvailable());
+      return delegate.verifyCastingProofPageV1(proofResponse, trustAnchor);
     }
 
     @Override
@@ -319,7 +313,7 @@ public final class ParliamentTimedOvnWalletV1 {
         final String authority,
         final Object handle) {
       return delegate.registrationFromProofV1(
-          proofResponse, kotlinTrustAnchor(trustAnchor), authority, kotlinHandle(handle));
+          proofResponse, trustAnchor, authority, kotlinHandle(handle));
     }
 
     @Override
@@ -331,22 +325,11 @@ public final class ParliamentTimedOvnWalletV1 {
         final ParliamentTimedOvnBallotChoiceV1 choice) {
       return delegate.ballotFromProofV1(
           proofResponse,
-          kotlinTrustAnchor(trustAnchor),
+          trustAnchor,
           authority,
           kotlinHandle(handle),
           org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnBallotChoiceV1.valueOf(
               choice.name()));
-    }
-
-    private static org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnCastingTrustAnchorV1
-        kotlinTrustAnchor(final ParliamentTimedOvnCastingTrustAnchorV1 anchor) {
-      final ParliamentTimedOvnCastingTrustAnchorV1 required =
-          Objects.requireNonNull(anchor, "trustAnchor");
-      return new org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnCastingTrustAnchorV1(
-          required.networkId(),
-          required.trustedCheckpointHeight(),
-          required.trustedCheckpointContextId(),
-          required.expectedBallotAttemptId());
     }
 
     private static org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnSeedHandleV1

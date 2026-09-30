@@ -18,7 +18,6 @@ campaign is correctness evidence, not an independent cryptographic audit.
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import importlib.util
 import os

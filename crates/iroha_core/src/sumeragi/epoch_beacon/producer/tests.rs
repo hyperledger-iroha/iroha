@@ -1,8 +1,8 @@
 //! Native producer coverage over an actually executed/certified four-validator prefix.
 //!
-//! The DKG/session and Parliament demand are explicit component fixture prestate. The prefix's
-//! genesis, native parent hash and R are real; this fixture does not claim governance enactment
-//! or live-network qualification of the seeded component rows.
+//! The DKG/session is explicit component prestate; Parliament demand enters through canonical
+//! attempt admission and its derived index. The prefix's genesis, native parent hash and R are
+//! real; this fixture does not claim live-network qualification of the seeded component rows.
 
 use super::*;
 use crate::{
@@ -143,6 +143,8 @@ fn fixture() -> Fixture {
         .activate(session.record().adaptive_dkg.finalized_at_height)
         .unwrap();
     assert!(session.record().adaptive_dkg.finalized_at_height <= chain.height());
+    let (attempt_id, _, attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(), &roster, 9);
     chain.setup_world_at(2_000, |transaction| {
         transaction
             .world
@@ -154,11 +156,15 @@ fn fixture() -> Fixture {
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, id);
         transaction
             .world
-            .parliament_required_beacon_pulse_slots
-            .insert(
-                (BeaconSessionId::for_network_v1(&chain.network_id()), 9),
-                BTreeSet::from([GovernanceAttemptId::new([0xA1; 32])]),
-            );
+            .put_parliament_attempt(attempt)
+            .expect("admit the producer's Parliament demand");
+        assert_eq!(
+            transaction
+                .world
+                .parliament_required_beacon_pulse_slots
+                .get(&(BeaconSessionId::for_network_v1(&chain.network_id()), 9)),
+            Some(&BTreeSet::from([attempt_id]))
+        );
     });
     let counts = pairs
         .iter()

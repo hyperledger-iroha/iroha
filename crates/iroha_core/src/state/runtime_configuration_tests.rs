@@ -143,8 +143,7 @@ fn configured_stake_index_pool_keeps_original_charge_through_reconfiguration() {
 }
 
 #[test]
-#[cfg(feature = "iroha-core-tests")]
-fn native_test_execution_pool_preserves_original_identity_and_reservations() {
+fn execution_pool_handle_preserves_original_identity_and_reservations() {
     run_runtime_configuration_test(|| {
         let state = State::new_for_testing(
             World::new(),
@@ -152,7 +151,7 @@ fn native_test_execution_pool_preserves_original_identity_and_reservations() {
             LiveQueryStore::start_test(),
         );
         let original = state.ivm_execution_budget();
-        let borrowed = state.ivm_execution_budget_for_testing();
+        let borrowed = state.ivm_execution_budget();
         assert!(borrowed.same_pool(&original));
         let held = borrowed.try_reserve_bytes(1).expect("original pool charge");
         assert!(held.belongs_to(&original));

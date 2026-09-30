@@ -10,16 +10,6 @@ impl State {
             .clone()
     }
 
-    /// Borrow the original execution allocation pool for native runtime tests.
-    ///
-    /// The returned handle shares reservation and limit authority with the live
-    /// runtime. It is available only to the explicit `iroha-core-tests` surface;
-    /// production callers cannot replace governed limits through this accessor.
-    #[cfg(feature = "iroha-core-tests")]
-    pub fn ivm_execution_budget_for_testing(&self) -> iroha_allocation::AllocationBudget {
-        self.ivm_execution_budget()
-    }
-
     /// Update pipeline preferences using a loaded configuration.
     pub fn set_pipeline(&mut self, pipeline: iroha_config::parameters::actual::Pipeline) {
         let execution_budget = self.ivm_execution_budget();

@@ -253,14 +253,14 @@ still require enclosing ownership.
 Map publication binds release observations to Concread’s actual acquired writer
 before validating its predecessor. A foreign/busy refusal emits no synthetic
 release; stale/poisoned cleanup retains the original acquired notification through
-the enclosing fences. See [the acquisition record](../../docs/history/2026-09-21/actual-writer-acquisition.md).
+the enclosing fences.
 
 Fresh ordinary and admitted Storage opening acquires both native writer phases
 before constructing either cursor. One pair transition retains both original
 notifications through refusal and callee unwind; success transfers both guards
 without a wake. Admitted opening reserves the whole pair and identity first,
 checks both poison verdicts before policy callbacks, and remains inside the
-original pool refund scope. See [fresh pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).
+original pool refund scope.
 
 Cell opening acquires both original EBR writers before cloning either value. A
 partial pair retains completed generations and unused charges until both guards
@@ -270,8 +270,7 @@ Known undo poison rejects before waiting for current; known current poison
 rejects before either payload clone. Abandoned private payloads are destroyed
 after both writers unlock, so a destructor panic cannot poison those released
 writers. Canonical current/undo
-JSON fields are unchanged. See the [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
-for measured scope and remaining aggregate boundaries.
+JSON fields are unchanged.
 
 Aggregates construct every `BlockAcquisitionSlot` before initializing any field.
 `BlockAcquisition::initialize` stores each actual acquisition and completed
@@ -289,4 +288,4 @@ and admission; successful capture owns the exact detached journal and its origin
 and retain successful cleanup through every enclosing writer. Standalone and
 prepaid capture use this same kernel. World and TriggerSet now compose these slots;
 consuming commit and enclosing State/runtime transfers remain open. See the
-[capture custody record](../../docs/history/2026-09-21/world-capture-custody.md).
+capture custody record.

@@ -110,5 +110,4 @@ unchanged; its snapshot omitted a vendored dependency, so this is scoped executa
 evidence rather than full dependency-closure qualification. The schema owner passes
 23 tests; canonical generation adds the eleven effect entries and preserves every
 existing entry. Its original generator link failure and separate successful recovery
-remain recorded. Core capture qualification remains pending; see the
-[dated checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
+remain recorded. Core capture qualification remains pending.

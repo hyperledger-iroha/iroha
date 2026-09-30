@@ -32,7 +32,7 @@ transaction results and Merkle proofs are codec fixtures, not finality or proof
 authorization.
 
 The exact preceding captures and original documentation are preserved under
-[the September 30 historical record](../../../../docs/history/2026-09-30/codec-fixtures-before-unit-repair/).
+the September 30 historical record.
 Earlier source inventories and component counts attest only their recorded
 candidate. Historical frames are never current decoder inputs or compatibility
 paths; current tests pin the current canonical wire layout.

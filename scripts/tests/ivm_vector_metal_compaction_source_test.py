@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Guard current Metal custody, accepted completion and deterministic fallback.
 
-Historical monolithic compaction evidence lives in docs/history/2026-09-30.
 This source guard follows the canonical owners; Rust tests verify execution.
 """
 from __future__ import annotations

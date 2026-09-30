@@ -1,5 +1,0 @@
-{
-  "original_path": "scripts/tests/check_sorafs_production_readiness_test.py",
-  "sha256": "48817277e4b253b00b013a23869aa57a107d4c35e7aeb34cd83290cb44272747",
-  "reason": "Remove module-global fixture signature-verdict interception; retain actual release_evidence_crypto verification on every call."
-}

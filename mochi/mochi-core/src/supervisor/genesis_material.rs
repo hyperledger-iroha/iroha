@@ -324,7 +324,6 @@ impl GenesisMaterial {
                 .into_builder()
                 .with_block_cadence_ms(block_cadence_ms)
                 .build_raw()?
-                .with_consensus_meta()
         };
         let manifest =
             genesis::with_local_account_onboarding_bootstrap(manifest, onboarding_authority)?;

@@ -8,7 +8,8 @@ use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use iroha_model_base::chain::ChainId;
 use mochi_core::{
     GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
-    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
+    config::{sandbox_root_for_workspace, validate_sumeragi_overlay},
+    supervisor::RestartPolicy,
 };
 use std::{
     convert::TryFrom,
@@ -56,7 +57,10 @@ pub struct BundleConfig {
     pub restart_policy: Option<RestartPolicy>,
     /// Optional Nexus config overrides applied to generated peer configs.
     pub nexus: Option<Map<String, Value>>,
-    /// Optional Sumeragi config overrides applied to generated peer configs.
+    /// Optional node-local Sumeragi settings applied to generated peer configs.
+    ///
+    /// Only keys of the node's `[sumeragi]` schema are accepted; consensus policy, committee
+    /// geometry, block limits and payload limits come from signed genesis and committed state.
     pub sumeragi: Option<Map<String, Value>>,
     /// Optional Torii config overrides applied to generated peer configs.
     pub torii: Option<Map<String, Value>>,
@@ -151,6 +155,14 @@ impl BundleConfig {
         self.restart_policy = value;
     }
     pub fn write_to_path(&self, path: &Path) -> Result<(), ConfigError> {
+        if let Some(sumeragi) = self.sumeragi.as_ref() {
+            validate_sumeragi_overlay(sumeragi).map_err(|error| {
+                ConfigError::new(format!(
+                    "refusing to write config {} with an invalid `[sumeragi]` table: {error}",
+                    path.display()
+                ))
+            })?;
+        }
         let mut root = existing_root_table(path)?;
         let mut supervisor = root
             .get("supervisor")
@@ -657,12 +669,12 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
                 path.display()
             )));
         };
-        if sumeragi.contains_key("da_enabled") {
-            return Err(ConfigError::new(format!(
-                "config {} contains retired `sumeragi.da_enabled`; revision-4 DA layout comes from signed chain context and has no local switch",
+        validate_sumeragi_overlay(sumeragi).map_err(|error| {
+            ConfigError::new(format!(
+                "config {} has an invalid `[sumeragi]` table: {error}",
                 path.display()
-            )));
-        }
+            ))
+        })?;
         config.sumeragi = Some(sumeragi.clone());
     }
     if let Some(torii_value) = table.get("torii") {
@@ -1213,8 +1225,9 @@ index = 0
 alias = "core"
 dataspace = "universal"
 
-[sumeragi.queues]
-commands = 1024
+[sumeragi]
+role = "validator"
+view_timeout_base_ms = 2500
 
 [torii]
   [torii.da_ingest]
@@ -1229,12 +1242,14 @@ commands = 1024
         assert_eq!(nexus.get("lane_count").and_then(Value::as_integer), Some(2));
         let sumeragi = config.sumeragi.expect("sumeragi config");
         assert_eq!(
+            sumeragi.get("role").and_then(Value::as_str),
+            Some("validator")
+        );
+        assert_eq!(
             sumeragi
-                .get("queues")
-                .and_then(Value::as_table)
-                .and_then(|queues| queues.get("commands"))
+                .get("view_timeout_base_ms")
                 .and_then(Value::as_integer),
-            Some(1024)
+            Some(2500)
         );
         let torii = config.torii.expect("torii config");
         let da_ingest = torii
@@ -1253,19 +1268,68 @@ commands = 1024
         );
     }
     #[test]
-    fn parse_bundle_config_rejects_retired_sumeragi_da_enabled() {
-        let (_dir, path) = temp_file(
-            r#"
-[sumeragi]
-da_enabled = "nope"
-"#,
-        );
-        let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
-            .expect_err("retired sumeragi config should fail");
-        assert!(
-            err.to_string().contains("sumeragi.da_enabled"),
-            "unexpected error: {err}"
-        );
+    fn parse_bundle_config_rejects_settings_outside_the_node_local_sumeragi_schema() {
+        for (contents, rejected) in [
+            ("[sumeragi]\nda_enabled = \"nope\"\n", "sumeragi.da_enabled"),
+            ("[sumeragi.queues]\ncommands = 1024\n", "sumeragi.queues"),
+            (
+                "[sumeragi.block]\nmax_transactions = 512\n",
+                "sumeragi.block",
+            ),
+            (
+                "[sumeragi]\nconsensus_mode = \"npos\"\n",
+                "sumeragi.consensus_mode",
+            ),
+        ] {
+            let (_dir, path) = temp_file(contents);
+            let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("the node rejects every key outside its node-local schema");
+            assert!(
+                err.to_string()
+                    .contains(&format!("unknown parameter: `{rejected}`")),
+                "unexpected error for `{rejected}`: {err}"
+            );
+        }
+    }
+    #[test]
+    fn writer_refuses_sumeragi_settings_the_node_rejects() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("config/local.toml");
+        let mut node_local = Map::new();
+        node_local.insert("status_keepalive_ms".into(), Value::Integer(4000));
+        let config = BundleConfig {
+            sumeragi: Some(node_local),
+            ..BundleConfig::default()
+        };
+        config
+            .write_to_path(&path)
+            .expect("write node-local settings");
+        let written = fs::read_to_string(&path).expect("read config back");
+        let parsed = parse_bundle_config(&path, &written).expect("parse written config");
+        assert_eq!(parsed.sumeragi, config.sumeragi);
+        for retired in ["queues", "block"] {
+            let mut sumeragi = Map::new();
+            let mut table = Map::new();
+            table.insert("commands".into(), Value::Integer(1024));
+            sumeragi.insert(retired.into(), Value::Table(table));
+            let error = BundleConfig {
+                sumeragi: Some(sumeragi),
+                ..BundleConfig::default()
+            }
+            .write_to_path(&path)
+            .expect_err("the writer must not emit a retired Sumeragi table");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown parameter: `sumeragi.{retired}`")),
+                "unexpected error for `sumeragi.{retired}`: {error}"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).expect("read config after refusal"),
+                written,
+                "a refused write must leave the existing config untouched"
+            );
+        }
     }
     #[test]
     fn parse_bundle_config_rejects_retired_iroha_cli_binary() {
@@ -1470,9 +1534,8 @@ data_root = "./env-data"
         );
         config.nexus = Some(nexus);
         let mut sumeragi = Map::new();
-        let mut queues = Map::new();
-        queues.insert("commands".into(), Value::Integer(1024));
-        sumeragi.insert("queues".into(), Value::Table(queues));
+        sumeragi.insert("role".into(), Value::String("observer".into()));
+        sumeragi.insert("view_timeout_base_ms".into(), Value::Integer(2500));
         config.sumeragi = Some(sumeragi);
         let mut torii = Map::new();
         let mut da_ingest = Map::new();
@@ -1660,7 +1723,7 @@ lane_count = 2
 extra_lane = "keep"
 
 [sumeragi]
-extra_setting = "keep"
+status_keepalive_ms = 4000
 
 [torii]
 custom_route_setting = "keep"
@@ -1684,7 +1747,7 @@ custom_route_setting = "keep"
             "nexus fields must be preserved"
         );
         assert!(
-            contents.contains("extra_setting = \"keep\""),
+            contents.contains("status_keepalive_ms = 4000"),
             "sumeragi fields must be preserved"
         );
         assert!(

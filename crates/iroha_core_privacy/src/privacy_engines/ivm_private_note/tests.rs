@@ -5,31 +5,21 @@ use super::{
     PRIVATE_PROGRAM_BYTES_V1, PrivateInstructionV1, PrivateNotePlaintextV1, PrivateOpcodeV1,
     PrivateProgramV1,
     codec::decode_private_program_v1,
-    derive_note_authority_v1, derive_note_commitment_v1, derive_note_nullifier_v1,
-    derive_private_program_id_v1, encode_private_program_v1, encrypt_ivm_private_wallet_note_v1,
-    ivm_private_recipient_public_key_v1,
+    derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
+    encode_private_program_v1,
     relation::{
-        IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,
-        IvmPrivateNoteWitnessV1, PrivateNoteRelationProfileV1, accumulator_leaf_invocation_v1,
-        accumulator_node_invocation_v1, derive_profiled_input_commitment_v1,
-        derive_profiled_output_commitment_v1, preflight_private_note_relation_with_profile_v1,
+        IvmPrivateNoteRelationErrorV1, accumulator_leaf_invocation_v1,
+        accumulator_node_invocation_v1, preflight_private_note_relation_with_profile_v1,
         validate_private_note_relation_v1, validate_private_note_relation_with_profile_v1,
     },
 };
 use iroha_data_model::{
     NetworkId,
-    asset::AssetDefinitionId,
     privacy::{
-        IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyCommitmentV1,
-        PrivacyEngineManifestDigestV1, PrivacyNullifierV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPoolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
+        PrivacyNullifierV1, PrivacyParameterDigestV1, PrivacyPoolIdV1, PrivacyRootV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
     },
 };
-use iroha_model_base::domain::DomainId;
-use rand_08::{SeedableRng as _, rngs::StdRng};
-use std::str::FromStr as _;
 
 #[test]
 fn audit_input_openings_bind_each_ordered_private_field_and_value_distribution() {

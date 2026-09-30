@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Check shared emitter ownership, error propagation and retained diagnostic tests.
 
-Current contracts are structural. Historical source/lock hashes and opening
-objects remain in docs/history/2026-09-07/norito-helper-compaction.json; they do
-not freeze unrelated dependencies, local test ordering or source formatting.
+Current contracts are structural and do not freeze unrelated dependencies,
+local test ordering or source formatting.
 This source check does not replace compiled procedural-macro and UI suites.
 """
 

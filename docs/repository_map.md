@@ -68,10 +68,9 @@ after consolidation. The Kotlin constraints are in
 
 ## Source, evidence, and checks
 
-- [`status.md`](../status.md) and [`roadmap.md`](../roadmap.md) are bounded current
-  views. [Historical evidence](history/README.md) is indexed by subsystem and date;
-  manifests reconstruct the original dirty sources without treating old claims
-  as current release qualification.
+- [`status.md`](../status.md) summarizes current health and blockers;
+  [`roadmap.md`](../roadmap.md) lists remaining outcomes, owners and completion
+  criteria. Routine progress and validation results belong in PRs and CI artifacts.
 - [`specs`](../specs), [`formal`](../formal), and
   [`fixtures`](../fixtures) own implementation contracts, proofs, and executable
   shared evidence. Public guides belong in the optional sibling `iroha-docs`.
@@ -81,8 +80,6 @@ after consolidation. The Kotlin constraints are in
 - [`ci/dependency_budget.json`](../ci/dependency_budget.json) defines dependency
   ownership and forbidden resolved normal/build edges. Run
   `python3 scripts/check_dependency_budget.py --check-boundaries --offline`.
-- [`ci/source_file_budget.json`](../ci/source_file_budget.json) retains the
-  5,000-line production and 3,000-line test-file limits.
 - [Build profiling](profile_build.md) records source-sealed compiler memory.
   A passing compilation alone does not establish a memory or release budget.
 - [CI routing](../ci/README.md) separates binary-free tests from consumers of

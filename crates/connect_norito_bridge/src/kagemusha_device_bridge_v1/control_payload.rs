@@ -559,7 +559,6 @@ pub(super) fn decode_control_command_v1(
 }
 
 /// Decode the exact operation-1 projection for the native startup owner.
-#[cfg(test)]
 pub(super) fn qualification_projection_v1(
     bytes: &[u8],
 ) -> Result<super::QualificationProjectionV1> {
@@ -683,7 +682,6 @@ struct SignedPaymentRequestReplyV1 {
 /// Correlate signed reads with independently pinned native wallet and credential selectors.
 /// This still does not authenticate a recursive aggregate witness, a revocation decision or a
 /// private clock/lease opening; the state backend must establish those before a transition.
-#[cfg(test)]
 pub(super) fn validate_observation_reply_context_v1(
     operation: u8,
     bytes: &[u8],

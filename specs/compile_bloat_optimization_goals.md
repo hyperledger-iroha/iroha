@@ -1,8 +1,6 @@
 # Compile-time and code-bloat optimization goals
 
-Continuation of Claude session `72f9ffb9-ff7e-4c95-85b5-4f004d06c958`,
-recovered on September 30, 2026. Work stays in this checkout on
-`optimizations`. Preserve features, wire declarations, deterministic execution
+The optimization preserves the current compilation and ownership boundaries. Preserve features, wire declarations, deterministic execution
 and runtime performance. Migrate consumers directly: first release does not
 require public compatibility aliases. Sumeragi remains owned by the user's
 separate work; inspect current SCCP state before touching adjacent code.
@@ -24,14 +22,14 @@ seconds overall; Torii 187.0 seconds, data model 126.1 seconds and Core
 optimization's measured effect. New compiler-memory limits require actual
 pinned-runner measurements; source moves alone do not qualify them.
 
-Scoped continuation evidence passes: 1,014 IVM, 32 compiler-surface and 51
+Scoped component evidence covers: 1,014 IVM, 32 compiler-surface and 51
 toolchain library tests; nine timed-OVN owner tests; 286 formal/feature Python
 tests; 48 dependency-budget tests; Cargo feature hygiene, workspace target
 inventory and every configured feature-resolved dependency boundary. Separate
 source/fixture suites retain their own logs and counts. The normal graphs
 exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
-The [owner graph review](../docs/history/2026-09-30/compile-bloat-owner-review/README.md)
-records exact declaration costs without growth headroom. These are scoped
+The [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
+describes these boundaries and remaining controls. These are scoped
 development checks during concurrent source changes; full completion is not
 yet established.
 
@@ -39,6 +37,6 @@ Compiler-memory qualification remains the pinned-runner work described by
 roadmap A5. Measured limits must also cover newly extracted owner/library units;
 the empty `introduced_units` arrays do not admit them automatically. The last
 retired Norito flag-name constant is removed after confirming its protected
-consumer no longer exists. One Core ZK public test helper remains temporarily
-referenced by a user-owned Sumeragi test; its explicit TODO does not restore a
-production compatibility path.
+consumer no longer exists. One Core ZK adapter is explicitly non-shipping,
+gated by `iroha-core-tests`, while its user-owned Sumeragi test still awaits a
+direct-owner import. Normal Core uses a crate-local owner alias.

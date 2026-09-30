@@ -292,18 +292,6 @@ pub enum ProfileError {
         /// Why the roster is not admissible.
         reason: &'static str,
     },
-    /// The derived Sumeragi configuration is rejected by the node parser.
-    #[error(
-        "profile `{profile}` derives an inadmissible Sumeragi configuration for {validators} validators: {message}"
-    )]
-    Sumeragi {
-        /// Profile being derived.
-        profile: ProfileId,
-        /// Requested roster.
-        validators: usize,
-        /// Parser diagnostic.
-        message: String,
-    },
     /// A value has no canonical form.
     #[error("profile `{profile}`: {source}")]
     Canonical {

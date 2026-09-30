@@ -168,9 +168,12 @@ pub mod validation_fee;
 /// Independently anchored evidence for pending committee signer custody.
 pub mod validator_committee_evidence;
 /// Crate-local path to `iroha_core_zk`; external crates import `iroha_core_zk` directly.
-// TODO(zk-split): replace this module with `pub(crate) use iroha_core_zk as zk;` once
+#[cfg(not(feature = "iroha-core-tests"))]
+pub(crate) use iroha_core_zk as zk;
+// TODO(zk-split): remove this non-shipping test adapter once
 // integration_tests/tests/sumeragi_npos_committee_transition.rs (user-owned, Sumeragi)
 // imports `verify_kagemusha_mint_finality_candidate_possession_v1` from iroha_core_zk.
+#[cfg(feature = "iroha-core-tests")]
 #[doc(hidden)]
 pub mod zk {
     pub(crate) use iroha_core_zk::*;

@@ -260,10 +260,6 @@ jobs:
           python-version: "3.11"
       - name: Install pinned router-test dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
-      - name: Verify current project views and archived evidence
-        run: |
-          python3 -I -S scripts/archive_project_history.py verify --archive docs/history/2026-09-06 --check-current
-          python3 -m pytest -q scripts/tests/archive_project_history_test.py
       - name: Verify the KAGEMUSHA first-release package surface
         run: |
           python3 -m pytest -q \

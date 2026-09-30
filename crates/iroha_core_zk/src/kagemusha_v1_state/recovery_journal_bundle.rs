@@ -91,7 +91,7 @@ impl KagemushaPendingRecoveryJournalsV1 {
         Ok((machine, self.coordinator, self.responses))
     }
 
-    fn validate_pair<R, G, H>(
+    pub(super) fn validate_pair<R, G, H>(
         &self,
         machine: &KagemushaStateMachineV1<R, G, H>,
     ) -> Result<(), KagemushaStateErrorV1>

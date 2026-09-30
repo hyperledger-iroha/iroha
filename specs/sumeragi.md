@@ -304,7 +304,6 @@ of possession, and fresh authenticated leader randomness (§10). It contains no 
 or signer subset. Every header, vote, QC, timeout, TC and probe echo carries this identity;
 verification requires equality with the authenticated context installed for that height.
 
-
 ```text
 prop_preimage(h, v, bh, ad)      = TAG_SIG ‖ 0x01 ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ ad
 vote_preimage(kind, h, v, bh, R, a) = TAG_SIG ‖ kind ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ R ‖ bit(a)
@@ -550,6 +549,16 @@ state is explicitly untrusted; admission copies or shares it into the original S
 pool before native ingress retains it. Immutable clones retain the same actual backing/control
 charges. The frame allowance includes the witness, compact signatures and bounded header/TC
 metadata through the generic core committee bound.
+
+The canonical execution-result witness carries each complete authorized epoch context once:
+the current context, the optional boundary's next context, and its optional frozen preparation.
+Each ready successor slot carries only its exact height and lag-two parameters, deriving its
+epoch from the boundary's next context when present and otherwise from the current context.
+Pending-boundary slots retain their explicit predecessor identity and boundary height. Encoding
+rejects an owned ready slot that differs from its derivable context; decoding reconstructs and
+validates the complete graph while charging the additional owned credentials to the inherited
+decode allocation budget. This keeps supported 31-member boundary/preparation graphs within
+the same 64 KiB witness limit, with no alternate or repeated-context result decoder.
 
 ### 3.7 Commit attestation (application extension)
 
@@ -3075,7 +3084,10 @@ executor that aborts discarded work at once — non-empty blocks must commit)
 · F16 validator-set change at an epoch
 boundary (add, remove, replace a majority) under load and crashes, including joiners that must
 fetch their parent's body · F17 node joining 10 000 heights behind; Byzantine sync responders
-(forged blocks, invalid QCs, withholding) · F18 floods of votes/timeouts for huge views and
+(forged blocks, invalid QCs, withholding). The run budgets each height's certified-metadata and
+signed-payload round trips, execution, body/block persistence and application, plus 60 s for
+source rotation and live progress; the joiner must pass the complete prebuilt prefix.
+· F18 floods of votes/timeouts for huge views and
 heights, oversize messages · F19 poison payload (executor rejects every block holding a given tx)
 → early timeout, quarantine and a later nonempty retry · F20 cross-instance replay with shared keys · F21
 nondeterministic executor at one honest node (only that node may halt) · F22 idle chain for 10⁵
@@ -3452,8 +3464,7 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
 
 ## Appendices A–D. Review logs
 
-The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbatim in
-[`docs/history/2026-09-25/sumeragi-spec-review.md`](../docs/history/2026-09-25/sumeragi-spec-review.md).
+md`.
 
 ---
 
@@ -3546,7 +3557,6 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E61 | Host frames (§13.5, §12.8) | A host that owns its scheduling sends opaque frames (`sim::host::Op::Frame` with a `HostFrame`, received through `Host::receive_frame`); the world carries them like messages of their class (NIC bandwidth, delay, loss, duplication, partitions) without reading them, and the network adversary does not rewrite them. The production kernel's availability frames travel so in the §13.5 conformance runs; the fake driver sends none. | `sim::host::{Op, HostFrame}`, `sim::world` |
 | E62 | F35 sparse local work (§8.1, §13.3) | The 100-seed sweep failed F35 seeds 6, 31, 78 and 87 (all `n = 22`): the progress check kept from the heartbeat era (8 heights in 120 s) and O-TXP's sanity check (half of the transactions older than 20 s committed) are not implied once leaders propose only nonempty work (§6.10). With the `f + 1` holders placed at random, up to `2f` workless leaders precede the first holder in a height's rotation and each failed view's timer grows ×1.5 up to `T_max` (§9.1): at `n = 22` one height may take 310 s (seed 6: views 0–7 of height 1, 129 s, had no holder leader; the other seeds lost views the same way, and no view `≥ 1` led by a holder failed). F35 checks the leader-turn bound (`Perf::LeaderTurns`) instead, from §6.10, §8.2 L1, L2, L4 and §9.1: with `v*(h)` the first view `≥ 1` whose leader (ground-truth topology) is a running holder, no honest replica passes `v*(h)` at an uncommitted height, and each commits `h` within `Σ_{v ≤ v*(h)} (P(v) + T(min(level_cap, s + v)) + σ + Δ)` of entering it (+3 % for drift), `s` the highest start level reported at `h`. A holder has work in any view `≥ 1`: the next transaction reaches it within the workload interval (`≤ 9 s`) of the parent's build, before view 1 ends (`P(0) + T(0) + P(1) + T(1) ≥ 10.4 s`, asserted by the scenario). O-TXP then requires each transaction in a block of the second height first committed after its submission (that block is built after the submission by a holder from its whole queue) instead of the 20-s check. The run lasts until heights 1 and 2 are due by the bound (no demotions yet, §2.1; start levels 0 and at most 1), at least 120 s, and requires both. `sim::tests::leader_turns_flags_holders_without_work` shows that the bound catches holders whose builders never return work. | `sim::scenarios::f35`, `sim::oracle::check_turns` |
 | E63 | F4 slow executors (§9.1, E32) | The 1000-seed sweep failed F4 seeds 163, 455, 675 and 799 (all `n = 22`, 6–7 heights in 40 s against 8): the fake builder prices a payload at its own machine's execution cost, so F4's slow executor (`exec_base` 1.5 s, above `exec_budget` = 750 ms at `n = 22` and 500 ms at `n ≤ 7`) fitted no transaction and, since leaders propose only nonempty work (§6.10), led like a silent member besides F4's silent ones (seed 163: views 0 and 1 of height 6, 12.9 s, led by its two slow executors). `exec_budget` is a calibrated estimate (§9.1) and E32 models F4's slow members as delaying only their Prepare, so their builders no longer price that slowness into payloads (`exec_per_kib: 0`, as for F15's and F34's slow executors). | `sim::scenarios::f04` |
-
 
 ### Native control-witness qualification boundary
 

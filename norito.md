@@ -663,6 +663,15 @@ Votes, certificates, timeout votes and evidence are specified with their signing
 preimages in [`specs/sumeragi.md`](specs/sumeragi.md) §3; `crates/iroha_sumeragi`
 owns their Norito encoding.
 
+The executable release wire identity includes the compiled layouts of
+`WireMessage` and native `Evidence`, including every `Defect` discriminant,
+and a separate root for the canonical compact `ExecutionResultCommitment` payload.
+`IntoSchema` describes composite enum variants through schema-only payload
+identities: ordered tuple fields or ordered named fields under the owning enum.
+These descriptions add no wire wrapper and do not change Norito frame identities.
+The release identity therefore changes when an evidence field or defect tag
+changes, even though block effects carry the canonical evidence frame as bytes.
+
 ## Hidden RAM-FHE program encoding
 
 The private program tape uses the declared frame identity
@@ -1083,3 +1092,24 @@ replay; mobile enrollment, concrete mint/state/payment/terminal and Guard
 verification, hardware transaction admission, and testnet proof observation
 enforce the same release-to-operation network match. There is one first-release
 layout and no decoder for the networkless pre-release shape.
+
+### Sumeragi execution-result schedule projection
+
+The sole `iroha_data_model::sumeragi_finality::ExecutionResultCommitment` frame
+contains `height`, `execution`, `schedule`, `beacon`, and `native_lanes` in that
+order. Its schedule contains `height`, the complete `current` epoch context,
+the optional complete `boundary` (including its next context and frozen
+preparation), then `next` and `after_next`. Each successor is either
+`Ready { height, params }` (tag 0), or
+`PendingBoundary { height, boundary_height, predecessor_context_id, params }`
+(tag 1). A ready successor derives its epoch from `boundary.next` when a
+boundary exists, otherwise from `current`; no duplicate epoch bytes occur in
+the successor slots. The encoder rejects an owned successor whose epoch differs
+from that exact source before writing the frame. The decoder reconstructs the
+complete owned graph, charging every additional roster, public-key and proof
+allocation to the inherited decode budget, and the result reader validates the
+complete graph. The result's `IntoSchema` projection describes these exact wire
+fields. The 64 KiB result-preimage/shared-witness limit is unchanged, including
+31-member boundaries with frozen preparations. The standalone `ScheduleOutcome`
+codec still represents its full owned graph; it is not the result frame's
+schedule codec. There is no decoder for the repeated-successor result layout.

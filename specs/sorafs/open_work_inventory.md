@@ -25,9 +25,6 @@ The September 30 review retains these implementation boundaries:
   registration, and production signing workflow qualification remain explicit
   implementation or deployment tasks.
 
-Dated history is outside the active inventory. Numeric Node test-runner `todo`
-counters are metadata, not work markers. The two former guards requiring every
-marker to disappear are retained byte-for-byte under
-`docs/history/2026-09-30/sorafs-open-work-guards/`; their closure claim conflicted
-with the current implementation and the required documentation of incomplete
-work. Removing markers without completing their work would conceal blockers.
+Numeric Node test-runner `todo` counters are metadata, not work markers.
+Removing incomplete-work markers without completing their work would conceal
+blockers; no guard may require that.

@@ -9,7 +9,10 @@ Within this workspace, `crates/iroha` is the reusable Rust client library and
 `crates/iroha_cli` contains the `iroha_cli_lib` implementation package. Its
 `bins` directory contains the `iroha_cli` package that builds the `iroha`
 command-line binary and owns the binary integration tests. Run
-`cargo test -p iroha_cli_lib --lib` for the implementation suite.
+`cargo test -p iroha_cli_lib --lib` for the implementation suite. The library
+always includes its runtime dependencies; its optional flags control bridge
+commands, visual offline codecs and test hooks. The executable owns the `cli`
+and `dev-tools` target-selection flags.
 
 ## Installation
 

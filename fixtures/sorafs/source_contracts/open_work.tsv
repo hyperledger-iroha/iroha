@@ -31,7 +31,6 @@ scripts/check_sorafs_production_promotion_bundle.py	# TODO: Connect purpose-owne
 scripts/check_sorafs_production_promotion_bundle.py	# TODO: Replace this with a purpose-owned native custody/operation Check verifier, never
 scripts/check_sorafs_production_promotion_bundle.py	# TODO: Replace this with purpose-owned native custody, Reserve/Complete and finalized
 scripts/check_sorafs_production_promotion_bundle.py	# TODO: Verify the role-16 topology subject, current native Check, exact executed
-scripts/formal/check_sora_parliament_source_contract.py	# TODO(CG2): the native producer and execution fixtures seed
 scripts/sorafs_javascript_archive.py	TODO: connect this owner to the installed JavaScript producer and original-index
 scripts/sorafs_javascript_child.mjs	// TODO: the source-owned parent must retain every actual pipe byte, require
 scripts/sorafs_javascript_child_files.mjs	// TODO: connect the fixed installed child after its original source/runtime,

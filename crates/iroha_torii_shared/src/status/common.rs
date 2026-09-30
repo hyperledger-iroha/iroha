@@ -259,7 +259,7 @@ pub struct BuildStatus {
     /// Target triple used to compile this binary.
     pub target_triple: String,
     /// Lowercase hex of the compiled consensus/block wire-schema and IVM ABI identity
-    /// (`iroha_data_model::wire_schema_hash`); release manifests pin the same value.
+    /// (`iroha_core::release_identity::wire_schema_hash`); release manifests pin the same value.
     pub wire_schema_hash: String,
 }
 /// Response body for the Torii GET `/status` endpoint.

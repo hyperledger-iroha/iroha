@@ -154,7 +154,7 @@ impl KagemushaHardwareTransactionJournalV1 {
         Ok(owner)
     }
 
-        /// Persist intent, execute/recover the one hardware transaction, verify it and fsync the
+    /// Persist intent, execute/recover the one hardware transaction, verify it and fsync the
     /// original certificate before returning. Exact duplicate calls return the retained bytes.
     pub fn commit_or_recover(
         &mut self,

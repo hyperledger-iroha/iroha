@@ -4,14 +4,13 @@ Iroha exports Prometheus-format metrics and a JSON status summary. This page lis
 
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
-- `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, tx_queue_depth, tx_queue_capacity, tx_queue_retained_bytes, tx_queue_max_retained_bytes, tx_queue_saturated, tx_queue_saturated_by_count, tx_queue_saturated_by_bytes, tx_queue_saturated_by_age, tx_queue_oldest_queued_age_ms, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view, and a `governance` snapshot.
+- `/status`: JSON node status (hidden when telemetry is disabled). Includes peers, block and transaction gauges, crypto capabilities, governance, and the `sumeragi` node-wide queue and sealed-lane observations (`SumeragiConsensusStatus`). Per-instance consensus state comes from `/v1/sumeragi/status` and `/v1/sumeragi/lanes`.
 - `/v1/sumeragi/status` (Norito by default, JSON with `Accept: application/json`): the authoritative `SumeragiStatus` of the global Sumeragi instance (protocol version, configuration fingerprint, instance id, height/view/stage, leader and proxy tail, lock view, pacemaker levels, committed and applied heights, signer, halt reason and footprint counters); `503` before consensus starts. `/v1/sumeragi/lanes` lists the node's lane instances.
 - `/v1/sumeragi/status/sse` (SSE): operator-authenticated periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - Nexus lane/dataspace status is present for every first-release deployment,
   including the canonical one-lane topology.
-- `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
 - `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. DTOs reject unknown fields and overlong/control-bearing labels; live bucket admission rejects future or expired timestamps, bounds incomplete windows, and rejects conflicting or already-finalized collector shares. The share route also derives a full 256-bit BLAKE3 collector ID from the authenticated operator key and rejects caller identity mismatches. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
-- `/v1/sumeragi/params` (JSON): read-only snapshot of governed NPoS parameter records. It does not replace the signed revision-4 height context or the shared configuration fingerprint exposed by `/v1/sumeragi/status`.
+- `/v1/sumeragi/params` (JSON): read-only snapshot of governed NPoS parameter records. It does not replace authenticated per-instance consensus state or the shared configuration fingerprint exposed by `/v1/sumeragi/status`.
 
 `/status` is an immutable reply from the Core telemetry actor. Its applied target
 height, header hash and Nexus routing policy are copied under one stable State
@@ -389,10 +388,10 @@ When the alert triggers:
    payload. If backlog is accumulating, verify gossip health and DA fetch
    telemetry (`dashboards/grafana/soranet_pq_ratchet.json` covers PQ circuit
    status) before blaming the admission tier.
-4. Confirm the authenticated revision-4 `(height, view)` and TimeoutCertificate
+4. Confirm the authenticated `(height, view)` and TimeoutCertificate
    progress in `/v1/sumeragi/status`. Correlate repeated view changes with
-   backpressure reasons and responsive committee membership; revision-4
-   certificate progress is the authoritative deadline signal.
+   backpressure reasons and responsive committee membership; certified
+   consensus progress is the authoritative deadline signal.
 5. If latency remains elevated after clearing backlog, throttle the offending
    lane by raising `iroha_config.torii.transaction_lane.max_inflight` or
    redirecting traffic to a healthy lane using the orchestrator/CLI routing
@@ -404,21 +403,15 @@ after remediation; include them in the incident timeline for audit parity.
 
 ### Sumeragi consensus overview dashboard
 
-Operators monitoring proposal health should import
-`specs/grafana_sumeragi_overview.json` into Grafana. The dashboard tracks:
+Import `dashboards/grafana/sumeragi_consensus.json` for current per-instance
+heights, views, pacemaker levels, halt reasons, queue drops and commit/apply
+latencies. `dashboards/alerts/sumeragi_rules.yml` supplies tested alerts for
+halts, stalled committed progress under queued work, delayed application and
+unanchored keys.
+The `lane` label is `global` or the decimal lane id; retiring a lane removes its
+series. Idle instances need no commits and should not trigger a stalled-work
+alert.
 
-- `Highest vs Locked QC Height` — gauges `sumeragi_highest_qc_height` and
-  `sumeragi_locked_qc_height` so you can spot stalled view changes or peers
-  lagging behind the canonical highest/locked certificates.
-- `Proposal Drop Rates (5m)` — visualises the BlockCreated drop counters
-  (`block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`,
-  `block_created_proposal_mismatch_total`) to highlight invalid or stale
-  proposals.
-- `Proposal Drop Totals` — a stat panel over the cumulative counters for quick
-  summarisation in NOC dashboards.
-
-Pair the panel with the alert snippets above (hint/proposal mismatch bursts) to
-trigger remediation workflows when drops exceed acceptable limits.
 - Missing activations: alert when
   `increase(governance_manifest_activations_total{event="instance_bound"}[30m]) == 0`
   during an upgrade rollout window; a namespace binding never landed on-chain.
@@ -522,51 +515,38 @@ P2P metrics (selected)
 - connected_peers, `p2p_peer_churn_total{event="connected|disconnected"}`, p2p_* gauges/counters for queue depth/drops, throttling, DNS, handshake latencies (`p2p_handshake_ms_*`).
 - `consensus_ingress_drop_total{topic,reason}` counts consensus ingress drops for payload topics (`topic` in `ConsensusPayload|ConsensusChunk|BlockSync`, `reason` in `rate|bytes|penalty`).
 
-Sumeragi metrics
-- Counters: `sumeragi_tail_votes_total`, `sumeragi_widen_before_rotate_total`, `sumeragi_view_change_suggest_total`, `sumeragi_view_change_install_total`; histogram: `sumeragi_cert_size` (signatures per committed block).
-- Commit quorum/certificate: `sumeragi_commit_signatures_present`, `sumeragi_commit_signatures_counted`, `sumeragi_commit_signatures_set_b`, `sumeragi_commit_signatures_required` track the last commit tally; `sumeragi_commit_qc_height`, `sumeragi_commit_qc_view`, `sumeragi_commit_qc_epoch`, `sumeragi_commit_qc_signatures_total`, and `sumeragi_commit_qc_validator_set_len` summarize the latest commit certificate.
-- Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling, while `sumeragi_tx_queue_retained_bytes`/`sumeragi_tx_queue_max_retained_bytes` gauge retained queue memory. `sumeragi_tx_queue_saturated_by_count`, `sumeragi_tx_queue_saturated_by_bytes`, `sumeragi_tx_queue_saturated_by_age`, and `sumeragi_tx_queue_oldest_queued_age_ms` distinguish the pressure cause; `sumeragi_tx_queue_saturated` flips to `1` when any cause is active.
-- Pending blocks: `sumeragi_pending_blocks_total` counts pending blocks tracked by the local node; `sumeragi_pending_blocks_blocking` isolates those that gate proposal/view-change progress; `sumeragi_commit_inflight_queue_depth` shows whether the commit pipeline is busy (0/1).
-- Proposal gaps: `sumeragi_proposal_gap_total` counts view-change rotations triggered because no proposal was observed before the cutoff.
-- Retired consensus-VRF series: `sumeragi_vrf_*` metrics are not registered or
-  exported. Production emits no VRF commit/reveal traffic, derives no VRF
-  participation penalty, and exposes no consensus-VRF randomness-health or
-  release signals. Current randomness is the finalized global threshold-beacon
-  pulse.
-- Signed DA availability: revision-4 admission is mandatory; use authenticated Sumeragi status together with `sumeragi_bg_post_queue_depth`, `sumeragi_dropped_block_messages_total`, and `p2p_queue_dropped_total` to inspect transport pressure. Retired global-RBC INIT/READY/DELIVER counters are not exported.
-- Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
+### Sumeragi consensus metrics
 
-Sumeragi additions (new series)
-- `sumeragi_highest_qc_height` (gauge) — current adopted highest QC height.
-- `sumeragi_new_view_publish_total` (counter) — NEW_VIEW messages published by this node.
-- `sumeragi_new_view_recv_total` (counter) — NEW_VIEW messages received and accepted by this node.
-  - See also: `sumeragi_new_view_receipts_by_hv{height="<h>",view="<v>"}` for per-(height,view) receipt counts.
-- `sumeragi_post_to_peer_total{peer}` (counter) — post attempts to peers (collector routing and backpressure insight).
-- `sumeragi_bg_post_enqueued_total{kind}` (counter) — background-post tasks enqueued by kind in {Post,Broadcast}.
-- `sumeragi_bg_post_overflow_total{kind}` (counter) — background-post queue full events; sender blocks until space is available.
-- `sumeragi_bg_post_drop_total{kind}` (counter) — background-post drops when the queue is missing or disconnected.
-- `sumeragi_bg_post_queue_depth` (gauge) — global background-post queue depth.
-- `sumeragi_bg_post_queue_depth_by_peer{peer}` (gauge) — per-collector background-post queue depth.
+The native driver writes `iroha_core::sumeragi::metrics::InstanceMetrics` from
+status snapshots and actual driver actions. Every instance series has a bounded
+`lane` label (`global` or a live decimal lane id); `reason`, `kind` and `queue`
+labels use closed enums. Telemetry never changes protocol decisions.
 
-Sumeragi deadlines
+| Series | Meaning |
+| --- | --- |
+| `sumeragi_round_height`, `sumeragi_round_view`, `sumeragi_round_stage` | Current height, view and protocol stage. |
+| `sumeragi_pacemaker_level`, `sumeragi_pacemaker_start_level`, `sumeragi_retransmit_interval_ms` | Current local pacemaker state. |
+| `sumeragi_committed_height`, `sumeragi_applied_height` | Certified and durably applied heights. |
+| `sumeragi_awaiting_configuration`, `sumeragi_signer_present`, `sumeragi_abstaining`, `sumeragi_unanchored` | Independent status flags. |
+| `sumeragi_halted{reason}` | Halt flag by exact reason. |
+| `sumeragi_commits_total`, `sumeragi_view_changes_total` | Progress since the first observed status snapshot. |
+| `sumeragi_timeout_votes_total` | Locally signed timeout votes, counted once per height/view. |
+| `sumeragi_fetch_requests_total{kind}` | Catch-up (`sync`) and payload (`body`) fetch requests. |
+| `sumeragi_dropped_total{queue}` | Drops at the `ingress`, `held` and `serve` driver bounds. |
+| `sumeragi_commit_latency_ms` | Histogram from first execution at a height to its CommitQC. |
+| `sumeragi_apply_latency_ms` | Histogram from CommitQC to durable application. |
 
-- Revision 4 derives its view-zero deadline as ten signed cadence intervals,
-  retransmits every one fifth of that deadline, and applies linear
-  view-indexed backoff capped at ten view-zero deadlines. Validate cadence and
-  the shared configuration fingerprint through authenticated
-  `/v1/sumeragi/status`.
-- First-release telemetry does not expose adaptive backoff, RTT, EMA, jitter,
-  or pacemaker-deferral series. Use the authenticated status plus transaction,
-  adapter, ingress, and P2P queue metrics for finite-queue diagnosis.
+Latency samples use the driver's local monotonic clock and retain at most 64
+pending heights per phase. Retries do not reset the first execution timestamp;
+applying consumes the timestamp once. These measurements describe local node
+progress, not client submission latency. The driver removes retired lane series.
 
-NEW_VIEW receipts
-- GaugeVec:
-  - `sumeragi_new_view_receipts_by_hv{height="<h>",view="<v>"}` — deduplicated NEW_VIEW sender count for (height, view).
-- Counter:
-- `sumeragi_new_view_dropped_by_lock_total` — NEW_VIEW frames rejected because the advertised highest certificate is behind the current locked certificate.
-- Example queries:
-  - Latest counts across recent heights: `sum by (height,view) (sumeragi_new_view_receipts_by_hv)`
-  - Filter for current height h: `sumeragi_new_view_receipts_by_hv{height="<h>"}`
+The node-wide transaction queue retains `sumeragi_tx_queue_depth`,
+`sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_retained_bytes`,
+`sumeragi_tx_queue_max_retained_bytes`, `sumeragi_tx_queue_oldest_queued_age_ms`,
+and the `sumeragi_tx_queue_saturated` flags (aggregate, `_by_count`, `_by_bytes`,
+`_by_age`). Correlate them with instance progress and P2P transport pressure.
+Signed availability and quorum validity are protocol checks, not metric verdicts.
 
 Example PromQL
 - P50/P90 stage latency (ms):
@@ -578,45 +558,16 @@ Example PromQL
   - 100 * (ivm_cache_hits - ivm_cache_hits offset 5m) / clamp_min((ivm_cache_hits - ivm_cache_hits offset 5m) + (ivm_cache_misses - ivm_cache_misses offset 5m), 1)
 - Detached merge ratio:
  - pipeline_detached_merged / clamp_min(pipeline_detached_prepared, 1)
- - Sumeragi tail votes rate (s⁻¹):
-   - rate(sumeragi_tail_votes_total[5m])
- - Widen-before-rotate rate (s⁻¹):
-   - rate(sumeragi_widen_before_rotate_total[5m])
- - View-change suggests vs installs (s⁻¹):
-   - rate(sumeragi_view_change_suggest_total[5m])
- - rate(sumeragi_view_change_install_total[5m])
-- Certificate size P90 (signatures):
-  - histogram_quantile(0.9, sum(rate(sumeragi_cert_size_bucket[5m])) by (le))
-- Channel drop alerts:
-  - rate(sumeragi_dropped_block_messages_total[5m])
-  - rate(sumeragi_dropped_control_messages_total[5m])
-  - rate(dropped_messages[5m])
+- View advances by instance: `rate(sumeragi_view_changes_total[5m])`
+- Commit latency P95 by instance:
+  `histogram_quantile(0.95, sum by (le,lane) (rate(sumeragi_commit_latency_ms_bucket[5m])))`
+- Driver drops: `sum by (lane,queue) (rate(sumeragi_dropped_total[5m]))`
 
-Alert snippets
-- Hint mismatch burst: `increase(block_created_hint_mismatch_total[5m]) > 0`
-- Proposal mismatch burst: `increase(block_created_proposal_mismatch_total[5m]) > 0`
-- Locked QC gate drop spike: `increase(block_created_dropped_by_lock_total[5m]) > 0`
-- Transaction queue saturation: `max_over_time(sumeragi_tx_queue_saturated[5m]) > 0`
-- Transaction queue count pressure: `max_over_time(sumeragi_tx_queue_saturated_by_count[5m]) > 0`
-- Transaction queue byte pressure: `max_over_time(sumeragi_tx_queue_saturated_by_bytes[5m]) > 0`
-
-Sumeragi v2 PrepareQC response
-- Endpoint: `GET /v1/sumeragi/qc`
-- Shape: `{ highest_prepare_qc, locked_prepare_qc }`, where both slots are required and nullable. Each non-null value is the exact `QuorumCertificateRef` projection: `{ round, proposal_round, phase, subject, execution_commitment }`.
-- The endpoint does not project or accept the pre-release `{ highest_qc, locked_qc }` summary shape.
-
-Example response before either PrepareQC is installed
-```json
-{
-  "highest_prepare_qc": null,
-  "locked_prepare_qc": null
-}
-```
-
-Prometheus exports matching gauges for these snapshots:
-- `sumeragi_highest_qc_height`
-- `sumeragi_locked_qc_height`
-- `sumeragi_locked_qc_view`
+Alert expressions and their expected pending/firing behavior are maintained in
+`dashboards/alerts/sumeragi_rules.yml` and its promtool test, alongside the
+Grafana dashboard. Current leader/proxy-tail and lock details are fields of
+`GET /v1/sumeragi/status`; certified finality comes from the bridge finality
+proof, bundle and attestation routes.
 
 ## Fraud monitoring metrics
 
@@ -636,22 +587,6 @@ PromQL starters:
 - Mismatch ratio: `sum(rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) / clamp_min(sum(rate(fraud_psp_assessments_total[1h])), 1)`
 
 Telemetry expects the following transaction metadata to be present when fraud monitoring is enabled: `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, and, once PSPs complete post-incident triage, `fraud_assessment_disposition` (values documented in `specs/fraud_monitoring_system.md`).
-
-Sumeragi leader (example)
-- Endpoint: `GET /v1/sumeragi/leader`
-- Shape: `{ leader_index, prf: { height, view, epoch_seed } }`
-
-Example response
-```json
-{
-  "leader_index": 3,
-  "prf": {
-    "height": 1234,
-    "view": 7,
-    "epoch_seed": "c0ffee1234567890deadbeef00112233445566778899aabbccddeeff00112233"
-  }
-}
-```
 
 Layer widths and utilization
 - Peak width per block: max_over_time(pipeline_peak_layer_width[5m])
@@ -904,30 +839,6 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 2. Confirm `torii_active_connections_total{scheme="norito_rpc"}` stabilises and the `ToriiNoritoRpcSilentTraffic` alert stays green.
 3. Re-run the Norito RPC smoke test (`python/iroha_python/scripts/run_norito_rpc_smoke.sh`) and alert tests (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`).
 4. Capture evidence (Grafana images, config patches, CLI outputs) and attach it to the NRPC-2 runbook ticket plus `status.md` so the roadmap artifact remains auditable.
-
-A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence. `/v1/sumeragi/status` now surfaces a `membership_mismatch` block with the active peer list and last mismatch context to speed triage.
-
-The gauges `sumeragi_membership_view_hash`, `sumeragi_membership_height`, `sumeragi_membership_view`, and `sumeragi_membership_epoch` expose the deterministic membership hash together with the `(height, view, epoch)` context. Compare these values across peers to confirm roster alignment without waiting for mismatch alarms.
-
-Recommended alert (recorded in the runbook):
-
-```
-alert: SumeragiMembershipMismatch
-expr: increase(sumeragi_membership_mismatch_total[5m]) > 0
-for: 5m
-labels:
-  severity: warning
-annotations:
-  summary: "Consensus membership mismatch detected"
-  description: |
-    Node {{ $labels.instance }} observed validator membership mismatch for peer {{ $labels.peer }} at height {{ $labels.height }} view {{ $labels.view }}.
-    Investigate peer configuration, on-chain `SumeragiParameters`, and recent key rotation events.
-```
-
-Operations checklist:
-- Verify the mismatch is expected (e.g., pending topology change) via `/v1/sumeragi/status`.
-- If unexpected, quarantine the offending peer and confirm configuration files match the on-chain roster.
-- After remediation, ensure `sumeragi_membership_mismatch_active{peer}` returns to `0`.
 
 ## Nexus scheduler TEU metrics
 

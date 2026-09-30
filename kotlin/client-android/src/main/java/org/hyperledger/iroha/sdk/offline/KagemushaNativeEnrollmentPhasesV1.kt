@@ -80,6 +80,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     private var beginInvoked = false
     private var begunAccountI105: String? = null
     private var selected: Selection? = null
+    private var preparationRequest: List<ByteArray>? = null
     private var challengeRequest: List<ByteArray>? = null
     private var accepted: AcceptedChallenge? = null
     private var proofRequest: List<ByteArray>? = null
@@ -99,6 +100,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         begunAccountI105 = null
         accepted = null
         proof = null
+        preparationRequest = null
         challengeRequest = null
         proofRequest = null
         finishRequest = null
@@ -137,6 +139,19 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
             return original
         }
         return candidate.also { selected = it }
+    }
+
+    /** Verify the original signed issuer preparation in native phase 8 before any KeyMint access. */
+    @Synchronized
+    fun verifySignedPreparation(selection: Selection, signedPreparation: ByteArray): ByteArray {
+        requireSelection(selection)
+        require(signedPreparation.size == 273) { "Signed issuer preparation has an invalid length" }
+        val fields = listOf(u32(8), selection.ticket(), signedPreparation.copyOf())
+        sameOrRemember(preparationRequest, fields, "Signed issuer preparation")
+        if (preparationRequest == null) preparationRequest = copyFields(fields)
+        // Native independently authenticates issuer, lifetime and original ticket pins; this
+        // method never interprets the frame shape or cached nonce as signature authority.
+        return bridge.invoke(METHOD, fields).single().copyOf()
     }
 
     /**
