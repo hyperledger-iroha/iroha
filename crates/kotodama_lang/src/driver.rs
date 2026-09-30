@@ -26,12 +26,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     error::Error,
     fmt, fs,
-    io::{Read as _, Write as _},
     path::{Component, Path, PathBuf},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, OnceLock},
 };
 mod source_bundle;
 pub use source_bundle::{
@@ -41,6 +37,9 @@ const BUILD_RECORD_SCHEMA: &str = "kotodama-build-v1";
 const DEFAULT_TARGET_ROOT: &str = "target/kotodama";
 const MAX_BUILD_RECORD_BYTES: usize = 4 * 1024;
 const MAX_CACHED_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CURRENT_TOOLCHAIN_FINGERPRINT: OnceLock<String> = OnceLock::new();
 /// Whether generated files may be updated or must already match exactly.
@@ -1634,86 +1633,24 @@ pub fn atomic_write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, BuildE
         return Ok(false);
     }
     let parent = output_parent(path);
-    fs::create_dir_all(parent).map_err(|error| BuildError::Io {
-        operation: "create output directory",
-        path: parent.to_path_buf(),
-        message: error.to_string(),
-    })?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| BuildError::InvalidPath {
-            path: path.to_path_buf(),
-            message: "output path has no file name".to_owned(),
-        })?
-        .to_string_lossy();
-    let mut temporary = None;
-    let mut file = None;
-    for _ in 0..32 {
-        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(
-            ".{file_name}.{}.{}.tmp",
-            std::process::id(),
-            sequence
-        ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(opened) => {
-                temporary = Some(candidate);
-                file = Some(opened);
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(BuildError::Io {
-                    operation: "create temporary output",
-                    path: candidate,
-                    message: error.to_string(),
-                });
-            }
-        }
-    }
-    let temporary = temporary.ok_or_else(|| {
-        BuildError::Internal(format!(
-            "could not allocate a unique temporary file for {}",
-            path.display()
-        ))
-    })?;
-    let mut file = file.expect("temporary path and file are assigned together");
-    let publication = (|| {
-        file.write_all(bytes).map_err(|error| BuildError::Io {
-            operation: "write temporary output",
-            path: temporary.clone(),
-            message: error.to_string(),
-        })?;
-        file.sync_all().map_err(|error| BuildError::Io {
-            operation: "sync temporary output",
-            path: temporary.clone(),
-            message: error.to_string(),
-        })?;
-        drop(file);
-        fs::rename(&temporary, path).map_err(|error| BuildError::Io {
-            operation: "publish output",
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-        let directory = fs::File::open(parent).map_err(|error| BuildError::Io {
-            operation: "open output directory",
+    let directory =
+        iroha_fs::OwnerDirectory::open_or_create(parent).map_err(|error| BuildError::Io {
+            operation: "retain output directory",
             path: parent.to_path_buf(),
             message: error.to_string(),
         })?;
-        directory.sync_all().map_err(|error| BuildError::Io {
-            operation: "sync output directory",
-            path: parent.to_path_buf(),
+    let name = path.file_name().ok_or_else(|| BuildError::InvalidPath {
+        path: path.to_path_buf(),
+        message: "output path has no file name".to_owned(),
+    })?;
+    directory
+        .write_atomic(name, bytes, iroha_fs::PublishMode::Replace)
+        .map_err(|error| BuildError::Io {
+            operation: "publish exact compiler output",
+            path: path.to_path_buf(),
             message: error.to_string(),
-        })
-    })();
-    if publication.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    publication.map(|()| true)
+        })?;
+    Ok(true)
 }
 fn output_parent(path: &Path) -> &Path {
     path.parent()
@@ -1721,36 +1658,15 @@ fn output_parent(path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 fn read_bounded_file(path: &Path, limit: usize) -> Option<Vec<u8>> {
-    let file = fs::File::open(path).ok()?;
-    let declared = file.metadata().ok()?.len();
-    let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
-    if declared > limit_u64 {
-        return None;
-    }
-    let capacity = usize::try_from(declared).ok()?.min(limit);
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(limit_u64.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() <= limit).then_some(bytes)
+    iroha_fs::read_regular(path, limit)
+        .ok()
+        .map(|bytes| bytes.to_vec())
 }
 fn file_equals(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
-    let mut file = fs::File::open(path)?;
-    if file.metadata()?.len() != u64::try_from(expected.len()).unwrap_or(u64::MAX) {
-        return Ok(false);
-    }
-    let mut offset = 0_usize;
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(offset == expected.len());
-        }
-        let end = offset.saturating_add(read);
-        if expected.get(offset..end) != Some(&buffer[..read]) {
-            return Ok(false);
-        }
-        offset = end;
+    match iroha_fs::read_regular(path, expected.len()) {
+        Ok(bytes) => Ok(bytes.as_slice() == expected),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(false),
+        Err(error) => Err(error),
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3058,5 +2974,18 @@ mod tests {
         assert!(atomic_write_if_changed(&path, b"relative").expect("publish relative output"));
         assert_eq!(fs::read(&path).expect("read relative output"), b"relative");
         fs::remove_file(path).expect("remove relative output");
+    }
+    #[test]
+    fn atomic_writer_rejects_linked_output_without_changing_any_alias() {
+        let root = temp_root("linked-output");
+        let path = root.join("value.bin");
+        let alias = root.join("alias.bin");
+        atomic_write_if_changed(&path, b"original").expect("initial output");
+        fs::hard_link(&path, &alias).expect("host supports regular hardlinks");
+        assert!(atomic_write_if_changed(&path, b"different").is_err());
+        assert!(read_bounded_file(&path, 64).is_none());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read(&alias).unwrap(), b"original");
+        fs::remove_dir_all(root).expect("remove linked output root");
     }
 }

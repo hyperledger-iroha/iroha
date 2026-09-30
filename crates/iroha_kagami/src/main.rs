@@ -20,17 +20,17 @@ mod atomic_output;
 mod client_configs;
 mod codec;
 mod crypto;
+mod developer;
 mod genesis;
 mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
-mod localnet_tui;
 mod privacy_bootstrap;
 mod schema;
-mod secret_toml;
+use iroha_deploy::secret_toml;
 mod secure_fs;
-mod shell;
+use iroha_deploy::shell;
 mod swarm;
 mod tui;
 mod verify;
@@ -47,9 +47,11 @@ pub(crate) type Outcome = color_eyre::Result<()>;
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
-    "  kagami localnet-wizard\n",
+    "  kagami localnet up\n",
+    "  kagami contract deploy hello.ko\n",
+    "  kagami context list\n",
     "  kagami wizard\n",
-    "  kagami localnet --out-dir ./localnet\n",
+    "  kagami localnet generate --out-dir ./localnet\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -101,10 +103,18 @@ struct Cli {
 enum Command {
     /// Guided onboarding flow for staging a Sora Nexus observer configuration
     Wizard(wizard::Args),
-    /// Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
-    LocalnetWizard(localnet_tui::LocalnetWizardArgs),
-    /// Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
-    Localnet(localnet::Args),
+    /// Start and manage a persistent localnet without supplying configuration
+    #[command(subcommand)]
+    Localnet(developer::LocalnetCommand),
+    /// Select and inspect managed developer environments
+    #[command(subcommand)]
+    Context(developer::ContextCommand),
+    /// Build and deploy native IVM contracts in one invocation
+    #[command(subcommand)]
+    Contract(developer::ContractCommand),
+    /// Internal native process-owner entry point
+    #[command(name = "_managed-worker", hide = true)]
+    ManagedWorker(developer::WorkerArgs),
     /// Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
     Docker(swarm::Args),
     /// Generate cryptographic key pairs and optional validator Proofs-of-Possession
@@ -152,8 +162,10 @@ impl<T: Write> RunArgs<T> for Command {
         use Command::*;
         match self {
             Wizard(args) => args.run(writer),
-            LocalnetWizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Context(args) => args.run(writer),
+            Contract(args) => args.run(writer),
+            ManagedWorker(args) => args.run(writer),
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Kagemusha(args) => args.run(writer),

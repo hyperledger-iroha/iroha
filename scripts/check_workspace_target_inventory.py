@@ -90,7 +90,6 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("ivm", "ivm_predecoder_export"),
         ("kotlin-fixture-gen", "kotlin-fixture-gen"),
         ("kotodama_toolchain", "dump_program"),
-        ("mochi-integration", "kagami_mock"),
         ("norito", "norito_regen_goldens"),
         ("norito_codegen_exporter", "norito-schema-inventory"),
         ("norito_codegen_exporter", "norito_codegen_exporter"),

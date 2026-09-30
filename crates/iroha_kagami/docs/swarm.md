@@ -85,16 +85,16 @@ instead of Kagami's ambient working directory. The generator cannot silently
 produce a roster different from the one signed into genesis:
 
 ```bash
-kagami localnet --peers 4 --out-dir ./localnet
+kagami localnet generate --peers 4 --out-dir ./localnet
 kagami docker \
     --peers 4 \
-    --config-dir ./localnet \
+    --config-dir ./localnet generate \
     --image hyperledger/iroha:dev \
     --out-file ./my-configs/docker-compose.yml
 docker compose -f ./my-configs/docker-compose.yml up
 ```
 
-`kagami localnet` emits and cross-checks the complete prepared bundle. An
+`kagami localnet generate` emits and cross-checks the complete prepared bundle. An
 equivalent manually prepared bundle may use
 `kagami genesis sign --expected-hash-out`; that command emits one canonical
 LF-terminated `hash:<64 uppercase hex>#<CRC16>` NetworkId file selected through
@@ -153,7 +153,7 @@ the image locally:
 ```bash
 kagami docker \
     --peers 4 \
-    --config-dir ./localnet \
+    --config-dir ./localnet generate \
     --image myiroha:local \
     --build . \
     --out-file ./my-configs/docker-compose.build.yml
@@ -181,7 +181,7 @@ kagami docker \
    every peer config against the same exact hash.
 
    ```bash
-   kagami localnet \
+   kagami localnet generate \
        --peers 4 \
        --consensus-mode npos \
        --out-dir ./cfg

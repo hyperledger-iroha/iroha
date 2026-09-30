@@ -375,6 +375,7 @@ pub(super) async fn prepare(
     generate
         .args([
             "localnet",
+            "generate",
             "--peers",
             "4",
             "--chain-id",

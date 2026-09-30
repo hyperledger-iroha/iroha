@@ -16,7 +16,7 @@ mod i18n;
 pub mod musubi_publication_service;
 mod network_relay;
 /// Fixed-name runtime secrets of a `data_dir` node.
-#[cfg(all(feature = "daemon", unix))]
+#[cfg(feature = "daemon")]
 pub mod node_secrets;
 /// Asynchronous Nexus DPN fee settlement relay.
 /// Explicit recovery boundaries for daemon-owned provider work.
@@ -5868,16 +5868,15 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
 }
 /// Check the custody of the `<data_dir>/secrets/` key files the configuration parser may read
 /// ([`node_secrets::verify_config_key_custody`]).
-#[cfg(all(feature = "daemon", unix))]
+#[cfg(feature = "daemon")]
 fn verify_config_key_custody(data_dir: &Path) -> Result<(), String> {
     node_secrets::verify_config_key_custody(&iroha_config::parameters::actual::DataDir::new(
         data_dir.to_path_buf(),
     ))
     .map_err(|error| error.to_string())
 }
-/// Non-Unix builds cannot enforce secret-file custody; a real start of a `data_dir` node is
-/// refused by `resolve_node_secrets_runtime_deps`.
-#[cfg(not(all(feature = "daemon", unix)))]
+/// Non-daemon builds have no fixed-secret runtime provider.
+#[cfg(not(feature = "daemon"))]
 fn verify_config_key_custody(_data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
@@ -8743,7 +8742,7 @@ fn validate_config_and_genesis_for_check(
 /// resolves the Soracloud runtime signer and the global-beacon partial signer, and binds the
 /// KAGEMUSHA mint-finality authority from `secrets/mint_finality.seed` against the roster of the
 /// already authenticated local genesis.
-#[cfg(all(feature = "daemon", unix))]
+#[cfg(feature = "daemon")]
 fn resolve_node_secrets_runtime_deps(
     config: &Config,
     authenticated_genesis: Option<&crate::authenticated_genesis::AuthenticatedGenesis>,
@@ -8769,13 +8768,13 @@ fn resolve_node_secrets_runtime_deps(
         .bind_mint_finality_authority(config, authenticated_genesis, runtime_deps)
         .map_err(secrets_error)
 }
-/// Non-Unix builds cannot enforce secret-file custody.
-#[cfg(not(all(feature = "daemon", unix)))]
+/// A build without daemon providers cannot resolve fixed-secret runtime providers.
+#[cfg(not(feature = "daemon"))]
 fn resolve_node_secrets_runtime_deps(
     _config: &Config,
     _authenticated_genesis: Option<&crate::authenticated_genesis::AuthenticatedGenesis>,
 ) -> ReportResult<IrohaRuntimeDeps, MainError> {
-    Err(Report::new(MainError::Config).attach("data_dir node secrets require a Unix daemon build"))
+    Err(Report::new(MainError::Config).attach("data_dir node secrets require the daemon feature"))
 }
 fn validate_available_genesis_for_check(
     config: &Config,

@@ -237,12 +237,6 @@ WAVE_TWO_TARGETS = (
         modules=(("torii_streams", "torii_streams.rs"),),
     ),
     WaveTwoTarget(
-        package="mochi/mochi-integration",
-        target="readiness_smoke",
-        root="readiness_smoke.rs",
-        modules=(("supervisor", "supervisor.rs"),),
-    ),
-    WaveTwoTarget(
         package="crates/sorafs_node",
         target="pin_workflows",
         root="pin_workflows.rs",
@@ -285,7 +279,6 @@ WAVE_TWO_SOURCE_PATHS = (
     'mochi/mochi-core/tests/composer_drafts.rs',
     'mochi/mochi-core/tests/torii_streams.rs',
     'mochi/mochi-integration/tests/readiness_smoke.rs',
-    'mochi/mochi-integration/tests/supervisor.rs',
     'tools/soranet-handshake-harness/tests/fixtures_verify.rs',
     'tools/soranet-handshake-harness/tests/interop_parity.rs',
     'tools/soranet-handshake-harness/tests/perf_gate.rs',

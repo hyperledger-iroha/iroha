@@ -1,8 +1,8 @@
 # Kagami
 
-Kagami is the task-first operator toolbox shipped with Iroha. Use it for guided
-peer setup, disposable local devnets, Docker Compose generation, genesis work,
-validator key material, and lower-level inspection utilities.
+Kagami provides managed developer networks and native contract deployment, plus
+operator tooling for genesis, validator keys, and inspection. Managed commands
+use the shared `iroha_deploy` engine and Musubi deployment service.
 
 ## Build
 
@@ -33,11 +33,23 @@ cargo build --bin kagami --features "gost,sm"
 
 ## Quickstart
 
-New local devnet, guided:
+Start or resume a four-validator localnet without supplying configuration:
 
 ```bash
-kagami localnet-wizard
+kagami localnet up
+kagami contract deploy hello.ko
+kagami localnet down
 ```
+
+Install the complete native bundle with `kagami` and `iroha3d` side by side.
+State and credentials live outside the project in a private workspace-scoped
+store. `down` retains the ledger; `localnet reset local` deliberately retires it.
+`contract deploy` also accepts `.to` or a Musubi package directory and starts the
+default localnet when no context has been selected. Use `context list`,
+`context show`, or `context use NAME` to inspect or select retained environments.
+
+The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
+remaining native-platform, private-dataspace, and end-to-end qualification.
 
 Existing Sora network / observer peer config, guided:
 
@@ -48,19 +60,19 @@ kagami wizard
 Direct disposable localnet, permissioned by default:
 
 ```bash
-kagami localnet --peers 4 --out-dir ./localnet
+kagami localnet generate --peers 4 --out-dir ./localnet
 ```
 
 Direct NPoS localnet:
 
 ```bash
-kagami localnet --consensus-mode npos --peers 4 --out-dir ./localnet-npos
+kagami localnet generate --consensus-mode npos --peers 4 --out-dir ./localnet-npos
 ```
 
 Docker Compose from one authoritative prepared bundle:
 
 ```bash
-kagami localnet \
+kagami localnet generate \
   --peers 4 \
   --out-dir ./localnet
 kagami docker \
@@ -71,7 +83,7 @@ kagami docker \
 docker compose -f docker-compose.yml up
 ```
 
-`localnet` uses operating-system-random keys by default and refuses a non-empty
+`localnet generate` uses operating-system-random keys by default and refuses a non-empty
 output directory. Pass `--seed` only for reproducible development fixtures.
 
 Ed25519 or BLS keys:
@@ -87,49 +99,31 @@ directory containing newline-terminated `public.key` and owner-only
 the private key.
 
 The generator commands print a concise summary with generated paths and the
-next safe handoff. `localnet` and `wizard` also emit a generated `README.md`
+next handoff. `localnet generate` and `wizard` also emit a generated `README.md`
 into the output directory.
 
 ## Main Flows
 
-`kagami localnet-wizard`
-- Guided disposable devnet flow
-- Prompts for peer count, profile, consensus mode, ports, sample assets, and
-  output directory
-- Defaults the output to the canonical OS temporary directory so owner-only
-  custody checks do not traverse platform temporary-directory symlinks
-- Default genesis has no public test accounts or sample assets. Bootstrap grants
-  belong to the supplied genesis authority; localnet operator grants and optional
-  sample assets belong to the generated runtime operator. Gas custody uses a
-  protocol-derived non-signing account.
-- The generated `client.toml` operator is funded and receives
-  `CanManageSmartContractCode` and `CanGrantSmartContractCodeManagement` for
-  privileged artifact administration. Registered, funded developers can create
-  verified immutable artifacts without these grants and deploy under an owned
-  namespace. Operator grants are not assigned to onboarding signers, validators,
-  or public sample accounts.
-- Taira generation requires runtime output outside a Git checkout. Each validator
-  has an independent private mint-finality seed, retained in an owner-only runtime
-  sidecar. The launcher stages consumed descriptor 199 alongside the Soracloud
-  signer at descriptor 198; the daemon binds it to the authenticated genesis and
-  matching epoch rosters. Private signing material never belongs in source or
-  public artifacts.
-- Scheduling epochs retain the exact authenticated mint-finality authority
-  generation and installed beacon binding through incumbent-certified epoch
-  authorizations. Per-epoch key schedules are not a provisioning interface.
-  TODO: expose prepared generation activation only after consensus owns the
-  frozen target, all-seat custody readiness, and authenticated beacon transition.
-- Writes genesis, signed genesis, its exact hash, per-peer configs,
-  `client.toml`, `start.sh`, `stop.sh`, and a generated guide
-- Generic generated stop scripts validate pidfiles against the expected peer
-  config path before signalling a live process. Taira has a stricter
-  first-release path: owner-only `peerN.process.json` identities bind the boot,
-  start time, executable, exact argv/config, and OS ownership/session fields;
-  observation, signaling, and exit waits use held Linux pidfds only.
+`kagami localnet up|status|logs|down|reset`
+- Uses one retained generation and native supervisor per managed environment.
+- Generates independent validator and developer identities, loopback ports,
+  signed genesis, fixed-name runtime seeds, and private node/client configuration.
+- Readiness requires all four validators and a signed committed smoke transaction.
+- Native control IPC authenticates the owner; numeric PID files do not establish
+  process ownership.
+- Logs are bounded; `--json` returns public connection metadata with progress on stderr.
+
+`kagami contract deploy`
+- Compiles `.ko`, verifies `.to`, or resolves a Musubi package through shared services.
+- Derives a contract alias inside the selected environment's authorized dataspace.
+- Quotes exact fees, retains signed transactions before dispatch, and verifies
+  Applied evidence and artifact/alias readback before reporting completion.
+- `--resume JOURNAL` recovers the original operation without rebuilding or signing
+  replacements. Identical repeated deployments reconcile their retained operation.
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use
-  `localnet-wizard` for a new generic network
+  `localnet up` for a new local network
 - Supports interactive and fully flag-driven non-interactive use
 - Requires the operator-authenticated full validator peer/PoP roster encoded by
   the network's signed genesis; the generated local peer is not promoted to validator
@@ -138,7 +132,7 @@ into the output directory.
   signed genesis block, and exact hash before showing the final `iroha3d`
   launch step
 
-`kagami localnet`
+`kagami localnet generate`
 - Bare-metal local network generator
 - Requires an exact `3f + 1` validator count in `4..=31`, the Sumeragi global
   committee geometry
@@ -164,7 +158,7 @@ into the output directory.
 
 `kagami docker`
 - Docker Compose generator for an authoritative prepared bundle from
-  `kagami localnet` (or equivalent peer configs plus signed genesis artifacts)
+  `kagami localnet generate` (or equivalent peer configs plus signed genesis artifacts)
 - Normal mode omits `--seed`: Kagami parses every `peerN.toml` without ambient
   environment overrides, rejects `extends`, and verifies the exact signed
   genesis, manifest, expected hash, verifier key, validator identities, trusted

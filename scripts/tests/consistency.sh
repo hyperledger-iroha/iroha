@@ -163,7 +163,7 @@ prepare_compose_dev_bundle() {
     local tmp_root="${TMPDIR:-/tmp}"
     compose_dev_root="$(mktemp -d "${tmp_root%/}/iroha-compose-dev.XXXXXX")"
     trap 'remove_compose_dev_root' EXIT
-    local cmd="${bin_kagami[*]} localnet --peers $compose_peers --seed $compose_seed --out-dir \"$compose_dev_root/localnet\""
+    local cmd="${bin_kagami[*]} localnet generate --peers $compose_peers --seed $compose_seed --out-dir \"$compose_dev_root/localnet\""
     if ! eval "$cmd" > "$compose_dev_root/localnet.log" 2>&1; then
         echo "[FAIL] unable to render the deterministic development genesis input"
         echo "  $cmd"

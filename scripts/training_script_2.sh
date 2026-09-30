@@ -1045,7 +1045,7 @@ for run in $(seq 1 "$RUNS"); do
       continue
     fi
 
-    if ! "$KAGAMI_BIN" localnet \
+    if ! "$KAGAMI_BIN" localnet generate \
         --out-dir "$run_dir" \
         --peers "$PEERS" \
         --seed "$SEED" \

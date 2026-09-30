@@ -18,7 +18,6 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json;
 use std::{
     num::NonZeroU64,
@@ -588,6 +587,7 @@ pub enum StateQueryError {
 /// cursor for further pagination.
 pub async fn run_state_query(
     client: ToriiClient,
+    signer: &crate::SigningAuthority,
     kind: StateQueryKind,
     cursor: Option<StateCursor>,
     fetch_size: Option<NonZeroU64>,
@@ -597,7 +597,7 @@ pub async fn run_state_query(
     } else {
         kind.build_request(fetch_size)
     };
-    let signed = client.sign_query(request, ALICE_ID.clone(), &ALICE_KEYPAIR)?;
+    let signed = client.sign_query(request, signer.account_id().clone(), signer.key_pair())?;
     let output = client.execute_query(&signed).await?;
     parse_iterable_output(kind, output)
 }
@@ -718,7 +718,7 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{NumericSpec, Quantity};
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use norito::{json, to_bytes};
     fn try_start_mock_server() -> Option<MockServer> {
         std::panic::catch_unwind(MockServer::start)
@@ -820,7 +820,7 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let page = run_state_query(client, StateQueryKind::Accounts, None, None)
+        let page = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Accounts, None, None)
             .await
             .expect("state page");
         mock.assert();
@@ -850,7 +850,7 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let page = run_state_query(client, StateQueryKind::Peers, None, None)
+        let page = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Peers, None, None)
             .await
             .expect("state page");
         assert_eq!(page.entries.len(), 1);
@@ -874,7 +874,7 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let err = run_state_query(client, StateQueryKind::Accounts, None, None)
+        let err = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Accounts, None, None)
             .await
             .expect_err("unexpected batch kind should error");
         assert!(matches!(err, StateQueryError::UnexpectedBatch { .. }));

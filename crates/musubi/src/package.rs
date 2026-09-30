@@ -5,7 +5,7 @@
 //! translate a validated `Musubi.toml` into [`PackageLayout`], pass the original manifest and
 //! verification lock documents to [`plan_package`], and use the resulting immutable plan for a
 //! clean compiler check and `SoraFS` CAR construction. Filesystem-backed planning is qualified on
-//! Unix; other targets fail with [`PackageError::UnsupportedPlatform`] before parsing or I/O.
+//! native Unix and Windows through retained filesystem authority.
 use crate::{
     lockfile::{MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1, render_verification_lock},
     manifest::Inheritable,
@@ -29,8 +29,8 @@ use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 use norito::codec::Decode;
 use norito::codec::Encode;
 use sorafs_car::{
-    CarBuildPlan, CarWriteStats, CarWriter, FileEntry, FilePayload, PayloadSource,
-    chunker_registry::default_descriptor, compute_chunk_plan_digest_sha3, compute_por_root,
+    CarBuildPlan, CarWriteStats, CarWriter, FileEntry, chunker_registry::default_descriptor,
+    compute_chunk_plan_digest_sha3, compute_por_root,
 };
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -617,7 +617,7 @@ impl fmt::Display for PackageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedPlatform => formatter.write_str(
-                "secure Musubi package planning is unsupported on this platform; qualified planning currently requires Unix stable file identities",
+                "secure Musubi package planning requires native Unix or Windows retained filesystem authority",
             ),
             Self::Io { operation, path, source } => write!(
                 formatter,
@@ -781,8 +781,7 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
 ///
 /// # Errors
 ///
-/// Returns [`PackageError::UnsupportedPlatform`] on non-Unix targets before parsing documents or
-/// accessing the filesystem. On Unix, returns an error for invalid documents, unsafe paths or
+/// Returns an error for invalid documents, unsafe paths or
 /// filesystem objects, credential material, inconsistent filesystem identity, or a V1
 /// resource-limit violation.
 pub fn plan_package(
@@ -790,9 +789,7 @@ pub fn plan_package(
     manifest_toml: &str,
     verification_lock: &MusubiVerificationLockV1,
 ) -> Result<PackagePlan, PackageError> {
-    if !cfg!(unix) {
-        // TODO: Enable non-Unix planning only after a safe stable handle-identity, single-link,
-        // and no-follow file-open abstraction is available.
+    if !cfg!(any(unix, windows)) {
         return Err(PackageError::UnsupportedPlatform);
     }
     let manifest = canonicalize_manifest_toml(manifest_toml)?;
@@ -803,7 +800,7 @@ pub fn plan_package(
         })?
         .into_bytes();
     let root = validate_root(layout.root())?;
-    let mut collector = Collector::new(root);
+    let mut collector = Collector::new(root)?;
     collector.insert_virtual(MANIFEST_PATH, manifest)?;
     collector.insert_virtual(VERIFICATION_LOCK_PATH, lock)?;
     collect_package_sources(layout, &mut collector)?;
@@ -825,11 +822,11 @@ pub fn inventory_package(
     layout: &PackageLayout,
     manifest_toml: &str,
 ) -> Result<PackageInventory, PackageError> {
-    if !cfg!(unix) {
+    if !cfg!(any(unix, windows)) {
         return Err(PackageError::UnsupportedPlatform);
     }
     let manifest = canonicalize_manifest_toml(manifest_toml)?;
-    let mut collector = Collector::new(validate_root(layout.root())?);
+    let mut collector = Collector::new(validate_root(layout.root())?)?;
     collector.insert_virtual(MANIFEST_PATH, manifest)?;
     collect_package_sources(layout, &mut collector)?;
     collector.finish()
@@ -873,7 +870,7 @@ fn collect_package_sources(
     collector.collect_source_dependencies()?;
     for selection in &layout.external {
         let root = validate_root(&selection.root)?;
-        let mut external = Collector::new(root.clone());
+        let mut external = Collector::new(root.clone())?;
         external.collect_selector(&selection.selector, selection.shape)?;
         external.collect_source_dependencies()?;
         let external_entries = external.visited_entries;
@@ -1250,20 +1247,24 @@ enum SelectionShape {
 }
 struct Collector {
     root: PathBuf,
+    authority: iroha_fs::OwnerDirectory,
     files: BTreeMap<String, PlannedFile>,
     collision_origins: BTreeMap<String, String>,
     source_bytes: u64,
     visited_entries: usize,
 }
 impl Collector {
-    fn new(root: PathBuf) -> Self {
-        Self {
+    fn new(root: PathBuf) -> Result<Self, PackageError> {
+        let authority = iroha_fs::OwnerDirectory::open(&root)
+            .map_err(|source| io_error("retain package root", &root, source))?;
+        Ok(Self {
             root,
+            authority,
             files: BTreeMap::new(),
             collision_origins: BTreeMap::new(),
             source_bytes: 0,
             visited_entries: 0,
-        }
+        })
     }
     fn consume_entries(&mut self, count: usize) -> Result<(), PackageError> {
         let Some(next) = self.visited_entries.checked_add(count) else {
@@ -1368,6 +1369,9 @@ impl Collector {
         selector: &Path,
         shape: SelectionShape,
     ) -> Result<(), PackageError> {
+        self.authority
+            .revalidate()
+            .map_err(|source| io_error("revalidate package root", &self.root, source))?;
         let relative = validate_selector(selector)?;
         self.consume_entries(1)?;
         if relative.as_os_str().is_empty() {
@@ -1477,7 +1481,8 @@ impl Collector {
         if !linked.is_file() {
             return Err(PackageError::SpecialFile(relative.to_path_buf()));
         }
-        if !metadata_has_one_hard_link(&linked) {
+        #[cfg(unix)]
+        if linked.nlink() != 1 {
             return Err(PackageError::Hardlink(relative.to_path_buf()));
         }
         let next_size =
@@ -1488,36 +1493,17 @@ impl Collector {
                     maximum: MAX_SOURCE_BYTES,
                 })?;
         enforce_source_limit(next_size)?;
-        let mut source = FilePayload::open(&physical)
-            .map_err(|source| io_error("securely open package file", relative, source))?;
-        validate_confined_file(&self.root, relative)?;
-        let size = usize::try_from(linked.len()).map_err(|_| PackageError::SourceTooLarge {
-            bytes: linked.len(),
-            maximum: MAX_SOURCE_BYTES,
-        })?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(size).map_err(|source| {
-            io_error(
-                "allocate package file buffer",
-                relative,
-                io::Error::other(source),
-            )
-        })?;
-        bytes.resize(size, 0);
-        source.read_exact(0, &mut bytes).map_err(|source| {
-            io_error(
-                "read stable package file",
-                relative,
-                io::Error::other(source),
-            )
-        })?;
-        source.ensure_exhausted(linked.len()).map_err(|source| {
-            io_error(
-                "verify stable package file",
-                relative,
-                io::Error::other(source),
-            )
-        })?;
+        let remaining =
+            usize::try_from(MAX_SOURCE_BYTES - self.source_bytes).map_err(|source| {
+                io_error(
+                    "bound package source read",
+                    relative,
+                    io::Error::other(source),
+                )
+            })?;
+        let bytes = iroha_fs::read_regular(&physical, remaining)
+            .map_err(|source| io_error("read stable package file", relative, source))?
+            .to_vec();
         validate_confined_file(&self.root, relative)?;
         if let Some(marker) = sensitive_content_marker(&bytes) {
             return Err(PackageError::SensitiveContent {
@@ -1570,6 +1556,9 @@ impl Collector {
         Ok(())
     }
     fn finish(self) -> Result<PackageInventory, PackageError> {
+        self.authority
+            .revalidate()
+            .map_err(|source| io_error("revalidate complete package", &self.root, source))?;
         enforce_file_limit(self.files.len())?;
         enforce_source_limit(self.source_bytes)?;
         let files = self.files.into_values().collect::<Vec<_>>();
@@ -1793,21 +1782,15 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     {
         metadata.file_type().is_symlink()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = metadata;
         true
-    }
-}
-fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.nlink() == 1
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        false
     }
 }
 fn is_reserved_component(component: &str) -> bool {
@@ -3100,7 +3083,8 @@ exports = []
         // names before `read_dir`, while the portable package check must behave identically on
         // case-sensitive and case-insensitive hosts.
         let case = tempdir().expect("tempdir");
-        let mut collector = Collector::new(case.path().to_path_buf());
+        let mut collector =
+            Collector::new(case.path().to_path_buf()).expect("retained package root");
         collector
             .insert_virtual("src/Foo.ko", b"one".to_vec())
             .expect("first case spelling");
@@ -3109,7 +3093,8 @@ exports = []
             Err(PackageError::PathCollision { .. })
         ));
         let unicode = tempdir().expect("tempdir");
-        let mut collector = Collector::new(unicode.path().to_path_buf());
+        let mut collector =
+            Collector::new(unicode.path().to_path_buf()).expect("retained package root");
         collector
             .insert_virtual("src/caf\u{e9}.ko", b"one".to_vec())
             .expect("first Unicode spelling");
@@ -3118,7 +3103,8 @@ exports = []
             Err(PackageError::PathCollision { .. })
         ));
         let caseless = tempdir().expect("tempdir");
-        let mut collector = Collector::new(caseless.path().to_path_buf());
+        let mut collector =
+            Collector::new(caseless.path().to_path_buf()).expect("retained package root");
         collector
             .insert_virtual("src/Straße.ko", b"one".to_vec())
             .expect("first full case mapping");
@@ -3127,7 +3113,8 @@ exports = []
             Err(PackageError::PathCollision { .. })
         ));
         let prefix = tempdir().expect("tempdir");
-        let mut collector = Collector::new(prefix.path().to_path_buf());
+        let mut collector =
+            Collector::new(prefix.path().to_path_buf()).expect("retained package root");
         collector
             .insert_virtual("Foo", b"one".to_vec())
             .expect("case-sensitive file spelling");
@@ -3848,14 +3835,19 @@ exports = []
         ));
     }
 }
-#[cfg(all(test, not(unix)))]
-mod unsupported_platform_tests {
-    use super::{PackageError, PackageLayout, plan_package};
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+    use crate::workspace::load_workspace;
+    #[cfg(not(any(unix, windows)))]
     use iroha_data_model::musubi::{
         MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
         MusubiVerificationLockV1,
     };
+    #[cfg(not(any(unix, windows)))]
     use iroha_model_base::topology::DataSpaceId;
+    use tempfile::tempdir;
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn package_planning_fails_before_parsing_or_inspecting_the_root() {
         let package = MusubiPackageIdV1::new(

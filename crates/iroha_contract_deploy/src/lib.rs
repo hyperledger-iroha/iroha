@@ -458,6 +458,44 @@ impl DeploymentService {
         self.validate_plan(&record)?;
         self.execute_record(&record, &journal, progress)
     }
+    /// Authenticate retained deployment inputs using the original execution authority.
+    /// This performs no network requests, signing, submission or journal writes.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage, altered plans, or a different network, authority or signing key.
+    pub fn retained_preflight(&self, journal_dir: &Path) -> DeploymentResult<DeploymentPreflight> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        Ok(record.preflight)
+    }
+
+    /// Verify a completed deployment still names its current alias and exact stored artifact.
+    /// This is the idempotent deployment check; historical receipt inspection remains available
+    /// separately through [`Self::completed_receipt`]. No transaction is submitted.
+    ///
+    /// # Errors
+    /// Rejects invalid retained evidence, a changed authority, unresolved finality or changed
+    /// alias/artifact state. An uncompleted authenticated plan returns `None`.
+    pub fn current_completed_receipt(
+        &self,
+        journal_dir: &Path,
+    ) -> DeploymentResult<Option<DeploymentReceipt>> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        let Some(receipt) = self.verify_completed_receipt(&record, &journal)? else {
+            return Ok(None);
+        };
+        self.read_back(&record, &receipt.commit)?;
+        Ok(Some(receipt))
+    }
     /// Authenticate an existing completed journal and recheck its exact commit on this network.
     ///
     /// Returns `None` for a valid plan that has no finalized receipt. This operation never submits

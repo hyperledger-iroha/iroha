@@ -58,7 +58,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        64 + usize::from(cfg!(feature = "telemetry"))
+        65 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),
@@ -260,6 +260,12 @@ fn native_execution_tip_is_authenticated_history_without_a_snapshot_decoder() {
     assert_eq!(tip.disclosure, Disclosure::CommitmentOnly);
     assert!(!fields.contains_key("state.lane_consensus_contexts"));
     assert!(!fields.contains_key("state.merge_admission"));
+    let witness = fields["state.native_world_cut"];
+    let Role::Local(reason) = witness.role else {
+        panic!("retained native journal custody cannot become independent snapshot authority");
+    };
+    assert!(reason.contains("absent after decoded restore"));
+    assert_eq!(witness.disclosure, Disclosure::NotApplicable);
 }
 
 #[test]

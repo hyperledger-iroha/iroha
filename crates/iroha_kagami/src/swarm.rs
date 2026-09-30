@@ -2360,8 +2360,8 @@ fn load_prepared_bundle(
     manifest: &RawGenesisTransaction,
 ) -> color_eyre::Result<PreparedBundle> {
     let signed_block = config_dir.join("genesis.signed.nrt");
-    let public_key_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
-    let expected_hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+    let public_key_path = config_dir.join(iroha_deploy::localnet::GENESIS_PUBLIC_KEY_FILE);
+    let expected_hash_path = config_dir.join(iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE);
     let canonical_signed_block = fs::canonicalize(&signed_block).wrap_err_with(|| {
         format!(
             "canonicalize prepared signed genesis {}",
@@ -2381,7 +2381,7 @@ fn load_prepared_bundle(
     let runtime_expected_hash = materialize_container_readable_file(
         projection_root,
         "genesis-hash",
-        crate::localnet::GENESIS_EXPECTED_HASH_FILE,
+        iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE,
         expected_hash_record.as_bytes(),
     )?;
     let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
@@ -2682,7 +2682,7 @@ fn load_prepared_bundle(
     let runtime_public_key = materialize_container_readable_file(
         projection_root,
         "genesis-key",
-        crate::localnet::GENESIS_PUBLIC_KEY_FILE,
+        iroha_deploy::localnet::GENESIS_PUBLIC_KEY_FILE,
         public_key_record.as_bytes(),
     )?;
     Ok(PreparedBundle {
@@ -2842,7 +2842,7 @@ impl<T: Write> RunArgs<T> for Args {
             writeln!(
                 writer,
                 "consensus_mode: {}",
-                crate::localnet::consensus_mode_label(manifest_mode)
+                iroha_deploy::localnet::consensus_mode_label(manifest_mode)
             )?;
             if let Some((signed_block, public_key, expected_hash)) = prepared_artifacts.as_ref() {
                 writeln!(writer, "genesis_signed: {}", signed_block.display())?;
@@ -2937,7 +2937,7 @@ mod tests {
         read_runtime_file_bounded, signed_genesis_consensus_metadata, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
-    use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _, localnet::LocalnetOptions};
+    use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
@@ -2946,6 +2946,7 @@ mod tests {
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
     };
+    use iroha_deploy::localnet::LocalnetOptions;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::peer::PeerId;
@@ -3058,7 +3059,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
+        iroha_deploy::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
             .expect("generate authoritative prepared localnet bundle");
         bundle
     }
@@ -3587,8 +3588,8 @@ mod tests {
         load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect("baseline prepared bundle validates");
         let signed_path = config_dir.join("genesis.signed.nrt");
-        let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
-        let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+        let public_path = config_dir.join(iroha_deploy::localnet::GENESIS_PUBLIC_KEY_FILE);
+        let hash_path = config_dir.join(iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE);
         let manifest =
             iroha_genesis::RawGenesisTransaction::from_path(config_dir.join("genesis.json"))
                 .expect("parse prepared genesis fixture manifest");
@@ -3801,8 +3802,8 @@ mod tests {
         let config_dir = temp_dir.path().join("resultless-prepared-bundle");
         fs::create_dir_all(&config_dir).expect("create resultless fixture directory");
         let signed_path = config_dir.join("genesis.signed.nrt");
-        let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
-        let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+        let public_path = config_dir.join(iroha_deploy::localnet::GENESIS_PUBLIC_KEY_FILE);
+        let hash_path = config_dir.join(iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE);
         let manifest_path = config_dir.join("genesis.json");
         let topology = (0..4)
             .map(|_| {

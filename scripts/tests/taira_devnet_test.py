@@ -1578,6 +1578,18 @@ class TairaDevnetTests(unittest.TestCase):
         self.process_ops_patch.stop()
         self.temporary.cleanup()
 
+    def test_network_generation_uses_explicit_bundle_command_and_four_fresh_keys(self) -> None:
+        run = mock.Mock()
+        target = Path(self.temporary.name) / "network"
+        kagami = Path(self.temporary.name) / "kagami"
+        module.generate_network(target, kagami, 18080, 18337, 1000, run)
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], [str(kagami), "localnet", "generate"])
+        self.assertEqual(command[command.index("--peers") + 1], "4")
+        self.assertEqual(command[command.index("--out-dir") + 1], str(target))
+        self.assertNotIn("--seed", command)
+
     def test_parallel_map_runs_bounded_work_concurrently_and_retains_order(self) -> None:
         barrier = threading.Barrier(module.PEER_COUNT)
         worker_ids: set[int] = set()
@@ -2986,7 +2998,7 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_kagami_taira_lifecycle_source_is_pidfd_only_and_linux_only(self) -> None:
         source = (
-            REPO_ROOT / "crates" / "iroha_kagami" / "src" / "localnet.rs"
+            REPO_ROOT / "crates" / "iroha_deploy" / "src" / "localnet.rs"
         ).read_text(encoding="utf-8")
         embedded_match = re.search(
             r'const TAIRA_PROCESS_IDENTITY_PY: &str = r#"(.*?)"#;',

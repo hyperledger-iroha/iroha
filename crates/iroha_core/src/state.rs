@@ -1450,6 +1450,7 @@ mod world_commit;
 )]
 mod world_journals;
 pub(crate) mod world_projection;
+pub(crate) use world_projection::world_state_accumulator;
 
 /// Exercise actual World capture while retaining journals through a test observation.
 #[cfg(test)]

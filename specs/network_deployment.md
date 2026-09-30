@@ -1,6 +1,12 @@
 # Iroha network and dataspace deployment
 
-Status: approved design, being implemented on branch `network-deploy`. This is the implementation-coupled specification for `crates/iroha_deploy`, `iroha network` and `iroha dataspace`. Keep it accurate as the code lands.
+Status: operator deployment design under implementation. This specification covers
+definition-driven `iroha network` and `iroha dataspace` workflows. The first-release
+[Kagami/Mochi developer contract](kagami_mochi_devex_goals.md) owns unattended
+localnet startup, one-call contract deployment and local owner-private dataspace
+attachment without user-supplied definitions. Both surfaces share `iroha_deploy`.
+Restricted globally merged lanes described here do not satisfy the developer
+workflow's independent private-State requirement.
 
 Current implementation on `optimizations`: `iroha dataspace plan|apply|status
 <definition> --trust <public-profile.json>` is the canonical existing-network
@@ -1275,8 +1281,8 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
     - the Inrou self-exe name match, which becomes `iroha3d` only (`soracloud_runtime.rs:224-241`).
 11. **Nexus flat configs and `--sora` (out of scope).** Minamoto is untouched. `--sora`, `IROHA_SORA_PROFILE`, `requires_sora_profile` and `Config::apply_sora_profile` stay as they are, together with `defaults/nexus/config.toml` and `configs/soranexus/nexus/config.toml`. Profiles never set `--sora`, and a node file that sets `profile` must not be started with `--sora` (parse error).
 12. **kagami.**
-    - Delete `localnet`, `localnet-wizard`, `localnet_tui.rs` and `localnet/`, including the chain-id Taira branch (`localnet.rs:1399`), the pidfd Python (`localnet.rs:5123-5741`) and the presets.
-    - The genesis, render and geometry core moves to `iroha_deploy::{genesis, identity, render}` and `iroha_config::profile::derive`. It becomes profile-driven, always emits Committee-role keys (today only for non-SINGLE lanes, `localnet.rs:4447-4476`) and mint-finality seeds, and keeps `--seed` determinism and the scaling layouts.
+    - `kagami localnet up/status/logs/down/reset` calls the shared native process owner. `kagami localnet generate` is the explicit operator bundle generator; no old positional form or `localnet-wizard` alias remains. The superseded `localnet_tui.rs` and frontend-owned generation implementation are removed.
+    - The canonical genesis and rendering implementation now lives in `iroha_deploy::{genesis, localnet}`. Profile consolidation into `iroha_config::profile::derive`, retirement of the chain-id Taira branch and generated script transport, and complete Committee-role/mint-finality custody remain operator-engine work. Deterministic fixtures retain `--seed` and scaling layouts; managed developer generations use fresh keys.
     - Delete the `iroha3-taira` `GenesisProfile` and `RETIRED_PUBLIC_CHAIN_ID_ALIASES`.
     - `kagami docker` reads the container render mode.
     - `privacy_bootstrap` `include_bytes!` of the Taira config and template (`privacy_bootstrap/release.rs:55-68`) is re-pointed to the profile files. The privacy plan and NEVO files move to `configs/soranexus/privacy/`.

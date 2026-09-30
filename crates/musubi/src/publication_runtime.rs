@@ -3854,7 +3854,6 @@ private_key = "{}"
         .expect_err("hard-linked configuration must fail closed");
         assert_eq!(hard_error.code(), "MUSUBI_PUBLICATION_CONFIG_INVALID");
     }
-    #[cfg(unix)]
     #[test]
     fn bounded_platform_config_preserves_the_nonempty_contract() {
         let temporary = tempdir().expect("temporary directory");
@@ -3867,7 +3866,7 @@ private_key = "{}"
             io::ErrorKind::InvalidData
         );
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn bounded_platform_config_is_unsupported_before_path_io() {
         let parent = tempdir().expect("temporary parent");

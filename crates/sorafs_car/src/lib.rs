@@ -18,7 +18,6 @@ use sorafs_manifest::{
     PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError, PdpMerkleTreeV1,
     PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
 };
-#[cfg(any(unix, test))]
 use std::fs;
 #[cfg(unix)]
 use std::fs::OpenOptions;
@@ -26,17 +25,14 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+#[cfg(unix)]
+use std::path::Component;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::TryFrom,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read, Seek as _, SeekFrom, Write},
     path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::{
-    io::{Seek as _, SeekFrom},
-    path::Component,
 };
 use thiserror::Error;
 pub mod bundle_archive;
@@ -400,139 +396,95 @@ impl PayloadSource for InMemoryPayload<'_> {
         Ok(())
     }
 }
-/// Payload source backed by a stable no-follow regular file on Unix.
-///
-/// Non-Unix platforms fail closed with [`io::ErrorKind::Unsupported`].
+/// Payload source backed by one exact retained native regular file.
 pub struct FilePayload {
-    #[cfg(unix)]
-    file: File,
-    #[cfg(unix)]
-    path: PathBuf,
-    #[cfg(unix)]
-    metadata: fs::Metadata,
-    #[cfg(not(unix))]
-    _unsupported: std::convert::Infallible,
+    file: iroha_fs::RetainedFile,
+    length: u64,
 }
 impl FilePayload {
-    /// Open a stable no-follow regular-file payload source.
+    /// Open a stable no-follow regular-file payload source on native Unix or Windows.
     pub fn open(path: &Path) -> Result<Self, io::Error> {
-        #[cfg(not(unix))]
-        {
-            let _ = path;
-            return Err(unsupported_secure_filesystem_error());
-        }
-        #[cfg(unix)]
-        {
-            let linked = fs::symlink_metadata(path)?;
-            validate_payload_metadata(&linked)?;
-            let mut options = OpenOptions::new();
-            options.read(true);
-            set_no_follow_flag(&mut options);
-            let file = options.open(path)?;
-            Self::from_open_file(path, file)
-        }
+        let file = iroha_fs::RetainedFile::open_regular(path)?;
+        let length = file.file().metadata()?.len();
+        Ok(Self { file, length })
     }
-    /// Adopt an already-open stable regular-file handle without reopening its path.
-    ///
-    /// This is used when a create-new writer becomes the reader after it has durably completed;
-    /// retaining the original handle closes the otherwise unavoidable namespace race.
+    /// Seal a completed private writer without releasing its object or ancestor authority.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the path is not a one-link regular file, the supplied handle does
-    /// not name that exact file, or either identity changes while it is being validated.
-    pub fn from_open_file(path: &Path, file: File) -> Result<Self, io::Error> {
-        #[cfg(not(unix))]
-        {
-            let _ = (path, file);
-            return Err(unsupported_secure_filesystem_error());
-        }
-        #[cfg(unix)]
-        {
-            let linked = fs::symlink_metadata(path)?;
-            if !metadata_is_safe_payload_file(&linked) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "file payload must be a no-follow regular file with one hard link",
-                ));
-            }
-            validate_payload_file_handle(path, &file, linked.len(), Some(&linked))?;
-            let metadata = file.metadata()?;
-            Ok(Self {
-                file,
-                path: path.to_path_buf(),
-                metadata,
-            })
-        }
+    /// Rejects changed custody, failed durability, or a nonregular/multiply-linked object.
+    pub fn from_retained_file(file: iroha_fs::RetainedFile) -> Result<Self, io::Error> {
+        let file = file.seal()?;
+        let length = file.file().metadata()?.len();
+        Ok(Self { file, length })
     }
-    #[cfg(unix)]
     fn validate_unchanged(&self) -> Result<(), ChunkStoreError> {
-        validate_payload_file_handle(
-            &self.path,
-            &self.file,
-            self.metadata.len(),
-            Some(&self.metadata),
-        )
-        .map_err(ChunkStoreError::Io)
-    }
-}
-#[cfg(unix)]
-impl PayloadSource for FilePayload {
-    fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
-        self.validate_unchanged()?;
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(ChunkStoreError::Io)?;
-        self.file.read_exact(buf).map_err(ChunkStoreError::Io)?;
-        Ok(())
-    }
-    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
-        self.validate_unchanged()?;
-        let actual = self.file.metadata().map_err(ChunkStoreError::Io)?.len();
-        if actual != expected_len {
+        self.file.revalidate().map_err(ChunkStoreError::Io)?;
+        let actual = self
+            .file
+            .file()
+            .metadata()
+            .map_err(ChunkStoreError::Io)?
+            .len();
+        if actual != self.length {
             return Err(ChunkStoreError::LengthMismatch {
-                expected: expected_len,
+                expected: self.length,
                 actual,
             });
         }
         Ok(())
     }
 }
-#[cfg(not(unix))]
 impl PayloadSource for FilePayload {
-    fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
-        let _ = &self._unsupported;
-        Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
+    fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
+        self.validate_unchanged()?;
+        let end = offset.checked_add(buf.len() as u64).ok_or_else(|| {
+            ChunkStoreError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "payload read offset overflow",
+            ))
+        })?;
+        if end > self.length {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: end,
+                actual: self.length,
+            });
+        }
+        self.file
+            .file_mut()
+            .seek(SeekFrom::Start(offset))
+            .map_err(ChunkStoreError::Io)?;
+        self.file
+            .file_mut()
+            .read_exact(buf)
+            .map_err(ChunkStoreError::Io)?;
+        self.validate_unchanged()
     }
-    fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
-        Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        self.validate_unchanged()?;
+        if self.length != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual: self.length,
+            });
+        }
+        Ok(())
     }
 }
-#[cfg(unix)]
 struct FileSpan {
     start: u64,
     end: u64,
     path: PathBuf,
-    metadata: fs::Metadata,
+    snapshot: iroha_fs::FileSnapshot,
 }
 /// Payload source backed by multiple files described by a [`CarBuildPlan`].
 ///
-/// Secure file-backed operation is available on Unix; other platforms fail closed.
+/// Native file and ancestor authority is retained on both Unix and Windows.
 pub struct DirectoryPayload {
-    #[cfg(unix)]
-    canonical_root: PathBuf,
-    #[cfg(unix)]
-    root_metadata: fs::Metadata,
-    #[cfg(unix)]
+    root: iroha_fs::OwnerDirectory,
     spans: Vec<FileSpan>,
-    #[cfg(unix)]
     total_len: u64,
-    #[cfg(unix)]
     cached_index: Option<usize>,
-    #[cfg(unix)]
-    cached_file: Option<File>,
-    #[cfg(not(unix))]
-    _unsupported: std::convert::Infallible,
+    cached_file: Option<iroha_fs::RetainedFile>,
 }
 impl DirectoryPayload {
     /// Open a root-confined payload inventory and capture every file's identity and exact size.
@@ -541,32 +493,8 @@ impl DirectoryPayload {
     /// non-regular files, root escapes, and actual sizes different from [`FilePlan::size`] are
     /// rejected before the source can be read.
     pub fn new(root: &Path, files: &[FilePlan]) -> Result<Self, io::Error> {
-        #[cfg(not(unix))]
-        {
-            let _ = (root, files);
-            return Err(unsupported_secure_filesystem_error());
-        }
-        #[cfg(unix)]
-        {
-            Self::new_unix(root, files)
-        }
-    }
-    #[cfg(unix)]
-    fn new_unix(root: &Path, files: &[FilePlan]) -> Result<Self, io::Error> {
-        let root_metadata = fs::symlink_metadata(root)?;
-        if metadata_is_symlink(&root_metadata) || !root_metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "directory payload root must be a real directory",
-            ));
-        }
-        let canonical_root = fs::canonicalize(root)?;
-        let canonical_metadata = fs::symlink_metadata(&canonical_root)?;
-        if !metadata_identifies_same_file(&root_metadata, &canonical_metadata) {
-            return Err(io::Error::other(
-                "directory payload root changed during canonicalization",
-            ));
-        }
+        let root = iroha_fs::OwnerDirectory::open(root)?;
+        let canonical_root = root.path().to_path_buf();
         if files.len() > CAR_PLAN_MAX_FILES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -635,67 +563,59 @@ impl DirectoryPayload {
             ))
         })?;
         for ((start, end, path), file_plan) in preliminary.into_iter().zip(files) {
-            let file = open_confined_payload_file(&canonical_root, &path, file_plan.size, None)?;
-            let metadata = file.metadata()?;
+            let file = iroha_fs::RetainedFile::open_regular(&path)?;
+            if file.file().metadata()?.len() != file_plan.size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "directory file size differs from its exact plan",
+                ));
+            }
+            let snapshot = file.snapshot()?;
             spans.push(FileSpan {
                 start,
                 end,
                 path,
-                metadata,
+                snapshot,
             });
         }
         Ok(Self {
-            canonical_root,
-            root_metadata: canonical_metadata,
+            root,
             total_len: offset,
             spans,
             cached_index: None,
             cached_file: None,
         })
     }
-    #[cfg(unix)]
     fn validate_root(&self) -> Result<(), ChunkStoreError> {
-        let current = fs::symlink_metadata(&self.canonical_root).map_err(ChunkStoreError::Io)?;
-        if !current.is_dir()
-            || metadata_is_symlink(&current)
-            || !metadata_snapshot_matches(&self.root_metadata, &current)
-        {
-            return Err(ChunkStoreError::Io(io::Error::other(
-                "directory payload root changed after validation",
-            )));
-        }
-        Ok(())
+        self.root.revalidate().map_err(ChunkStoreError::Io)
     }
-    #[cfg(unix)]
     fn open_file(&mut self, span_index: usize) -> Result<&mut File, ChunkStoreError> {
         self.validate_root()?;
+        let span = &self.spans[span_index];
         if self.cached_index != Some(span_index) {
-            let span = &self.spans[span_index];
-            let file = open_confined_payload_file(
-                &self.canonical_root,
-                &span.path,
-                span.end - span.start,
-                Some(&span.metadata),
-            )
-            .map_err(ChunkStoreError::Io)?;
-            self.cached_file = Some(file);
+            self.cached_file = Some(open_recorded_payload_span(span).map_err(ChunkStoreError::Io)?);
             self.cached_index = Some(span_index);
         }
         let file = self.cached_file.as_mut().ok_or_else(|| {
             ChunkStoreError::Io(io::Error::other("failed to cache directory file handle"))
         })?;
-        let span = &self.spans[span_index];
-        validate_payload_file_handle(
-            &span.path,
-            file,
-            span.end - span.start,
-            Some(&span.metadata),
-        )
-        .map_err(ChunkStoreError::Io)?;
-        Ok(file)
+        if file.snapshot().map_err(ChunkStoreError::Io)? != span.snapshot {
+            return Err(ChunkStoreError::Io(io::Error::other(
+                "directory payload file changed after inventory",
+            )));
+        }
+        Ok(file.file_mut())
     }
 }
-#[cfg(unix)]
+fn open_recorded_payload_span(span: &FileSpan) -> io::Result<iroha_fs::RetainedFile> {
+    let file = iroha_fs::RetainedFile::open_regular(&span.path)?;
+    if file.file().metadata()?.len() != span.end - span.start || file.snapshot()? != span.snapshot {
+        return Err(io::Error::other(
+            "directory payload file changed after inventory",
+        ));
+    }
+    Ok(file)
+}
 impl PayloadSource for DirectoryPayload {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         if buf.is_empty() {
@@ -751,6 +671,11 @@ impl PayloadSource for DirectoryPayload {
                 .map_err(ChunkStoreError::Io)?;
             file.read_exact(&mut buf[buf_cursor..buf_cursor + to_read])
                 .map_err(ChunkStoreError::Io)?;
+            self.cached_file
+                .as_ref()
+                .expect("opened payload span")
+                .revalidate()
+                .map_err(ChunkStoreError::Io)?;
             remaining -= to_read;
             buf_cursor += to_read;
             current_offset = current_offset
@@ -776,25 +701,9 @@ impl PayloadSource for DirectoryPayload {
         }
         self.validate_root()?;
         for span in &self.spans {
-            open_confined_payload_file(
-                &self.canonical_root,
-                &span.path,
-                span.end - span.start,
-                Some(&span.metadata),
-            )
-            .map_err(ChunkStoreError::Io)?;
+            open_recorded_payload_span(span).map_err(ChunkStoreError::Io)?;
         }
         Ok(())
-    }
-}
-#[cfg(not(unix))]
-impl PayloadSource for DirectoryPayload {
-    fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
-        let _ = &self._unsupported;
-        Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
-    }
-    fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
-        Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
 }
 #[cfg(unix)]
@@ -898,16 +807,6 @@ fn validate_payload_file_handle(
     {
         return Err(io::Error::other(
             "directory payload entry changed after validation",
-        ));
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn validate_payload_metadata(metadata: &fs::Metadata) -> io::Result<()> {
-    if !metadata_is_safe_payload_file(metadata) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "file payload must be a no-follow regular file with one hard link",
         ));
     }
     Ok(())
@@ -9566,7 +9465,14 @@ mod tests {
         let error = DirectoryPayload::new(temp.path(), &escaped_plan)
             .err()
             .expect("ancestor escape rejected");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied | io::ErrorKind::NotADirectory
+        ));
+        assert_eq!(
+            fs::read(outside.path().join("escaped")).unwrap(),
+            b"payload"
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -9604,26 +9510,57 @@ mod tests {
             Err(ChunkStoreError::Io(_))
         ));
     }
+    #[test]
+    fn native_payloads_retain_exact_source_and_read_across_file_spans() {
+        let temporary = tempdir().unwrap();
+        let directory = iroha_fs::OwnerDirectory::open(temporary.path()).unwrap();
+        let path = directory.path().join("a");
+        let mut writer = iroha_fs::RetainedFile::create_new_private(&path).unwrap();
+        writer.file_mut().write_all(b"first").unwrap();
+        let mut payload = FilePayload::from_retained_file(writer).unwrap();
+        let mut bytes = [0; 5];
+        payload.read_exact(0, &mut bytes).unwrap();
+        assert_eq!(&bytes, b"first");
+        payload.ensure_exhausted(5).unwrap();
+        assert!(payload.ensure_exhausted(6).is_err());
+        drop(payload);
+        directory
+            .write_atomic("b", b"second", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let files = [
+            FilePlan {
+                path: vec!["a".into()],
+                first_chunk: 0,
+                chunk_count: 1,
+                size: 5,
+            },
+            FilePlan {
+                path: vec!["b".into()],
+                first_chunk: 1,
+                chunk_count: 1,
+                size: 6,
+            },
+        ];
+        let mut source = DirectoryPayload::new(directory.path(), &files).unwrap();
+        let mut joined = [0; 7];
+        source.read_exact(3, &mut joined).unwrap();
+        assert_eq!(&joined, b"stsecon");
+        source.ensure_exhausted(11).unwrap();
+        drop(source);
+        let mut source = DirectoryPayload::new(directory.path(), &files).unwrap();
+        directory
+            .write_atomic("a", b"other", iroha_fs::PublishMode::Replace)
+            .unwrap();
+        assert!(source.read_exact(0, &mut bytes).is_err());
+    }
+
     #[cfg(not(unix))]
     #[test]
-    fn secure_file_backed_apis_fail_closed_without_side_effects_on_non_unix() {
+    fn directory_chunk_sink_fails_closed_without_side_effects_on_non_unix() {
         let temp = tempdir().expect("tempdir");
         let missing = temp.path().join("missing");
         let sentinel = temp.path().join("sentinel");
         fs::write(&sentinel, b"unchanged").expect("sentinel");
-        let file_error = FilePayload::open(&missing)
-            .err()
-            .expect("file payload unsupported");
-        assert_eq!(file_error.kind(), io::ErrorKind::Unsupported);
-        let open_sentinel = File::open(&sentinel).expect("open sentinel");
-        let adopted_error = FilePayload::from_open_file(&missing, open_sentinel)
-            .err()
-            .expect("adopted file payload unsupported");
-        assert_eq!(adopted_error.kind(), io::ErrorKind::Unsupported);
-        let directory_error = DirectoryPayload::new(&missing, &[])
-            .err()
-            .expect("directory payload unsupported");
-        assert_eq!(directory_error.kind(), io::ErrorKind::Unsupported);
         let plan = CarBuildPlan::single_file(b"payload").expect("plan");
         let root = temp.path().join("chunks");
         let mut sink = DirectoryChunkSink::new(&root);
