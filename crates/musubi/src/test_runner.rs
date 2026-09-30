@@ -610,7 +610,9 @@ fn local_source_package(
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
             .map_err(|error| WorkspaceTestErrorV1::ExternalModules(error.to_string()))?;
     for source in &mut units {
-        source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+        if library.source_dir.as_str() != "." {
+            source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+        }
     }
     let (modules, mut sources) = crate::compiler::partition_library_sources(units)
         .map_err(|error| WorkspaceTestErrorV1::ExternalModules(error.to_string()))?;
@@ -977,6 +979,7 @@ fn declared_test_sources(
             &mut budget,
             &mut sources,
         )?;
+        sources.retain(|source| crate::compiler::is_named_source_unit(&source.unit));
     } else {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test target `{}` is a symlink, reparse point, hardlink, or special file",

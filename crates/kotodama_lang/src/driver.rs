@@ -16,7 +16,7 @@ use crate::{
     },
     metadata::contract_code_hash,
     session::{CompileOutput, CompileRequest, CompilerSession},
-    source::{SourceFile, TextRange},
+    source::{SourceFile, SourceId, TextRange},
     spanned_ast::{AstNodeKind, SpannedProgram},
 };
 use iroha_crypto::Hash;
@@ -34,7 +34,9 @@ use std::{
     },
 };
 mod source_bundle;
-pub use source_bundle::{load_source_companions, load_source_project};
+pub use source_bundle::{
+    load_source_companions, load_source_package_companions, load_source_project,
+};
 const BUILD_RECORD_SCHEMA: &str = "kotodama-build-v1";
 const DEFAULT_TARGET_ROOT: &str = "target/kotodama";
 const MAX_BUILD_RECORD_BYTES: usize = 4 * 1024;
@@ -600,6 +602,7 @@ impl BuildDriver {
                     .flat_map(|package| package.modules.iter()),
             );
         for unit in units {
+            let unused_states = crate::lint::unused_state_names(unit.program.program());
             for program in unit.program.source_programs() {
                 let source = program
                     .source_files()
@@ -608,6 +611,11 @@ impl BuildDriver {
                 for warning in
                     crate::lint::lint_with_sources(program.program(), program.lint_facts(), source)
                 {
+                    if let crate::lint::LintMessage::UnusedState { name } = &warning.message
+                        && !unused_states.contains(name)
+                    {
+                        continue;
+                    }
                     warnings.push(ProjectLintWarning {
                         package_identity: source.package_identity().map(str::to_owned),
                         source_name: source.name().to_owned(),
@@ -624,6 +632,95 @@ impl BuildDriver {
                 .cmp(&right.package_identity)
                 .then_with(|| left.source_name.cmp(&right.source_name))
         });
+        Ok(warnings)
+    }
+
+    /// Check one reusable module and its explicit companion inventory without generating an artifact.
+    ///
+    /// The temporary check scope has no manifest exports or dependency bindings. Native
+    /// source files retain unowned diagnostic identities, including imported local modules.
+    pub fn check_module_sources(
+        &self,
+        root: SourceModuleUnit,
+        sources: Vec<SourceModuleUnit>,
+    ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        crate::session::run_with_compiler_stack(move || {
+            self.check_module_sources_inner(root, sources)
+        })
+        .map_err(|_| {
+            BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                Some("<module>"),
+            ))
+        })?
+    }
+    fn check_module_sources_inner(
+        &self,
+        root: SourceModuleUnit,
+        sources: Vec<SourceModuleUnit>,
+    ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
+        const CHECK_IDENTITY: &str = "local-source-check";
+        let request =
+            ModuleBuildGraph::canonical_source_package_bundle(SourcePackageGraphRequest {
+                package: SourcePackageUnit {
+                    identity: CHECK_IDENTITY.into(),
+                    modules: vec![root],
+                    sources,
+                    exports: BTreeSet::new(),
+                    imports: Vec::new(),
+                },
+                dependencies: Vec::new(),
+            })
+            .map_err(BuildError::SourceGraph)?;
+        let root = request.package.modules[0].clone();
+        let sources = request.package.sources.clone();
+        self.graph
+            .validate_package(request, self.session.linker_options())
+            .map_err(|error| {
+                let mut bundle = error.into_diagnostics();
+                for diagnostic in &mut bundle.diagnostics {
+                    for span in diagnostic
+                        .primary_span
+                        .iter_mut()
+                        .chain(diagnostic.labels.iter_mut().map(|label| &mut label.span))
+                        .chain(diagnostic.fix.iter_mut().map(|fix| &mut fix.span))
+                    {
+                        if span.package_identity.as_deref() == Some(CHECK_IDENTITY) {
+                            span.package_identity = None;
+                        }
+                    }
+                    for source in diagnostic
+                        .primary_source
+                        .iter_mut()
+                        .chain(diagnostic.label_sources.iter_mut().flatten())
+                    {
+                        if source.package_identity() == Some(CHECK_IDENTITY) {
+                            *source = SourceFile::new(source.id(), source.name(), source.text());
+                        }
+                    }
+                }
+                BuildError::Compile(bundle)
+            })?;
+        let mut warnings = Vec::new();
+        for source in std::iter::once(root).chain(sources) {
+            let file = SourceFile::new(
+                SourceId(0),
+                source.source_name.as_str(),
+                source.source.as_str(),
+            );
+            let (parsed, _) = crate::syntax::parser::parse_spanned_source_or_fragment(
+                &file,
+                crate::source::FrontendBudget::v1(),
+            )
+            .map_err(BuildError::Compile)?;
+            for warning in crate::lint::lint_with_sources(&parsed.program, &parsed.facts, &file) {
+                warnings.push(ProjectLintWarning {
+                    package_identity: None,
+                    source_name: source.source_name.clone(),
+                    warning,
+                });
+            }
+        }
         Ok(warnings)
     }
 
@@ -1370,7 +1467,12 @@ pub fn load_source_project_manifest_with_text_and_overlays(
     }
     let sources = load_source_companions(std::slice::from_ref(&root), project_root, overlays)?;
     for package in &mut packages {
-        package.sources = load_source_companions(&package.modules, project_root, overlays)?;
+        package.sources = load_source_package_companions(
+            &package.modules,
+            project_root,
+            overlays,
+            &package.identity,
+        )?;
     }
     for (owner, source) in
         sources
@@ -2155,6 +2257,91 @@ mod tests {
             })
         ));
         fs::remove_dir_all(root).expect("remove source error root");
+    }
+    #[test]
+    fn included_state_lints_account_for_uses_in_other_native_files() {
+        let graph = SourceLinkRequest {
+            root: SourceModuleUnit {
+                source_name: "app.ko".into(),
+                source: "seiyaku App { state int root_value; include \"body.ko\"; include \"init.ko\"; view fn from_root() -> int { return fragment_value; } }".into(),
+            },
+            sources: vec![SourceModuleUnit {
+                source_name: "body.ko".into(),
+                source: "state int fragment_value; state StateMap<int, int> unused; view fn from_fragment() -> int { return root_value; }".into(),
+            }, SourceModuleUnit {
+                source_name: "init.ko".into(),
+                source: "hajimari() { root_value = 1; fragment_value = 2; }".into(),
+            }],
+            imports: Vec::new(),
+            packages: Vec::new(),
+        };
+        let warnings = BuildDriver::new(CompilerSession::default(), "shared-state-lints")
+            .check_project(graph)
+            .expect("shared unit is valid");
+        let unused = warnings
+            .iter()
+            .filter(|warning| warning.warning.code == "unused-state")
+            .collect::<Vec<_>>();
+        assert_eq!(unused.len(), 1);
+        assert_eq!(unused[0].source_name, "body.ko");
+        assert_eq!(
+            unused[0].warning.message,
+            crate::lint::LintMessage::UnusedState {
+                name: "unused".into()
+            }
+        );
+        assert_eq!(
+            unused[0]
+                .warning
+                .source
+                .as_ref()
+                .expect("native span")
+                .source_file
+                .name(),
+            "body.ko"
+        );
+    }
+    #[test]
+    fn standalone_module_check_uses_include_and_import_closure_without_artifact() {
+        let driver = BuildDriver::new(CompilerSession::default(), "module-check");
+        let root = SourceModuleUnit {
+            source_name: "module.ko".into(),
+            source: "module Example { include \"body.ko\"; import \"helper.ko\" as helper; }"
+                .into(),
+        };
+        let sources = vec![
+            SourceModuleUnit {
+                source_name: "body.ko".into(),
+                source: "export fn value(int unused) -> int { return helper::answer(); }".into(),
+            },
+            SourceModuleUnit {
+                source_name: "helper.ko".into(),
+                source: "module Helper { export fn answer() -> int { return 7; } }".into(),
+            },
+        ];
+        let warnings = driver
+            .check_module_sources(root.clone(), sources.clone())
+            .expect("standalone module closure");
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.source_name == "body.ko"
+                    && warning.package_identity.is_none())
+        );
+        let mut invalid = sources;
+        invalid[0].source = "export fn value() -> int { return missing; }".into();
+        let error = driver
+            .check_module_sources(root, invalid)
+            .expect_err("source error")
+            .into_diagnostics()
+            .expect("structured source error");
+        let span = error
+            .diagnostics
+            .iter()
+            .find_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .expect("native span");
+        assert_eq!(span.source.as_deref(), Some("body.ko"));
+        assert!(span.package_identity.is_none());
     }
     #[test]
     fn manifest_overlay_replaces_invalid_disk_entries_and_loads_unsaved_companions() {

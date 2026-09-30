@@ -424,12 +424,14 @@ pub fn validate_exact_registry_interfaces_v1<'node>(
 enum PackagedTargetKindV1 {
     Contract,
     Test,
+    Source,
 }
 impl PackagedTargetKindV1 {
     const fn label(self) -> &'static str {
         match self {
             Self::Contract => "contract",
             Self::Test => "test",
+            Self::Source => "Kotodama",
         }
     }
 }
@@ -544,13 +546,32 @@ fn packaged_source_inventory(
                 file.path(),
                 file.path(),
                 file.bytes(),
-                PackagedTargetKindV1::Contract,
+                PackagedTargetKindV1::Source,
             )
         })
         .collect()
 }
 fn sources_contains_path(sources: &[SourceModuleUnit], name: &str) -> bool {
     sources.iter().any(|source| source.source_name == name)
+}
+pub(crate) fn is_named_source_unit(source: &SourceModuleUnit) -> bool {
+    let file = kotodama_lang::source::SourceFile::new(
+        kotodama_lang::source::SourceId(0),
+        source.source_name.as_str(),
+        source.source.as_str(),
+    );
+    let lexed = kotodama_lang::syntax::lex(&file, kotodama_lang::source::FrontendBudget::v1());
+    matches!(
+        lexed
+            .tokens
+            .iter()
+            .find(|token| !token.kind.is_trivia())
+            .map(|token| token.kind),
+        Some(
+            kotodama_lang::syntax::SyntaxKind::KwModule
+                | kotodama_lang::syntax::SyntaxKind::KwSeiyaku
+        )
+    )
 }
 pub(crate) fn partition_library_sources(
     sources: Vec<SourceModuleUnit>,
@@ -617,12 +638,15 @@ fn packaged_test_source_units(
         if relative.is_empty() || !has_kotodama_extension(relative) {
             continue;
         }
-        units.push(packaged_source_unit(
+        let source = packaged_source_unit(
             file.path(),
             file.path(),
             file.bytes(),
             PackagedTargetKindV1::Test,
-        )?);
+        )?;
+        if is_named_source_unit(&source) {
+            units.push(source);
+        }
     }
     if units.is_empty() {
         return Err(CompilerBridgeErrorV1::Package(format!(
@@ -875,7 +899,9 @@ fn local_source_package(
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
             .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
     for source in &mut units {
-        source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+        if library.source_dir.as_str() != "." {
+            source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+        }
     }
     let (modules, mut sources) = partition_library_sources(units)?;
     let loaded = kotodama_lang::driver::load_source_companions(
@@ -1482,6 +1508,11 @@ path = "tests"
     fn named_contract_targets_keep_one_source_and_artifact_while_tests_expand_directories() {
         let temp = TempDir::new().expect("temporary directory");
         write_named_target_fixtures(temp.path());
+        fs::write(
+            temp.path().join("tests/fragment.ko"),
+            "#[test] fn fragment() {}",
+        )
+        .expect("companion fragment is not a separate test root");
         let manifest = NAMED_TARGETS_MANIFEST;
         let lock = clean_verification_lock();
         let mut layout = PackageLayout::new(temp.path());
@@ -1634,11 +1665,16 @@ path = "tests/unit.ko"
             "seiyaku Repaired { #[test] fn repaired() { test::assert(true); } }",
         )
         .expect("repair ambient test");
-        assert!(matches!(
-            validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
-            Err(CompilerBridgeErrorV1::Package(reason))
-                if reason.contains("packaged test source `tests/unit.ko` is not UTF-8")
-        ));
+        let error = validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1)
+            .expect_err("the invalid captured bytes must remain authoritative");
+        assert!(
+            matches!(
+                &error,
+                CompilerBridgeErrorV1::Package(reason)
+                    if reason.contains("packaged Kotodama source `tests/unit.ko` is not UTF-8")
+            ),
+            "{error}"
+        );
     }
     #[test]
     fn clean_targets_ignore_ambient_mutation_and_do_not_change_library_interface() {

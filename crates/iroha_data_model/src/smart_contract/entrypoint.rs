@@ -1386,7 +1386,7 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
         && !KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&value)
         && !matches!(
             value,
-            "authorize"
+            "as" | "authorize"
                 | "break"
                 | "const"
                 | "continue"
@@ -1394,11 +1394,14 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
                 | "else"
                 | "enum"
                 | "error"
+                | "export"
                 | "false"
                 | "fn"
                 | "for"
                 | "hajimari"
                 | "if"
+                | "import"
+                | "include"
                 | "in"
                 | "int"
                 | "kaizen"

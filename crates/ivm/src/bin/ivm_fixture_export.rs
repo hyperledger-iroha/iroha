@@ -11,6 +11,7 @@ use iroha_data_model::{
         time::{ExecutionTime, TimeEventFilter},
     },
     smart_contract::manifest::{
+        ContractErrorMessage, ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
         ContractManifest, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
     },
     trigger::action::Repeats,
@@ -176,8 +177,18 @@ fn contract_manifest_fixture_types()
             triggers: vec![trigger],
         }]),
         states: None,
-        error_messages: None,
-        error_types: None,
+        error_messages: Some(vec![ContractErrorMessage {
+            error_type: "Test::Failure".into(),
+            code: 7,
+            message: "残高が不足しています".into(),
+        }]),
+        error_types: Some(vec![ContractErrorTypeDescriptor {
+            identity: "Test::Failure".into(),
+            variants: vec![ContractErrorVariantDescriptor {
+                name: "Insufficient".into(),
+                code: 7,
+            }],
+        }]),
         kotoba: None,
         provenance: None,
     };

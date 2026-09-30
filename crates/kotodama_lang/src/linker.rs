@@ -413,9 +413,24 @@ impl ModuleBuildGraph {
         &self,
         mut request: SourceLinkRequest,
     ) -> Result<LinkRequest, SourceGraphError> {
+        request = Self::canonical_source_bundle(request)?;
+        source_bundle::resolve(self, &request)
+    }
+    /// Normalize a bounded inventory and retain only its declared source dependency closure.
+    ///
+    /// This preflight uses the canonical lexer without filesystem reads. The root and explicit
+    /// package entry modules are retained, as are companions reachable through include/import
+    /// directives. Full parsing, ownership, and type validation still happen during linking.
+    pub fn canonical_source_bundle(
+        mut request: SourceLinkRequest,
+    ) -> Result<SourceLinkRequest, SourceGraphError> {
         let names = validate_source_link_request(&request)?;
         canonicalize_source_link_request(&mut request, names);
-        source_bundle::resolve(self, &request)
+        retain_root_source_closure(&mut request, &[]);
+        for package in &mut request.packages {
+            retain_package_source_closure(package);
+        }
+        Ok(request)
     }
     /// Return the canonical identity of a complete locked source graph.
     ///
@@ -425,6 +440,20 @@ impl ModuleBuildGraph {
     pub fn fingerprint(request: &SourceLinkRequest) -> Result<Hash, SourceGraphError> {
         let names = validate_source_link_request(request)?;
         Ok(source_graph_fingerprint(request, &names))
+    }
+    /// Normalize and retain the declared companion closure of a reusable package graph.
+    ///
+    /// All supplied files are budgeted before unused companions are removed. Like
+    /// [`Self::canonical_source_bundle`], this is a lexical preflight, not package validation.
+    pub fn canonical_source_package_bundle(
+        mut request: SourcePackageGraphRequest,
+    ) -> Result<SourcePackageGraphRequest, SourceGraphError> {
+        let names = validate_source_package_graph_request(&request)?;
+        canonicalize_source_package_graph_request(&mut request, names);
+        for package in std::iter::once(&mut request.package).chain(&mut request.dependencies) {
+            retain_package_source_closure(package);
+        }
+        Ok(request)
     }
     /// Return the canonical identity of one reusable package source graph.
     pub fn package_fingerprint(
@@ -547,6 +576,10 @@ impl ModuleBuildGraph {
         #[cfg(test)]
         self.link_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        retain_root_source_closure(&mut request, &test_sources);
+        for package in &mut request.packages {
+            retain_package_source_closure(package);
+        }
         let (resolved, parsed_tests) =
             source_bundle::resolve_with_tests(self, &request, &test_sources)?;
         let program = TypedLinker::new(options).link_with_tests(resolved, parsed_tests)?;
@@ -581,6 +614,9 @@ impl ModuleBuildGraph {
         let names = validate_source_package_graph_request(&request)?;
         let fingerprint = source_package_graph_fingerprint(&request, &names);
         canonicalize_source_package_graph_request(&mut request, names);
+        for package in std::iter::once(&mut request.package).chain(&mut request.dependencies) {
+            retain_package_source_closure(package);
+        }
         #[cfg(test)]
         self.link_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1296,6 +1332,33 @@ fn reachable_package_source_names(
         &inventory,
     )
 }
+fn retain_root_source_closure(request: &mut SourceLinkRequest, tests: &[SourceModuleUnit]) {
+    let inventory = std::iter::once(&request.root)
+        .chain(&request.sources)
+        .chain(tests)
+        .map(|source| (source.source_name.as_str(), source))
+        .collect();
+    let reached = reachable_source_names(
+        std::iter::once(request.root.source_name.as_str())
+            .chain(tests.iter().map(|source| source.source_name.as_str())),
+        &inventory,
+    );
+    request
+        .sources
+        .retain(|source| reached.contains(&source.source_name));
+}
+fn retain_package_source_closure(package: &mut SourcePackageUnit) {
+    let names = package
+        .modules
+        .iter()
+        .chain(&package.sources)
+        .map(|source| source.source_name.clone())
+        .collect::<Vec<_>>();
+    let reached = reachable_package_source_names(package, &names);
+    package
+        .sources
+        .retain(|source| reached.contains(&source.source_name));
+}
 fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSourceLinkNames) -> Hash {
     fn field(transcript: &mut Vec<u8>, value: impl AsRef<[u8]>) {
         let value = value.as_ref();
@@ -1842,6 +1905,8 @@ impl TypedLinker {
         let mut root = semantic
             .analyze_resolved_with_test_target(&request.root.program, &environment.typed)
             .map_err(|failures| semantic_link_error(&request.root, failures))?;
+        crate::session::enforce_call_table_bounds(&root, &request.root.program)
+            .map_err(LinkError::Diagnostics)?;
         let root_external_names = environment.names.clone();
         if !test_sources.is_empty() {
             let signatures = root
@@ -1916,6 +1981,8 @@ impl TypedLinker {
                 let mut typed = context
                     .analyze_resolved_with_test_target(&module.program, &test_environment)
                     .map_err(|failures| semantic_link_error(&module, failures))?;
+                crate::session::enforce_call_table_bounds(&typed, &module.program)
+                    .map_err(LinkError::Diagnostics)?;
                 rename_program_calls(&mut typed, &BTreeMap::new(), &imports.names);
                 crate::session::merge_source_files(&mut root, &mut typed, &module.source_name)
                     .map_err(LinkError::Diagnostics)?;
@@ -2481,6 +2548,8 @@ fn link_resolved_packages(
         let mut typed = semantic
             .analyze_resolved_with_test_target(&module.source.program, &module.environment.typed)
             .map_err(|failures| semantic_link_error(module.source, failures))?;
+        crate::session::enforce_call_table_bounds(&typed, &module.source.program)
+            .map_err(LinkError::Diagnostics)?;
         qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
         rename_program_calls(&mut typed, &module.linked_names, &module.environment.names);
         let mut new_error_types = Vec::new();

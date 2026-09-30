@@ -34,20 +34,24 @@ internal static class ToriiContractMetadataJson
         ValidateWarnings(response.Warnings, $"{context}.warnings");
         ValidateExactTokenText(response.RenderedSourceKind, $"{context}.rendered_source_kind");
         ValidateRenderedSourceText(response.RenderedSourceText, $"{context}.rendered_source_text");
-        try
+        if (response.RenderedSourceKind == "verified_source" || response.SourceFiles.Count != 0
+            || response.SourceImports.Count != 0 || response.SourcePackages.Count != 0)
         {
-            _ = ToriiContractSourceBundle.Normalize(new ToriiContractVerifiedSourceSubmission
+            try
             {
-                SourceName = response.VerifiedSourceReference?.SourceName,
-                SourceText = response.RenderedSourceText,
-                Sources = response.SourceFiles,
-                Imports = response.SourceImports,
-                Packages = response.SourcePackages,
-            }, requireRootName: false);
-        }
-        catch (ArgumentException error)
-        {
-            throw new JsonException($"{context} contains an invalid source bundle: {error.Message}", error);
+                _ = ToriiContractSourceBundle.Normalize(new ToriiContractVerifiedSourceSubmission
+                {
+                    SourceName = response.VerifiedSourceReference?.SourceName,
+                    SourceText = response.RenderedSourceText,
+                    Sources = response.SourceFiles,
+                    Imports = response.SourceImports,
+                    Packages = response.SourcePackages,
+                }, requireRootName: false);
+            }
+            catch (ArgumentException error)
+            {
+                throw new JsonException($"{context} contains an invalid source bundle: {error.Message}", error);
+            }
         }
         ValidateOptionalVerifiedSourceReference(response.VerifiedSourceReference, $"{context}.verified_source_ref");
     }

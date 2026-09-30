@@ -313,8 +313,9 @@ impl EditorSnapshot {
                         .collect::<Vec<_>>();
                 let keys = files
                     .iter()
-                    .map(|(package, file, _, _)| {
-                        format!("{}\0{}", package.unwrap_or("root"), file.source_name)
+                    .map(|(package, file, _, _)| match package {
+                        Some(package) => format!("package\0{package}\0{}", file.source_name),
+                        None => format!("root\0{}", file.source_name),
                     })
                     .collect::<Vec<_>>();
                 for ((package, file, imports, exports), id) in files
@@ -509,6 +510,9 @@ impl EditorSnapshot {
         let mut binding_types = BTreeMap::new();
         let mut typed_nodes = Vec::new();
         if let Some(resolved) = &resolved {
+            if !resolved.program().directives.is_empty() {
+                self.complete = false;
+            }
             let (typed, bindings, nodes) = SemanticContext::with_capabilities(zk_enabled, true)
                 .analyze_editor(resolved, BTreeMap::new(), BTreeMap::new());
             binding_types = bindings;
@@ -2566,6 +2570,17 @@ mod tests {
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
             vec!["value"]
+        );
+    }
+    #[test]
+    fn multifile_loose_document_requires_dependency_authority_before_rename() {
+        let source = r#"seiyaku App { include "./missing.ko"; view fn answer() -> int { 1 } }"#;
+        let snapshot = EditorSnapshot::single("app.ko", source, false);
+        assert!(!snapshot.is_complete());
+        assert!(
+            snapshot
+                .rename(SourceId(0), cursor(source, "answer"), "value")
+                .is_err()
         );
     }
 }

@@ -9059,6 +9059,47 @@ seiyaku Privacy {
         assert!(output.source_map_json.contains("math.ko"));
     }
     #[test]
+    fn canonical_kotodama_request_compiles_locked_package_companions() {
+        let mut request = JsKotodamaCompileRequest {
+            source: "seiyaku App { view fn value() -> int { return calc::value(); } }".into(),
+            source_name: Some("app.ko".into()),
+            sources: None,
+            imports: Some(vec![JsKotodamaSourceImport {
+                alias: "calc".into(),
+                package: "example/arithmetic@1".into(),
+            }]),
+            packages: Some(vec![JsKotodamaSourcePackage {
+                identity: "example/arithmetic@1".into(),
+                modules: vec![JsKotodamaSourceFile {
+                    source_name: "src/lib.ko".into(),
+                    source: "module Arithmetic { include \"body.ko\"; }".into(),
+                }],
+                sources: Some(vec![JsKotodamaSourceFile {
+                    source_name: "src/body.ko".into(),
+                    source: "export fn value() -> int { return 7; }".into(),
+                }]),
+                exports: vec!["value".into()],
+                imports: None,
+            }]),
+            zk: false,
+        };
+        let result = compile_kotodama_request(&request).expect("bounded locked package request");
+        assert!(result.ok, "{:?}", result.diagnostics_json);
+        let output = result.output.expect("locked source bundle output");
+        assert!(output.source_map_json.contains("src/body.ko"));
+        assert!(output.source_map_json.contains("source_id"));
+        request.packages.as_mut().expect("package")[0]
+            .sources
+            .as_mut()
+            .expect("companions")[0]
+            .source = "export fn value() -> int { return missing; }".into();
+        let invalid = compile_kotodama_request(&request).expect("bounded invalid source");
+        assert!(!invalid.ok);
+        let diagnostics = invalid.diagnostics_json.expect("native package diagnostic");
+        assert!(diagnostics.contains("src/body.ko"));
+        assert!(diagnostics.contains("example/arithmetic@1"));
+    }
+    #[test]
     fn canonical_kotodama_request_rejects_unbounded_or_control_source_names() {
         for source_name in [
             String::new(),

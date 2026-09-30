@@ -32,4 +32,13 @@ test("manifest signature payload matches and verifies the current Rust fixture",
   const publicKey = Buffer.from(signerLiteral.slice(6), "hex");
   const signature = Buffer.from(fixture.signed_provenance.signature, "hex");
   assert.equal(verifyEd25519(frame, signature, publicKey), true);
+
+  assert.equal(fixture.manifest.error_messages[0].message, "残高が不足しています");
+  const changed = structuredClone(fixture.manifest);
+  changed.error_messages[0].message = "A different explanation";
+  assert.equal(
+    verifyEd25519(noritoEncodeContractManifestSignaturePayload(changed), signature, publicKey),
+    false,
+    "changing presentation text must invalidate the Rust manifest signature",
+  );
 });

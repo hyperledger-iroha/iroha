@@ -282,3 +282,33 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 The older server-side deployment and activation shortcuts are not part of the
 current contract lifecycle. Clients deploy with locally signed native
 transactions and use the by-reference call/view routes described above.
+
+
+## Verified Kotodama source bundles
+
+The SDK-projected `POST /v1/contracts/code/{code_hash}/verified-source/jobs`
+accepts `language: "kotodama"`, `source_text`, and an optional `source_name`.
+Multifile submissions require `source_name` and may supply:
+
+- `sources`: companion `{source_name, source_text}` files owned by the root.
+- `imports`: exact `{alias, package}` bindings for locked dependencies.
+- `packages`: `{identity, modules, sources, exports, imports}` records. `modules`
+  are explicit library entries; `sources` are companion files; `exports` is the
+  exact public function allowlist and requires matching source `export` markers.
+
+Paths are portable `.ko` names relative to each owning source root. Include and
+local import paths resolve relative to the referring file and cannot escape
+that root. Torii reads no server files and resolves no packages over the network.
+The complete supplied inventory is bounded to 512 files, 1 MiB per file, and
+16 MiB of UTF-8 text. The compiler canonicalizes paths and ordering and removes
+unreachable companion files before persistence. Every explicit package entry
+remains in the bundle. A stored record must recompile to the requested code hash,
+ABI hash, and compiler fingerprint on every read, including all reached package
+companions; changed or missing dependencies fail verification.
+
+`GET /v1/contracts/code/{code_hash}/contract-view` retains the original root in
+`rendered_source_text` and its path in `verified_source_ref.source_name`. It adds
+`source_files`, `source_imports`, and `source_packages` for a verified bundle,
+omitting empty arrays. These fields preserve individual files for reproduction
+and editor navigation. The source and job routes remain SDK projections in the
+route catalog; they are not OpenAPI projections.

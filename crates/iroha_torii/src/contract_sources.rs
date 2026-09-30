@@ -263,6 +263,7 @@ pub struct SubmitVerifiedContractSourceDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceFileDto")]
 pub struct ContractSourceFileDto {
     /// Portable path relative to the submitted source-set root.
     pub source_name: String,
@@ -281,6 +282,7 @@ pub struct ContractSourceFileDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceImportDto")]
 pub struct ContractSourceImportDto {
     /// Source-visible package alias.
     pub alias: String,
@@ -299,6 +301,7 @@ pub struct ContractSourceImportDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourcePackageDto")]
 pub struct ContractSourcePackageDto {
     /// Exact locked identity, including revision when applicable.
     pub identity: String,
@@ -357,11 +360,8 @@ struct StoredVerifiedSourceRecord {
     #[norito(default)]
     source_name: Option<String>,
     source_text: String,
-    #[norito(default)]
     sources: Vec<ContractSourceFileDto>,
-    #[norito(default)]
     imports: Vec<ContractSourceImportDto>,
-    #[norito(default)]
     packages: Vec<ContractSourcePackageDto>,
     submitted_at: String,
     #[norito(default)]
@@ -2327,22 +2327,14 @@ fn source_bundle_bound_error(
     }
     None
 }
-fn compile_verified_source(
-    source_name: Option<&str>,
+fn verified_source_link_request(
+    name: &str,
     source_text: &str,
     sources: &[ContractSourceFileDto],
     imports: &[ContractSourceImportDto],
     packages: &[ContractSourcePackageDto],
-) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
-    let session = kotodama_lang::session::CompilerSession::default();
-    if sources.is_empty() && imports.is_empty() && packages.is_empty() {
-        return session.build(kotodama_lang::session::CompileRequest {
-            source: source_text,
-            source_name,
-        });
-    }
-    let name = source_name.unwrap_or("main.ko");
-    let graph = kotodama_lang::linker::SourceLinkRequest {
+) -> kotodama_lang::linker::SourceLinkRequest {
+    kotodama_lang::linker::SourceLinkRequest {
         root: kotodama_lang::linker::SourceModuleUnit {
             source_name: name.into(),
             source: source_text.into(),
@@ -2392,7 +2384,47 @@ fn compile_verified_source(
                     .collect(),
             })
             .collect(),
-    };
+    }
+}
+fn source_file_dto(source: kotodama_lang::linker::SourceModuleUnit) -> ContractSourceFileDto {
+    ContractSourceFileDto {
+        source_name: source.source_name,
+        source_text: source.source,
+    }
+}
+fn source_import_dto(binding: kotodama_lang::linker::ImportBinding) -> ContractSourceImportDto {
+    ContractSourceImportDto {
+        alias: binding.alias,
+        package: binding.package,
+    }
+}
+fn source_package_dto(
+    package: kotodama_lang::linker::SourcePackageUnit,
+) -> ContractSourcePackageDto {
+    ContractSourcePackageDto {
+        identity: package.identity,
+        modules: package.modules.into_iter().map(source_file_dto).collect(),
+        sources: package.sources.into_iter().map(source_file_dto).collect(),
+        exports: package.exports.into_iter().collect(),
+        imports: package.imports.into_iter().map(source_import_dto).collect(),
+    }
+}
+fn compile_verified_source(
+    source_name: Option<&str>,
+    source_text: &str,
+    sources: &[ContractSourceFileDto],
+    imports: &[ContractSourceImportDto],
+    packages: &[ContractSourcePackageDto],
+) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
+    let session = kotodama_lang::session::CompilerSession::default();
+    if sources.is_empty() && imports.is_empty() && packages.is_empty() {
+        return session.build(kotodama_lang::session::CompileRequest {
+            source: source_text,
+            source_name,
+        });
+    }
+    let name = source_name.unwrap_or("main.ko");
+    let graph = verified_source_link_request(name, source_text, sources, imports, packages);
     kotodama_lang::driver::BuildDriver::new(session, "verified-source")
         .compile_project(graph, name)
         .map_err(|error| {
@@ -2613,7 +2645,7 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let source_name = request.source_name;
+    let mut source_name = request.source_name;
     let source_text = request.source_text;
     let mut sources = request.sources;
     sources.sort_by(|left, right| left.source_name.cmp(&right.source_name));
@@ -2653,13 +2685,39 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let compile_result = compile_verified_source(
-        source_name.as_deref(),
-        &source_text,
-        &sources,
-        &imports,
-        &packages,
-    );
+    let canonical_error = if sources.is_empty() && imports.is_empty() && packages.is_empty() {
+        None
+    } else {
+        let graph = verified_source_link_request(
+            source_name
+                .as_deref()
+                .expect("source bundle requires root name"),
+            &source_text,
+            &sources,
+            &imports,
+            &packages,
+        );
+        match kotodama_lang::linker::ModuleBuildGraph::canonical_source_bundle(graph) {
+            Ok(graph) => {
+                source_name = Some(graph.root.source_name);
+                sources = graph.sources.into_iter().map(source_file_dto).collect();
+                imports = graph.imports.into_iter().map(source_import_dto).collect();
+                packages = graph.packages.into_iter().map(source_package_dto).collect();
+                None
+            }
+            Err(error) => Some(error.into_diagnostics()),
+        }
+    };
+    let compile_result = match canonical_error {
+        Some(error) => Err(error),
+        None => compile_verified_source(
+            source_name.as_deref(),
+            &source_text,
+            &sources,
+            &imports,
+            &packages,
+        ),
+    };
     let response = match compile_result {
         Ok(output) => {
             let kotodama_lang::session::CompileOutput {
@@ -2911,6 +2969,43 @@ mod tests {
                 .render_source_map_json()
                 .expect("source map")
                 .contains("parts/view.ko")
+        );
+        let verified =
+            ivm::verify_contract_artifact(&original.artifact).expect("verified artifact");
+        let code_hash = hash_hex(&canonical_code_hash(&original.artifact).expect("code hash"));
+        let mut record = StoredVerifiedSourceRecord {
+            version: VERIFIED_SOURCE_VERSION,
+            code_hash: code_hash.clone(),
+            abi_hash: Some(hash_hex(&verified.abi_hash)),
+            compiler_fingerprint: verified.manifest.compiler_fingerprint,
+            language: "kotodama".into(),
+            source_name: Some("app.ko".into()),
+            source_text: root.into(),
+            sources: sources.clone(),
+            imports: imports.clone(),
+            packages: packages.clone(),
+            submitted_at: now_rfc3339(),
+            manifest_id_hex: None,
+            payload_digest_hex: None,
+            content_length: None,
+        };
+        validate_verified_source_record(&record, &code_hash)
+            .expect("full stored closure revalidates");
+        record.packages[0].sources[0].source_text =
+            "export fn value() -> int { return 100; }".into();
+        assert!(
+            validate_verified_source_record(&record, &code_hash).is_err(),
+            "tampered companion must fail record hash validation"
+        );
+        let encoded = norito::json::to_json(&record).expect("serialize complete record");
+        let mut value: norito::json::Value = norito::json::from_str(&encoded).expect("record JSON");
+        value
+            .as_object_mut()
+            .expect("record object")
+            .remove("sources");
+        assert!(
+            norito::json::from_value::<StoredVerifiedSourceRecord>(value).is_err(),
+            "retired persisted record shape must not decode"
         );
         packages[0].sources[0].source_text = "export fn value() -> int { return 5; }".into();
         let changed = compile_verified_source(Some("app.ko"), root, &sources, &imports, &packages)

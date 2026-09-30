@@ -356,6 +356,17 @@ impl Scope<'_> {
             diagnostics,
         }
     }
+    fn dependency_path(
+        &self,
+        referrer: &str,
+        relative: &str,
+        source: SourceRange,
+    ) -> Result<String, SourceGraphError> {
+        resolve_source_path(referrer, relative).map_err(|error| {
+            let diagnostic = error.into_diagnostics().diagnostics.remove(0);
+            self.error(&diagnostic.code, diagnostic.message, Some(source))
+        })
+    }
     fn source_file(&self, source: &SourceModuleUnit, id: SourceId) -> SourceFile {
         self.package.map_or_else(
             || SourceFile::new(id, source.source_name.as_str(), source.source.as_str()),
@@ -508,7 +519,7 @@ impl Scope<'_> {
             {
                 match &directive.kind {
                     SourceDirectiveKind::Include { path: target } => {
-                        let target = resolve_source_path(&path, target)?;
+                        let target = self.dependency_path(&path, target, directive.source)?;
                         if active.contains(&target) {
                             let mut cycle = active.clone();
                             cycle.push(target);
@@ -518,8 +529,18 @@ impl Scope<'_> {
                                 Some(directive.source),
                             ));
                         }
-                        if self.fragment_owners.get(&target) == Some(&unit.path) {
-                            continue;
+                        if let Some(previous) = self.fragment_owners.get(&target) {
+                            if previous == &unit.path {
+                                continue;
+                            }
+                            return Err(self.error(
+                                "E_SOURCE_OWNERSHIP",
+                                format!(
+                                    "source `{target}` is included by both `{previous}` and `{}`",
+                                    unit.path
+                                ),
+                                Some(directive.source),
+                            ));
                         }
                         let fragment = self.parse(&target, Some(directive.source))?;
                         if fragment.parsed.program.unit.kind != SourceUnitKind::Fragment {
@@ -537,7 +558,7 @@ impl Scope<'_> {
                         path: target,
                         alias,
                     } => {
-                        let target = resolve_source_path(&path, target)?;
+                        let target = self.dependency_path(&path, target, directive.source)?;
                         if unit.imports.insert(alias.clone(), target.clone()).is_some() {
                             return Err(self.error(
                                 "E_DUPLICATE_IMPORT",

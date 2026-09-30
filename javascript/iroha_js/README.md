@@ -766,7 +766,7 @@ const result = await compileKotodamaProgram(
   {
     sourceName: "app.ko",
     sources: [
-      { sourceName: "parts/view.ko", source: "view fn value() -> int { return arith::double(3); }" },
+      { sourceName: "parts/view.ko", source: "view fn value() -> int { return arith::double(value: 3); }" },
       { sourceName: "math.ko", source: "module Math { export fn double(int value) -> int { return value * 2; } }" },
     ],
   },

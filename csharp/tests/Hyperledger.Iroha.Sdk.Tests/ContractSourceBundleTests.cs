@@ -36,6 +36,24 @@ public sealed class ContractSourceBundleTests
         Assert.Equal(0, handler.Requests);
     }
 
+    [Fact]
+    public void VerifiedSourceLimitsDoNotConstrainGeneratedPseudoSource()
+    {
+        var view = new ToriiContractCodeView {
+            CodeHash = new string('a', 64), RenderedSourceKind = "pseudo_source",
+            RenderedSourceText = new string('x', 1024 * 1024 + 1),
+        };
+        Assert.NotEmpty(JsonSerializer.Serialize(view));
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(view with { RenderedSourceKind = "verified_source" }));
+    }
+
+    [Fact]
+    public void SourceFileRequiresBothOriginalPathAndText()
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiContractSourceFile>("""{"source_name":"app.ko"}"""));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiContractSourceFile>("""{"source_text":""}"""));
+    }
+
     private static ToriiContractVerifiedSourceSubmission Bundle()
     {
         return new ToriiContractVerifiedSourceSubmission

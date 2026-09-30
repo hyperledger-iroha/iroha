@@ -1306,15 +1306,21 @@ impl Collector {
             let Ok(text) = std::str::from_utf8(&file.bytes) else {
                 continue;
             };
-            let source = SourceFile::new(SourceId(0), file.path.as_str(), text);
+            // Resolve filesystem references from the original spelling; archive paths may
+            // already have been normalized to NFC by the portable-path policy.
+            let referrer = self
+                .collision_origins
+                .get(&portable_collision_key(&file.components))
+                .unwrap_or(&file.path);
+            let source = SourceFile::new(SourceId(0), referrer.as_str(), text);
             if let Ok(program) = kotodama_lang::parser::parse_source(&source, FrontendBudget::v1())
             {
-                visited.insert((file.path.clone(), false));
-                pending.push_back((file.path.clone(), program));
+                visited.insert((referrer.clone(), false));
+                pending.push_back((referrer.clone(), program.directives));
             }
         }
-        while let Some((referrer, program)) = pending.pop_front() {
-            for directive in program.directives {
+        while let Some((referrer, directives)) = pending.pop_front() {
+            for directive in directives {
                 let (relative, fragment) = match directive.kind {
                     SourceDirectiveKind::Include { path } => (path, true),
                     SourceDirectiveKind::Import { path, .. } => (path, false),
@@ -1352,7 +1358,7 @@ impl Collector {
                     path: path.clone(),
                     reason: diagnostics.render_human(),
                 })?;
-                pending.push_back((path, program));
+                pending.push_back((path, program.directives));
             }
         }
         Ok(())
@@ -2658,6 +2664,30 @@ version = "1.0.0"
                 "modules/math.ko",
                 "modules/operations.ko",
             ]
+        );
+    }
+    #[test]
+    fn source_dependencies_resolve_before_portable_unicode_path_normalization() {
+        let temp = tempdir().expect("tempdir");
+        let directory = "cafe\u{301}";
+        fs::create_dir(temp.path().join(directory)).unwrap();
+        fs::write(
+            temp.path().join(directory).join("app.ko"),
+            r#"seiyaku App { include "part.ko"; }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(directory).join("part.ko"),
+            "state int total;",
+        )
+        .unwrap();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.add_contract(format!("{directory}/app.ko"));
+        let plan = plan_package(&layout, MANIFEST, &semantic_release().1).unwrap();
+        assert!(
+            plan.files()
+                .iter()
+                .any(|file| file.path() == "café/part.ko")
         );
     }
     #[test]
