@@ -4,29 +4,24 @@
 mod native_validation;
 use core::time::Duration;
 use iroha_core::{
-    block::{BlockValidationError, ValidBlock},
-    da::proof_policy_bundle,
+    block::BlockValidationError,
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStore,
     state::{State, StateReadOnly},
-    sumeragi::network_topology::Topology,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId, Registrable,
-    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+    block::builder::BlockBuilder,
     prelude::{
-        Account, AccountId, AssetDefinition, BlockHeader, Domain, Level, Log, SignedTransaction,
+        Account, AccountId, AssetDefinition, Domain, Level, Log, SignedTransaction,
         TransactionBuilder,
     },
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_primitives::time::TimeSource;
-use nonzero_ext::nonzero;
 fn checked_random_bls_batch_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked BLS batch keypair")
@@ -45,7 +40,7 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let account_id = AccountId::of(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let mut state =
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();

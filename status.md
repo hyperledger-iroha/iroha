@@ -26,11 +26,14 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 Exact finalized-carrier retries now authenticate the original execution and
 acknowledge admission without requeueing or charging again. The rebuilt local
-Nexus happy-day workload completes its financial, signed RS16 finality and replay
-checks across all 16 peers. Repeated accepted settlements and restart remain
-unqualified on one fixed source candidate. Restricted native-lane gossip also
-needs fresh daemon/harness qualification with disjoint global and participant
-committees.
+Nexus happy-day and smoke workloads complete financial, signed RS16 finality and
+exact-retry checks across all 16 peers; smoke also preserves the funded settlement
+through all 16 validator restarts. The measured smoke settlement takes 45.17 seconds.
+Repeated accepted settlements remain unqualified on one fixed source candidate.
+A fresh disjoint-committee run exposed an applied-body pruning race that stops
+the availability worker during an in-flight file read; its correction awaits
+rebuilt node qualification. Restricted native-lane gossip also needs fresh
+daemon/harness qualification with disjoint global and participant committees.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding

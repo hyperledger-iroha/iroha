@@ -33504,7 +33504,7 @@ impl State {
         if !self.should_enforce_nexus_storage_budget(block_height, interval_blocks) {
             return;
         }
-        let mut kura_used = match self.kura.disk_usage_bytes() {
+        let kura_used = match self.kura.disk_usage_bytes() {
             Ok(bytes) => bytes,
             Err(err) => {
                 warn!(?err, "nexus storage eviction: failed to measure Kura usage");
@@ -38190,13 +38190,9 @@ mod state_view_lock_tests {
 #[cfg(all(test, feature = "zk-preverify"))]
 mod state_preverify_backend_admission_tests;
 #[cfg(test)]
-mod musubi_replication_shortfall_state_tests {
-    use super::*;
-}
+mod musubi_replication_shortfall_state_tests {}
 #[cfg(test)]
-mod soracloud_sequence_watermark_state_tests {
-    use super::*;
-}
+mod soracloud_sequence_watermark_state_tests {}
 #[cfg(test)]
 mod public_lane_slash_observability_staging_tests {
     use super::*;
@@ -38510,7 +38506,7 @@ mod musubi_replication_shortfall_telemetry_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::block::BlockHeader;
-    use mv::cell::Cell;
+
     use std::sync::Arc;
     fn replication_shortfall_gauge(metrics: &crate::telemetry::Metrics) -> u64 {
         metrics

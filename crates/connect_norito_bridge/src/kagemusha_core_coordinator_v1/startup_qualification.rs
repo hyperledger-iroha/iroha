@@ -177,7 +177,7 @@ impl NativeStartupQualificationOwnerV1 {
         let mut owner = Self::new(release, enrollment, native_authorization_public_key)?;
         // The journal selects one profile. Membership elsewhere in the same authenticated
         // catalog cannot substitute another hardware/provider authority for this attempt.
-        owner.catalog.enabled_profiles = vec![enabled.clone()];
+        owner.catalog.enabled_profiles = vec![*enabled];
         Ok(owner)
     }
 

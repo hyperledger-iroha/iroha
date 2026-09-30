@@ -1271,12 +1271,10 @@ fn reachable_source_names<'a>(
             if matches!(
                 pair[0].kind,
                 crate::lexer::TokenKind::Include | crate::lexer::TokenKind::Import
-            ) {
-                if let crate::lexer::TokenKind::String(relative) = &pair[1].kind {
-                    if let Ok(target) = resolve_source_path(&path, relative) {
-                        pending.push(target);
-                    }
-                }
+            ) && let crate::lexer::TokenKind::String(relative) = &pair[1].kind
+                && let Ok(target) = resolve_source_path(&path, relative)
+            {
+                pending.push(target);
             }
         }
     }

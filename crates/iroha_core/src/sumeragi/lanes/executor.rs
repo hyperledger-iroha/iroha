@@ -689,6 +689,9 @@ mod tests {
         }
     }
     impl BlockStore for NoStore {
+        fn committed_body(&self, _: u64) -> std::io::Result<Option<(AvailableBody, Qc)>> {
+            Ok(None)
+        }
         fn height(&self) -> u64 {
             0
         }

@@ -516,10 +516,19 @@ impl World {
                 Action::ServeBlocks { .. } if strategies.contains(&Strategy::ForgeSync) => {
                     continue;
                 }
-                Action::ServePayload { .. }
+                Action::ServePayload { height, .. }
                     if strategies.contains(&Strategy::ForgeBodies)
-                        || strategies.contains(&Strategy::LateLeader(Late::Body)) =>
+                        || (strategies.contains(&Strategy::LateLeader(Late::Body))
+                            && self
+                                .adv
+                                .late_bodies
+                                .get(&(inst, *height))
+                                .is_some_and(|due| at < *due)) =>
                 {
+                    // F36 delays the initial rows. Once released, serve retries:
+                    // rows that raced ahead of metadata may need to be fetched.
+                    // Withholding them indefinitely introduces a different fault
+                    // whose recovery legitimately increases measured view latency.
                     continue;
                 }
                 _ => {

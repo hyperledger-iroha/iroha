@@ -2512,7 +2512,10 @@ and E59 (simulator).
   rejected once the participant has verified a `G` block above `d`: `G` has then decided `x`, and
   without this vote only `Abort`.
 - *Simulator* (`sim::amx`, F31): the same protocol as a toy application on every instance's
-  committed blocks, checked by O-AMX (§13.2) and the `MX` mutations (§13.4).
+  committed blocks, checked by O-AMX (§13.2) and the `MX` mutations (§13.4). Its executor
+  consumes the same signed RS16 `AvailableBody` owners as the other scenarios. A held
+  decision followed by a late `No` preparation retains one settlement and makes no ledger
+  movement; the oracle rejects a changed decision or a second monetary effect.
 
 ---
 
@@ -3142,8 +3145,12 @@ view `v ≥ 1` led by a running holder, within the leader-turn bound of entering
 transaction by the second height first committed after its submission (E62) ·
 F36 late leaders: up to `f` members send their view-0 proposal `T(start)/2 + 100 ms` after the
 honest anchor `t_enter + P(0)`, or the proposal at once without its payload and the body that much
-later (never served on request), so that every such view still commits; later one honest member
-crashes → no honest start level ever rises, every gap within the P4 leader-turn bound · F37
+later (requests are withheld until row release, then served so reordered rows can be fetched),
+so that every such view still commits → no honest start level rises before the deliberate
+crash; later one honest member crashes → every gap stays within the P4 leader-turn bound.
+A crash during certificate exchange may legitimately raise the start level when actual
+body-to-commit latency exceeds `T(start)/2` (§9.2); seed 1813 distinguishes this from waiting
+for a late body · F37
 commit attestation (§3.7): a share of the transactions requires mint finality, so the builder
 flags their blocks; every authority attests only blocks its node executed (`Pending` before, as a
 KAGEMUSHA authority needs `R`'s preimage); up to `f` Byzantine members forge or withhold their

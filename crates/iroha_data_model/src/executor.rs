@@ -168,7 +168,7 @@ mod model {
     #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
-        pub contract: String,
+        pub contract: Box<str>,
         /// Stable nominal error type identity.
         pub error_type: String,
         /// Hash of the exact declared variant schema.
@@ -178,7 +178,8 @@ mod model {
         /// Explicit stable non-zero application error code.
         pub code: u32,
         /// Static presentation text authenticated by the originating contract interface.
-        pub message: Option<String>,
+        /// Immutable text avoids retaining spare string capacity in every validation result.
+        pub message: Option<Box<str>>,
     }
     impl core::fmt::Display for ContractRejection {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -490,6 +491,7 @@ mod tests {
     use norito::codec::{DecodeAll, Encode};
     #[test]
     fn nominal_contract_rejection_roundtrips_without_losing_callee_identity() {
+        assert!(core::mem::size_of::<ValidationFail>() < 128);
         let rejection = ContractRejection {
             contract: "金庫".into(),
             error_type: "example/vault@1::金庫::拒否".into(),
@@ -514,6 +516,15 @@ mod tests {
             message: Some("残高が不足しています".into()),
             ..rejection
         };
+        // Compact immutable storage must retain the canonical string wire representation.
+        assert_eq!(
+            explained.contract.encode(),
+            explained.contract.to_string().encode()
+        );
+        assert_eq!(
+            explained.message.encode(),
+            explained.message.as_deref().map(str::to_owned).encode()
+        );
         assert!(explained.to_string().ends_with(": 残高が不足しています"));
         let encoded = norito::encode_canonical(&explained).unwrap();
         assert_eq!(

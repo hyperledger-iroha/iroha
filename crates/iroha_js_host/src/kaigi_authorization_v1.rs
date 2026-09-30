@@ -47,7 +47,7 @@ pub struct JsKaigiAuthorizationProofV1 {
     pub authorization: Buffer,
     /// Exact 32-byte pre-state root supplied to the relation.
     pub pre_roster_root: Buffer,
-    /// Canonical Norito OpenVerifyEnvelope for the final V1 circuit.
+    /// Canonical Norito `OpenVerifyEnvelope` for the final V1 circuit.
     pub proof: Buffer,
 }
 

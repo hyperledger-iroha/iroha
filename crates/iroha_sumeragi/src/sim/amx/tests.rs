@@ -502,6 +502,35 @@ fn det_amx_held_decision_votes_no() {
 }
 
 #[test]
+fn det_amx_oracle_held_decision_then_no_is_one_settlement() {
+    let g = single(1);
+    let initial = dataspace(&g);
+    let t = tx(&[D1, D2], 40, 12);
+    let x = t.id();
+    let txs = [(x, t.clone())].into_iter().collect();
+    let mut seen = Observed::default();
+    let mut held = initial.clone();
+    held.settle(&crypto(), &decision_proof(&g, x, Outcome::Abort, 12));
+    observe_dataspace(&mut seen, &txs, D1, &initial, &held).unwrap();
+    assert_eq!(seen.settled[&(D1, x)], (Outcome::Abort, Settlement::Held));
+    let mut prepared = held.clone();
+    prepare(&mut prepared, &g, &t);
+    observe_dataspace(&mut seen, &txs, D1, &held, &prepared).unwrap();
+    assert_eq!(seen.settled.len(), 1);
+    assert_eq!(seen.settled[&(D1, x)], (Outcome::Abort, Settlement::Closed));
+    assert_eq!(prepared.balances, initial.balances);
+    assert!(prepared.escrows.is_empty());
+    observe_dataspace(&mut seen, &txs, D1, &prepared, &prepared).unwrap();
+
+    // Recreating a settlement without its original held decision is still a
+    // duplicate; changing the held decision is also rejected independently.
+    assert!(observe_dataspace(&mut seen.clone(), &txs, D1, &initial, &prepared).is_err());
+    let mut wrong_held = held.clone();
+    wrong_held.held.insert(x, Outcome::Commit);
+    assert!(observe_dataspace(&mut seen, &txs, D1, &wrong_held, &prepared).is_err());
+}
+
+#[test]
 fn det_amx_settle_follows_decision() {
     let g = single(1);
     let mut state = dataspace(&g);

@@ -491,7 +491,7 @@ fn static_error_messages_preserve_nominal_schema_and_reach_rejections() {
     let mut vm = compiled_main(&source("残高が不足しています"));
     let error = vm.run().expect_err("declared failure");
     assert!(
-        matches!(error.as_unmetered(), VMError::ContractAbort { code: 7, message: Some(text), .. } if text == "残高が不足しています")
+        matches!(error.as_unmetered(), VMError::ContractAbort { code: 7, message: Some(text), .. } if text.as_ref() == "残高が不足しています")
     );
     assert!(error.to_string().contains("残高が不足しています"));
     let mut second_vm = compiled_main(&source("Insufficient balance"));

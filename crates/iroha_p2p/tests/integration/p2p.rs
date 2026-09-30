@@ -1522,8 +1522,7 @@ async fn four_peer_crossed_dials_and_restart_progress_with_old_delivered_owner()
         arbitration_mesh_online(&mut nodes).await;
         for (source, node) in nodes.iter().enumerate() {
             let target = (source + 1) % 4;
-            node
-                .as_ref()
+            node.as_ref()
                 .unwrap()
                 .network
                 .post_recoverable(
@@ -1538,13 +1537,11 @@ async fn four_peer_crossed_dials_and_restart_progress_with_old_delivered_owner()
         }
         for (target, node) in nodes.iter_mut().enumerate() {
             let source = (target + 3) % 4;
-            let message = tokio::time::timeout(
-                Duration::from_secs(20),
-                node.as_mut().unwrap().inbox.recv(),
-            )
-            .await
-            .expect("exact ring delivery must progress")
-            .expect("subscriber remains open");
+            let message =
+                tokio::time::timeout(Duration::from_secs(20), node.as_mut().unwrap().inbox.recv())
+                    .await
+                    .expect("exact ring delivery must progress")
+                    .expect("subscriber remains open");
             assert_eq!(message.peer.id(), peers[source].id());
             assert_eq!(
                 message.payload.0,

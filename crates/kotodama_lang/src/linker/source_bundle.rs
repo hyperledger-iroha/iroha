@@ -476,14 +476,14 @@ impl Scope<'_> {
             }
             return Ok(());
         }
-        if owner.kind == SourceUnitKind::Seiyaku {
-            if let Some(export) = file.parsed.program.exports.first() {
-                return Err(self.error(
-                    "E_SOURCE_UNIT_KIND",
-                    "`export` is only permitted in module declarations",
-                    Some(export.source),
-                ));
-            }
+        if owner.kind == SourceUnitKind::Seiyaku
+            && let Some(export) = file.parsed.program.exports.first()
+        {
+            return Err(self.error(
+                "E_SOURCE_UNIT_KIND",
+                "`export` is only permitted in module declarations",
+                Some(export.source),
+            ));
         }
         if file.parsed.program.unit.kind == SourceUnitKind::Fragment
             && file.parsed.program.test_target.is_some()

@@ -1173,7 +1173,7 @@ impl<'s> Worker<'s> {
             }
         };
         if let Err(error) = overlay.take_sumeragi_lanes() {
-            return invalid(height, &error);
+            return classify_lane_step(height, &error);
         }
         let inputs = match overlay.take_sumeragi_execution_inputs() {
             Ok(inputs) => inputs,
@@ -2203,6 +2203,14 @@ fn invalid(height: u64, reason: &dyn std::fmt::Display) -> ExecOutcome {
     ExecOutcome::Invalid
 }
 
+/// Custody allocator refusal is local; a semantic lane transition defect is deterministic.
+fn classify_lane_step(height: u64, error: &lanes::step::LaneStepError) -> ExecOutcome {
+    match error {
+        lanes::step::LaneStepError::CustodyAllocation => ExecOutcome::Failed(error.to_string()),
+        _ => invalid(height, error),
+    }
+}
+
 /// Local conditions are `Failed` (retried); every other rejection is deterministic.
 fn classify(height: u64, error: &BlockValidationError) -> ExecOutcome {
     local_failure(error).map_or_else(|| invalid(height, error), ExecOutcome::Failed)
@@ -2293,6 +2301,25 @@ mod tests {
             assert!(worker.finishing.is_none());
             assert!(worker.context.staging.get(&hash).is_none());
         });
+    }
+
+    #[test]
+    fn lane_custody_allocation_refusal_is_local_and_semantic_errors_remain_invalid() {
+        use lanes::step::LaneStepError;
+        assert!(matches!(
+            classify_lane_step(2, &LaneStepError::CustodyAllocation),
+            ExecOutcome::Failed(_)
+        ));
+        for error in [
+            LaneStepError::Custody(lanes::step::CustodyViolation::StakeBinding),
+            LaneStepError::NotAdvanced,
+            LaneStepError::MissingLane(iroha_model_base::topology::LaneId::new(1)),
+        ] {
+            assert!(matches!(
+                classify_lane_step(2, &error),
+                ExecOutcome::Invalid
+            ));
+        }
     }
 
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.

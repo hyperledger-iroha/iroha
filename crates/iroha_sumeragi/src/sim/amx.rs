@@ -54,8 +54,8 @@ use super::{
 };
 use crate::{
     api::ExecOutcome,
-    crypto::{Crypto, Verifier},
     availability::AvailableBody,
+    crypto::{Crypto, Verifier},
     message::{BlockHeader, Qc},
     preimage,
     testing::{FakeVerifier, sha256},
@@ -1680,12 +1680,21 @@ fn observe_dataspace(
             (Vote::Yes(_), Outcome::Abort) => Settlement::Released,
             (Vote::No, _) => Settlement::Closed,
         };
-        if seen.settled.insert((inst, *x), (outcome, kind)).is_some() {
+        // A decision may arrive before Begin. Preparing it later moves the
+        // already held decision into a No record without another monetary effect.
+        // Only this exact, unchanged Held -> Closed refinement is idempotent.
+        let completes_held = kind == Settlement::Closed
+            && !old.prepared.contains_key(x)
+            && old.held.get(x) == Some(&outcome)
+            && !new.held.contains_key(x)
+            && seen.settled.get(&(inst, *x)) == Some(&(outcome, Settlement::Held));
+        if seen.settled.contains_key(&(inst, *x)) && !completes_held {
             return Err(format!(
                 "O-AMX: dataspace {inst} settled {} twice",
                 short(x)
             ));
         }
+        seen.settled.insert((inst, *x), (outcome, kind));
         seen.settle_checks.push((inst, *x, outcome));
     }
     for (x, outcome) in &new.held {

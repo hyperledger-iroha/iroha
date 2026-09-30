@@ -47,6 +47,9 @@ pub(super) struct Blocks {
     source: AvailabilitySource,
     unavailable: AtomicBool,
     calls: AtomicUsize,
+    stored: Option<FileBodyStore>,
+    budget: AllocationBudget,
+    pending: std::sync::Mutex<Option<super::acquisition::StoredAcquisition>>,
 }
 struct Absent(AvailabilitySource);
 impl BodyReadJob for Absent {
@@ -59,10 +62,52 @@ impl BodyReadJob for Absent {
 }
 impl BodyReader for Blocks {
     fn begin_read(&self, s: AvailabilitySource) -> Result<Box<dyn BodyReadJob>, BodyReadError> {
+        if let Some(stored) = &self.stored {
+            assert_eq!(
+                s, self.source,
+                "retry must preserve exact independent authority"
+            );
+            return stored.begin_read(s);
+        }
         Ok(Box::new(Absent(s)))
     }
 }
 impl BlockStore for Blocks {
+    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+        use super::acquisition::{StoredAcquisition, StoredProgress};
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+        }
+        let Some(stored) = &self.stored else {
+            return Ok(None);
+        };
+        assert_eq!(height, self.source.height());
+        let mut pending = self.pending.lock().unwrap();
+        if pending.is_none() {
+            *pending = Some(
+                StoredAcquisition::begin(stored, self.source.clone())
+                    .map_err(|error| io::Error::other(format!("{error:?}")))?,
+            );
+        }
+        match pending
+            .as_mut()
+            .unwrap()
+            .poll(&self.budget, &BlsCrypto::new())
+        {
+            Ok(StoredProgress::Available(body)) => {
+                *pending = None;
+                let mut qc = super::tests::commit_qc(&body, Hash32::ZERO);
+                qc.block_hash = body.source().block_hash();
+                Ok(Some((body, qc)))
+            }
+            Ok(StoredProgress::Absent) => {
+                *pending = None;
+                Ok(None)
+            }
+            Ok(StoredProgress::Pending(_)) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+            Err(error) => Err(io::Error::other(format!("{error:?}"))),
+        }
+    }
     fn height(&self) -> u64 {
         0
     }
@@ -128,6 +173,9 @@ impl Fixture {
             source: source.clone(),
             unavailable: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
+            stored: None,
+            budget: budget.clone(),
+            pending: std::sync::Mutex::new(None),
         };
         Self {
             body,
@@ -149,6 +197,20 @@ impl Fixture {
             4,
             0,
         )
+    }
+    fn install_committed_body(&mut self) {
+        let committed = FileBodyStore::open(
+            &self._dir.path().join("committed"),
+            &self.source.instance(),
+            self.crypto.clone(),
+            BodyLimits::default(),
+            self.budget.clone(),
+        )
+        .unwrap();
+        committed
+            .put(&self.source.block_hash(), &self.body)
+            .unwrap();
+        self.blocks.stored = Some(committed);
     }
     pub(super) fn poll(&self, w: &mut PayloadWorker, work: PayloadWork) -> ObservedProgress {
         let net = Capture::default();
@@ -329,6 +391,183 @@ fn stored_fetch_verifies_actual_file_then_returns_custody_without_remote_request
     assert!(all.sends.is_empty());
     assert!(matches!(all.events.as_slice(),[Event::BodyAvailable{block}] if block==&f.body));
 }
+
+/// Hold the original file read on its allocation pool while persistence retires its path.
+fn pending_stored_fetch(f: &Fixture) -> PayloadWorker {
+    f.bodies.put(&f.source.block_hash(), &f.body).unwrap();
+    let mut worker = f.worker();
+    f.budget.set_limit_bytes(f.budget.reserved_bytes());
+    let pending = f.poll(
+        &mut worker,
+        PayloadWork::Fetch {
+            source: f.source.clone(),
+            peers: vec![f.signers[1].public_key().clone()],
+        },
+    );
+    assert!(pending.retry && pending.refused);
+    assert!(pending.events.is_empty() && pending.sends.is_empty());
+    worker
+}
+
+#[test]
+fn applied_body_pruned_during_read_reacquires_exact_committed_custody() {
+    let mut f = Fixture::new();
+    f.install_committed_body();
+    let mut worker = pending_stored_fetch(&f);
+    f.bodies.prune_through(f.source.height()).unwrap();
+    f.budget.set_limit_bytes(1 << 25);
+    let progress = f.poll(&mut worker, PayloadWork::Poll);
+    assert!(
+        progress.events.is_empty(),
+        "pruning cannot itself grant custody"
+    );
+    let complete = f.drain(&mut worker, progress);
+    assert!(
+        complete.sends.is_empty(),
+        "no remote recovery masks the local race"
+    );
+    assert!(
+        matches!(complete.events.as_slice(), [Event::BodyAvailable { block }] if block == &f.body)
+    );
+}
+
+#[test]
+fn unknown_committed_hash_cancels_only_that_lookup_and_valid_serving_continues() {
+    let mut f = Fixture::new();
+    f.install_committed_body();
+    let mut worker = f.worker();
+    let stale = f.poll(
+        &mut worker,
+        PayloadWork::Serve {
+            to: f.signers[1].public_key().clone(),
+            height: f.source.height(),
+            block_hash: Hash32([0x91; 32]),
+        },
+    );
+    let stale = f.drain(&mut worker, stale);
+    assert!(stale.events.is_empty() && stale.sends.is_empty());
+    let valid = f.poll(
+        &mut worker,
+        PayloadWork::Serve {
+            to: f.signers[1].public_key().clone(),
+            height: f.source.height(),
+            block_hash: f.source.block_hash(),
+        },
+    );
+    let valid = f.drain(&mut worker, valid);
+    assert!(
+        matches!(&valid.sends[0].1, WireMessage::PayloadManifest(manifest)
+        if manifest.header == *f.body.header() && manifest.availability == *f.body.availability())
+    );
+}
+
+#[test]
+fn committed_lookup_keeps_exact_original_read_on_resource_refusal() {
+    let mut f = Fixture::new();
+    f.install_committed_body();
+    let mut worker = f.worker();
+    f.budget.set_limit_bytes(f.budget.reserved_bytes());
+    f.poll(
+        &mut worker,
+        PayloadWork::Fetch {
+            source: f.source.clone(),
+            peers: vec![f.signers[1].public_key().clone()],
+        },
+    );
+    let pending = f.poll(&mut worker, PayloadWork::Poll);
+    assert!(pending.retry && pending.refused && pending.events.is_empty());
+    {
+        let held = f.blocks.pending.lock().unwrap();
+        assert_eq!(held.as_ref().unwrap().source(), &f.source);
+    }
+    f.budget.set_limit_bytes(1 << 25);
+    let progress = f.poll(&mut worker, PayloadWork::Poll);
+    let complete = f.drain(&mut worker, progress);
+    assert!(
+        matches!(complete.events.as_slice(), [Event::BodyAvailable { block }] if block == &f.body)
+    );
+    assert!(f.blocks.pending.lock().unwrap().is_none());
+    assert!(complete.sends.is_empty());
+}
+
+#[test]
+fn committed_corruption_is_never_a_stale_lookup_or_remote_fetch() {
+    let mut f = Fixture::new();
+    f.install_committed_body();
+    let committed = f.blocks.stored.as_ref().unwrap();
+    std::fs::write(
+        committed.body_path(f.source.height(), &f.source.block_hash()),
+        b"corrupt",
+    )
+    .unwrap();
+    let mut worker = f.worker();
+    f.poll(
+        &mut worker,
+        PayloadWork::Serve {
+            to: f.signers[1].public_key().clone(),
+            height: f.source.height(),
+            block_hash: Hash32([0x91; 32]),
+        },
+    );
+    let capture = Capture::default();
+    assert!(
+        worker
+            .step(PayloadWork::Poll, &f.bodies, &f.blocks, &capture)
+            .is_err()
+    );
+    assert!(capture.0.lock().unwrap().is_empty());
+}
+
+#[test]
+fn disappearance_without_local_retirement_remains_a_storage_fault() {
+    let f = Fixture::new();
+    let mut worker = pending_stored_fetch(&f);
+    std::fs::remove_file(
+        f.bodies
+            .body_path(f.source.height(), &f.source.block_hash()),
+    )
+    .unwrap();
+    f.budget.set_limit_bytes(1 << 25);
+    assert!(
+        worker
+            .step(PayloadWork::Poll, &f.bodies, &f.blocks, &Capture::default())
+            .is_err()
+    );
+}
+
+#[test]
+fn local_retirement_cannot_mask_missing_committed_custody() {
+    let f = Fixture::new();
+    let mut worker = pending_stored_fetch(&f);
+    f.bodies.prune_through(f.source.height()).unwrap();
+    f.budget.set_limit_bytes(1 << 25);
+    let progress = f.poll(&mut worker, PayloadWork::Poll);
+    assert!(progress.retry && progress.events.is_empty() && progress.sends.is_empty());
+    assert!(
+        worker
+            .step(PayloadWork::Poll, &f.bodies, &f.blocks, &Capture::default())
+            .is_err()
+    );
+}
+
+#[test]
+fn local_retirement_cannot_mask_a_replaced_open_source() {
+    let f = Fixture::new();
+    let mut worker = pending_stored_fetch(&f);
+    f.bodies.prune_through(f.source.height()).unwrap();
+    let path = f
+        .bodies
+        .body_path(f.source.height(), &f.source.block_hash());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"replacement").unwrap();
+    f.budget.set_limit_bytes(1 << 25);
+    assert!(
+        worker
+            .step(PayloadWork::Poll, &f.bodies, &f.blocks, &Capture::default())
+            .is_err()
+    );
+}
+
 #[test]
 fn both_stores_absent_is_the_only_remote_fetch_outcome() {
     let f = Fixture::new();

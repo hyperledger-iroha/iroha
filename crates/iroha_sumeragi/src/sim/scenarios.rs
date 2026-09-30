@@ -1280,6 +1280,21 @@ pub fn f31(seed: u64) -> Scenario {
         relayer_down: vec![(0, 20_000, 45_000), (1, 35_000, 55_000)],
         ..super::amx::AmxConfig::default()
     });
+    let initial: Vec<_> = (0..n).map(|machine| (machine, 0)).collect();
+    let next = if seed.is_multiple_of(2) {
+        initial.clone()
+    } else {
+        sc.extra = 1;
+        (0..n - 1)
+            .chain(std::iter::once(n))
+            .map(|machine| (machine, 0))
+            .collect()
+    };
+    sc.committees = vec![(0, initial), (12, next.clone()), (32, next)];
+    // The relayer loses volatile jobs with its machine and reconstructs them from
+    // each instance's committed signed-availability history after restart.
+    sc.script.push((65_000, Fault::Crash(0)));
+    sc.script.push((68_000, Fault::Restart(0)));
     sc.net_rules = vec![
         NetRule::StallInstance {
             inst: 0,
@@ -1511,8 +1526,9 @@ fn first_holder_view(sc: &Scenario, height: u64, holders: u64) -> u64 {
 /// late as the view still commits — the whole proposal `T(start)/2 + 100 ms` after the honest
 /// anchor `t_enter + P(0)`, or the proposal at once without its payload and the body that much
 /// later — never failing a view, so they are never demoted. They must not raise any honest
-/// start level; then one honest member crashes, and its leader turn must cost `P(0) + T(0)`,
-/// not `P(0) + T(start_cap)` (every gap within the P4 leader-turn bound).
+/// start level before one honest member crashes. The crash can extend certificate latency
+/// beyond half a timeout and legitimately raise the level (§9.2), but every subsequent gap
+/// must remain within the P4 leader-turn bound.
 pub fn f36(seed: u64) -> Scenario {
     let n = pick(seed, &[4, 7, 5, 22]);
     let mut sc = sized("F36", seed, n);

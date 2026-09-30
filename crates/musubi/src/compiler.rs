@@ -275,18 +275,15 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
                 ));
             }
             let (modules, mut sources) = partition_library_sources(modules)?;
-            let module_names = modules
+            let existing_names = modules
                 .iter()
-                .map(|source| source.source_name.as_str())
+                .chain(&sources)
+                .map(|source| source.source_name.clone())
                 .collect::<BTreeSet<_>>();
             sources.extend(
                 packaged_source_inventory(plan)?
                     .into_iter()
-                    .filter(|source| {
-                        !module_names.contains(source.source_name.as_str())
-                            && !sources_contains_path(&sources, &source.source_name)
-                    })
-                    .collect::<Vec<_>>(),
+                    .filter(|source| !existing_names.contains(&source.source_name)),
             );
             Ok(SourcePackageUnit {
                 sources,
@@ -552,7 +549,8 @@ fn packaged_source_inventory(
 fn sources_contains_path(sources: &[SourceModuleUnit], name: &str) -> bool {
     sources.iter().any(|source| source.source_name == name)
 }
-pub(crate) fn partition_library_sources(
+/// Separate module roots from their included source fragments.
+pub fn partition_library_sources(
     sources: Vec<SourceModuleUnit>,
 ) -> Result<(Vec<SourceModuleUnit>, Vec<SourceModuleUnit>), CompilerBridgeErrorV1> {
     let mut modules = Vec::new();

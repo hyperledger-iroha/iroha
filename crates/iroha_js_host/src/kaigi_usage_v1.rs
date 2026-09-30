@@ -42,7 +42,7 @@ pub struct JsKaigiUsageProofV1 {
     pub usage_commitment: Buffer,
     /// Exact roster root bound by the usage relation.
     pub pre_roster_root: Buffer,
-    /// Canonical final V1 OpenVerifyEnvelope, already verified by Core.
+    /// Canonical final V1 `OpenVerifyEnvelope`, already verified by Core.
     pub proof: Buffer,
 }
 

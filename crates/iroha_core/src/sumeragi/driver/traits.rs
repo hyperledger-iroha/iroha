@@ -145,6 +145,12 @@ pub trait BodyStore: BodyReader {
     /// # Errors
     /// A write failure (retried like a store).
     fn prune_through(&self, height: u64) -> io::Result<()>;
+    /// Whether this store has received local authority to retire this applied height.
+    /// An in-flight read that loses its path may then retry its exact source in the
+    /// committed store. This is not proof that any replacement body is available.
+    fn retirement_authorized(&self, _height: u64) -> bool {
+        false
+    }
 }
 
 /// The committed chain (Kura in the node): one block and its `CommitQC` per height above
@@ -152,6 +158,14 @@ pub trait BodyStore: BodyReader {
 pub trait BlockStore: BodyReader {
     /// Highest stored height (the genesis height when nothing is stored above it).
     fn height(&self) -> u64;
+    /// Take the fully authenticated body and certificate at this committed height.
+    /// The implementation retains the original read/restoration owners on refusal.
+    /// The returned body's independent source identifies the canonical block; callers
+    /// must distinguish an obsolete requested hash from corrupt stored bytes.
+    ///
+    /// # Errors
+    /// I/O, corruption, missing authority and resource refusal are never absence.
+    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>>;
     /// The committed block and `CommitQC` of `height`, if stored.
     ///
     /// # Errors

@@ -19293,7 +19293,7 @@ seiyaku Callee {
         assert_eq!(
             error.as_unmetered(),
             &ivm::VMError::ContractAbort {
-                contract: "Callee".to_owned(),
+                contract: "Callee".into(),
                 error_type: expected.identity.clone(),
                 schema_hash: expected.schema_hash(),
                 name: "ForcedFailure".to_owned(),
@@ -19305,7 +19305,7 @@ seiyaku Callee {
             crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error),
             iroha_data_model::ValidationFail::ContractRejected(
                 iroha_data_model::executor::ContractRejection {
-                    contract: "Callee".to_owned(),
+                    contract: "Callee".into(),
                     error_type: expected.identity.clone(),
                     schema_hash: expected.schema_hash(),
                     name: "ForcedFailure".to_owned(),

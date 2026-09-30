@@ -7,6 +7,8 @@
 //! anchor block's hash and creation time, and the lane record's immutable fields), so every
 //! honest member computes the same `R` whenever it executes.
 
+pub(crate) mod custody;
+
 /// Authentication of original lane certificates and reproduced admission evidence.
 pub mod evidence;
 /// The executor of a lane instance.

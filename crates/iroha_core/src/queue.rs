@@ -5819,7 +5819,7 @@ pub mod tests {
     use super::*;
     use crate::state::StateReadOnlyWithTransactions as _;
     use crate::{
-        block::{BlockBuilder, EventProducer, ValidBlock},
+        block::ValidBlock,
         compliance::LaneComplianceEngine,
         governance::manifest::{
             GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus,
@@ -5849,12 +5849,11 @@ pub mod tests {
         events::pipeline::PipelineEventBox,
         isi::runtime_upgrade::ProposeRuntimeUpgrade,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_MANAGED,
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceMetadata,
-            JurisdictionSet, LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId,
-            LaneComplianceRule, LaneConfig, LaneLifecyclePlan, LanePrivacyMerkleWitness,
-            LanePrivacyProof, LanePrivacyWitness, LaneSchedulerPolicy, ManifestVersion,
-            ParticipantSelector,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
+            AuditControls, DataSpaceCatalog, DataSpaceMetadata, JurisdictionSet, LaneCatalog,
+            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneConfig,
+            LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+            LaneSchedulerPolicy, ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -5891,7 +5890,7 @@ pub mod tests {
         thread,
         time::Duration,
     };
-    use tempfile::{TempDir, tempdir};
+    use tempfile::tempdir;
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
     fn pending_kagemusha_binding_for_test(
         authority: AccountId,

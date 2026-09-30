@@ -1051,16 +1051,14 @@ impl EditorSnapshot {
                             module.source.clone_from(replacement);
                         }
                     }
-                } else {
-                    if request.root.source_name == unit.file.name() {
-                        request.root.source.clone_from(replacement);
-                    } else if let Some(file) = request
-                        .sources
-                        .iter_mut()
-                        .find(|file| file.source_name == unit.file.name())
-                    {
-                        file.source.clone_from(replacement);
-                    }
+                } else if request.root.source_name == unit.file.name() {
+                    request.root.source.clone_from(replacement);
+                } else if let Some(file) = request
+                    .sources
+                    .iter_mut()
+                    .find(|file| file.source_name == unit.file.name())
+                {
+                    file.source.clone_from(replacement);
                 }
             }
             Self::project(&request, self.zk_enabled)
@@ -1233,16 +1231,14 @@ impl EditorSnapshot {
                     {
                         module.source = repaired;
                     }
-                } else {
-                    if request.root.source_name == unit.file.name() {
-                        request.root.source = repaired;
-                    } else if let Some(file) = request
-                        .sources
-                        .iter_mut()
-                        .find(|file| file.source_name == unit.file.name())
-                    {
-                        file.source = repaired;
-                    }
+                } else if request.root.source_name == unit.file.name() {
+                    request.root.source = repaired;
+                } else if let Some(file) = request
+                    .sources
+                    .iter_mut()
+                    .find(|file| file.source_name == unit.file.name())
+                {
+                    file.source = repaired;
                 }
                 Self::project(&request, self.zk_enabled)
             } else {

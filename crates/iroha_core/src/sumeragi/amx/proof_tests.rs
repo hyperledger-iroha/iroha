@@ -174,7 +174,7 @@ fn persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives() {
 
 #[test]
 fn persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates() {
-    let (mut chain, tx) = chain();
+    let (chain, tx) = chain();
     let budget = chain.state().ivm_execution_budget();
     let limit = budget.limit_bytes();
     let reserved = budget.reserved_bytes();

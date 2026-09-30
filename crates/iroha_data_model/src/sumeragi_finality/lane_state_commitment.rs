@@ -48,7 +48,33 @@ impl SumeragiLaneStateCommitment {
         carrier_height: u64,
         state: &SumeragiLaneState,
     ) -> Result<Self, norito::Error> {
-        if carrier_height == 0
+        if state.custody.len() > crate::sumeragi_lanes::MAX_LANE_CUSTODY_OBLIGATIONS
+            || state
+                .custody
+                .windows(2)
+                .any(|pair| pair[0].incarnation >= pair[1].incarnation)
+            || state.custody.iter().any(|obligation| {
+                obligation.validate().is_err()
+                    || obligation.created_at > carrier_height
+                    || obligation
+                        .retired_at
+                        .is_some_and(|height| height > carrier_height)
+                    || match state
+                        .lanes
+                        .iter()
+                        .find(|lane| lane.incarnation == obligation.incarnation)
+                    {
+                        Some(lane) => {
+                            obligation.retired_at.is_some()
+                                || lane.lane != obligation.lane
+                                || lane.created_at != obligation.created_at
+                                || u32::try_from(lane.committee.len()).ok()
+                                    != Some(obligation.signer_count)
+                        }
+                        None => obligation.retired_at.is_none(),
+                    }
+            })
+            || carrier_height == 0
             || state
                 .lanes
                 .windows(2)
@@ -141,7 +167,7 @@ const _: () =
     assert!(std::mem::align_of::<StatePayload<'_>>() == std::mem::align_of::<SumeragiLaneState>());
 impl norito::core::SerializePayload for StatePayload<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        // The sole canonical SumeragiLaneState payload always emits its four compact field
+        // The sole canonical SumeragiLaneState payload always emits its five compact field
         // lengths. Propagate that known layout usage while forwarding the original bytes.
         norito::core::note_compact_len_emitted();
         std::io::Write::write_all(writer, self.bytes)?;
@@ -180,6 +206,38 @@ mod tests {
             b"lane state fixture",
         )))
     }
+    #[test]
+    fn custody_commitment_binds_policy_and_requires_exact_live_incarnation() {
+        use crate::sumeragi_lanes::{SumeragiLaneCustody, SumeragiLaneCustodySigners};
+        let mut value = state(1);
+        value.custody.push(SumeragiLaneCustody {
+            lane: value.lanes[0].lane,
+            incarnation: value.lanes[0].incarnation,
+            instance: [4; 32],
+            created_at: 1,
+            signer_count: 4,
+            signers: SumeragiLaneCustodySigners::default(),
+            evidence_horizon: 7,
+            slashing_delay: 3,
+            retired_at: None,
+        });
+        let original = SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap();
+        value.custody[0].evidence_horizon += 1;
+        assert_ne!(
+            original,
+            SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap()
+        );
+        value.custody[0].lane = LaneId::new(2);
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+        value.custody[0].lane = LaneId::new(1);
+        value.custody[0].retired_at = Some(2);
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+        value.lanes.clear();
+        SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap();
+        value.custody[0].retired_at = None;
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+    }
+
     fn state(count: u32) -> SumeragiLaneState {
         let mut committee = (1..=4)
             .map(|seed| {
@@ -192,6 +250,7 @@ mod tests {
             .collect::<Vec<_>>();
         committee.sort();
         SumeragiLaneState {
+            custody: Vec::new(),
             lanes: (1..=count)
                 .map(|lane| SumeragiLaneRecord {
                     da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),

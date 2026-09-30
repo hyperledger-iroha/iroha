@@ -279,7 +279,7 @@ fn seeded_state(owner: &AccountId, uaid: UniversalAccountId) -> State {
 fn encrypted_registration_activation_and_claims_refuse_without_state_changes() {
     let owner = checked_account_id();
     let uaid = UniversalAccountId::from_hash(Hash::new(b"refused-owner"));
-    let mut state = seeded_state(&owner, uaid);
+    let state = seeded_state(&owner, uaid);
     let resolver = checked_keypair();
     let mut policy = email_policy(&owner);
     policy.active = true;
@@ -415,7 +415,7 @@ fn identifier_receipt_checks_policy_and_commitment_backends_before_decode() {
 fn phone_policy_registration_preserves_exact_shape_and_attestor_requirements() {
     let owner = checked_account_id();
     let resolver = checked_keypair();
-    let mut state = test_state();
+    let state = test_state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
     let mut tx = block.transaction();
     for (name, normalization, program) in [
@@ -876,7 +876,7 @@ fn verified_binding_and_revoke_update_all_indexes_and_enforce_authority() {
     let owner = checked_account_id();
     let resolver = checked_keypair();
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid"));
-    let mut state = seeded_state(&owner, uaid);
+    let state = seeded_state(&owner, uaid);
     let policy = email_policy(&owner);
     let program = sample_program_policy(&owner, &resolver, &policy.program_id);
     let receipt = claim_receipt(

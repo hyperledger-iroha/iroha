@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(
             error,
             ivm::VMError::ContractAbort {
-                contract: "LiquidityPolicy".to_owned(),
+                contract: "LiquidityPolicy".into(),
                 name: "BelowMinimum".to_owned(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
@@ -719,7 +719,7 @@ mod tests {
         assert_eq!(
             map_vm_error_with_context_to_validation(&vm, &error),
             ValidationFail::ContractRejected(ContractRejection {
-                contract: "LiquidityPolicy".to_owned(),
+                contract: "LiquidityPolicy".into(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
                 name: "BelowMinimum".to_owned(),

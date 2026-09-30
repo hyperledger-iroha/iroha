@@ -192,16 +192,16 @@ explicit source bundle and preserves every file's native source ranges.
 
 For example, these three files form one contract source bundle:
 
-```text
-// app.ko
+```kotodama bundle
+// file: app.ko
 seiyaku App {
     include "./helpers.ko";
     import "./math.ko" as arithmetic;
     view fn answer() -> int { twice(arithmetic::SCALE) }
 }
-// helpers.ko (bare fragment)
+// file: helpers.ko
 fn twice(int _ value) -> int { value + value }
-// math.ko
+// file: math.ko
 module Math { export const int SCALE = 21; }
 ```
 

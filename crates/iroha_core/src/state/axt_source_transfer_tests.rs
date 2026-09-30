@@ -3,32 +3,17 @@
 use super::axt_source_transfer::FinalizedAxtSourceTransferErrorV1 as Error;
 use super::{State, World};
 use crate::kura::tests::CommittedNetworkProofFixture;
-use iroha_crypto::{Hash, KeyPair};
+use iroha_crypto::Hash;
 use iroha_data_model::{
-    account::AccountId,
     asset::id::AssetDefinitionId,
-    block::{
-        BlockHeader, SignedBlock,
-        builder::BlockBuilder,
-        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-        output_budget::ExecutionOutputLimits,
-    },
-    fastpq::{
-        FastpqPublicTransferDeltaV1, TransferDeltaTranscript, TransferSmtWitness,
-        TransferTranscript,
-    },
+    block::SignedBlock,
+    fastpq::{FastpqPublicTransferDeltaV1, TransferDeltaTranscript, TransferSmtWitness},
     nexus::{AxtSourceTransferOccurrenceV1, axt_source_transfer_digest_v1},
-    transaction::{FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use nonzero_ext::nonzero;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::sync::Arc;
 
 const MAX_WORK: u64 = 8;
 const MAX_BYTES: u64 = 4 * 1024 * 1024;

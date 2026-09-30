@@ -196,7 +196,7 @@ pub enum VMError {
     /// Contract requested an application-level abort with a stable numeric code.
     ContractAbort {
         /// Authenticated seiyaku name where the rejection originated.
-        contract: String,
+        contract: Box<str>,
         /// Authenticated symbolic variant name within the declared error type.
         name: String,
         /// Stable nominal error type identity.
@@ -206,7 +206,8 @@ pub enum VMError {
         /// Validated nonzero enum-local variant code.
         code: u32,
         /// Static presentation text authenticated by the originating contract interface.
-        message: Option<String>,
+        /// Its immutable storage keeps this rare diagnostic from inflating every VM result.
+        message: Option<Box<str>>,
     },
     ExceededMaxCycles,
     InvalidMetadata,
@@ -511,6 +512,27 @@ impl StdError for VMError {
 #[cfg(test)]
 mod execution_deferral_tests {
     use super::{ExecutionDeferral, VMError};
+
+    #[test]
+    fn contract_abort_preserves_authenticated_text_and_identity_through_metering() {
+        // Every VM operation carries this result type, including ordinary small failures.
+        assert!(core::mem::size_of::<VMError>() < 128);
+        let rejection = VMError::ContractAbort {
+            contract: "Treasury".into(),
+            name: "InsufficientFunds".into(),
+            error_type: "treasury::Error".into(),
+            schema_hash: [7; 32],
+            code: 18,
+            message: Some("残高が不足しています".into()),
+        };
+        let metered = VMError::metered(123, rejection.clone());
+        assert_eq!(metered.as_unmetered(), &rejection);
+        assert_eq!(
+            rejection.to_string(),
+            "seiyaku aborted with treasury::Error code 18: 残高が不足しています"
+        );
+        assert_eq!(metered.split_metered(), (Some(123), rejection));
+    }
 
     #[test]
     fn local_refusal_never_acquires_a_deterministic_gas_charge() {

@@ -298,6 +298,9 @@ impl FileLaneBlockStore {
 }
 
 impl BlockStore for FileLaneBlockStore {
+    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+        Self::committed_body(self, height)
+    }
     fn height(&self) -> u64 {
         self.state.lock().tip
     }

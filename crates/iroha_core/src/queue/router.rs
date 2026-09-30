@@ -9097,7 +9097,7 @@ mod tests {
         trigger::CanRegisterTrigger,
     };
     use iroha_model_base::metadata::Metadata;
-    use iroha_model_base::peer::PeerId;
+
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::time::TimeSource;

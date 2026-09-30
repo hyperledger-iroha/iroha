@@ -3,11 +3,7 @@
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
 use crate::synthetic_state_snapshots as snapshots;
-use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
-    state::{StateReadOnly, WorldReadOnly},
-};
+use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -15,7 +11,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use snapshots::assert_events;
-use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 // Use a fixed creation time so event fixtures do not depend on wall clock.
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
 fn test_network_id(_label: &[u8]) -> NetworkId {

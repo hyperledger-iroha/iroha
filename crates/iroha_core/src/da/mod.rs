@@ -2261,7 +2261,7 @@ mod tests {
             LaneConfig as ModelLaneConfig, LaneStorageProfile,
         },
     };
-    use iroha_model_base::peer::PeerId;
+
     use iroha_model_base::topology::DataSpaceId;
     use norito::to_bytes;
     use std::{collections::BTreeMap, num::NonZeroU32};

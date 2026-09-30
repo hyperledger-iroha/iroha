@@ -72,6 +72,8 @@ pub struct RepObs {
     pub max_t_retx: Millis,
     /// Highest start level reported (§9.2 adaptation, F15).
     pub max_start_level: u32,
+    /// Highest start level before the scenario's heal boundary (F36's deliberate crash).
+    pub max_start_level_before_heal: u32,
     /// [`Perf::LeaderTurns`]: the replica's uncommitted height and its bound.
     pub turn: Option<Turn>,
 }
@@ -587,9 +589,16 @@ impl World {
             }
             self.oracle.reps[r].checked_cqc = Some(q.clone());
         }
+        if status.start_level > self.oracle.reps[r].max_start_level {
+            self.trace(r, format!("start level increased: {status:?}"));
+        }
         let obs = &mut self.oracle.reps[r];
         obs.max_t_retx = obs.max_t_retx.max(status.t_retx);
         obs.max_start_level = obs.max_start_level.max(status.start_level);
+        if self.now < self.heal_at {
+            obs.max_start_level_before_heal =
+                obs.max_start_level_before_heal.max(status.start_level);
+        }
         if status.committed_height > obs.committed {
             // `t̂` of the committed height's view 0: its start level is within one of the level
             // the node entered the next height with (§9.2), so the next level up bounds it.

@@ -263,6 +263,7 @@ pub struct SubmitVerifiedContractSourceDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceFileDto")]
 pub struct ContractSourceFileDto {
     /// Portable path relative to the submitted source-set root.
     pub source_name: String,
@@ -281,6 +282,7 @@ pub struct ContractSourceFileDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceImportDto")]
 pub struct ContractSourceImportDto {
     /// Source-visible package alias.
     pub alias: String,
@@ -299,6 +301,7 @@ pub struct ContractSourceImportDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourcePackageDto")]
 pub struct ContractSourcePackageDto {
     /// Exact locked identity, including revision when applicable.
     pub identity: String,

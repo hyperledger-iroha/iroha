@@ -82,8 +82,8 @@ only after the global chain has applied `active_from`.
 ### 2.1 Lifecycle record
 
 World holds one `SumeragiLaneState` cell: the lane records (lanes ascending), the autoscale
-samples (§6.1), the height of the last autoscale transition and the incarnation counter. A lane
-record is
+samples (§6.1), the height of the last autoscale transition, the incarnation counter and the
+original staking obligations below. A lane record is
 
 ```text
 SumeragiLaneRecord {
@@ -103,6 +103,36 @@ SumeragiLaneRecord {
 The state is committed by the `G` block that writes it. A fixed lane is created when the policy
 lists it (genesis, or the first block after a `SetParameter` that adds it); an elastic lane by
 autoscale (§6). Lane `0` has no record.
+
+#### Original staking obligations
+
+On an NPoS chain, creation also pins a `SumeragiLaneCustody` row to the exact native
+instance and incarnation. Its sparse, strictly increasing signer indices support the native
+core representation of up to 1024 members, with indices `0..n-1`. This representation does not relax the separate
+authenticated lane-state committee-size and canonical-order checks. Each monetary
+binding commits the original canonical staking owner, universal account, activation height,
+peer and exact retained escrow asset. It never resolves a later registration by public key.
+Missing positive custody makes that original signer forensic-only. Elastic lanes pin global
+validator custody; fixed lanes pin the canonical staking owner selected for their physical
+dataspace at creation. A fixed committee alone grants no authority over a reused global key.
+
+The row uses global creation and retirement heights; native lane heights are not global
+occurrence heights. Live incarnations retain their original registration and pending-unbond
+custody. Retirement at `r = c + A + 1` admits reports through `r + evidence_horizon`
+inclusively, and releases custody only after the mandatory penalty phase at
+`r + evidence_horizon + slashing_delay`. Existing obligations keep the maximum authenticated
+policy fences encountered; a same-block policy extension applies before withdrawal. Unresolved
+committed evidence retains its original row. No later account/key registration inherits it.
+
+At most 4096 original incarnation rows are retained. Exhaustion defers new lane creation while
+existing closing, retirement and ordinary block execution continue. Expired rows are reclaimed
+before creation, and the complete table is included in the ordinary lane-state commitment.
+
+**Open H3 boundary:** the custody ledger and withdrawal fences are prerequisites. Lane evidence
+still needs original authenticated lane ancestry, native-scope attribution and exact original
+custody penalty application; raw lane heights must never enter the global verifier or slashing
+clock. The sparse ledger backing and World clones also still require complete original-pool
+allocation ownership. This slice does not qualify lane offences or resource accounting.
 
 ### 2.2 States
 

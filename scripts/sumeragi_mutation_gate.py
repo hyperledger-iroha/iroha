@@ -671,7 +671,8 @@ def main():
     report_path.write_text(json.dumps(report, indent=1))
     print(json.dumps(summary, indent=1))
     print(f"report: {report_path}")
-    failed = (summary["baseline"] == "fail" or summary["survived"] or summary["error"]
+    failed = (summary["baseline"] not in ("pass", "skipped")
+              or summary["survived"] or summary["error"]
               or (args.strict and summary["killed_by_scenario_only"]))
     return 1 if failed else 0
 

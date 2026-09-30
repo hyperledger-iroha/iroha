@@ -3238,12 +3238,12 @@ impl IVM {
         self.halted = true;
         self.constraint_failed = true;
         self.contract_abort_error = Some(VMError::ContractAbort {
-            contract,
+            contract: contract.into_boxed_str(),
             name,
             error_type,
             schema_hash,
             code,
-            message,
+            message: message.map(String::into_boxed_str),
         });
     }
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
@@ -8416,7 +8416,7 @@ seiyaku Demo {
         assert_eq!(
             vm.contract_abort_error,
             Some(VMError::ContractAbort {
-                contract: "Test".to_owned(),
+                contract: "Test".into(),
                 name: "Rejected".to_owned(),
                 error_type: "test::Error".to_owned(),
                 schema_hash: [0; 32],

@@ -13,7 +13,9 @@ repository.
 The checker intentionally fails closed: the inventory must be well formed,
 every required document must contain source, fence directives and heredocs
 must be understood, misspelled or omitted Kotodama fence labels are rejected,
-and every extracted source must pass ``koto check``.
+and every extracted source must pass the canonical compiler. ``kotodama bundle``
+fences use ``// file: relative.ko`` markers, with the root first; every companion
+must belong to the compiled source closure.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import Sequence
 DEFAULT_MANIFEST = Path("specs/kotodama_v1_docs.json")
 MANIFEST_SCHEMA = 2
 SOURCE_LANGUAGES = frozenset({"ko", "kotodama"})
-SOURCE_DIRECTIVES = frozenset({"zk"})
+SOURCE_DIRECTIVES = frozenset({"zk", "bundle"})
 SOURCE_LANGUAGE_ALIASES = frozenset({"koto"})
 _OPENING_FENCE = re.compile(r"^( {0,3})(?P<fence>`{3,}|~{3,})(?P<info>[^\r\n]*)$")
 _SOURCE_UNIT = re.compile(
@@ -74,6 +76,7 @@ class SourceFence:
     source_line: int
     source: str
     zk: bool
+    bundle: bool = False
 
     @property
     def location(self) -> str:
@@ -294,7 +297,7 @@ def _looks_like_source_language(token: str) -> bool:
     return len(normalised) >= 6 and _edit_distance(normalised, "kotodama") <= 2
 
 
-def _source_mode(info: str, document: Path, line: int) -> bool | None:
+def _source_mode(info: str, document: Path, line: int) -> frozenset[str] | None:
     fields = info.strip().split()
     if not fields:
         return None
@@ -327,7 +330,40 @@ def _source_mode(info: str, document: Path, line: int) -> bool | None:
         raise DocumentationCheckError(
             f"{document}:{line}: duplicate Kotodama fence directive"
         )
-    return "zk" in directives
+    return frozenset(directives)
+
+
+def bundle_sources(fence: SourceFence) -> tuple[tuple[Path, str], ...]:
+    """Split explicit ``// file: relative.ko`` entries; the first file is the root."""
+
+    files: dict[Path, list[str]] = {}
+    current: Path | None = None
+    for line in fence.source.splitlines(keepends=True):
+        if line.startswith("// file:"):
+            name = line.removeprefix("// file:").strip()
+            if (
+                not re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.ko", name)
+                or any(part in {".", ".."} for part in name.split("/"))
+            ):
+                raise DocumentationCheckError(
+                    f"{fence.location}: invalid bundle source path: {name!r}"
+                )
+            current = Path(name)
+            if current in files:
+                raise DocumentationCheckError(
+                    f"{fence.location}: duplicate bundle source: {name}"
+                )
+            files[current] = []
+        elif current is None:
+            if line.strip():
+                raise DocumentationCheckError(
+                    f"{fence.location}: bundle must start with '// file: root.ko'"
+                )
+        else:
+            files[current].append(line)
+    if not files or any(not "".join(lines).strip() for lines in files.values()):
+        raise DocumentationCheckError(f"{fence.location}: bundle has missing or empty sources")
+    return tuple((path, "".join(lines)) for path, lines in files.items())
 
 
 def _without_ko_heredoc_bodies(text: str) -> str:
@@ -430,15 +466,17 @@ def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
             raise DocumentationCheckError(
                 f"{document}:{opening_line}: Kotodama source fence is empty"
             )
-        fences.append(
-            SourceFence(
-                document=document,
-                opening_line=opening_line,
-                source_line=opening_line + 1,
-                source=source,
-                zk=mode,
-            )
+        fence = SourceFence(
+            document=document,
+            opening_line=opening_line,
+            source_line=opening_line + 1,
+            source=source,
+            zk="zk" in mode,
+            bundle="bundle" in mode,
         )
+        if fence.bundle:
+            bundle_sources(fence)
+        fences.append(fence)
         index += 1
 
     for index, raw_line in enumerate(lines):
@@ -688,16 +726,23 @@ def compile_source_fences(
 
     if timeout_seconds <= 0:
         raise DocumentationCheckError("timeout must be positive")
-    groups: dict[tuple[str, bool], list[SourceFence]] = {}
+    groups: dict[tuple[str, bool, bool], list[SourceFence]] = {}
     for fence in fences:
-        groups.setdefault((fence.source, fence.zk), []).append(fence)
+        groups.setdefault((fence.source, fence.zk, fence.bundle), []).append(fence)
 
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="kotodama-doc-fences-") as temporary:
         temporary_root = Path(temporary)
-        for index, ((source, zk), occurrences) in enumerate(groups.items(), start=1):
-            source_path = temporary_root / f"fence-{index:03d}.ko"
-            source_path.write_text(source, encoding="utf-8")
+        for index, ((source, zk, bundle), occurrences) in enumerate(groups.items(), start=1):
+            source_root = temporary_root / f"fence-{index:03d}"
+            source_root.mkdir()
+            files = bundle_sources(occurrences[0]) if bundle else ((Path("main.ko"), source),)
+            for relative, contents in files:
+                path = source_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents, encoding="utf-8")
+            source_path = source_root / files[0][0]
+            source = files[0][1]
             source_unit = _SOURCE_UNIT.search(source)
             if source_unit is not None and source_unit.group("kind") in {
                 "seiyaku",
@@ -717,6 +762,8 @@ def compile_source_fences(
             for command in commands:
                 if zk:
                     command.append("--zk")
+                if bundle:
+                    command.extend(["--source-root", str(source_root)])
                 command.append(str(source_path))
                 try:
                     completed = subprocess.run(
@@ -735,6 +782,28 @@ def compile_source_fences(
                     source_failed = True
                     break
                 if completed.returncode == 0:
+                    # Prove every companion belongs to the compiler's actual source closure.
+                    # Removing an unused file must not silently qualify hidden source text.
+                    for relative, contents in files[1:]:
+                        companion = source_root / relative
+                        companion.unlink()
+                        try:
+                            missing = subprocess.run(
+                                command, cwd=root, check=False, capture_output=True,
+                                text=True, timeout=timeout_seconds,
+                            )
+                            if missing.returncode == 0:
+                                failures.append(
+                                    f"{occurrences[0].location}: bundle source {relative} "
+                                    "is outside the compiled source closure"
+                                )
+                        except (OSError, subprocess.SubprocessError) as error:
+                            failures.append(
+                                f"{occurrences[0].location}: failed to verify bundle source "
+                                f"{relative}: {error}"
+                            )
+                        finally:
+                            companion.write_text(contents, encoding="utf-8")
                     continue
                 output = "\n".join(
                     part.rstrip()

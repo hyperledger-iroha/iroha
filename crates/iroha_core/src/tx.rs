@@ -5332,7 +5332,7 @@ pub mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
-    use iroha_model_base::peer::PeerId;
+
     use iroha_model_base::topology::DataSpaceId;
     use iroha_model_base::{
         topology::DataSpaceId as TestDataSpaceId, topology::LaneId as TestLaneId,

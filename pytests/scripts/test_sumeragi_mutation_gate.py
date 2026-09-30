@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "sumeragi_mutation_gate_under_test", ROOT / "scripts" / "sumeragi_mutation_gate.py"
@@ -42,3 +44,23 @@ def test_actual_availability_boundaries_have_separate_strict_kill_tests():
     for mutation, test in expected.items():
         assert test in gate.BY_ID[mutation].tests
         assert gate.has_switch(mutation)
+
+
+@pytest.mark.parametrize("baseline,expected", [("pass", 0), ("fail", 1), ("error", 1)])
+def test_baseline_failure_cannot_pass_when_every_mutant_is_killed(
+    monkeypatch, tmp_path, baseline, expected
+):
+    monkeypatch.setattr(
+        sys, "argv",
+        ["sumeragi_mutation_gate.py", "--only", "MX1", "--strict", "--fast",
+         "--target-dir", str(tmp_path)],
+    )
+    monkeypatch.setattr(
+        gate, "evaluate_baseline",
+        lambda *_: {"id": "baseline", "verdict": baseline},
+    )
+    monkeypatch.setattr(
+        gate, "evaluate",
+        lambda *_: {"id": "MX1", "verdict": "killed_by_test"},
+    )
+    assert gate.main() == expected

@@ -2329,7 +2329,7 @@ impl Kura {
         }
         let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
         let fingerprint = geometry_catalog_fingerprint(&bindings);
-        let mut journal = self.read_lane_geometry_journal()?;
+        let journal = self.read_lane_geometry_journal()?;
         if let Some(attempted) = configured_baseline {
             if journal.configured_catalog_hash != Some(attempted) {
                 return Err(self.geometry_error(

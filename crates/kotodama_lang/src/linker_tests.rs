@@ -149,7 +149,8 @@ fn package(modules: Vec<ModuleUnit>, exports: &[&str]) -> PackageUnit {
     }
 }
 fn request(root: ModuleUnit, package: PackageUnit) -> LinkRequest {
-    LinkRequest { local_modules: Vec::new(),
+    LinkRequest {
+        local_modules: Vec::new(),
         root,
         imports: vec![ImportBinding {
             alias: "arith".to_owned(),
@@ -416,7 +417,8 @@ fn imported_structs_keep_locked_identity_in_public_and_durable_schemas() {
 }
 #[test]
 fn imported_types_resolve_dependency_signatures_before_identity_order() {
-    let base = SourcePackageUnit { sources: Vec::new(),
+    let base = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "z/base@1.0.0".into(),
         modules: vec![source_module(
             "base.ko",
@@ -425,7 +427,8 @@ fn imported_types_resolve_dependency_signatures_before_identity_order() {
         exports: ["Value".to_owned()].into_iter().collect(),
         imports: Vec::new(),
     };
-    let derived = SourcePackageUnit { sources: Vec::new(),
+    let derived = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "a/derived@1.0.0".into(),
         modules: vec![source_module(
             "derived.ko",
@@ -447,7 +450,8 @@ fn imported_types_resolve_dependency_signatures_before_identity_order() {
 fn same_named_imported_errors_remain_nominally_distinct() {
     let packages = ["left", "right"]
         .into_iter()
-        .map(|name| SourcePackageUnit { sources: Vec::new(),
+        .map(|name| SourcePackageUnit {
+            sources: Vec::new(),
             identity: format!("std/{name}@1.0.0"),
             modules: vec![source_module(
                 "errors.ko",
@@ -493,7 +497,8 @@ fn package_interface_fingerprint_tracks_declared_call_modes() {
 fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
     let base_identity = "std/base@1.0.0".to_owned();
     let derived_identity = "std/derived@1.0.0".to_owned();
-    SourceLinkRequest { sources: Vec::new(),
+    SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".to_owned(),
             source: "seiyaku App { view fn run() -> int { return derived::value(); } }".to_owned(),
@@ -503,7 +508,8 @@ fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
             package: derived_identity.clone(),
         }],
         packages: vec![
-            SourcePackageUnit { sources: Vec::new(),
+            SourcePackageUnit {
+                sources: Vec::new(),
                 identity: base_identity.clone(),
                 modules: vec![SourceModuleUnit {
                     source_name: "base.ko".to_owned(),
@@ -512,12 +518,14 @@ fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
                 exports: BTreeSet::from(["value".to_owned()]),
                 imports: Vec::new(),
             },
-            SourcePackageUnit { sources: Vec::new(),
+            SourcePackageUnit {
+                sources: Vec::new(),
                 identity: derived_identity,
                 modules: vec![SourceModuleUnit {
                     source_name: "derived.ko".to_owned(),
-                    source: "module Derived { export fn value() -> int { return base::value() + 1; } }"
-                        .to_owned(),
+                    source:
+                        "module Derived { export fn value() -> int { return base::value() + 1; } }"
+                            .to_owned(),
                 }],
                 exports: BTreeSet::from(["value".to_owned()]),
                 imports: vec![ImportBinding {
@@ -732,7 +740,8 @@ fn source_graph_unknown_calls_retain_every_exact_resolver_span() {
     let root_source = "seiyaku App { view fn run() -> int { return missing() + also_missing(); } }";
     let error = ModuleBuildGraph::default()
         .link(
-            SourceLinkRequest { sources: Vec::new(),
+            SourceLinkRequest {
+                sources: Vec::new(),
                 root: SourceModuleUnit {
                     source_name: "app.ko".to_owned(),
                     source: root_source.to_owned(),
@@ -771,7 +780,8 @@ fn source_graph_unknown_import_aliases_retain_every_exact_resolved_call_span() {
         "seiyaku App { view fn run() -> int { return missing::one() + other::two(); } }";
     let error = ModuleBuildGraph::default()
         .link(
-            SourceLinkRequest { sources: Vec::new(),
+            SourceLinkRequest {
+                sources: Vec::new(),
                 root: SourceModuleUnit {
                     source_name: "app.ko".to_owned(),
                     source: root_source.to_owned(),
@@ -847,8 +857,14 @@ fn rejects_ambiguous_duplicate_export() {
             ),
             package(
                 vec![
-                    source("a.ko", "module A { export fn value() -> int { return 1; } }"),
-                    source("b.ko", "module B { export fn value() -> int { return 2; } }"),
+                    source(
+                        "a.ko",
+                        "module A { export fn value() -> int { return 1; } }",
+                    ),
+                    source(
+                        "b.ko",
+                        "module B { export fn value() -> int { return 2; } }",
+                    ),
                 ],
                 &["value"],
             ),
@@ -1119,13 +1135,15 @@ fn reused_graph_parses_only_changes_and_rechecks_dependents() {
 }
 #[test]
 fn source_graph_accumulates_independent_parse_and_resolution_failures() {
-    let request = |root_source: &str, module_source: &str| SourceLinkRequest { sources: Vec::new(),
+    let request = |root_source: &str, module_source: &str| SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".to_owned(),
             source: root_source.to_owned(),
         },
         imports: Vec::new(),
-        packages: vec![SourcePackageUnit { sources: Vec::new(),
+        packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "example/math@1.0.0".to_owned(),
             modules: vec![SourceModuleUnit {
                 source_name: "src/lib.ko".to_owned(),
@@ -1171,7 +1189,8 @@ fn source_graph_accumulates_independent_parse_and_resolution_failures() {
 }
 #[test]
 fn linked_typed_hir_retains_path_and_order_stable_distinct_source_ids() {
-    let request = transitive_source_request("module Base { export fn value() -> int { return 1; } }");
+    let request =
+        transitive_source_request("module Base { export fn value() -> int { return 1; } }");
     let mut reordered = request.clone();
     reordered.packages.reverse();
     reordered.root.source_name = r".\app.ko".to_owned();
@@ -1287,13 +1306,15 @@ fn source_graph_rejects_excessive_module_count_before_parsing() {
             source: "not parsed".to_owned(),
         })
         .collect();
-    let request = SourceLinkRequest { sources: Vec::new(),
+    let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "root.ko".to_owned(),
             source: "also not parsed".to_owned(),
         },
         imports: Vec::new(),
-        packages: vec![SourcePackageUnit { sources: Vec::new(),
+        packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "oversized@1".to_owned(),
             modules,
             exports: BTreeSet::new(),
@@ -1306,7 +1327,8 @@ fn source_graph_rejects_excessive_module_count_before_parsing() {
 }
 #[test]
 fn source_graph_rejects_excessive_aggregate_bytes_before_parsing() {
-    let request = SourceLinkRequest { sources: Vec::new(),
+    let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "root.ko".to_owned(),
             source: "x".repeat(MAX_MODULE_GRAPH_SOURCE_BYTES + 1),
@@ -1331,7 +1353,8 @@ fn graph_fingerprint_is_order_stable_and_binds_exports() {
         source_name: "app.ko".to_owned(),
         source: "seiyaku App { view fn run() -> int { return arith::value(); } }".to_owned(),
     };
-    let package = SourcePackageUnit { sources: Vec::new(),
+    let package = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "std/math@1.0.0".to_owned(),
         modules: vec![SourceModuleUnit {
             source_name: "math.ko".to_owned(),
@@ -1340,7 +1363,8 @@ fn graph_fingerprint_is_order_stable_and_binds_exports() {
         exports: ["value".to_owned()].into_iter().collect(),
         imports: Vec::new(),
     };
-    let left = SourceLinkRequest { sources: Vec::new(),
+    let left = SourceLinkRequest {
+        sources: Vec::new(),
         root: root.clone(),
         imports: vec![ImportBinding {
             alias: "arith".to_owned(),
@@ -1369,7 +1393,8 @@ fn graph_fingerprint_is_order_stable_and_binds_exports() {
     );
 }
 fn publish_package(modules: Vec<SourceModuleUnit>, exports: &[&str]) -> SourcePackageUnit {
-    SourcePackageUnit { sources: Vec::new(),
+    SourcePackageUnit {
+        sources: Vec::new(),
         identity: "local/quotes@1.0.0".to_owned(),
         modules,
         exports: exports.iter().map(|name| (*name).to_owned()).collect(),
@@ -1464,7 +1489,8 @@ fn package_graph_validates_unique_typed_export_and_locked_call() {
     });
     let request = SourcePackageGraphRequest {
         package: local,
-        dependencies: vec![SourcePackageUnit { sources: Vec::new(),
+        dependencies: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: dependency_identity,
             modules: vec![source_module(
                 "src/lib.ko",
@@ -1508,7 +1534,8 @@ fn package_interface_fingerprint_tracks_types_not_function_bodies() {
 #[test]
 fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
     let graph = ModuleBuildGraph::default();
-    let request = SourceLinkRequest { sources: Vec::new(),
+    let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module(
             "contracts/app.ko",
             "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() -> int { return reward(); } }",
@@ -1517,7 +1544,8 @@ fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
             alias: "calc".to_owned(),
             package: "demo/math@1.0.0".to_owned(),
         }],
-        packages: vec![SourcePackageUnit { sources: Vec::new(),
+        packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "demo/math@1.0.0".to_owned(),
             modules: vec![source_module(
                 "tests/unit.ko",
@@ -1591,7 +1619,8 @@ fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
 }
 #[test]
 fn standalone_test_graph_rejects_target_duplicates_and_source_budget_overflow() {
-    let request = SourceLinkRequest { sources: Vec::new(),
+    let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module("app.ko", "seiyaku App { fn value() -> int { return 1; } }"),
         imports: Vec::new(),
         packages: Vec::new(),
@@ -1627,7 +1656,8 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
     let dependency_identity = "std/math@1.0.0".to_owned();
     let output = ModuleBuildGraph::default()
         .build_test_project(
-            SourceLinkRequest { sources: Vec::new(),
+            SourceLinkRequest {
+                sources: Vec::new(),
                 root: source_module(
                     "tests/unit.ko",
                     r#"
@@ -1644,7 +1674,8 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
                     alias: "calc".to_owned(),
                     package: dependency_identity.clone(),
                 }],
-                packages: vec![SourcePackageUnit { sources: Vec::new(),
+                packages: vec![SourcePackageUnit {
+                    sources: Vec::new(),
                     identity: dependency_identity,
                     modules: vec![source_module(
                         "src/lib.ko",
@@ -1684,7 +1715,8 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
 #[test]
 fn package_and_test_graphs_handoff_from_a_small_caller() {
     let expression = boundary_list_expression();
-    let module_source = format!("module Deep {{ export fn value() {{ let nested = {expression}; }} }}");
+    let module_source =
+        format!("module Deep {{ export fn value() {{ let nested = {expression}; }} }}");
     let test_source = format!(
         "seiyaku Deep {{ hajimari() {{ let nested = {expression}; }} #[test] fn boundary() {{ let nested = {expression}; }} }}"
     );
@@ -1709,7 +1741,8 @@ fn package_and_test_graphs_handoff_from_a_small_caller() {
 
             let output = graph
                 .build_test_project(
-                    SourceLinkRequest { sources: Vec::new(),
+                    SourceLinkRequest {
+                        sources: Vec::new(),
                         root: source_module("tests/deep.ko", &test_source),
                         imports: Vec::new(),
                         packages: Vec::new(),
@@ -1865,7 +1898,10 @@ fn package_graph_rejects_duplicate_symbols_and_module_names() {
             SourcePackageGraphRequest {
                 package: publish_package(
                     vec![
-                        source_module("a.ko", "module Quotes { export fn quote() -> int { return 1; } }"),
+                        source_module(
+                            "a.ko",
+                            "module Quotes { export fn quote() -> int { return 1; } }",
+                        ),
                         source_module("b.ko", "module Quotes { fn other() -> int { return 2; } }"),
                     ],
                     &["quote"],
@@ -1978,7 +2014,8 @@ fn package_graph_rejects_import_cycles_without_call_cycles() {
         .validate_package(
             SourcePackageGraphRequest {
                 package: local,
-                dependencies: vec![SourcePackageUnit { sources: Vec::new(),
+                dependencies: vec![SourcePackageUnit {
+                    sources: Vec::new(),
                     identity: dependency_identity,
                     modules: vec![source_module(
                         "math.ko",
@@ -2048,10 +2085,12 @@ fn package_fingerprint_normalizes_portable_logical_source_paths() {
 }
 #[test]
 fn source_graph_fingerprint_normalizes_root_and_package_paths() {
-    let left = SourceLinkRequest { sources: Vec::new(),
+    let left = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module("src/app.ko", "not parsed"),
         imports: Vec::new(),
-        packages: vec![SourcePackageUnit { sources: Vec::new(),
+        packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "std/arith@1.0.0".to_owned(),
             modules: vec![source_module("src/lib.ko", "also not parsed")],
             exports: BTreeSet::new(),
@@ -2072,7 +2111,8 @@ fn invalid_root_paths_fail_closed_before_any_parse_or_link_attempt() {
         let graph = ModuleBuildGraph::default();
         let error = graph
             .link(
-                SourceLinkRequest { sources: Vec::new(),
+                SourceLinkRequest {
+                    sources: Vec::new(),
                     root: source_module(&source_name, "not parsed"),
                     imports: Vec::new(),
                     packages: Vec::new(),
@@ -2140,7 +2180,8 @@ fn root_path_is_canonical_in_parse_diagnostics() {
     let graph = ModuleBuildGraph::default();
     let error = graph
         .link(
-            SourceLinkRequest { sources: Vec::new(),
+            SourceLinkRequest {
+                sources: Vec::new(),
                 root: source_module(r".\src\nested\..\app.ko", "@"),
                 imports: Vec::new(),
                 packages: Vec::new(),

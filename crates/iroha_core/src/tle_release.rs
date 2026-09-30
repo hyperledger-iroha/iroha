@@ -578,7 +578,7 @@ pub(crate) mod tests {
     };
     use iroha_crypto::{
         Hash, HashOf,
-        threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
+        threshold_bls::AdaptiveThresholdBlsSecretShare,
         timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1},
     };
     use iroha_data_model::{

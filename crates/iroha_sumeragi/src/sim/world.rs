@@ -18,8 +18,8 @@ use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
     driver::{
-        Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec,
-        encode_tx_flagged, payload_mints,
+        Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec, encode_tx_flagged,
+        payload_mints,
     },
     host::{Done, Host, Op, Start, fake_host},
     net::{Fate, NetConfig, Nic, Packet, approx_size, class_of, lane},
@@ -1919,7 +1919,7 @@ impl World {
         self.schedule(next, Ev::TxGen(inst));
     }
 
-    fn offer_tx(&mut self, r: usize, id: u64, tx: Vec<u8>) {
+    pub(super) fn offer_tx(&mut self, r: usize, id: u64, tx: Vec<u8>) {
         let rep = &mut self.replicas[r];
         if rep.quarantine.contains(&id) {
             return;
