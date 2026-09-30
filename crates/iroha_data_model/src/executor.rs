@@ -153,7 +153,6 @@ mod model {
     /// Manifest-authenticated application error returned by a contract.
     #[derive(
         Debug,
-        derive_more::Display,
         Clone,
         PartialEq,
         Eq,
@@ -162,9 +161,10 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
+        crate::DeriveJsonSerialize,
+        crate::DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
-    #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
-    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
@@ -177,6 +177,21 @@ mod model {
         pub name: String,
         /// Explicit stable non-zero application error code.
         pub code: u32,
+        /// Static presentation text authenticated by the originating contract interface.
+        pub message: Option<String>,
+    }
+    impl core::fmt::Display for ContractRejection {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(
+                f,
+                "Seiyaku {} rejected with {}::{} ({})",
+                self.contract, self.error_type, self.name, self.code
+            )?;
+            if let Some(message) = &self.message {
+                write!(f, ": {message}")?;
+            }
+            Ok(())
+        }
     }
     /// Structured reasons for IVM admission/static validation failure.
     #[derive(
@@ -481,6 +496,7 @@ mod tests {
             schema_hash: [7; 32],
             name: "不足".into(),
             code: 1,
+            message: None,
         };
         let encoded = norito::encode_canonical(&rejection).unwrap();
         let decoded = norito::decode_canonical::<ContractRejection>(&encoded).unwrap();
@@ -494,6 +510,16 @@ mod tests {
         assert_eq!(decoded, rejection);
         assert!(json.contains("error_type") && json.contains("schema_hash"));
         assert!(!json.contains("namespace"));
+        let explained = ContractRejection {
+            message: Some("残高が不足しています".into()),
+            ..rejection
+        };
+        assert!(explained.to_string().ends_with(": 残高が不足しています"));
+        let encoded = norito::encode_canonical(&explained).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ContractRejection>(&encoded).unwrap(),
+            explained
+        );
     }
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {

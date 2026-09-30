@@ -1,4 +1,4 @@
-import { normalizeContractErrorTypeV1 } from "./contractErrorTypes.js";
+import { normalizeContractErrorTypeV1, normalizeContractErrorMessagesV1 } from "./contractErrorTypes.js";
 import { createNoritoRecordDecoder, createNoritoRecordEncoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
@@ -353,6 +353,7 @@ export function createNoritoContractCodecs(
     "entrypoints",
     "states",
     "error_types",
+    "error_messages",
     "kotoba",
     "provenance",
   ]);
@@ -360,6 +361,7 @@ export function createNoritoContractCodecs(
   function contractManifestSignatureFields(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, CONTRACT_MANIFEST_KEYS, context);
+    normalizeContractErrorMessagesV1(value.error_messages, value.error_types, `${context}.error_messages`);
     return [
       [encodeOptionValue(value.seiyaku_name, encodeNoritoStringValue, `${context}.seiyaku_name`)],
       [encodeOptionValue(value.code_hash, encodeHashValue, `${context}.code_hash`)],
@@ -386,6 +388,13 @@ export function createNoritoContractCodecs(
           value.error_types ?? null,
           encodeContractErrorTypeDescriptorsValue,
           `${context}.error_types`,
+        ),
+      ],
+      [
+        encodeOptionValue(
+          value.error_messages ?? null,
+          encodeContractErrorMessagesValue,
+          `${context}.error_messages`,
         ),
       ],
       [
@@ -425,12 +434,15 @@ export function createNoritoContractCodecs(
     ["entrypoints", decodeEntrypointDescriptorsValue, 1],
     ["states", decodeStateDescriptorsValue, 1],
     ["error_types", decodeContractErrorTypeDescriptorsValue, 1],
+    ["error_messages", decodeContractErrorMessagesValue, 1],
     ["kotoba", decodeKotobaTranslationEntriesValue, 1],
     ["provenance", decodeManifestProvenanceValue, 1],
   ];
 
   function decodeContractManifestValue(payload, context) {
-    return decodeRecordFields(payload, context, ContractManifestValueFields);
+    const value = decodeRecordFields(payload, context, ContractManifestValueFields);
+    normalizeContractErrorMessagesV1(value.error_messages, value.error_types, `${context}.error_messages`);
+    return value;
   }
 
   function encodeAccessSetHintsValue(value, context) {
@@ -961,6 +973,28 @@ export function createNoritoContractCodecs(
         const variant = decodeStructFields(payload, label, ["name", "code"]);
         return { name: decodeStringValue(variant.name, `${label}.name`), code: decodeU32Value(variant.code, `${label}.code`) };
       }, `${context}.variants`),
+    }, context);
+  }
+
+  function encodeContractErrorMessagesValue(value, context) {
+    assertArrayValue(value, context);
+    return encodeNoritoVec(value, (entry, index) => {
+      const label = `${context}[${index}]`;
+      assertOnlyObjectKeys(entry, ["error_type", "code", "message"], label);
+      return encodeStructValue([
+        [encodeNoritoStringValue(entry.error_type)],
+        [encodeU32Value(entry.code, `${label}.code`)],
+        [encodeNoritoStringValue(entry.message)],
+      ]);
+    });
+  }
+
+  function decodeContractErrorMessagesValue(payload, context) {
+    return decodeNoritoVec(payload, (entry, index) => {
+      const label = `${context}[${index}]`;
+      const fields = decodeStructFields(entry, label, ["error_type", "code", "message"]);
+      return { error_type: decodeStringValue(fields.error_type, `${label}.error_type`),
+        code: decodeU32Value(fields.code, `${label}.code`), message: decodeStringValue(fields.message, `${label}.message`) };
     }, context);
   }
 

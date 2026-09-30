@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildRegisterSmartContractCodeInstruction } from "../src/instructionBuilders.js";
 import { ToriiClient } from "../src/toriiClient.js";
-import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../src/contractErrorTypes.js";
+import { normalizeContractErrorMessagesV1, normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../src/contractErrorTypes.js";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
 import { isCanonicalKotodamaStateTypeName, isCanonicalKotodamaStructName } from "../src/kotodamaIdentifiers.js";
 import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
@@ -78,12 +78,14 @@ test("native Norito manifest codecs roundtrip Unit and nominal error schemas", a
   const fixture = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const manifest = structuredClone(fixture.manifest);
   manifest.error_types = [error];
+  manifest.error_messages = [{ error_type: error.identity, code: 1, message: "残高が不足しています" }];
   manifest.entrypoints[0].return_type = `Result<(), ${error.identity}>`;
   manifest.entrypoints[0].return_schema = returnSchema;
   const instruction = { RegisterSmartContractCode: { manifest } };
   const encoded = noritoEncodeInstruction(instruction, 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_types, [error]);
+  assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_messages, manifest.error_messages);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, returnSchema);
   assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
@@ -203,4 +205,19 @@ test("manifest instruction encoding and decoding reject unavailable native bindi
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("static error messages bind declared variants without changing nominal schemas", () => {
+  const entry = { error_type: error.identity, code: 1, message: "残高が不足しています" };
+  assert.deepEqual(normalizeContractErrorMessagesV1([entry], [error]), [entry]);
+  assert.equal(normalizeContractErrorMessagesV1(null, [error]), null);
+  for (const mutation of [
+    { ...entry, error_type: "Other::Failure" }, { ...entry, code: 3 },
+    { ...entry, message: " \n\t" }, { ...entry, message: "é".repeat(2049) },
+  ]) assert.throws(() => normalizeContractErrorMessagesV1([mutation], [error]), TypeError);
+  assert.throws(() => normalizeContractErrorMessagesV1([entry, entry], [error]), /sorted and unique/u);
+  assert.deepEqual(normalizeContractErrorMessagesV1([{ ...entry, message: "é".repeat(2048) }], [error])[0].message.length, 2048);
+  const manifest = { error_types: [error], error_messages: [entry] };
+  validateManifestErrorTypeBindingsV1(manifest);
+  assert.deepEqual(manifest.error_types, [error]);
 });

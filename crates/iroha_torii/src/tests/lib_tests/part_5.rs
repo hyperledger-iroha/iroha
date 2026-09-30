@@ -1355,6 +1355,7 @@ fn contract_rejection_maps_to_unprocessable_entity() {
         schema_hash: [0; 32],
         name: "BelowMinimum".to_owned(),
         code: 18,
+        message: None,
     };
     assert_eq!(
         Error::Query(ValidationFail::ContractRejected(rejection)).status_code(),

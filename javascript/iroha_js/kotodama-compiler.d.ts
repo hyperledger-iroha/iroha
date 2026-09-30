@@ -1,3 +1,16 @@
+/** One immutable source file; paths are relative to their owning source root. */
+export interface KotodamaCompilerSourceFile { sourceName: string; source: string }
+/** An already locked package alias, resolved without network access. */
+export interface KotodamaCompilerSourceImport { alias: string; package: string }
+/** Complete immutable inventory for one locked dependency package. */
+export interface KotodamaCompilerSourcePackage {
+  identity: string;
+  modules: ReadonlyArray<KotodamaCompilerSourceFile>;
+  sources?: ReadonlyArray<KotodamaCompilerSourceFile>;
+  exports: ReadonlyArray<string>;
+  imports?: ReadonlyArray<KotodamaCompilerSourceImport>;
+}
+
 export type KotodamaCompilerDiagnosticPhase =
   | "lex"
   | "parse"
@@ -221,6 +234,7 @@ export interface KotodamaCompiledManifestMetadata {
   } | null;
   states: KotodamaCompiledStateDescriptor[];
   error_types: KotodamaCompiledErrorTypeDescriptor[] | null;
+  error_messages?: ReadonlyArray<{ error_type: string; code: number; message: string }> | null;
   kotoba: KotodamaCompiledKotobaEntry[] | null;
   /** Signed provenance is not accepted until its exact V1 message can be verified. */
   provenance: null;
@@ -229,6 +243,10 @@ export interface KotodamaCompiledManifestMetadata {
 export interface KotodamaCompilerRequestOptions {
   /** Logical UTF-8 source path preserved in diagnostics and hash-keyed sidecars. */
   sourceName?: string;
+  /** Explicit companion files for include/import; paths are relative to the source-set root. */
+  sources?: ReadonlyArray<KotodamaCompilerSourceFile>;
+  imports?: ReadonlyArray<KotodamaCompilerSourceImport>;
+  packages?: ReadonlyArray<KotodamaCompilerSourcePackage>;
   /** Select the canonical ZK contract policy required by `Secret<T>`. */
   zk?: boolean;
 }
@@ -237,6 +255,9 @@ export interface KotodamaCompilerRequestOptions {
 export interface KotodamaCompilerRequest {
   source: string;
   sourceName?: string;
+  sources?: ReadonlyArray<KotodamaCompilerSourceFile>;
+  imports?: ReadonlyArray<KotodamaCompilerSourceImport>;
+  packages?: ReadonlyArray<KotodamaCompilerSourcePackage>;
   zk: boolean;
 }
 

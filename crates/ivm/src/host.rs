@@ -75,7 +75,7 @@ pub(crate) fn request_nominal_contract_abort(
     if tlv.type_id != PointerType::NoritoBytes || tlv.payload.len() > 64 * 1024 {
         return Err(VMError::NoritoInvalid);
     }
-    let gas = DEBUG_GAS.saturating_add(u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX));
+    let descriptor_len = tlv.payload.len();
     let descriptor: iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor =
         decode_canonical_norito(tlv.payload)?;
     if !descriptor.validate()
@@ -96,14 +96,29 @@ pub(crate) fn request_nominal_contract_abort(
         .ok_or(VMError::NoritoInvalid)?
         .name
         .clone();
+    let message = contract_abort_message(vm, &descriptor.identity, code).map(str::to_owned);
+    let gas = contract_abort_gas(descriptor_len, message.as_deref());
     vm.request_contract_abort(
         contract,
         name,
         descriptor.identity.clone(),
         descriptor.schema_hash(),
         code,
+        message,
     );
     Ok(gas)
+}
+fn contract_abort_message<'a>(vm: &'a IVM, identity: &str, code: u32) -> Option<&'a str> {
+    let messages = &vm.contract_interface()?.error_messages;
+    let index = messages
+        .binary_search_by(|entry| (entry.error_type.as_str(), entry.code).cmp(&(identity, code)))
+        .ok()?;
+    Some(messages[index].message.as_str())
+}
+fn contract_abort_gas(descriptor_bytes: usize, message: Option<&str>) -> u64 {
+    DEBUG_GAS
+        .saturating_add(u64::try_from(descriptor_bytes).unwrap_or(u64::MAX))
+        .saturating_add(message.map_or(0, |text| text.len() as u64))
 }
 /// Runtime record of logical state touches performed by a host during a transaction.
 #[derive(Clone, Default, Debug)]
@@ -1596,7 +1611,11 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
             if len > 64 * 1024 {
                 return Err(VMError::NoritoInvalid);
             }
-            DEBUG_GAS.saturating_add(u64::try_from(len).unwrap_or(u64::MAX))
+            let tlv = vm.validate_tlv(DefaultHost::resolve_code_tlv_addr(vm, vm.register(10)))?;
+            let descriptor: iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor =
+                decode_canonical_norito(tlv.payload)?;
+            let code = u32::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+            contract_abort_gas(len, contract_abort_message(vm, &descriptor.identity, code))
         }
         syscalls::SYSCALL_DEBUG_LOG => {
             let pointer = vm.register(10);

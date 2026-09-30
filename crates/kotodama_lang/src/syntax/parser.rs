@@ -118,13 +118,53 @@ impl ProgramParseOutput {
 /// Parse one source file once, producing both its lossless CST and compiler AST.
 #[must_use]
 pub fn parse_program(source: &SourceFile, budget: FrontendBudget) -> ProgramParseOutput {
-    parse_program_internal(source, budget, true)
+    parse_program_internal(source, budget, true, Some(false))
+}
+/// Parse bare included declarations while retaining their original source offsets.
+#[must_use]
+pub fn parse_fragment_program(source: &SourceFile, budget: FrontendBudget) -> ProgramParseOutput {
+    parse_program_internal(source, budget, true, Some(true))
+}
+/// Parse a full source unit or a bare declaration file for source formatting.
+///
+/// The first significant token selects the grammar; lexing still runs only once.
+#[must_use]
+pub fn parse_source_or_fragment(source: &SourceFile, budget: FrontendBudget) -> ProgramParseOutput {
+    parse_program_internal(source, budget, true, None)
 }
 pub(crate) fn parse_spanned_program(
     source: &SourceFile,
     budget: FrontendBudget,
 ) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
-    let output = parse_program_internal(source, budget, false);
+    parse_spanned_program_mode(source, budget, false)
+}
+pub(crate) fn parse_spanned_fragment_program(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
+    parse_spanned_program_mode(source, budget, true)
+}
+pub(crate) fn parse_spanned_source_or_fragment(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
+    spanned_output(parse_program_internal(source, budget, false, None))
+}
+fn parse_spanned_program_mode(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    fragment: bool,
+) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
+    spanned_output(parse_program_internal(
+        source,
+        budget,
+        false,
+        Some(fragment),
+    ))
+}
+fn spanned_output(
+    output: ProgramParseOutput,
+) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
     match (output.sourced_program, output.ast_facts) {
         (Some(program), Some(facts)) => Ok((
             crate::spanned_ast::SpannedProgram { program, facts },
@@ -137,11 +177,18 @@ fn parse_program_internal(
     source: &SourceFile,
     budget: FrontendBudget,
     produce_plain_program: bool,
+    fragment: Option<bool>,
 ) -> ProgramParseOutput {
     let lexed = lex(source, budget);
     let lossless_tokens = lexed.tokens.clone();
     let (lowered_tokens, mut lexical_diagnostics, mut omitted_lexical_diagnostics) =
         crate::lexer::lower_lexed_recovering_with_omissions(source, budget, lexed);
+    let fragment = fragment.unwrap_or_else(|| {
+        !matches!(
+            lowered_tokens.first().map(|token| &token.kind),
+            Some(crate::lexer::TokenKind::Seiyaku | crate::lexer::TokenKind::Module)
+        )
+    });
     let lexical_failure = !lexical_diagnostics.is_empty() || omitted_lexical_diagnostics != 0;
     let resource_failure = lexical_diagnostics
         .iter()
@@ -166,7 +213,7 @@ fn parse_program_internal(
         )
     } else {
         match crate::parser::validate_nesting(source, budget, &lowered_tokens) {
-            Ok(()) => match parse_with_bounded_stack(source, budget, &lowered_tokens) {
+            Ok(()) => match parse_with_bounded_stack(source, budget, &lowered_tokens, fragment) {
                 Ok(parsed) => {
                     let (program, sourced_program, ast_facts) =
                         parsed.spanned.map_or((None, None, None), |spanned| {
@@ -270,20 +317,26 @@ fn parse_with_bounded_stack(
     source: &SourceFile,
     budget: FrontendBudget,
     tokens: &[crate::lexer::Token],
+    fragment: bool,
 ) -> Result<crate::parser::GrammarParseOutput, DiagnosticBundle> {
+    let parse = || {
+        if fragment {
+            crate::parser::parse_with_syntax_mode(source, budget, tokens, true)
+        } else {
+            crate::parser::parse_with_syntax(source, budget, tokens)
+        }
+    };
     if crate::session::compiler_worker_active() {
         #[cfg(test)]
         crate::parser::record_direct_cst_lowering();
-        return Ok(crate::parser::parse_with_syntax(source, budget, tokens));
+        return Ok(parse());
     }
     let _permit = acquire_parser_worker();
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("kotodama-parser".to_owned())
             .stack_size(PARSER_STACK_BYTES)
-            .spawn_scoped(scope, || {
-                crate::parser::parse_with_syntax(source, budget, tokens)
-            });
+            .spawn_scoped(scope, parse);
         let worker = match worker {
             Ok(worker) => worker,
             Err(_) => {

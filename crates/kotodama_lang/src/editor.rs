@@ -1,14 +1,13 @@
 //! Immutable compiler-owned editor analysis. Navigation uses resolved identities, never spelling scans.
 //!
 //! Recovery supplies completion candidates only. An incomplete buffer cannot produce a compilable
-//! recovered AST, a rename edit, or a claimed cross-file reference. Locked imports are the sole
-//! authority for cross-file symbols; this module never reads the filesystem.
+//! recovered AST, a rename edit, or a claimed cross-file reference. The explicit source and locked
+//! import graph authorizes cross-file symbols; this module never reads the filesystem.
 use crate::{
     ast::ParameterCallMode,
     lexer::{Token, TokenKind},
     linker::{
-        ImportBinding, LinkRequest, LinkerOptions, ModuleBuildGraph, ModuleUnit, PackageUnit,
-        SourceLinkRequest, TypedLinker,
+        ImportBinding, LinkerOptions, ModuleBuildGraph, ModuleUnit, SourceLinkRequest, TypedLinker,
     },
     resolved::{
         BindingId, ResolvedCallTarget, ResolvedProgram, ResolvedSymbolKind, ResolvedTarget,
@@ -155,17 +154,68 @@ struct Occurrence {
 }
 struct EditorUnit {
     file: SourceFile,
+    owner: SourceId,
+    local_imports: BTreeMap<String, SourceId>,
+    error_messages: BTreeMap<(String, String), String>,
     tokens: Vec<Token>,
     facts: AstFacts,
     resolved: Option<ResolvedProgram>,
     imports: Vec<ImportBinding>,
     package: Option<String>,
     exports: BTreeSet<String>,
+    manifest_exports: BTreeSet<String>,
     binding_types: BTreeMap<BindingId, Type>,
     typed_nodes: Vec<TypedHirNode>,
     signatures: BTreeMap<String, FunctionSignature>,
-    error_types:
-        BTreeMap<String, iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor>,
+}
+fn source_error_messages(program: &crate::ast::Program) -> BTreeMap<(String, String), String> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let crate::ast::Item::ErrorEnum(error) = item {
+                Some(error)
+            } else {
+                None
+            }
+        })
+        .flat_map(|error| {
+            error.variants.iter().filter_map(|variant| {
+                variant
+                    .message
+                    .as_ref()
+                    .map(|message| ((error.name.clone(), variant.name.clone()), message.clone()))
+            })
+        })
+        .collect()
+}
+fn source_path_at(unit: &EditorUnit, range: SourceRange) -> Option<(String, SourceRange)> {
+    let mut tokens = unit
+        .tokens
+        .iter()
+        .skip_while(|token| token.range.start < range.range.start);
+    let first = tokens.next()?;
+    let TokenKind::Ident(name) = &first.kind else {
+        return None;
+    };
+    let mut path = name.clone();
+    let mut terminal = first.range;
+    loop {
+        let Some(separator) = tokens.next() else {
+            break;
+        };
+        if !matches!(separator.kind, TokenKind::ColonColon) {
+            break;
+        }
+        let Some(next) = tokens.next() else { break };
+        let TokenKind::Ident(name) = &next.kind else {
+            break;
+        };
+        path.push_str("::");
+        path.push_str(name);
+        terminal = next.range;
+    }
+    Some((path, SourceRange::new(unit.file.id(), terminal)))
 }
 /// A bounded, immutable source-graph snapshot used by every semantic editor operation.
 #[derive(Default)]
@@ -204,51 +254,95 @@ impl EditorSnapshot {
             let Ok(request) = ModuleBuildGraph::editor_request(request) else {
                 return Self::default();
             };
-            let keys = std::iter::once(format!("root\0{}", request.root.source_name))
-                .chain(request.packages.iter().flat_map(|package| {
-                    package.modules.iter().map(|module| {
-                        format!("package\0{}\0{}", package.identity, module.source_name)
-                    })
-                }))
-                .collect::<Vec<_>>();
-            let ids = crate::linker::stable_source_ids(&keys);
             let mut snapshot = Self {
                 complete: true,
                 zk_enabled,
+                project_request: Some(request.clone()),
                 ..Self::default()
             };
-            snapshot.project_request = Some(request.clone());
-            snapshot.add_unit(
-                SourceFile::new(
-                    ids[0],
-                    request.root.source_name.as_str(),
-                    &request.root.source,
-                ),
-                request.imports.clone(),
-                None,
-                BTreeSet::new(),
-                zk_enabled,
-            );
-            let mut index = 1;
-            for package in &request.packages {
-                for module in &package.modules {
-                    snapshot.add_unit(
+            let graph = ModuleBuildGraph::default();
+            let resolved_request = graph.resolve_sources(request.clone());
+            if let Ok(resolved) = &resolved_request {
+                let roots = std::iter::once(&resolved.root)
+                    .chain(&resolved.local_modules)
+                    .collect::<Vec<_>>();
+                for module in &roots {
+                    snapshot.add_resolved_unit(
+                        module,
+                        &roots,
+                        &request.imports,
+                        None,
+                        &BTreeSet::new(),
+                    );
+                }
+                for package in &resolved.packages {
+                    let modules = package.modules.iter().collect::<Vec<_>>();
+                    for module in &modules {
+                        snapshot.add_resolved_unit(
+                            module,
+                            &modules,
+                            &package.imports,
+                            Some(&package.identity),
+                            &package.exports,
+                        );
+                    }
+                }
+            } else {
+                let files =
+                    std::iter::once((None, &request.root, &request.imports, BTreeSet::new()))
+                        .chain(
+                            request
+                                .sources
+                                .iter()
+                                .map(|file| (None, file, &request.imports, BTreeSet::new())),
+                        )
+                        .chain(request.packages.iter().flat_map(|package| {
+                            package
+                                .modules
+                                .iter()
+                                .chain(&package.sources)
+                                .map(move |file| {
+                                    (
+                                        Some(package.identity.as_str()),
+                                        file,
+                                        &package.imports,
+                                        package.exports.clone(),
+                                    )
+                                })
+                        }))
+                        .collect::<Vec<_>>();
+                let keys = files
+                    .iter()
+                    .map(|(package, file, _, _)| {
+                        format!("{}\0{}", package.unwrap_or("root"), file.source_name)
+                    })
+                    .collect::<Vec<_>>();
+                for ((package, file, imports, exports), id) in files
+                    .into_iter()
+                    .zip(crate::linker::stable_source_ids(&keys))
+                {
+                    let source = if let Some(package) = package {
                         SourceFile::new_in_package(
-                            ids[index],
-                            package.identity.as_str(),
-                            module.source_name.as_str(),
-                            &module.source,
-                        ),
-                        package.imports.clone(),
-                        Some(package.identity.clone()),
-                        package.exports.clone(),
+                            id,
+                            package,
+                            file.source_name.as_str(),
+                            file.source.as_str(),
+                        )
+                    } else {
+                        SourceFile::new(id, file.source_name.as_str(), file.source.as_str())
+                    };
+                    snapshot.add_unit(
+                        source,
+                        imports.clone(),
+                        package.map(str::to_owned),
+                        exports,
                         zk_enabled,
                     );
-                    index += 1;
                 }
+                snapshot.complete = false;
             }
             // Successful linking supplies graph-authenticated receiver types, preserving original HIR ids.
-            match ModuleBuildGraph::default().link(
+            match graph.link(
                 request.clone(),
                 LinkerOptions {
                     zk_enabled,
@@ -290,7 +384,7 @@ impl EditorSnapshot {
                     snapshot.complete = false;
                     // A body error must not discard receiver types from locked dependencies.
                     // The editor projection exposes facts only; strict linking still failed.
-                    if let Some(request) = snapshot.resolved_project_request()
+                    if let Ok(request) = resolved_request
                         && let Ok(facts) = TypedLinker::new(LinkerOptions {
                             zk_enabled,
                             ..LinkerOptions::default()
@@ -312,38 +406,73 @@ impl EditorSnapshot {
         })
         .unwrap_or_default()
     }
-    fn resolved_project_request(&self) -> Option<LinkRequest> {
-        let request = self.project_request.as_ref()?;
-        let module = |package: Option<&str>, name: &str| {
-            let unit = self
-                .units
-                .values()
-                .find(|unit| unit.package.as_deref() == package && unit.file.name() == name)?;
-            Some(ModuleUnit {
-                source_name: name.to_owned(),
-                program: unit.resolved.clone()?,
+    fn add_resolved_unit(
+        &mut self,
+        module: &ModuleUnit,
+        modules: &[&ModuleUnit],
+        imports: &[ImportBinding],
+        package: Option<&str>,
+        package_exports: &BTreeSet<String>,
+    ) {
+        let owner = module.program.source_file().id();
+        let exports = module
+            .program
+            .program()
+            .exports
+            .iter()
+            .map(|export| export.name.clone())
+            .collect::<BTreeSet<_>>();
+        let local_imports = module
+            .program
+            .program()
+            .directives
+            .iter()
+            .filter_map(|directive| {
+                let crate::ast::SourceDirectiveKind::Import { path, alias } = &directive.kind
+                else {
+                    return None;
+                };
+                let file = module
+                    .program
+                    .source_files()
+                    .find(|file| file.id() == directive.source.source)?;
+                let path = crate::linker::resolve_source_path(file.name(), path).ok()?;
+                let target = modules.iter().find(|module| module.source_name == path)?;
+                Some((alias.clone(), target.program.source_file().id()))
             })
-        };
-        Some(LinkRequest {
-            root: module(None, &request.root.source_name)?,
-            imports: request.imports.clone(),
-            packages: request
-                .packages
-                .iter()
-                .map(|package| {
-                    Some(PackageUnit {
-                        identity: package.identity.clone(),
-                        modules: package
-                            .modules
-                            .iter()
-                            .map(|source| module(Some(&package.identity), &source.source_name))
-                            .collect::<Option<Vec<_>>>()?,
-                        exports: package.exports.clone(),
-                        imports: package.imports.clone(),
-                    })
-                })
-                .collect::<Option<Vec<_>>>()?,
-        })
+            .collect::<BTreeMap<_, _>>();
+        for file in module.program.source_files() {
+            let native = module
+                .program
+                .source_program(file.id())
+                .expect("native source program");
+            let file = native.source_file().clone();
+            let budget = FrontendBudget::v1();
+            let (tokens, _) = crate::lexer::lower_lexed_recovering(
+                &file,
+                budget,
+                crate::syntax::lex(&file, budget),
+            );
+            self.units.insert(
+                file.id(),
+                EditorUnit {
+                    owner,
+                    local_imports: local_imports.clone(),
+                    error_messages: source_error_messages(native.program()),
+                    file,
+                    tokens,
+                    facts: native.lint_facts().clone(),
+                    resolved: Some(native.clone()),
+                    imports: imports.to_vec(),
+                    package: package.map(str::to_owned),
+                    exports: exports.clone(),
+                    manifest_exports: package_exports.clone(),
+                    binding_types: BTreeMap::new(),
+                    typed_nodes: Vec::new(),
+                    signatures: BTreeMap::new(),
+                },
+            );
+        }
     }
     fn add_unit(
         &mut self,
@@ -356,7 +485,7 @@ impl EditorSnapshot {
         let budget = FrontendBudget::v1();
         let (tokens, _) =
             crate::lexer::lower_lexed_recovering(&file, budget, crate::syntax::lex(&file, budget));
-        let parsed = crate::parser::parse_source_spanned(&file, budget)
+        let parsed = crate::syntax::parser::parse_spanned_source_or_fragment(&file, budget)
             .ok()
             .map(|(parsed, _)| parsed);
         let facts = parsed
@@ -379,19 +508,11 @@ impl EditorSnapshot {
             .unwrap_or_default();
         let mut binding_types = BTreeMap::new();
         let mut typed_nodes = Vec::new();
-        let mut error_types = BTreeMap::new();
         if let Some(resolved) = &resolved {
             let (typed, bindings, nodes) = SemanticContext::with_capabilities(zk_enabled, true)
                 .analyze_editor(resolved, BTreeMap::new(), BTreeMap::new());
             binding_types = bindings;
             typed_nodes = nodes;
-            if let Ok(program) = &typed {
-                for error in &program.error_types {
-                    if let Some(name) = error.identity.rsplit("::").next() {
-                        error_types.insert(name.to_owned(), error.clone());
-                    }
-                }
-            }
             if typed.is_err() {
                 self.complete = false;
             }
@@ -401,17 +522,23 @@ impl EditorSnapshot {
         self.units.insert(
             file.id(),
             EditorUnit {
+                owner: file.id(),
+                local_imports: BTreeMap::new(),
+                error_messages: resolved
+                    .as_ref()
+                    .map(|resolved| source_error_messages(resolved.program()))
+                    .unwrap_or_default(),
                 file,
                 tokens,
                 facts,
                 resolved,
                 imports,
                 package,
+                manifest_exports: exports.clone(),
                 exports,
                 binding_types,
                 typed_nodes,
                 signatures,
-                error_types,
             },
         );
     }
@@ -522,13 +649,7 @@ impl EditorSnapshot {
                     && let Some((namespace, range)) = error_namespace_source(unit, source)
                 {
                     let identity = match target {
-                        ResolvedValueTarget::ErrorCode(_) => resolved
-                            .symbols()
-                            .find(|symbol| {
-                                symbol.kind == ResolvedSymbolKind::ErrorEnum
-                                    && symbol.name == namespace
-                            })
-                            .map(|symbol| EditorIdentity::Symbol(unit.file.id(), symbol.id)),
+                        ResolvedValueTarget::ErrorCode(_) => self.shared_identity(unit, &namespace),
                         ResolvedValueTarget::ImportedErrorVariant => {
                             self.imported_identity(unit, &namespace)
                         }
@@ -541,6 +662,27 @@ impl EditorSnapshot {
                             declaration: false,
                         });
                     }
+                }
+            }
+            for node in resolved.arena().nodes() {
+                if matches!(
+                    node.target,
+                    Some(
+                        ResolvedTarget::Value(
+                            ResolvedValueTarget::ExternalState | ResolvedValueTarget::ExternalConst
+                        ) | ResolvedTarget::Assignment(
+                            ResolvedValueTarget::ExternalState | ResolvedValueTarget::ExternalConst
+                        ) | ResolvedTarget::ExternalStructLiteral
+                    )
+                ) && let Some(range) = node.source
+                    && let Some((path, name_source)) = source_path_at(unit, range)
+                    && let Some(identity) = self.imported_identity(unit, &path)
+                {
+                    self.occurrences.push(Occurrence {
+                        source: name_source,
+                        identity,
+                        declaration: false,
+                    });
                 }
             }
             for call in resolved.calls() {
@@ -595,7 +737,9 @@ impl EditorSnapshot {
             }
             for ty in resolved.types() {
                 let identity = match ty.target {
-                    ResolvedTypeTarget::ExternalType => self.imported_identity(unit, &ty.name),
+                    ResolvedTypeTarget::ExternalType | ResolvedTypeTarget::ExternalStruct => {
+                        self.imported_identity(unit, &ty.name)
+                    }
                     ResolvedTypeTarget::Struct(id) | ResolvedTypeTarget::ErrorEnum(id) => {
                         Some(EditorIdentity::Symbol(*source, id))
                     }
@@ -615,17 +759,41 @@ impl EditorSnapshot {
         self.occurrences
             .dedup_by_key(|occurrence| (occurrence.source, occurrence.identity));
     }
+    fn shared_identity(&self, unit: &EditorUnit, name: &str) -> Option<EditorIdentity> {
+        self.units
+            .values()
+            .filter(|candidate| candidate.owner == unit.owner)
+            .find_map(|candidate| {
+                candidate
+                    .resolved
+                    .as_ref()?
+                    .symbols()
+                    .find(|symbol| symbol.name == name)
+                    .map(|symbol| EditorIdentity::Symbol(candidate.file.id(), symbol.id))
+            })
+    }
     fn imported_identity(&self, unit: &EditorUnit, path: &str) -> Option<EditorIdentity> {
-        let (alias, name) = path.split_once("::")?;
+        let Some((alias, name)) = path.split_once("::") else {
+            return self.shared_identity(unit, path);
+        };
         if name.contains("::") {
             return None;
         }
-        let import = unit.imports.iter().find(|import| import.alias == alias)?;
+        let owner = unit.local_imports.get(alias);
+        let package = unit
+            .imports
+            .iter()
+            .find(|import| import.alias == alias)
+            .map(|import| import.package.as_str());
         let mut found = self
             .units
             .values()
             .filter(|candidate| {
-                candidate.package.as_deref() == Some(&import.package)
+                (owner.is_some_and(|owner| candidate.owner == *owner)
+                    || package.is_some_and(|package| {
+                        candidate.package.as_deref() == Some(package)
+                            && candidate.manifest_exports.contains(name)
+                    }))
                     && candidate.exports.contains(name)
             })
             .filter_map(|candidate| {
@@ -638,6 +806,16 @@ impl EditorSnapshot {
             });
         let identity = found.next()?;
         found.next().is_none().then_some(identity)
+    }
+    fn error_message(&self, unit: &EditorUnit, path: &str) -> Option<String> {
+        let (namespace, variant) = path.rsplit_once("::")?;
+        let identity = self.imported_identity(unit, namespace)?;
+        let definition = self.definitions.get(&identity)?;
+        self.units
+            .get(&definition.source.source)?
+            .error_messages
+            .get(&(definition.name.clone(), variant.to_owned()))
+            .cloned()
     }
     /// All immutable source files in this snapshot.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
@@ -664,6 +842,26 @@ impl EditorSnapshot {
         signatures.sort_by(|left, right| left.name.cmp(&right.name));
         signatures
     }
+    /// Callable declarations of the enclosing contract or module, including its fragments.
+    /// Imported modules retain separate owners and do not contribute declarations here.
+    pub fn unit_declaration_signatures(&self, source: SourceId) -> Vec<EditorSignature> {
+        let Some(unit) = self.units.get(&source) else {
+            return Vec::new();
+        };
+        let mut signatures = self
+            .units
+            .values()
+            .filter(|candidate| candidate.owner == unit.owner)
+            .flat_map(|candidate| {
+                candidate
+                    .signatures
+                    .iter()
+                    .map(|(name, signature)| source_signature(name, signature))
+            })
+            .collect::<Vec<_>>();
+        signatures.sort_by(|left, right| left.name.cmp(&right.name));
+        signatures
+    }
     /// Whether every source has complete, successful semantic analysis.
     pub const fn is_complete(&self) -> bool {
         self.complete
@@ -682,6 +880,23 @@ impl EditorSnapshot {
     /// Canonical hover text from a resolved declaration, call, or typed expression.
     pub fn hover(&self, source: SourceId, offset: u32) -> Option<(String, String)> {
         let unit = self.units.get(&source)?;
+        if let Some(resolved) = &unit.resolved {
+            for node in resolved.arena().nodes() {
+                if matches!(
+                    node.target,
+                    Some(ResolvedTarget::Value(
+                        ResolvedValueTarget::ErrorCode(_)
+                            | ResolvedValueTarget::ImportedErrorVariant
+                    ))
+                ) && let Some(range) = node.source
+                    && contains(range.range, offset)
+                    && let Some((path, _)) = source_path_at(unit, range)
+                    && let Some(message) = self.error_message(unit, &path)
+                {
+                    return Some((path, message));
+                }
+            }
+        }
         if let Some(definition) = self.definition(source, offset) {
             let ty = unit
                 .typed_nodes
@@ -779,7 +994,7 @@ impl EditorSnapshot {
             .get(&definition.source.source)
             .filter(|unit| {
                 matches!(definition.identity, EditorIdentity::Symbol(..))
-                    && unit.exports.contains(&definition.name)
+                    && unit.manifest_exports.contains(&definition.name)
             })
             .and_then(|unit| unit.package.as_ref())
             .map(|package| EditorExportRename {
@@ -830,14 +1045,22 @@ impl EditorSnapshot {
                         .packages
                         .iter_mut()
                         .filter(|candidate| &candidate.identity == package)
-                        .flat_map(|package| &mut package.modules)
+                        .flat_map(|package| package.modules.iter_mut().chain(&mut package.sources))
                     {
                         if module.source_name == unit.file.name() {
                             module.source.clone_from(replacement);
                         }
                     }
                 } else {
-                    request.root.source.clone_from(replacement);
+                    if request.root.source_name == unit.file.name() {
+                        request.root.source.clone_from(replacement);
+                    } else if let Some(file) = request
+                        .sources
+                        .iter_mut()
+                        .find(|file| file.source_name == unit.file.name())
+                    {
+                        file.source.clone_from(replacement);
+                    }
                 }
             }
             Self::project(&request, self.zk_enabled)
@@ -1005,13 +1228,21 @@ impl EditorSnapshot {
                         .packages
                         .iter_mut()
                         .filter(|candidate| &candidate.identity == package)
-                        .flat_map(|package| &mut package.modules)
+                        .flat_map(|package| package.modules.iter_mut().chain(&mut package.sources))
                         .find(|module| module.source_name == unit.file.name())
                     {
                         module.source = repaired;
                     }
                 } else {
-                    request.root.source = repaired;
+                    if request.root.source_name == unit.file.name() {
+                        request.root.source = repaired;
+                    } else if let Some(file) = request
+                        .sources
+                        .iter_mut()
+                        .find(|file| file.source_name == unit.file.name())
+                    {
+                        file.source = repaired;
+                    }
                 }
                 Self::project(&request, self.zk_enabled)
             } else {
@@ -1045,7 +1276,9 @@ impl EditorSnapshot {
         if let Some((namespace, _)) = prefix.rsplit_once("::") {
             let alias = namespace.split("::").next().unwrap_or(namespace);
             let mut candidates = Vec::new();
-            if let Some(import) = unit.imports.iter().find(|import| import.alias == alias) {
+            if unit.local_imports.contains_key(alias)
+                || unit.imports.iter().any(|import| import.alias == alias)
+            {
                 if namespace != alias {
                     if let Some(identity) = self.imported_identity(unit, namespace)
                         && let Some(definition) = self.definitions.get(&identity)
@@ -1053,14 +1286,27 @@ impl EditorSnapshot {
                         && let Some(descriptor) = self
                             .units
                             .get(&definition.source.source)
-                            .and_then(|owner| owner.error_types.get(&definition.name))
+                            .and_then(|owner| owner.resolved.as_ref())
+                            .and_then(|resolved| {
+                                resolved.program().items.iter().find_map(|item| {
+                                    if let crate::ast::Item::ErrorEnum(error) = item {
+                                        (error.name == definition.name).then_some(error)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
                     {
                         for variant in &descriptor.variants {
-                            candidates.push(plain_completion(
+                            let mut completion = plain_completion(
                                 &variant.name,
                                 20,
                                 &format!("{namespace}::{} = {}", variant.name, variant.code),
-                            ));
+                            );
+                            completion.documentation = self
+                                .error_message(unit, &format!("{namespace}::{}", variant.name))
+                                .unwrap_or_default();
+                            candidates.push(completion);
                         }
                     }
                     return candidates;
@@ -1069,7 +1315,16 @@ impl EditorSnapshot {
                     self.units
                         .get(&definition.source.source)
                         .is_some_and(|candidate| {
-                            candidate.package.as_deref() == Some(&import.package)
+                            (unit
+                                .local_imports
+                                .get(alias)
+                                .is_some_and(|owner| candidate.owner == *owner)
+                                || unit.imports.iter().any(|import| {
+                                    import.alias == alias
+                                        && candidate.package.as_deref()
+                                            == Some(import.package.as_str())
+                                        && candidate.manifest_exports.contains(&definition.name)
+                                }))
                                 && candidate.exports.contains(&definition.name)
                         })
                 }) {
@@ -1099,22 +1354,33 @@ impl EditorSnapshot {
                     }
                 }
             }
-            for declaration in unit.facts.declarations.iter().filter(|declaration| {
-                declaration.kind == DeclarationKind::ErrorEnum && declaration.name == namespace
-            }) {
-                if let Some(node) = unit.facts.source_map.node(declaration.node)
-                    && let Some(source) = unit.file.slice(node.range)
-                    && let Ok(program) =
-                        crate::parser::parse(&format!("module Editor {{ {source} }}"))
-                {
-                    for item in program.items {
-                        if let crate::ast::Item::ErrorEnum(error) = item {
-                            for variant in error.variants {
-                                candidates.push(plain_completion(
-                                    &variant.name,
-                                    20,
-                                    &format!("{namespace}::{} = {}", variant.name, variant.code),
-                                ));
+            for owner in self
+                .units
+                .values()
+                .filter(|candidate| candidate.owner == unit.owner)
+            {
+                for declaration in owner.facts.declarations.iter().filter(|declaration| {
+                    declaration.kind == DeclarationKind::ErrorEnum && declaration.name == namespace
+                }) {
+                    if let Some(node) = owner.facts.source_map.node(declaration.node)
+                        && let Some(source) = owner.file.slice(node.range)
+                        && let Ok(program) =
+                            crate::parser::parse(&format!("module Editor {{ {source} }}"))
+                    {
+                        for item in program.items {
+                            if let crate::ast::Item::ErrorEnum(error) = item {
+                                for variant in error.variants {
+                                    let mut completion = plain_completion(
+                                        &variant.name,
+                                        20,
+                                        &format!(
+                                            "{namespace}::{} = {}",
+                                            variant.name, variant.code
+                                        ),
+                                    );
+                                    completion.documentation = variant.message.unwrap_or_default();
+                                    candidates.push(completion);
+                                }
                             }
                         }
                     }
@@ -1165,7 +1431,13 @@ impl EditorSnapshot {
         for definition in self
             .definitions
             .values()
-            .filter(|definition| definition.source.source == source)
+            .filter(|definition| match definition.identity {
+                EditorIdentity::Symbol(..) => self
+                    .units
+                    .get(&definition.source.source)
+                    .is_some_and(|candidate| candidate.owner == unit.owner),
+                EditorIdentity::Binding(..) => definition.source.source == source,
+            })
         {
             let visible = match definition.identity {
                 EditorIdentity::Symbol(..) => true,
@@ -1965,6 +2237,7 @@ mod tests {
     fn locked_import_references_keep_source_and_package_identity() {
         use crate::linker::{SourceModuleUnit, SourcePackageUnit};
         let request = SourceLinkRequest {
+            sources: Vec::new(),
             root: SourceModuleUnit {
                 source_name: "app.ko".into(),
                 source: "seiyaku App { view fn run() -> int { arithmetic::value() } }".into(),
@@ -1974,11 +2247,13 @@ mod tests {
                 package: "std/math@1.0.0".into(),
             }],
             packages: vec![SourcePackageUnit {
+                sources: Vec::new(),
                 identity: "std/math@1.0.0".into(),
                 modules: vec![SourceModuleUnit {
                     source_name: "math.ko".into(),
-                    source: "module Math { fn value() -> int { 7 } fn hidden() -> int { 9 } }"
-                        .into(),
+                    source:
+                        "module Math { export fn value() -> int { 7 } fn hidden() -> int { 9 } }"
+                            .into(),
                 }],
                 exports: BTreeSet::from(["value".into()]),
                 imports: vec![],
@@ -2031,17 +2306,17 @@ mod tests {
     #[test]
     fn imported_error_namespace_completion_uses_the_exported_nominal_type() {
         use crate::linker::{SourceModuleUnit, SourcePackageUnit};
-        let request = SourceLinkRequest {
+        let request = SourceLinkRequest { sources: Vec::new(),
             root: SourceModuleUnit {
                 source_name: "app.ko".into(),
                 source: "seiyaku App { view fn run() -> errors::Failure { errors::Failure::Missing } }".into(),
             },
             imports: vec![ImportBinding { alias: "errors".into(), package: "local/errors@1".into() }],
-            packages: vec![SourcePackageUnit {
+            packages: vec![SourcePackageUnit { sources: Vec::new(),
                 identity: "local/errors@1".into(),
                 modules: vec![SourceModuleUnit {
                     source_name: "errors.ko".into(),
-                    source: "module Errors { error enum Failure { Missing = 1, Invalid = 2 } fn value() -> int { 7 } }".into(),
+                    source: "module Errors { export error enum Failure { Missing = 1, Invalid = 2 } export fn value() -> int { 7 } }".into(),
                 }],
                 exports: BTreeSet::from(["Failure".into(), "value".into()]), imports: vec![],
             }],
@@ -2137,6 +2412,160 @@ mod tests {
         assert!(
             test.iter()
                 .any(|candidate| candidate.label == "test::expect_reject_as")
+        );
+    }
+    #[test]
+    fn multifile_editor_tracks_includes_imports_messages_and_rename() {
+        use crate::linker::SourceModuleUnit;
+        let request = SourceLinkRequest {
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./parts.ko"; import "./math.ko" as arithmetic; view fn run() -> int { helper(arithmetic::SCALE) } fn fail() -> Fault { Fault::Denied } }"#.into() },
+            sources: vec![
+                SourceModuleUnit { source_name: "parts.ko".into(), source: r#"const int BASE = 1; fn helper(int _ value) -> int { value + BASE } error enum Fault { #[message("Permission required")] Denied = 3; }"#.into() },
+                SourceModuleUnit { source_name: "math.ko".into(), source: "module Math { export const int SCALE = 7; fn hidden() -> int { 2 } }".into() },
+            ], imports: vec![], packages: vec![],
+        };
+        let snapshot = EditorSnapshot::project(&request, false);
+        assert!(
+            snapshot.is_complete(),
+            "{:?}",
+            ModuleBuildGraph::default().link(request.clone(), LinkerOptions::default())
+        );
+        assert_eq!(snapshot.sources().count(), 3);
+        let root = snapshot
+            .sources()
+            .find(|file| file.name() == "app.ko")
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .unit_declaration_signatures(root.id())
+                .iter()
+                .map(|signature| signature.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fail", "helper", "run"]
+        );
+        let helper = cursor(root.text(), "helper(");
+        let definition = snapshot
+            .definition(root.id(), helper)
+            .expect("included helper definition");
+        assert_eq!(
+            snapshot.source(definition.source.source).unwrap().name(),
+            "parts.ko"
+        );
+        assert_eq!(snapshot.references(root.id(), helper, true).len(), 2);
+        let rename = snapshot
+            .rename(root.id(), helper, "calculate")
+            .expect("rename across native files");
+        assert_eq!(rename.sources.len(), 2);
+        let constant = snapshot
+            .definition(root.id(), cursor(root.text(), "SCALE"))
+            .expect("local exported constant");
+        assert_eq!(
+            snapshot.source(constant.source.source).unwrap().name(),
+            "math.ko"
+        );
+        let completions = snapshot.completions(root.id(), cursor(root.text(), "arithmetic::") + 12);
+        assert!(completions.iter().any(|item| item.label == "SCALE"));
+        assert!(completions.iter().all(|item| item.label != "hidden"));
+        assert_eq!(
+            snapshot
+                .hover(root.id(), cursor(root.text(), "Denied"))
+                .unwrap()
+                .1,
+            "Permission required"
+        );
+        let variants = snapshot.completions(root.id(), cursor(root.text(), "Fault::") + 7);
+        assert_eq!(
+            variants
+                .iter()
+                .find(|item| item.label == "Denied")
+                .unwrap()
+                .documentation,
+            "Permission required"
+        );
+    }
+    #[test]
+    fn multifile_editor_retains_shared_receiver_facts_after_body_error() {
+        use crate::linker::SourceModuleUnit;
+        let request = SourceLinkRequest {
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./types.ko"; view fn run(Receipt receipt) -> int { receipt.amount + true } }"#.into() },
+            sources: vec![SourceModuleUnit { source_name: "types.ko".into(), source: "struct Receipt { int amount; }".into() }],
+            imports: vec![], packages: vec![],
+        };
+        let snapshot = EditorSnapshot::project(&request, false);
+        assert!(!snapshot.is_complete());
+        let root = snapshot
+            .sources()
+            .find(|file| file.name() == "app.ko")
+            .unwrap();
+        let completions =
+            snapshot.completions(root.id(), cursor(root.text(), "receipt.amount") + 8);
+        assert!(
+            completions
+                .iter()
+                .any(|item| item.label == "amount" && item.detail == "int")
+        );
+        let definition = snapshot
+            .definition(root.id(), cursor(root.text(), "Receipt receipt"))
+            .unwrap();
+        assert_eq!(
+            snapshot.source(definition.source.source).unwrap().name(),
+            "types.ko"
+        );
+    }
+    #[test]
+    fn multifile_editor_package_paths_preserve_source_and_manifest_exports() {
+        use crate::linker::{SourceModuleUnit, SourcePackageUnit};
+        let request = SourceLinkRequest {
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: "seiyaku App { view fn run() -> int { library::value() } }".into() },
+            sources: vec![], imports: vec![ImportBinding { alias: "library".into(), package: "local/tools@1".into() }],
+            packages: vec![SourcePackageUnit {
+                identity: "local/tools@1".into(),
+                modules: vec![SourceModuleUnit { source_name: "lib.ko".into(), source: r#"module Tools { import "./detail.ko" as helper; export fn value() -> int { helper::SEED } }"#.into() }],
+                sources: vec![SourceModuleUnit { source_name: "detail.ko".into(), source: "module Detail { export const int SEED = 7; fn hidden() -> int { 2 } }".into() }],
+                imports: vec![], exports: BTreeSet::from(["value".into()]),
+            }],
+        };
+        let snapshot = EditorSnapshot::project(&request, false);
+        assert!(
+            snapshot.is_complete(),
+            "{:?}",
+            ModuleBuildGraph::default().link(request.clone(), LinkerOptions::default())
+        );
+        let module = snapshot
+            .sources()
+            .find(|file| file.name() == "lib.ko")
+            .unwrap();
+        let constant = snapshot
+            .definition(module.id(), cursor(module.text(), "SEED"))
+            .expect("source export through a local path");
+        assert_eq!(
+            snapshot.source(constant.source.source).unwrap().name(),
+            "detail.ko"
+        );
+        let completion = snapshot.completions(module.id(), cursor(module.text(), "helper::") + 8);
+        assert_eq!(
+            completion
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["SEED"]
+        );
+        let rename = snapshot
+            .rename(module.id(), cursor(module.text(), "SEED"), "START")
+            .expect("private package export rename");
+        assert_eq!(rename.sources.len(), 2);
+        assert!(rename.exports.is_empty());
+        let root = snapshot
+            .sources()
+            .find(|file| file.name() == "app.ko")
+            .unwrap();
+        let completion = snapshot.completions(root.id(), cursor(root.text(), "library::") + 9);
+        assert_eq!(
+            completion
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["value"]
         );
     }
 }

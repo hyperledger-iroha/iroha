@@ -16879,6 +16879,27 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
+    func testStaticErrorMessagesBindDeclaredVariants() throws {
+        let error = ToriiContractErrorTypeDescriptor(identity: "Vault::Failure", variants: [ToriiContractErrorVariantDescriptor(name: "Missing", code: 1)])
+        let message = ToriiContractErrorMessage(errorType: error.identity, code: 1, message: "残高が不足しています")
+        var manifest = ToriiContractManifest(errorTypes: [error], errorMessages: [message])
+        let encoded = try JSONEncoder().encode(manifest)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), manifest)
+        for text in [" \n explanation \t", "\u{001c}", "😀"] {
+            manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: text)]
+            let data = try JSONEncoder().encode(manifest)
+            XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: data).errorMessages?.first?.message, text)
+        }
+        manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: "\u{0085}\u{00a0}")]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [message, message]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [.init(errorType: error.identity, code: 2, message: "Undeclared")]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: String(repeating: "é", count: 2049))]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+    }
+
     func testNominalErrorSharedFixturePreservesJapaneseIdentityAndUnit() throws {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         var fixture: URL?

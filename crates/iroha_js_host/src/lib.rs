@@ -537,8 +537,58 @@ pub struct JsKotodamaCompileRequest {
     pub source: String,
     /// Optional logical source path preserved in diagnostics and sidecars.
     pub source_name: Option<String>,
+    /// Explicit companion sources, resolved without filesystem access.
+    pub sources: Option<Vec<JsKotodamaSourceFile>>,
+    /// Explicit root dependency aliases bound to locked package identities.
+    pub imports: Option<Vec<JsKotodamaSourceImport>>,
+    /// Complete immutable locked dependency graph, with no network resolution.
+    pub packages: Option<Vec<JsKotodamaSourcePackage>>,
     /// Whether to compile with the canonical ZK contract policy.
     pub zk: bool,
+}
+/// One bounded source file supplied to the canonical compiler.
+#[napi(object)]
+pub struct JsKotodamaSourceFile {
+    /// Portable source-set-relative logical path.
+    pub source_name: String,
+    /// Complete UTF-8 source text.
+    pub source: String,
+}
+/// One dependency alias bound to an immutable package identity.
+#[napi(object)]
+pub struct JsKotodamaSourceImport {
+    /// Alias used by source declarations.
+    pub alias: String,
+    /// Locked package identity.
+    pub package: String,
+}
+/// Immutable sources and dependency bindings for one locked package.
+#[napi(object)]
+pub struct JsKotodamaSourcePackage {
+    /// Canonical package identity.
+    pub identity: String,
+    /// Explicit library entry modules.
+    pub modules: Vec<JsKotodamaSourceFile>,
+    /// Companion fragments and locally imported modules.
+    pub sources: Option<Vec<JsKotodamaSourceFile>>,
+    /// Public function identities exported by the package.
+    pub exports: Vec<String>,
+    /// Locked dependency aliases visible within this package.
+    pub imports: Option<Vec<JsKotodamaSourceImport>>,
+}
+fn kotodama_source_file(source: &JsKotodamaSourceFile) -> kotodama_lang::linker::SourceModuleUnit {
+    kotodama_lang::linker::SourceModuleUnit {
+        source_name: source.source_name.clone(),
+        source: source.source.clone(),
+    }
+}
+fn kotodama_source_import(
+    binding: &JsKotodamaSourceImport,
+) -> kotodama_lang::linker::ImportBinding {
+    kotodama_lang::linker::ImportBinding {
+        alias: binding.alias.clone(),
+        package: binding.package.clone(),
+    }
 }
 /// Compile Kotodama with the canonical Rust compiler without blocking the Node event loop.
 #[allow(
@@ -580,10 +630,88 @@ fn compile_kotodama_request(
             force_zk: request.zk,
             ..kotodama_lang::compiler::CompilerOptions::default()
         });
-    let output = match session.build(kotodama_lang::session::CompileRequest {
-        source: &request.source,
-        source_name: request.source_name.as_deref(),
-    }) {
+    let compiled =
+        if request.sources.is_some() || request.imports.is_some() || request.packages.is_some() {
+            let sources = request.sources.as_deref().unwrap_or_default();
+            let packages = request.packages.as_deref().unwrap_or_default();
+            for package in packages {
+                if package
+                    .exports
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != package.exports.len()
+                {
+                    return Err("locked package contains duplicate exports".into());
+                }
+            }
+            let source_name = request
+                .source_name
+                .as_deref()
+                .ok_or_else(|| "sourceName is required when sources are supplied".to_owned())?;
+            let graph = kotodama_lang::linker::SourceLinkRequest {
+                root: kotodama_lang::linker::SourceModuleUnit {
+                    source_name: source_name.into(),
+                    source: request.source.clone(),
+                },
+                sources: sources
+                    .iter()
+                    .map(|source| kotodama_lang::linker::SourceModuleUnit {
+                        source_name: source.source_name.clone(),
+                        source: source.source.clone(),
+                    })
+                    .collect(),
+                imports: request
+                    .imports
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(kotodama_source_import)
+                    .collect(),
+                packages: packages
+                    .iter()
+                    .map(|package| kotodama_lang::linker::SourcePackageUnit {
+                        identity: package.identity.clone(),
+                        modules: package.modules.iter().map(kotodama_source_file).collect(),
+                        sources: package
+                            .sources
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(kotodama_source_file)
+                            .collect(),
+                        exports: package.exports.iter().cloned().collect(),
+                        imports: package
+                            .imports
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(kotodama_source_import)
+                            .collect(),
+                    })
+                    .collect(),
+            };
+            kotodama_lang::driver::BuildDriver::new(session, "iroha-js-host")
+                .compile_project(graph, source_name)
+                .map_err(|error| {
+                    error.into_diagnostics().unwrap_or_else(|error| {
+                        kotodama_lang::diagnostic::DiagnosticBundle::single(
+                            kotodama_lang::diagnostic::Diagnostic::error(
+                                "K0000",
+                                kotodama_lang::diagnostic::DiagnosticPhase::Resolve,
+                                error.to_string(),
+                                None,
+                            ),
+                        )
+                    })
+                })
+        } else {
+            session.build(kotodama_lang::session::CompileRequest {
+                source: &request.source,
+                source_name: request.source_name.as_deref(),
+            })
+        };
+    let output = match compiled {
         Ok(output) => output,
         Err(diagnostics) => {
             let diagnostics_json = diagnostics
@@ -8720,6 +8848,9 @@ mod tests {
         JsKotodamaCompileRequest {
             source: source.to_owned(),
             source_name: None,
+            sources: None,
+            imports: None,
+            packages: None,
             zk: false,
         }
     }
@@ -8878,6 +9009,9 @@ seiyaku Privacy {
         let request = JsKotodamaCompileRequest {
             source: source.to_owned(),
             source_name: Some("contracts/privacy.ko".to_owned()),
+            sources: None,
+            imports: None,
+            packages: None,
             zk: true,
         };
         let result = compile_kotodama_request(&request).expect("compile canonical ZK request");
@@ -8899,6 +9033,32 @@ seiyaku Privacy {
         );
     }
     #[test]
+    fn canonical_kotodama_request_compiles_named_companion_inventory() {
+        let request = JsKotodamaCompileRequest {
+            source: "seiyaku App { include \"parts/view.ko\"; import \"math.ko\" as arith; }"
+                .into(),
+            source_name: Some("app.ko".into()),
+            sources: Some(vec![
+                JsKotodamaSourceFile {
+                    source_name: "parts/view.ko".into(),
+                    source: "view fn value() -> int { return arith::value(); }".into(),
+                },
+                JsKotodamaSourceFile {
+                    source_name: "math.ko".into(),
+                    source: "module Math { export fn value() -> int { return 7; } }".into(),
+                },
+            ]),
+            imports: None,
+            packages: None,
+            zk: false,
+        };
+        let result = compile_kotodama_request(&request).expect("source inventory is bounded");
+        assert!(result.ok, "{:?}", result.diagnostics_json);
+        let output = result.output.expect("compiled source set");
+        assert!(output.source_map_json.contains("parts/view.ko"));
+        assert!(output.source_map_json.contains("math.ko"));
+    }
+    #[test]
     fn canonical_kotodama_request_rejects_unbounded_or_control_source_names() {
         for source_name in [
             String::new(),
@@ -8908,6 +9068,9 @@ seiyaku Privacy {
             let request = JsKotodamaCompileRequest {
                 source: "seiyaku Demo { view fn ping() -> int { return 1; } }".to_owned(),
                 source_name: Some(source_name),
+                sources: None,
+                imports: None,
+                packages: None,
                 zk: false,
             };
             assert!(compile_kotodama_request(&request).is_err());
@@ -12380,6 +12543,7 @@ seiyaku Privacy {
                     text: "Ledger Contract".to_owned(),
                 }],
             }]),
+            error_messages: None,
             error_types: None,
             provenance: None,
         }

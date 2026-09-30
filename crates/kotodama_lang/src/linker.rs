@@ -1,9 +1,9 @@
 //! Typed-HIR linker for Kotodama V1 modules.
 //!
-//! Source units are parsed and type checked independently. The linker resolves only explicit
-//! `alias::symbol` imports backed by a locked export table, rewrites final symbol identities in
-//! typed HIR, and then reruns whole-program recursion and effect analysis before handing the result
-//! to the canonical compiler session.
+//! Explicit source bundles assemble declaration includes in their owning unit while preserving
+//! native per-file arenas. Local modules and locked packages expose only explicit exports through
+//! namespaced imports. The linker rewrites final symbol identities in typed HIR, then reruns
+//! whole-program recursion and effect analysis before handing the result to the compiler session.
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     diagnostic::{
@@ -27,6 +27,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 mod editor;
+mod local_modules;
+mod source_bundle;
+use local_modules::{ModuleEnvironment, resolve_module_group};
 const MAX_PARSED_CACHE_ENTRIES: usize = 64;
 const MAX_PARSED_CACHE_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum number of source units in one typed module graph.
@@ -73,6 +76,8 @@ pub struct PackageUnit {
 pub struct LinkRequest {
     /// The only deployable `seiyaku Name { ... }` source unit.
     pub root: ModuleUnit,
+    /// Independently scoped local modules imported by the root project.
+    pub local_modules: Vec<ModuleUnit>,
     /// Direct dependency aliases visible to the root seiyaku.
     pub imports: Vec<ImportBinding>,
     /// Locked transitive package graph.
@@ -95,8 +100,11 @@ pub struct SourceModuleUnit {
 pub struct SourcePackageUnit {
     /// Stable canonical package reference.
     pub identity: String,
-    /// Every reusable source unit in the package.
+    /// Explicit module entry files; their include/import closure is loaded from `sources`.
     pub modules: Vec<SourceModuleUnit>,
+    /// Explicit inventory of companion fragments and locally imported modules.
+    /// Only sources reached from the package's entry modules are linked.
+    pub sources: Vec<SourceModuleUnit>,
     /// Explicit function exports from package metadata.
     pub exports: BTreeSet<String>,
     /// Dependency aliases locked for this package.
@@ -107,6 +115,8 @@ pub struct SourcePackageUnit {
 pub struct SourceLinkRequest {
     /// The single deployable `seiyaku`/`誓約` source.
     pub root: SourceModuleUnit,
+    /// Explicit inventory of fragments and local modules owned by the root project.
+    pub sources: Vec<SourceModuleUnit>,
     /// Direct dependency aliases visible to the root seiyaku.
     pub imports: Vec<ImportBinding>,
     /// Locked transitive package graph.
@@ -268,6 +278,8 @@ pub enum InvalidSourcePathReason {
     EscapesRoot,
     /// A non-special path component consists only of dots.
     DotOnlyComponent,
+    /// Source dependencies must use the canonical Kotodama extension.
+    InvalidExtension,
     /// A character is not portable in a logical source identity.
     NonPortableCharacter {
         /// UTF-8 byte offset of the rejected character.
@@ -296,6 +308,9 @@ impl fmt::Display for InvalidSourcePathReason {
             }
             Self::DotOnlyComponent => {
                 formatter.write_str("dot-only file-name components are not portable")
+            }
+            Self::InvalidExtension => {
+                formatter.write_str("source dependencies must have a lowercase .ko extension")
             }
             Self::NonPortableCharacter {
                 byte_offset,
@@ -390,6 +405,18 @@ pub struct ModuleBuildGraph {
     link_attempts: std::sync::atomic::AtomicUsize,
 }
 impl ModuleBuildGraph {
+    /// Resolve an explicit source bundle while retaining original per-file arenas.
+    ///
+    /// This exposes the same assembled declarations used by compilation to test
+    /// discovery and other tooling. It performs no filesystem or network reads.
+    pub fn resolve_sources(
+        &self,
+        mut request: SourceLinkRequest,
+    ) -> Result<LinkRequest, SourceGraphError> {
+        let names = validate_source_link_request(&request)?;
+        canonicalize_source_link_request(&mut request, names);
+        source_bundle::resolve(self, &request)
+    }
     /// Return the canonical identity of a complete locked source graph.
     ///
     /// This preflight performs the same aggregate resource-budget check as [`Self::link`] but does
@@ -443,15 +470,22 @@ impl ModuleBuildGraph {
         let fingerprint = source_graph_fingerprint(&request, &names);
         canonicalize_source_link_request(&mut request, names);
         let source_count = 1
+            + request.sources.len()
             + test_sources.len()
             + request
                 .packages
                 .iter()
-                .map(|package| package.modules.len())
+                .map(|package| package.modules.len() + package.sources.len())
                 .sum::<usize>();
         let source_bytes = test_sources
             .iter()
-            .chain(request.packages.iter().flat_map(|package| &package.modules))
+            .chain(&request.sources)
+            .chain(
+                request
+                    .packages
+                    .iter()
+                    .flat_map(|package| package.modules.iter().chain(&package.sources)),
+            )
             .fold(request.root.source.len(), |total, source| {
                 total.saturating_add(source.source.len())
             });
@@ -464,7 +498,15 @@ impl ModuleBuildGraph {
             });
         }
         let mut test_sources = test_sources.to_vec();
-        let mut local_names = BTreeSet::from([request.root.source_name.clone()]);
+        validate_source_file_budgets(test_sources.iter())?;
+        let mut local_names = std::iter::once(request.root.source_name.clone())
+            .chain(
+                request
+                    .sources
+                    .iter()
+                    .map(|source| source.source_name.clone()),
+            )
+            .collect::<BTreeSet<_>>();
         for test in &mut test_sources {
             test.source_name = canonical_logical_source_name("test", &test.source_name)?;
             if !local_names.insert(test.source_name.clone()) {
@@ -480,7 +522,21 @@ impl ModuleBuildGraph {
         } else {
             let mut transcript = b"kotodama-test-source-graph-v1\0".to_vec();
             transcript.extend_from_slice(fingerprint.as_ref());
-            for source in &test_sources {
+            let inventory = std::iter::once(&request.root)
+                .chain(&request.sources)
+                .chain(&test_sources)
+                .map(|source| (source.source_name.as_str(), source))
+                .collect::<BTreeMap<_, _>>();
+            let reached = reachable_source_names(
+                test_sources
+                    .iter()
+                    .map(|source| source.source_name.as_str()),
+                &inventory,
+            );
+            for source in reached
+                .iter()
+                .filter_map(|path| inventory.get(path.as_str()))
+            {
                 for value in [source.source_name.as_bytes(), source.source.as_bytes()] {
                     transcript.extend_from_slice(&(value.len() as u64).to_le_bytes());
                     transcript.extend_from_slice(value);
@@ -491,138 +547,9 @@ impl ModuleBuildGraph {
         #[cfg(test)]
         self.link_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut sources = Vec::new();
-        sources.push(request.root.clone());
-        let mut package_identities = vec![None];
-        for package in &request.packages {
-            sources.extend(package.modules.iter().cloned());
-            package_identities.extend(std::iter::repeat_n(
-                Some(package.identity.clone()),
-                package.modules.len(),
-            ));
-        }
-        let ordinary_source_count = sources.len();
-        sources.extend(test_sources.iter().cloned());
-        package_identities.extend(std::iter::repeat_n(None, test_sources.len()));
-        let source_keys = std::iter::once(format!("root\0{}", request.root.source_name))
-            .chain(request.packages.iter().flat_map(|package| {
-                package
-                    .modules
-                    .iter()
-                    .map(|module| format!("package\0{}\0{}", package.identity, module.source_name))
-            }))
-            .chain(
-                test_sources
-                    .iter()
-                    .map(|source| format!("test\0{}", source.source_name)),
-            )
-            .collect::<Vec<_>>();
-        let source_ids = stable_source_ids(&source_keys);
-        let mut parsed =
-            self.parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?;
-        let parsed_tests = parsed
-            .split_off(ordinary_source_count)
-            .into_iter()
-            .zip(&sources[ordinary_source_count..])
-            .zip(&source_ids[ordinary_source_count..])
-            .map(|((program, source), id)| {
-                (
-                    program,
-                    SourceFile::new(*id, source.source_name.as_str(), source.source.as_str()),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut programs = Vec::with_capacity(parsed.len());
-        let mut resolve_diagnostics = Vec::new();
-        for (index, ((program, source), source_id)) in parsed
-            .into_iter()
-            .zip(&sources)
-            .zip(source_ids.iter().copied())
-            .enumerate()
-        {
-            let imports = if index == 0 {
-                &request.imports
-            } else {
-                let mut offset = 1_usize;
-                let mut selected = None;
-                for package in &request.packages {
-                    let end = offset.saturating_add(package.modules.len());
-                    if (offset..end).contains(&index) {
-                        selected = Some(&package.imports);
-                        break;
-                    }
-                    offset = end;
-                }
-                selected.expect("every non-root source belongs to a package")
-            };
-            let imports = imports
-                .iter()
-                .map(|binding| (binding.alias.clone(), ()))
-                .collect::<BTreeMap<_, _>>();
-            let file = package_identities[index].as_ref().map_or_else(
-                || SourceFile::new(source_id, source.source_name.as_str(), &source.source),
-                |package| {
-                    SourceFile::new_in_package(
-                        source_id,
-                        package.as_str(),
-                        source.source_name.as_str(),
-                        &source.source,
-                    )
-                },
-            );
-            match crate::resolved::resolve_with_imports(program, &file, &imports) {
-                Ok(program) => programs.push(Some(program)),
-                Err(diagnostics) => {
-                    resolve_diagnostics.extend(diagnostics.diagnostics);
-                    programs.push(None);
-                }
-            }
-        }
-        if !resolve_diagnostics.is_empty() {
-            return Err(SourceGraphError::Resolve {
-                source: "<project>".to_owned(),
-                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
-            });
-        }
-        let programs = programs
-            .into_iter()
-            .map(|program| program.expect("resolution failures returned before typed linking"))
-            .collect::<Vec<_>>();
-        let mut programs = programs.into_iter();
-        let root = ModuleUnit {
-            source_name: request.root.source_name,
-            program: programs
-                .next()
-                .expect("the root source is always included in the parse graph"),
-        };
-        let mut packages = Vec::with_capacity(request.packages.len());
-        for package in request.packages {
-            let modules = package
-                .modules
-                .into_iter()
-                .map(|module| ModuleUnit {
-                    source_name: module.source_name,
-                    program: programs
-                        .next()
-                        .expect("every source module has one parsed program"),
-                })
-                .collect();
-            packages.push(PackageUnit {
-                identity: package.identity,
-                modules,
-                exports: package.exports,
-                imports: package.imports,
-            });
-        }
-        debug_assert!(programs.next().is_none());
-        let program = TypedLinker::new(options).link_with_tests(
-            LinkRequest {
-                root,
-                imports: request.imports,
-                packages,
-            },
-            parsed_tests,
-        )?;
+        let (resolved, parsed_tests) =
+            source_bundle::resolve_with_tests(self, &request, &test_sources)?;
+        let program = TypedLinker::new(options).link_with_tests(resolved, parsed_tests)?;
         Ok(LinkedSourceGraph {
             program,
             fingerprint,
@@ -662,81 +589,7 @@ impl ModuleBuildGraph {
         let mut packages = Vec::with_capacity(1_usize.saturating_add(request.dependencies.len()));
         packages.push(request.package);
         packages.extend(request.dependencies);
-        let sources = packages
-            .iter()
-            .flat_map(|package| package.modules.iter().cloned())
-            .collect::<Vec<_>>();
-        let source_keys = packages
-            .iter()
-            .flat_map(|package| {
-                package
-                    .modules
-                    .iter()
-                    .map(|module| format!("package\0{}\0{}", package.identity, module.source_name))
-            })
-            .collect::<Vec<_>>();
-        let source_ids = stable_source_ids(&source_keys);
-        let package_identities = packages
-            .iter()
-            .flat_map(|package| {
-                std::iter::repeat_n(Some(package.identity.clone()), package.modules.len())
-            })
-            .collect::<Vec<_>>();
-        let mut parsed = self
-            .parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?
-            .into_iter();
-        let mut source_ids = source_ids.into_iter();
-        let mut package_identities = package_identities.into_iter();
-        let mut resolved_packages = Vec::with_capacity(packages.len());
-        let mut resolve_diagnostics = Vec::new();
-        for package in packages {
-            let imports = package
-                .imports
-                .iter()
-                .map(|binding| (binding.alias.clone(), ()))
-                .collect::<BTreeMap<_, _>>();
-            let mut modules = Vec::with_capacity(package.modules.len());
-            for module in package.modules {
-                let program = parsed
-                    .next()
-                    .expect("every package source has one parsed program");
-                let source_id = source_ids
-                    .next()
-                    .expect("every package source has one stable source id");
-                let package_identity = package_identities
-                    .next()
-                    .flatten()
-                    .expect("every reusable module has one package identity");
-                let file = SourceFile::new_in_package(
-                    source_id,
-                    package_identity,
-                    module.source_name.as_str(),
-                    module.source.as_str(),
-                );
-                match crate::resolved::resolve_with_imports(program, &file, &imports) {
-                    Ok(program) => modules.push(ModuleUnit {
-                        source_name: module.source_name,
-                        program,
-                    }),
-                    Err(diagnostics) => resolve_diagnostics.extend(diagnostics.diagnostics),
-                }
-            }
-            resolved_packages.push(PackageUnit {
-                identity: package.identity,
-                modules,
-                exports: package.exports,
-                imports: package.imports,
-            });
-        }
-        debug_assert!(parsed.next().is_none());
-        debug_assert!(source_ids.next().is_none());
-        debug_assert!(package_identities.next().is_none());
-        if !resolve_diagnostics.is_empty() {
-            return Err(SourceGraphError::Resolve {
-                source: "<project>".to_owned(),
-                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
-            });
-        }
+        let resolved_packages = source_bundle::resolve_packages(self, &packages)?;
         let interface_fingerprint =
             TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
         Ok(ValidatedSourcePackageGraph {
@@ -943,9 +796,11 @@ impl ModuleBuildGraph {
                                 item.source_name.as_str(),
                                 item.source.as_str(),
                             );
-                            let result =
-                                crate::parser::parse_source_spanned(&file, FrontendBudget::v1())
-                                    .map(|(program, _)| program);
+                            let result = crate::syntax::parser::parse_spanned_source_or_fragment(
+                                &file,
+                                FrontendBudget::v1(),
+                            )
+                            .map(|(program, _)| program);
                             (*index, result)
                         })
                         .map_err(|_| SourceGraphError::Parse {
@@ -1057,6 +912,7 @@ pub(crate) fn stable_source_ids(keys: &[String]) -> Vec<SourceId> {
 }
 struct CanonicalSourceLinkNames {
     root: String,
+    sources: Vec<String>,
     packages: Vec<Vec<String>>,
 }
 struct CanonicalSourcePackageGraphNames {
@@ -1067,14 +923,48 @@ fn validate_source_link_request(
     request: &SourceLinkRequest,
 ) -> Result<CanonicalSourceLinkNames, SourceGraphError> {
     validate_source_graph_budget(request)?;
+    validate_source_file_budgets(
+        std::iter::once(&request.root)
+            .chain(&request.sources)
+            .chain(
+                request
+                    .packages
+                    .iter()
+                    .flat_map(|package| package.modules.iter().chain(&package.sources)),
+            ),
+    )?;
     let root = canonical_logical_source_name("root", &request.root.source_name)?;
+    let mut seen = BTreeSet::from([root.clone()]);
+    let sources = request
+        .sources
+        .iter()
+        .map(|source| {
+            let name = canonical_logical_source_name("root", &source.source_name)?;
+            if !seen.insert(name.clone()) {
+                return Err(SourceGraphError::DuplicateSource {
+                    scope: "root".into(),
+                    source: name,
+                });
+            }
+            Ok(name)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let packages = validate_source_package_metadata(request.packages.iter())?;
-    Ok(CanonicalSourceLinkNames { root, packages })
+    Ok(CanonicalSourceLinkNames {
+        root,
+        sources,
+        packages,
+    })
 }
 fn validate_source_package_graph_request(
     request: &SourcePackageGraphRequest,
 ) -> Result<CanonicalSourcePackageGraphNames, SourceGraphError> {
     validate_package_graph_budget(request)?;
+    validate_source_file_budgets(
+        std::iter::once(&request.package)
+            .chain(&request.dependencies)
+            .flat_map(|package| package.modules.iter().chain(&package.sources)),
+    )?;
     let mut names = validate_source_package_metadata(
         std::iter::once(&request.package).chain(request.dependencies.iter()),
     )?
@@ -1093,6 +983,12 @@ fn canonicalize_source_link_request(
     names: CanonicalSourceLinkNames,
 ) {
     request.root.source_name = names.root;
+    for (source, name) in request.sources.iter_mut().zip(names.sources) {
+        source.source_name = name;
+    }
+    request
+        .sources
+        .sort_by(|left, right| left.source_name.cmp(&right.source_name));
     for (package, names) in request.packages.iter_mut().zip(names.packages) {
         canonicalize_source_package(package, names);
     }
@@ -1115,15 +1011,23 @@ fn canonicalize_source_package_graph_request(
 }
 fn canonicalize_source_package(package: &mut SourcePackageUnit, names: Vec<String>) {
     assert_eq!(
-        package.modules.len(),
+        package.modules.len() + package.sources.len(),
         names.len(),
         "validated source names remain aligned with their package"
     );
-    for (module, name) in package.modules.iter_mut().zip(names) {
+    for (module, name) in package
+        .modules
+        .iter_mut()
+        .chain(&mut package.sources)
+        .zip(names)
+    {
         module.source_name = name;
     }
     package
         .modules
+        .sort_by(|left, right| left.source_name.cmp(&right.source_name));
+    package
+        .sources
         .sort_by(|left, right| left.source_name.cmp(&right.source_name));
     sort_imports(&mut package.imports);
 }
@@ -1135,11 +1039,18 @@ fn sort_imports(imports: &mut [ImportBinding]) {
     });
 }
 fn validate_source_graph_budget(request: &SourceLinkRequest) -> Result<(), SourceGraphError> {
-    let mut sources = 1_usize;
-    let mut source_bytes = request.root.source.len();
+    let mut sources = 1_usize + request.sources.len();
+    let mut source_bytes = request
+        .sources
+        .iter()
+        .fold(request.root.source.len(), |total, source| {
+            total.saturating_add(source.source.len())
+        });
     for package in &request.packages {
-        sources = sources.saturating_add(package.modules.len());
-        for module in &package.modules {
+        sources = sources
+            .saturating_add(package.modules.len())
+            .saturating_add(package.sources.len());
+        for module in package.modules.iter().chain(&package.sources) {
             source_bytes = source_bytes.saturating_add(module.source.len());
         }
     }
@@ -1156,15 +1067,17 @@ fn validate_source_graph_budget(request: &SourceLinkRequest) -> Result<(), Sourc
 fn validate_package_graph_budget(
     request: &SourcePackageGraphRequest,
 ) -> Result<(), SourceGraphError> {
-    let sources = request
-        .dependencies
-        .iter()
-        .fold(request.package.modules.len(), |total, package| {
-            total.saturating_add(package.modules.len())
-        });
+    let sources = request.dependencies.iter().fold(
+        request.package.modules.len() + request.package.sources.len(),
+        |total, package| {
+            total
+                .saturating_add(package.modules.len())
+                .saturating_add(package.sources.len())
+        },
+    );
     let source_bytes = std::iter::once(&request.package)
         .chain(request.dependencies.iter())
-        .flat_map(|package| package.modules.iter())
+        .flat_map(|package| package.modules.iter().chain(&package.sources))
         .fold(0_usize, |total, module| {
             total.saturating_add(module.source.len())
         });
@@ -1175,6 +1088,28 @@ fn validate_package_graph_budget(
             max_sources: MAX_MODULE_GRAPH_SOURCES,
             max_source_bytes: MAX_MODULE_GRAPH_SOURCE_BYTES,
         });
+    }
+    Ok(())
+}
+fn validate_source_file_budgets<'a>(
+    sources: impl Iterator<Item = &'a SourceModuleUnit>,
+) -> Result<(), SourceGraphError> {
+    for source in sources {
+        if source.source.len() > crate::source::MAX_SOURCE_BYTES {
+            return Err(SourceGraphError::Parse {
+                source: source.source_name.clone(),
+                diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                    "K0001",
+                    DiagnosticPhase::Lex,
+                    format!(
+                        "source contains {} bytes and exceeds the {}-byte compiler limit",
+                        source.source.len(),
+                        crate::source::MAX_SOURCE_BYTES
+                    ),
+                    None,
+                )),
+            });
+        }
     }
     Ok(())
 }
@@ -1200,7 +1135,7 @@ fn validate_source_package_metadata<'a>(
         }
         let mut sources = BTreeSet::new();
         let mut package_sources = Vec::with_capacity(package.modules.len());
-        for module in &package.modules {
+        for module in package.modules.iter().chain(&package.sources) {
             let source = canonical_logical_source_name(&package.identity, &module.source_name)?;
             if !sources.insert(source.clone()) {
                 return Err(SourceGraphError::DuplicateSource {
@@ -1281,6 +1216,86 @@ fn canonical_logical_source_name(scope: &str, source: &str) -> Result<String, So
     }
     Ok(normalized)
 }
+/// Resolve a literal source dependency relative to its referring logical file.
+///
+/// Resolution never consults the filesystem. Both paths must remain within the
+/// same supplied source inventory; platform-specific and escaping paths fail.
+pub fn resolve_source_path(referrer: &str, relative: &str) -> Result<String, SourceGraphError> {
+    let referrer = canonical_logical_source_name("source", referrer)?;
+    let relative = relative.replace('\\', "/");
+    if relative.starts_with('/') || relative.as_bytes().get(1) == Some(&b':') {
+        return canonical_logical_source_name("source dependency", &relative);
+    }
+    if relative.is_empty() {
+        return canonical_logical_source_name("source dependency", &relative);
+    }
+    let parent = referrer.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let combined = if parent.is_empty() {
+        relative
+    } else {
+        format!("{parent}/{relative}")
+    };
+    let normalized = canonical_logical_source_name("source dependency", &combined)?;
+    if !normalized.ends_with(".ko") {
+        return Err(SourceGraphError::InvalidSourcePath {
+            scope: "source dependency".into(),
+            source: normalized,
+            reason: InvalidSourcePathReason::InvalidExtension,
+        });
+    }
+    Ok(normalized)
+}
+// Use the canonical lexer for a cheap dependency preflight. Successful compilation will
+// validate directive placement, aliases, ownership, and cycles against the parsed tree.
+// Invalid source still gets a deterministic identity, but can never populate the build cache.
+fn reachable_source_names<'a>(
+    entries: impl IntoIterator<Item = &'a str>,
+    inventory: &BTreeMap<&'a str, &'a SourceModuleUnit>,
+) -> BTreeSet<String> {
+    let mut pending = entries.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    let mut reached = BTreeSet::new();
+    while let Some(path) = pending.pop() {
+        if !reached.insert(path.clone()) {
+            continue;
+        }
+        let Some(file) = inventory.get(path.as_str()) else {
+            continue;
+        };
+        if !file.source.contains("include") && !file.source.contains("import") {
+            continue;
+        }
+        let Ok(tokens) = crate::lexer::lex(&file.source) else {
+            continue;
+        };
+        for pair in tokens.windows(2) {
+            if matches!(
+                pair[0].kind,
+                crate::lexer::TokenKind::Include | crate::lexer::TokenKind::Import
+            ) {
+                if let crate::lexer::TokenKind::String(relative) = &pair[1].kind {
+                    if let Ok(target) = resolve_source_path(&path, relative) {
+                        pending.push(target);
+                    }
+                }
+            }
+        }
+    }
+    reached
+}
+fn reachable_package_source_names(
+    package: &SourcePackageUnit,
+    names: &[String],
+) -> BTreeSet<String> {
+    let inventory = names
+        .iter()
+        .map(String::as_str)
+        .zip(package.modules.iter().chain(&package.sources))
+        .collect();
+    reachable_source_names(
+        names.iter().take(package.modules.len()).map(String::as_str),
+        &inventory,
+    )
+}
 fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSourceLinkNames) -> Hash {
     fn field(transcript: &mut Vec<u8>, value: impl AsRef<[u8]>) {
         let value = value.as_ref();
@@ -1303,6 +1318,28 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
     let mut transcript = b"kotodama-source-graph-v1\0".to_vec();
     field(&mut transcript, &names.root);
     field(&mut transcript, &request.root.source);
+    let inventory = std::iter::once((names.root.as_str(), &request.root))
+        .chain(
+            names
+                .sources
+                .iter()
+                .map(String::as_str)
+                .zip(&request.sources),
+        )
+        .collect();
+    let reached = reachable_source_names([names.root.as_str()], &inventory);
+    let mut sources = request
+        .sources
+        .iter()
+        .zip(&names.sources)
+        .filter(|(_, name)| reached.contains(*name))
+        .collect::<Vec<_>>();
+    sources.sort_by(|(_, left), (_, right)| left.cmp(right));
+    field(&mut transcript, (sources.len() as u64).to_le_bytes());
+    for (source, name) in sources {
+        field(&mut transcript, name);
+        field(&mut transcript, &source.source);
+    }
     imports(&mut transcript, &request.imports);
     let mut packages = request
         .packages
@@ -1321,10 +1358,23 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
         for export in &package.exports {
             field(&mut transcript, export);
         }
-        let mut modules = package.modules.iter().zip(names).collect::<Vec<_>>();
+        field(
+            &mut transcript,
+            (package.modules.len() as u64).to_le_bytes(),
+        );
+        let reached = reachable_package_source_names(package, names);
+        let mut modules = package
+            .modules
+            .iter()
+            .map(|source| (true, source))
+            .chain(package.sources.iter().map(|source| (false, source)))
+            .zip(names)
+            .filter(|(_, name)| reached.contains(*name))
+            .collect::<Vec<_>>();
         modules.sort_by(|(_, left), (_, right)| left.cmp(right));
         field(&mut transcript, (modules.len() as u64).to_le_bytes());
-        for (module, name) in modules {
+        for ((entry, module), name) in modules {
+            field(&mut transcript, [u8::from(entry)]);
             field(&mut transcript, name);
             field(&mut transcript, &module.source);
         }
@@ -1360,10 +1410,20 @@ fn source_package_graph_fingerprint(
         for export in &value.exports {
             field(transcript, export);
         }
-        let mut modules = value.modules.iter().zip(names).collect::<Vec<_>>();
+        field(transcript, (value.modules.len() as u64).to_le_bytes());
+        let reached = reachable_package_source_names(value, names);
+        let mut modules = value
+            .modules
+            .iter()
+            .map(|source| (true, source))
+            .chain(value.sources.iter().map(|source| (false, source)))
+            .zip(names)
+            .filter(|(_, name)| reached.contains(*name))
+            .collect::<Vec<_>>();
         modules.sort_by(|(_, left), (_, right)| left.cmp(right));
         field(transcript, (modules.len() as u64).to_le_bytes());
-        for (module, name) in modules {
+        for ((entry, module), name) in modules {
+            field(transcript, [u8::from(entry)]);
             field(transcript, name);
             field(transcript, &module.source);
         }
@@ -1693,16 +1753,17 @@ impl TypedLinker {
     fn link_with_tests(
         &self,
         request: LinkRequest,
-        test_sources: Vec<(SpannedProgram, SourceFile)>,
+        test_sources: Vec<source_bundle::ParsedTestUnit>,
     ) -> Result<TypedProgram, LinkError> {
-        let sources = std::iter::once(request.root.program.source_file().clone())
-            .chain(request.packages.iter().flat_map(|package| {
-                package
-                    .modules
+        let sources = std::iter::once(&request.root)
+            .chain(&request.local_modules)
+            .chain(request.packages.iter().flat_map(|package| &package.modules))
+            .flat_map(|module| module.program.source_files().cloned())
+            .chain(
+                test_sources
                     .iter()
-                    .map(|module| module.program.source_file().clone())
-            }))
-            .chain(test_sources.iter().map(|(_, file)| file.clone()))
+                    .flat_map(|unit| unit.source_files().cloned()),
+            )
             .collect::<Vec<_>>();
         crate::session::run_with_compiler_stack(move || self.link_inner(request, test_sources))
             .map_err(|_| LinkError::Semantic {
@@ -1722,7 +1783,7 @@ impl TypedLinker {
     fn link_inner(
         &self,
         mut request: LinkRequest,
-        test_sources: Vec<(SpannedProgram, SourceFile)>,
+        test_sources: Vec<source_bundle::ParsedTestUnit>,
     ) -> Result<TypedProgram, LinkError> {
         validate_linker_options(self.options)?;
         if request.root.ast().unit.kind != SourceUnitKind::Seiyaku {
@@ -1738,36 +1799,50 @@ impl TypedLinker {
             .map(|(index, package)| (package.identity.clone(), index))
             .collect::<HashMap<_, _>>();
         let root_imports = resolve_imports("root", &request.imports, &package_indexes)?;
-        let mut import_diagnostics =
-            imported_call_diagnostics(&request.root, &root_imports, &resolved_packages);
-        for package in &resolved_packages {
-            for module in &package.modules {
-                import_diagnostics.extend(imported_call_diagnostics(
-                    module.source,
-                    &package.imports,
-                    &resolved_packages,
-                ));
-            }
+        let mut base = ModuleEnvironment::default();
+        for (alias, index) in &root_imports {
+            base.add_package(alias, &resolved_packages[*index]);
+        }
+        request
+            .local_modules
+            .sort_by(|left, right| left.source_name.cmp(&right.source_name));
+        let local_modules = resolve_module_group(
+            self.options,
+            &request.local_modules,
+            &base,
+            None,
+            &request.root.ast().unit.name,
+            resolved_packages.len(),
+        )?;
+        let environment = base
+            .clone()
+            .with_local_imports(&request.root, &local_modules)?;
+        let mut import_diagnostics = environment_import_diagnostics(&request.root, &environment);
+        for module in resolved_packages
+            .iter()
+            .flat_map(|package| &package.modules)
+            .chain(&local_modules)
+        {
+            import_diagnostics.extend(environment_import_diagnostics(
+                module.source,
+                &module.environment,
+            ));
         }
         if !import_diagnostics.is_empty() {
             return Err(LinkError::Diagnostics(DiagnosticBundle::new(
                 import_diagnostics,
             )));
         }
-        let root_external = external_signatures(&root_imports, &resolved_packages);
-        let root_types = external_types(&root_imports, &resolved_packages);
+        let root_external = environment.typed.functions.clone();
+        let root_types = environment.typed.types.clone();
         let semantic = semantic::SemanticContext::with_capabilities(
             self.options.zk_enabled,
             self.options.test_builtins_enabled,
         );
         let mut root = semantic
-            .analyze_resolved_with_external_types(
-                &request.root.program,
-                &root_external,
-                &root_types,
-            )
+            .analyze_resolved_with_test_target(&request.root.program, &environment.typed)
             .map_err(|failures| semantic_link_error(&request.root, failures))?;
-        let root_external_names = external_linked_names(&root_imports, &resolved_packages);
+        let root_external_names = environment.names.clone();
         if !test_sources.is_empty() {
             let signatures = root
                 .items
@@ -1804,25 +1879,18 @@ impl TypedLinker {
                     .collect(),
             };
             let mut tests = Vec::with_capacity(test_sources.len());
-            for (program, file) in test_sources {
+            for source in test_sources {
+                let module = source
+                    .resolve(&resolution_environment)
+                    .map_err(LinkError::Diagnostics)?;
                 crate::session::validate_test_module_source(
-                    &program.program,
-                    Some(file.name()),
+                    module.ast(),
+                    Some(&module.source_name),
                     &request.root.source_name,
                 )
                 .map_err(LinkError::Diagnostics)?;
-                let resolved = crate::resolved::resolve_with_imports_and_external_environment(
-                    program,
-                    &file,
-                    &resolution_environment,
-                )
-                .map_err(LinkError::Diagnostics)?;
-                let module = ModuleUnit {
-                    source_name: file.name().to_owned(),
-                    program: resolved,
-                };
-                let diagnostics =
-                    imported_call_diagnostics(&module, &root_imports, &resolved_packages);
+                let imports = base.clone().with_local_imports(&module, &local_modules)?;
+                let diagnostics = environment_import_diagnostics(&module, &imports);
                 if !diagnostics.is_empty() {
                     return Err(LinkError::Diagnostics(DiagnosticBundle::new(diagnostics)));
                 }
@@ -1838,21 +1906,28 @@ impl TypedLinker {
             )
             .map_err(LinkError::Diagnostics)?;
             for module in tests {
+                let imports = base.clone().with_local_imports(&module, &local_modules)?;
+                let mut test_environment = environment.clone();
+                test_environment.functions.extend(imports.typed.functions);
+                test_environment.types.extend(imports.typed.types);
+                test_environment.consts.extend(imports.typed.consts);
                 let context =
                     semantic::SemanticContext::with_capabilities(self.options.zk_enabled, true);
                 let mut typed = context
-                    .analyze_resolved_with_test_target(&module.program, &environment)
+                    .analyze_resolved_with_test_target(&module.program, &test_environment)
                     .map_err(|failures| semantic_link_error(&module, failures))?;
+                rename_program_calls(&mut typed, &BTreeMap::new(), &imports.names);
                 crate::session::merge_source_files(&mut root, &mut typed, &module.source_name)
                     .map_err(LinkError::Diagnostics)?;
                 root.items.append(&mut typed.items);
                 root.error_types.append(&mut typed.error_types);
+                root.error_messages.append(&mut typed.error_messages);
                 root.message_entries.append(&mut typed.message_entries);
                 root.test_support_enabled |= typed.test_support_enabled;
             }
         }
         rename_program_calls(&mut root, &BTreeMap::new(), &root_external_names);
-        link_resolved_packages(self.options, &resolved_packages, Some(root))
+        link_resolved_packages(self.options, &resolved_packages, &local_modules, Some(root))
     }
     /// Validate a reusable package and all locked dependencies as typed HIR.
     ///
@@ -1896,7 +1971,7 @@ impl TypedLinker {
             .iter()
             .flat_map(|package| {
                 package.modules.iter().flat_map(|module| {
-                    imported_call_diagnostics(module.source, &package.imports, &resolved_packages)
+                    environment_import_diagnostics(module.source, &module.environment)
                 })
             })
             .collect::<Vec<_>>();
@@ -1905,7 +1980,7 @@ impl TypedLinker {
                 import_diagnostics,
             )));
         }
-        link_resolved_packages(self.options, &resolved_packages, None)?;
+        link_resolved_packages(self.options, &resolved_packages, &[], None)?;
         Ok(interface_fingerprint)
     }
 }
@@ -1918,16 +1993,19 @@ struct ResolvedModule<'request> {
     source: &'request ModuleUnit,
     signatures: BTreeMap<String, FunctionSignature>,
     types: BTreeMap<String, Type>,
+    constants: BTreeMap<String, TypedExpr>,
     linked_names: BTreeMap<String, String>,
     local_structs: HashSet<String>,
     type_prefix: String,
+    nominal_owner: String,
+    environment: ModuleEnvironment,
 }
 struct ResolvedPackage<'request> {
     identity: String,
-    imports: BTreeMap<String, usize>,
     modules: Vec<ResolvedModule<'request>>,
     exports: BTreeMap<String, ResolvedExport>,
     type_exports: BTreeMap<String, Type>,
+    const_exports: BTreeMap<String, TypedExpr>,
 }
 fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
     let mut transcript = b"kotodama-package-interface-v1\0".to_vec();
@@ -1952,6 +2030,23 @@ fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
     for (name, ty) in &package.type_exports {
         interface_field(&mut transcript, name.as_bytes());
         interface_type(&mut transcript, ty);
+    }
+    interface_count(&mut transcript, package.const_exports.len());
+    for (name, value) in &package.const_exports {
+        interface_field(&mut transcript, name.as_bytes());
+        interface_type(&mut transcript, &value.ty);
+        match &value.expr {
+            ExprKind::IntLiteral(value) => {
+                interface_field(&mut transcript, value.to_string().as_bytes())
+            }
+            ExprKind::DecimalLiteral { value, .. } => {
+                interface_field(&mut transcript, value.to_string().as_bytes())
+            }
+            ExprKind::Bool(value) => interface_field(&mut transcript, &[u8::from(*value)]),
+            ExprKind::String(value) => interface_field(&mut transcript, value.as_bytes()),
+            ExprKind::Bytes(value) => interface_field(&mut transcript, value),
+            _ => unreachable!("semantic constant evaluation returns only folded scalar literals"),
+        }
     }
     Hash::new(transcript)
 }
@@ -2163,80 +2258,56 @@ fn resolve_packages<'request>(
         remaining.remove(&package_index);
         let package = &packages[package_index];
         let imports = resolved_imports[package_index].clone();
-        let mut imported_types = BTreeMap::new();
+        let mut environment = ModuleEnvironment::default();
         for (alias, dependency) in &imports {
-            for (name, ty) in &resolved_packages[*dependency]
-                .as_ref()
-                .expect("dependency resolved")
-                .type_exports
-            {
-                imported_types.insert(format!("{alias}::{name}"), ty.clone());
-            }
-        }
-        let mut modules = Vec::with_capacity(package.modules.len());
-        for (module_index, module) in package.modules.iter().enumerate() {
-            let semantic = semantic::SemanticContext::with_capabilities(
-                options.zk_enabled,
-                options.test_builtins_enabled,
+            environment.add_package(
+                alias,
+                resolved_packages[*dependency]
+                    .as_ref()
+                    .expect("ready package dependency"),
             );
-            semantic.set_package_identity(package.identity.clone());
-            let mut signatures = semantic
-                .resolve_resolved_function_signatures_with_types(&module.program, &imported_types)
-                .map_err(|failures| semantic_link_error(module, failures))?;
-            let mut types = semantic
-                .declared_nominal_types(module.ast())
-                .map_err(|error| {
-                    semantic_link_error(module, semantic::SemanticFailures::from(error))
-                })?;
-            let local_structs = module
-                .ast()
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    Item::Struct(definition) => Some(definition.name.clone()),
-                    _ => None,
-                })
-                .collect::<HashSet<_>>();
-            let type_prefix = format!("{}::{}", package.identity, module.ast().unit.name);
-            for signature in signatures.values_mut() {
-                qualify_signature(signature, &local_structs, &type_prefix);
-            }
-            for ty in types.values_mut() {
-                qualify_type(ty, &local_structs, &type_prefix);
-            }
-            let linked_names = signatures
-                .keys()
-                .enumerate()
-                .map(|(function_index, name)| {
-                    (
-                        name.clone(),
-                        format!(
-                            "{LINKED_SYMBOL_PREFIX}p{package_index}_m{module_index}_f{function_index}"
-                        ),
-                    )
-                })
-                .collect();
-            modules.push(ResolvedModule {
-                source: module,
-                signatures,
-                types,
-                linked_names,
-                local_structs,
-                type_prefix,
-            });
         }
+        let modules = resolve_module_group(
+            options,
+            &package.modules,
+            &environment,
+            Some(&package.identity),
+            "",
+            package_index,
+        )?;
         let mut exports = BTreeMap::new();
         let mut type_exports = BTreeMap::new();
+        let mut const_exports = BTreeMap::new();
         for export in &package.exports {
             validate_identifier("package export", export)?;
             let candidates = modules
                 .iter()
                 .filter(|module| {
-                    module.signatures.contains_key(export) || module.types.contains_key(export)
+                    module
+                        .source
+                        .ast()
+                        .exports
+                        .iter()
+                        .any(|declaration| declaration.name == *export)
+                })
+                .filter(|module| {
+                    module.signatures.contains_key(export)
+                        || module.types.contains_key(export)
+                        || module.constants.contains_key(export)
                 })
                 .collect::<Vec<_>>();
             let module = match candidates.as_slice() {
                 [] => {
+                    if let Some(module) = modules.iter().find(|module| {
+                        module.signatures.contains_key(export)
+                            || module.types.contains_key(export)
+                            || module.constants.contains_key(export)
+                    }) {
+                        export_diagnostics.push(Diagnostic::error("E_UNEXPORTED_SYMBOL", DiagnosticPhase::Resolve,
+                            format!("package `{}` exports `{export}`, but its declaration is not marked `export`", package.identity),
+                            module.source.program.symbols().find(|symbol| symbol.name == *export).and_then(|symbol| module.source.program.source_span(symbol.source))));
+                        continue;
+                    }
                     export_diagnostics.push(Diagnostic::error(
                         "E_MISSING_EXPORT",
                         DiagnosticPhase::Resolve,
@@ -2293,14 +2364,16 @@ fn resolve_packages<'request>(
                 );
             } else if let Some(ty) = module.types.get(export) {
                 type_exports.insert(export.clone(), ty.clone());
+            } else if let Some(value) = module.constants.get(export) {
+                const_exports.insert(export.clone(), value.clone());
             }
         }
         resolved_packages[package_index] = Some(ResolvedPackage {
             identity: package.identity.clone(),
-            imports,
             modules,
             exports,
             type_exports,
+            const_exports,
         });
     }
     if export_diagnostics.is_empty() {
@@ -2371,6 +2444,7 @@ fn validate_acyclic_package_imports(
 fn link_resolved_packages(
     options: LinkerOptions,
     packages: &[ResolvedPackage<'_>],
+    local_modules: &[ResolvedModule<'_>],
     mut linked: Option<TypedProgram>,
 ) -> Result<TypedProgram, LinkError> {
     let mut seen_error_types = BTreeMap::new();
@@ -2394,91 +2468,90 @@ fn link_resolved_packages(
         .flat_map(|program| program.message_entries.iter())
         .map(|entry| entry.msg_id.clone())
         .collect::<HashSet<_>>();
-    for package in packages {
-        let external = external_signatures(&package.imports, packages);
-        let types = external_types(&package.imports, packages);
-        let external_names = external_linked_names(&package.imports, packages);
-        for module in &package.modules {
-            let semantic = semantic::SemanticContext::with_capabilities(
-                options.zk_enabled,
-                options.test_builtins_enabled,
-            );
-            semantic.set_package_identity(package.identity.clone());
-            let mut typed = semantic
-                .analyze_resolved_with_external_types(&module.source.program, &external, &types)
-                .map_err(|failures| semantic_link_error(module.source, failures))?;
-            qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
-            rename_program_calls(&mut typed, &module.linked_names, &external_names);
-            let mut new_error_types = Vec::new();
-            for error in std::mem::take(&mut typed.error_types) {
-                let hash = error.schema_hash();
-                if let Some(previous) = seen_error_types.get(&error.identity) {
-                    if previous != &hash {
-                        return Err(LinkError::ConflictingErrorType {
-                            identity: error.identity,
-                        });
-                    }
-                } else {
-                    seen_error_types.insert(error.identity.clone(), hash);
-                    new_error_types.push(error);
+    for module in packages
+        .iter()
+        .flat_map(|package| &package.modules)
+        .chain(local_modules)
+    {
+        let semantic = semantic::SemanticContext::with_capabilities(
+            options.zk_enabled,
+            options.test_builtins_enabled,
+        );
+        semantic.set_package_identity(module.nominal_owner.clone());
+        let mut typed = semantic
+            .analyze_resolved_with_test_target(&module.source.program, &module.environment.typed)
+            .map_err(|failures| semantic_link_error(module.source, failures))?;
+        qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
+        rename_program_calls(&mut typed, &module.linked_names, &module.environment.names);
+        let mut new_error_types = Vec::new();
+        for error in std::mem::take(&mut typed.error_types) {
+            let hash = error.schema_hash();
+            if let Some(previous) = seen_error_types.get(&error.identity) {
+                if previous != &hash {
+                    return Err(LinkError::ConflictingErrorType {
+                        identity: error.identity,
+                    });
                 }
+            } else {
+                seen_error_types.insert(error.identity.clone(), hash);
+                new_error_types.push(error);
             }
-            typed.error_types = new_error_types;
-            for message in &typed.message_entries {
-                if !seen_messages.insert(message.msg_id.clone()) {
-                    return Err(LinkError::DuplicateMessage {
-                        key: message.msg_id.clone(),
+        }
+        typed.error_types = new_error_types;
+        for message in &typed.message_entries {
+            if !seen_messages.insert(message.msg_id.clone()) {
+                return Err(LinkError::DuplicateMessage {
+                    key: message.msg_id.clone(),
+                });
+            }
+        }
+        if let Some(program) = &mut linked {
+            for (id, node) in std::mem::take(&mut typed.hir_nodes) {
+                if program.hir_nodes.insert(id, node).is_some() {
+                    return Err(LinkError::Semantic {
+                        diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                            "E_INTERNAL_RESOLUTION",
+                            DiagnosticPhase::Resolve,
+                            format!(
+                                "typed module graph reused HIR identity {}:{}",
+                                id.source.0, id.local.0
+                            ),
+                            None,
+                        )),
                     });
                 }
             }
-            if let Some(program) = &mut linked {
-                for (id, node) in std::mem::take(&mut typed.hir_nodes) {
-                    if program.hir_nodes.insert(id, node).is_some() {
-                        return Err(LinkError::Semantic {
-                            diagnostics: DiagnosticBundle::single(Diagnostic::error(
-                                "E_INTERNAL_RESOLUTION",
-                                DiagnosticPhase::Resolve,
-                                format!(
-                                    "typed module graph reused HIR identity {}:{}",
-                                    id.source.0, id.local.0
-                                ),
-                                None,
-                            )),
-                        });
-                    }
+            for (source_id, source_file) in std::mem::take(&mut typed.source_files) {
+                if let Some(previous) = program.source_files.insert(source_id, source_file.clone())
+                    && previous != source_file
+                {
+                    return Err(LinkError::Semantic {
+                        diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                            "E_INTERNAL_RESOLUTION",
+                            DiagnosticPhase::Resolve,
+                            format!(
+                                "compiler assigned SourceId {} to both `{}` and `{}`",
+                                source_id.0,
+                                previous.name(),
+                                source_file.name()
+                            ),
+                            None,
+                        )),
+                    });
                 }
-                for (source_id, source_file) in std::mem::take(&mut typed.source_files) {
-                    if let Some(previous) =
-                        program.source_files.insert(source_id, source_file.clone())
-                        && previous != source_file
-                    {
-                        return Err(LinkError::Semantic {
-                            diagnostics: DiagnosticBundle::single(Diagnostic::error(
-                                "E_INTERNAL_RESOLUTION",
-                                DiagnosticPhase::Resolve,
-                                format!(
-                                    "compiler assigned SourceId {} to both `{}` and `{}`",
-                                    source_id.0,
-                                    previous.name(),
-                                    source_file.name()
-                                ),
-                                None,
-                            )),
-                        });
-                    }
-                }
-                program.items.extend(typed.items);
-                program.states.extend(typed.states);
-                program.error_types.extend(typed.error_types);
-                program.triggers.extend(typed.triggers);
-                program.message_entries.extend(typed.message_entries);
-                program.test_support_enabled |= typed.test_support_enabled;
-            } else {
-                linked = Some(typed);
             }
+            program.items.extend(typed.items);
+            program.states.extend(typed.states);
+            program.error_types.extend(typed.error_types);
+            program.error_messages.extend(typed.error_messages);
+            program.triggers.extend(typed.triggers);
+            program.message_entries.extend(typed.message_entries);
+            program.test_support_enabled |= typed.test_support_enabled;
+        } else {
+            linked = Some(typed);
         }
     }
-    let linked = linked.ok_or_else(|| LinkError::Semantic {
+    let mut linked = linked.ok_or_else(|| LinkError::Semantic {
         diagnostics: DiagnosticBundle::single(Diagnostic::error(
             "E_EMPTY_PACKAGE_GRAPH",
             DiagnosticPhase::Resolve,
@@ -2486,6 +2559,23 @@ fn link_resolved_packages(
             None,
         )),
     })?;
+    linked
+        .error_messages
+        .sort_by(|left, right| (&left.error_type, left.code).cmp(&(&right.error_type, right.code)));
+    linked.error_messages.dedup();
+    if !iroha_data_model::smart_contract::manifest::validate_contract_error_messages(
+        &linked.error_types,
+        &linked.error_messages,
+    ) {
+        return Err(LinkError::Diagnostics(DiagnosticBundle::single(
+            Diagnostic::error(
+                "E_ERROR_MESSAGE",
+                DiagnosticPhase::Resolve,
+                "linked error messages conflict or reference undeclared error variants",
+                None,
+            ),
+        )));
+    }
     semantic::validate_linked_program(&linked, options.zk_enabled).map_err(|error| {
         LinkError::Semantic {
             diagnostics: DiagnosticBundle::single(Diagnostic::error(
@@ -2548,42 +2638,6 @@ pub fn is_reserved_import_alias(alias: &str) -> bool {
                 .split_once("::")
                 .is_some_and(|(root, _)| root == alias)
         })
-}
-fn external_signatures(
-    imports: &BTreeMap<String, usize>,
-    packages: &[ResolvedPackage<'_>],
-) -> BTreeMap<String, FunctionSignature> {
-    let mut external = BTreeMap::new();
-    for (alias, package_index) in imports {
-        for (symbol, export) in &packages[*package_index].exports {
-            external.insert(format!("{alias}::{symbol}"), export.signature.clone());
-        }
-    }
-    external
-}
-fn external_linked_names(
-    imports: &BTreeMap<String, usize>,
-    packages: &[ResolvedPackage<'_>],
-) -> BTreeMap<String, String> {
-    let mut names = BTreeMap::new();
-    for (alias, package_index) in imports {
-        for (symbol, export) in &packages[*package_index].exports {
-            names.insert(format!("{alias}::{symbol}"), export.linked_name.clone());
-        }
-    }
-    names
-}
-fn external_types(
-    imports: &BTreeMap<String, usize>,
-    packages: &[ResolvedPackage<'_>],
-) -> BTreeMap<String, Type> {
-    let mut external = BTreeMap::new();
-    for (alias, package_index) in imports {
-        for (symbol, ty) in &packages[*package_index].type_exports {
-            external.insert(format!("{alias}::{symbol}"), ty.clone());
-        }
-    }
-    external
 }
 fn validate_package_identity(identity: &str) -> Result<(), LinkError> {
     if !ivm_abi::entrypoint::is_canonical_kotodama_package_identity(identity) {
@@ -2664,35 +2718,36 @@ fn validate_module_items(module: &ModuleUnit) -> Result<(), LinkError> {
     }
     Ok(())
 }
-fn imported_call_diagnostics(
+fn environment_import_diagnostics(
     module: &ModuleUnit,
-    imports: &BTreeMap<String, usize>,
-    packages: &[ResolvedPackage<'_>],
+    environment: &ModuleEnvironment,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for ty in module.program.types() {
         if ty.target != crate::resolved::ResolvedTypeTarget::ExternalType {
             continue;
         }
-        let Some((alias, symbol)) = ty.name.split_once("::") else {
+        let Some((alias, _)) = ty.name.split_once("::") else {
             continue;
         };
-        let error = match imports.get(alias) {
-            None => Some((
+        let error = if !environment.aliases.contains(alias) {
+            Some((
                 "E_UNKNOWN_IMPORT_ALIAS",
                 format!(
                     "source `{}` uses unknown import alias `{alias}`",
                     module.source_name
                 ),
-            )),
-            Some(index) if !packages[*index].type_exports.contains_key(symbol) => Some((
+            ))
+        } else if !environment.typed.types.contains_key(&ty.name) {
+            Some((
                 "E_UNEXPORTED_TYPE",
                 format!(
                     "source `{}` cannot use unexported type `{}`",
                     module.source_name, ty.name
                 ),
-            )),
-            Some(_) => None,
+            ))
+        } else {
+            None
         };
         if let Some((code, message)) = error {
             diagnostics.push(Diagnostic::error(
@@ -2704,50 +2759,45 @@ fn imported_call_diagnostics(
         }
     }
     for call in module.program.calls() {
-        if call.target != crate::resolved::ResolvedCallTarget::External {
-            continue;
-        }
-        // Unqualified external calls are already bound to the authenticated standalone
-        // target environment by the resolver. Only explicit package calls use aliases.
-        if !call.name.contains("::") {
+        if call.target != crate::resolved::ResolvedCallTarget::External || !call.name.contains("::")
+        {
             continue;
         }
         let mut parts = call.name.split("::");
-        let alias = parts.next().expect("split always has a first item");
-        let symbol = parts.next();
-        if alias == "*" || symbol == Some("*") || parts.next().is_some() {
-            diagnostics.push(Diagnostic::error(
+        let alias = parts.next().expect("qualified call");
+        let symbol = parts.next().unwrap_or_default();
+        let error = if alias == "*" || symbol == "*" || parts.next().is_some() {
+            Some((
                 "E_WILDCARD_IMPORT",
-                DiagnosticPhase::Resolve,
                 format!(
                     "source `{}` uses a wildcard import; Kotodama V1 requires explicit symbols",
                     module.source_name
                 ),
-                module.program.source_span(call.name_source),
-            ));
-            continue;
-        }
-        let symbol = symbol.unwrap_or_default();
-        let Some(package_index) = imports.get(alias).copied() else {
-            diagnostics.push(Diagnostic::error(
+            ))
+        } else if !environment.aliases.contains(alias) {
+            Some((
                 "E_UNKNOWN_IMPORT_ALIAS",
-                DiagnosticPhase::Resolve,
                 format!(
                     "source `{}` uses unknown import alias `{alias}`",
                     module.source_name
                 ),
-                module.program.source_span(call.name_source),
-            ));
-            continue;
-        };
-        if !packages[package_index].exports.contains_key(symbol) {
-            diagnostics.push(Diagnostic::error(
+            ))
+        } else if !environment.typed.functions.contains_key(&call.name) {
+            Some((
                 "E_UNEXPORTED_SYMBOL",
-                DiagnosticPhase::Resolve,
                 format!(
                     "source `{}` cannot call unexported symbol `{alias}::{symbol}`",
                     module.source_name
                 ),
+            ))
+        } else {
+            None
+        };
+        if let Some((code, message)) = error {
+            diagnostics.push(Diagnostic::error(
+                code,
+                DiagnosticPhase::Resolve,
+                message,
                 module.program.source_span(call.name_source),
             ));
         }
@@ -3221,3 +3271,7 @@ fn rename_expr_calls(
 #[cfg(test)]
 #[path = "linker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "linker/multifile_tests.rs"]
+mod multifile_tests;

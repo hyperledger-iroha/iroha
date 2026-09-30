@@ -152,6 +152,15 @@ pub(crate) fn from_semantic_failures(
     source: Option<&SourceFile>,
     resolved: Option<&ResolvedProgram>,
 ) -> DiagnosticBundle {
+    let owner_source = |range: SourceRange| {
+        resolved
+            .and_then(|program| {
+                program
+                    .source_files()
+                    .find(|file| file.id() == range.source)
+            })
+            .or_else(|| source.filter(|file| file.id() == range.source))
+    };
     DiagnosticBundle::new(
         failures
             .failures
@@ -166,7 +175,8 @@ pub(crate) fn from_semantic_failures(
                     semantic
                         .as_ref()
                         .and_then(|diagnostic| {
-                            source.and_then(|source| source_span(source, diagnostic.primary))
+                            owner_source(diagnostic.primary)
+                                .and_then(|source| source_span(source, diagnostic.primary))
                         })
                         .or_else(|| {
                             failure.location.and_then(|location| {
@@ -180,7 +190,7 @@ pub(crate) fn from_semantic_failures(
                             })
                         })
                         .or_else(|| {
-                            source.zip(resolved).and_then(|(source, resolved)| {
+                            source.zip(resolved).and_then(|(_, resolved)| {
                                 let range = match code {
                                     "E_STATE_HAJIMARI_REQUIRED" => {
                                         resolved.first_scalar_state_keyword_source()
@@ -190,7 +200,7 @@ pub(crate) fn from_semantic_failures(
                                     }
                                     _ => None,
                                 }?;
-                                source_span(source, range)
+                                owner_source(range).and_then(|source| source_span(source, range))
                             })
                         })
                 };
@@ -200,24 +210,28 @@ pub(crate) fn from_semantic_failures(
                     message,
                     primary_span,
                 );
-                if let Some(semantic) = semantic
-                    && let Some(source) = source
-                {
+                if let Some(semantic) = semantic {
                     diagnostic.labels = semantic
                         .labels
                         .into_iter()
                         .filter_map(|label| {
                             Some(DiagnosticLabel {
-                                span: source_span(source, label.source)?,
+                                span: owner_source(label.source)
+                                    .and_then(|source| source_span(source, label.source))?,
                                 message: label.message,
                             })
                         })
                         .collect();
-                    diagnostic.fix = semantic
-                        .fix
-                        .and_then(|fix| materialize_fix(source, semantic.primary, fix));
+                    diagnostic.fix = semantic.fix.and_then(|fix| {
+                        owner_source(semantic.primary)
+                            .and_then(|source| materialize_fix(source, semantic.primary, fix))
+                    });
                 }
-                if let Some(source) = source {
+                if let Some(resolved) = resolved {
+                    for source in resolved.source_files() {
+                        diagnostic.capture_source(source);
+                    }
+                } else if let Some(source) = source {
                     diagnostic.capture_source(source);
                 }
                 diagnostic

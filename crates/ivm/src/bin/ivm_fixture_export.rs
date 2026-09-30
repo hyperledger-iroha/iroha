@@ -176,6 +176,7 @@ fn contract_manifest_fixture_types()
             triggers: vec![trigger],
         }]),
         states: None,
+        error_messages: None,
         error_types: None,
         kotoba: None,
         provenance: None,

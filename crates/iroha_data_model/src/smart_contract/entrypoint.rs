@@ -1329,10 +1329,11 @@ pub fn is_canonical_kotodama_package_identity(value: &str) -> bool {
     let path = parts.next().unwrap_or_default();
     path.split('/').all(component) && parts.next().is_none_or(component) && parts.next().is_none()
 }
-/// Return whether a schema struct name is local or exactly `package::Unit::Struct`.
+/// Validate an unqualified, locked-package, or root-local module struct identity.
 ///
 /// Package identities retain their locked spelling. Unit and type names use the same
 /// declaration vocabulary as source; qualified compiler-owned names are never aliases.
+/// Root-local modules use `local::<64 lowercase hex owner digest>::Unit::Struct`.
 #[must_use]
 pub fn is_canonical_kotodama_struct_name(value: &str) -> bool {
     fn declaration(value: &str) -> bool {
@@ -1348,12 +1349,26 @@ pub fn is_canonical_kotodama_struct_name(value: &str) -> bool {
             || is_core_query_view_name(value)
             || matches!(value, "QueryPage" | "StatePage");
     }
-    let mut parts = value.split("::");
-    is_canonical_kotodama_package_identity(parts.next().unwrap_or_default())
-        && parts.next().is_some_and(declaration)
-        && parts.next().is_some_and(declaration)
-        && parts.next().is_none()
-        && !value.contains("__kotodama_link_")
+    if value.contains("__kotodama_link_") {
+        return false;
+    }
+    let parts = value.split("::").collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["local", digest, unit, name] => {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && declaration(unit)
+                && declaration(name)
+        }
+        [package, unit, name] => {
+            is_canonical_kotodama_package_identity(package)
+                && declaration(unit)
+                && declaration(name)
+        }
+        _ => false,
+    }
 }
 /// Return whether `value` is an ASCII Kotodama identifier that does not collide
 /// with a canonical V1 keyword or first-release forbidden source identifier.

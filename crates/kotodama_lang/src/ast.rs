@@ -32,6 +32,10 @@ pub struct Program {
     /// The single named source unit declared by this file.
     pub unit: SourceUnit,
     pub items: Vec<Item>,
+    /// Explicit source dependencies in declaration order.
+    pub directives: Vec<SourceDirective>,
+    /// Declarations explicitly exposed to module consumers.
+    pub exports: Vec<ExportDecl>,
     /// Optional standalone test-file target declaration.
     pub test_target: Option<TestTargetDecl>,
     /// Optional local test fixtures available to `#[test(...)]` functions.
@@ -44,6 +48,42 @@ pub enum SourceUnitKind {
     Seiyaku,
     /// A non-deployable library unit.
     Module,
+    /// Bare declarations included into an enclosing seiyaku or module.
+    Fragment,
+}
+/// One source dependency at a declaration boundary.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SourceDirective {
+    /// Include or namespaced local-module import.
+    pub kind: SourceDirectiveKind,
+    /// Number of ordinary declarations preceding this directive.
+    pub item_index: usize,
+    /// Exact directive range in its original source file.
+    pub source: SourceRange,
+}
+/// Source-level dependency syntax; resolution is owned by the compiler graph.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SourceDirectiveKind {
+    /// Include bare declarations into the enclosing unit's shared scope.
+    Include {
+        /// Literal path relative to the file containing the directive.
+        path: String,
+    },
+    /// Import an independently scoped local module.
+    Import {
+        /// Literal path relative to the file containing the directive.
+        path: String,
+        /// Explicit source namespace for exported declarations.
+        alias: String,
+    },
+}
+/// Explicit visibility of one module declaration.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ExportDecl {
+    /// Source declaration name, independent of its runtime function role.
+    pub name: String,
+    /// Exact `export` modifier range in its original source file.
+    pub source: SourceRange,
 }
 /// Identity of the single top-level source unit.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -222,6 +262,8 @@ pub struct ErrorEnumDef {
 pub struct ErrorVariant {
     pub name: String,
     pub code: u32,
+    /// Optional bounded static text displayed for this nominal rejection.
+    pub message: Option<String>,
 }
 /// A seiyaku-level type-first `const` declaration: `const Type name = expr;`.
 #[derive(Debug, PartialEq, Clone)]
@@ -2836,6 +2878,12 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
 /// Rebase every embedded source range while preserving local NodeId/HirId identities.
 pub(crate) fn rebase_program_source(program: &mut Program, source: crate::source::SourceId) {
     transform_program_provenance(program, ProvenanceAction::Rebase(source));
+    for directive in &mut program.directives {
+        directive.source.source = source;
+    }
+    for export in &mut program.exports {
+        export.source.source = source;
+    }
 }
 /// Remove compiler provenance wrappers for public syntax/tooling AST consumers.
 pub(crate) fn strip_program_provenance(program: &mut Program) {
@@ -2884,21 +2932,21 @@ fn expression_depth_violation_impl(
 
     let mut pending = Vec::new();
     if let Some(program) = program {
-        // Every parsed program is enclosed by its `seiyaku` or `module` braces.
-        const SOURCE_UNIT_DEPTH: usize = 1;
+        // Bare fragments have no synthetic enclosing brace in their source.
+        let source_unit_depth = usize::from(program.unit.kind != SourceUnitKind::Fragment);
         for item in &program.items {
             match item {
                 Item::Function(function) => push_block(
                     &function.body,
-                    SOURCE_UNIT_DEPTH.saturating_add(1),
+                    source_unit_depth.saturating_add(1),
                     &mut pending,
                 ),
                 Item::Const(declaration) => {
-                    push_expression(&declaration.value, SOURCE_UNIT_DEPTH, &mut pending)
+                    push_expression(&declaration.value, source_unit_depth, &mut pending)
                 }
                 Item::Trigger(declaration) => {
                     // Metadata values sit inside both the trigger and metadata braces.
-                    let metadata_depth = SOURCE_UNIT_DEPTH.saturating_add(2);
+                    let metadata_depth = source_unit_depth.saturating_add(2);
                     for entry in &declaration.metadata {
                         push_expression(&entry.value, metadata_depth, &mut pending);
                     }
@@ -2907,7 +2955,7 @@ fn expression_depth_violation_impl(
             }
         }
         // Fixture arguments sit inside the fixture braces and action parentheses.
-        let fixture_depth = SOURCE_UNIT_DEPTH.saturating_add(2);
+        let fixture_depth = source_unit_depth.saturating_add(2);
         for fixture in &program.fixtures {
             for action in &fixture.actions {
                 for argument in &action.args {
@@ -3215,6 +3263,8 @@ pub(crate) fn drop_program_iterative(program: Program) {
         items,
         test_target: _,
         fixtures,
+        directives: _,
+        exports: _,
     } = program;
     let mut pending = Vec::new();
     for item in items {
@@ -3441,6 +3491,8 @@ pub(crate) fn drop_expression_iterative(expression: Expr) {
             ty: None,
             value: expression,
         })],
+        directives: Vec::new(),
+        exports: Vec::new(),
         test_target: None,
         fixtures: Vec::new(),
     });
@@ -3483,6 +3535,8 @@ pub(crate) fn drop_block_iterative(block: Block) {
             modifiers: FunctionModifiers::default(),
             location: SourceLocation { line: 0, column: 0 },
         })],
+        directives: Vec::new(),
+        exports: Vec::new(),
         test_target: None,
         fixtures: Vec::new(),
     });
@@ -3560,6 +3614,8 @@ mod provenance_tests {
                 name: "Wide".to_owned(),
             },
             items,
+            directives: Vec::new(),
+            exports: Vec::new(),
             test_target: None,
             fixtures: Vec::new(),
         };
@@ -3666,6 +3722,8 @@ mod provenance_tests {
                                 location: SourceLocation { line: 1, column: 1 },
                             }),
                         ],
+                        directives: Vec::new(),
+                        exports: Vec::new(),
                         test_target: None,
                         fixtures: Vec::new(),
                     });
@@ -3718,6 +3776,8 @@ mod provenance_tests {
                 ty: None,
                 value: expression,
             })],
+            directives: Vec::new(),
+            exports: Vec::new(),
             test_target: None,
             fixtures: Vec::new(),
         }

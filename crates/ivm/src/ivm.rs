@@ -3233,6 +3233,7 @@ impl IVM {
         error_type: String,
         schema_hash: [u8; 32],
         code: u32,
+        message: Option<String>,
     ) {
         self.halted = true;
         self.constraint_failed = true;
@@ -3242,6 +3243,7 @@ impl IVM {
             error_type,
             schema_hash,
             code,
+            message,
         });
     }
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
@@ -7457,6 +7459,7 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -7752,6 +7755,7 @@ mod tests {
             "test::Error".to_owned(),
             [0; 32],
             17,
+            None,
         );
         let mut raw = Vec::new();
         raw.extend_from_slice(
@@ -8407,6 +8411,7 @@ seiyaku Demo {
             "test::Error".to_owned(),
             [0; 32],
             18,
+            None,
         );
         assert_eq!(
             vm.contract_abort_error,
@@ -8415,7 +8420,8 @@ seiyaku Demo {
                 name: "Rejected".to_owned(),
                 error_type: "test::Error".to_owned(),
                 schema_hash: [0; 32],
-                code: 18
+                code: 18,
+                message: None,
             })
         );
     }

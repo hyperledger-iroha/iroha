@@ -2176,6 +2176,7 @@ mod tests {
                 name: name.to_owned(),
                 ty,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
         }
     }

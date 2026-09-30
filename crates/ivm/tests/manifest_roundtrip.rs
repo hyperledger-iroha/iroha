@@ -1,5 +1,8 @@
 use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
+use iroha_data_model::smart_contract::manifest::{
+    AccessSetHints, ContractErrorMessage, ContractErrorTypeDescriptor,
+    ContractErrorVariantDescriptor, ContractManifest,
+};
 #[test]
 fn contract_manifest_roundtrip_norito() {
     let manifest = ContractManifest {
@@ -19,10 +22,24 @@ fn contract_manifest_roundtrip_norito() {
         entrypoints: None,
         states: None,
         kotoba: None,
-        error_types: None,
+        error_messages: Some(vec![ContractErrorMessage {
+            error_type: "Vault::Failure".into(),
+            code: 1,
+            message: "残高が不足しています".into(),
+        }]),
+        error_types: Some(vec![ContractErrorTypeDescriptor {
+            identity: "Vault::Failure".into(),
+            variants: vec![ContractErrorVariantDescriptor {
+                name: "Insufficient".into(),
+                code: 1,
+            }],
+        }]),
         provenance: None,
     };
     let bytes = norito::to_bytes(&manifest).expect("encode manifest");
     let decoded: ContractManifest = norito::decode_from_bytes(&bytes).expect("decode manifest");
+    assert_eq!(decoded, manifest);
+    let json = norito::json::to_json(&manifest).expect("encode manifest JSON");
+    let decoded: ContractManifest = norito::json::from_str(&json).expect("decode manifest JSON");
     assert_eq!(decoded, manifest);
 }

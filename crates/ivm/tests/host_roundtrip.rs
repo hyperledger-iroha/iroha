@@ -73,6 +73,7 @@ fn state_program(write: bool) -> Vec<u8> {
             name: "roundtrip_key".to_owned(),
             ty: EmbeddedStateType::Bytes,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     };
     let mut program = ProgramMetadata::default().encode();

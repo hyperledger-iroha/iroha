@@ -18036,6 +18036,7 @@ mod tests {
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -18088,6 +18089,7 @@ mod tests {
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -19672,6 +19674,7 @@ seiyaku ReviewedValue {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             },

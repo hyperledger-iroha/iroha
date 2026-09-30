@@ -265,6 +265,7 @@ fn build_authenticated_test_contract_program_with_states(
             entry_pc: 0,
         }],
         states,
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     };
     let mut program = ivm::ProgramMetadata {

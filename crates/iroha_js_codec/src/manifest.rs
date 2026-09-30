@@ -37,6 +37,14 @@ pub fn validate_manifest_schemas(manifest: &ContractManifest) -> CodecResult<()>
         ));
     }
     let mut catalog = BTreeMap::new();
+    if !iroha_data_model::smart_contract::manifest::validate_contract_error_messages(
+        manifest.error_types.as_deref().unwrap_or_default(),
+        manifest.error_messages.as_deref().unwrap_or_default(),
+    ) {
+        return Err(invalid(
+            "manifest.error_messages must be sorted, unique, bounded text for declared error variants",
+        ));
+    }
     for descriptor in manifest.error_types.as_deref().unwrap_or_default() {
         if !descriptor.validate()
             || catalog

@@ -209,6 +209,7 @@ fn assemble_schema_contract_with_states(
             entry_pc: 0,
         }],
         states,
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     };
     let mut program = ProgramMetadata::default().encode();

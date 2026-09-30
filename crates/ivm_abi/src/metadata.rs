@@ -8,8 +8,8 @@
 //! mode flags, an optional logical vector length, and a cycle limit.
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
-    AccessSetHints, ContractErrorTypeDescriptor, EntryPointKind, EntrypointDescriptor,
-    KotobaTranslationEntry, TriggerDescriptor,
+    AccessSetHints, ContractErrorMessage, ContractErrorTypeDescriptor, EntryPointKind,
+    EntrypointDescriptor, KotobaTranslationEntry, TriggerDescriptor,
 };
 pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
 use norito::{
@@ -1323,6 +1323,8 @@ pub struct EmbeddedContractInterfaceV1 {
     pub states: Vec<EmbeddedStateDescriptor>,
     /// Stable application error codes accepted by `require`.
     pub error_types: Vec<ContractErrorTypeDescriptor>,
+    /// Authenticated presentation catalog, sorted by nominal identity and code.
+    pub error_messages: Vec<ContractErrorMessage>,
 }
 /// Exact source location emitted for hash-keyed compiler debug sidecars.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
@@ -2370,6 +2372,7 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: vec![ContractErrorTypeDescriptor {
                 identity: "PaymentError".to_owned(),
                 variants: vec![

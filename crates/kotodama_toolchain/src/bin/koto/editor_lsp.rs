@@ -20,8 +20,13 @@ impl Workspace {
         uri: &str,
         zk: bool,
     ) -> Self {
+        let local_project = project
+            .is_none()
+            .then(|| lsp_local_source_project(documents, Some(uri)))
+            .flatten();
+        let project = project.or(local_project.as_ref());
         if let Some(project) = project
-            && let Some((graph, source_uris, _, manifest)) =
+            && let Ok((graph, source_uris, _, manifest)) =
                 lsp_project_with_open_overlays(project, documents)
             && source_uris.values().any(|candidate| candidate == uri)
         {
@@ -60,7 +65,9 @@ impl Workspace {
                         .values()
                         .any(|path| lsp_file_uri_path(uri).as_ref() == Some(path))
                 })
-                .map(|_| "Rename requires a valid current project manifest.".into()),
+                .map(|_| {
+                    "Rename requires a valid current project source graph and manifest.".into()
+                }),
         }
     }
     pub(super) fn with_versions(mut self, versions: &HashMap<String, i64>) -> Self {
@@ -496,7 +503,7 @@ mod tests {
         let manifest = root.join("kotodama.project.json");
         let app_text = "seiyaku App { /* 金庫😀 */ view fn run() -> int { value::value() } }";
         let module_text =
-            "module Values { fn value() -> int { 7 } fn other() -> string { \"value\" } }";
+            "module Values { export fn value() -> int { 7 } fn other() -> string { \"value\" } }";
         let manifest_text = r#"{
             "version": 1, "root": "金庫😀.ko",
             "imports": [{"alias": "value", "package": "test/value@1"}],
@@ -641,5 +648,144 @@ mod tests {
         let position = text.find("value +").unwrap();
         let request = norito::json!({"params": {"textDocument": {"uri": uri}, "position": {"line": 0, "character": position}, "newName": "amount"}});
         assert!(workspace.response("textDocument/rename", &request).is_err());
+    }
+    struct SourceDirectory(PathBuf);
+    impl SourceDirectory {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "kotodama-lsp-multifile-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root.canonicalize().unwrap())
+        }
+        fn uri(&self, name: &str) -> String {
+            lsp_path_file_uri(&self.0.join(name)).unwrap()
+        }
+    }
+    impl Drop for SourceDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn multifile_unsaved_overlays_drive_navigation_rename_and_changed_edges() {
+        let directory = SourceDirectory::new();
+        let app = directory.uri("app.ko");
+        let fragment = directory.uri("helpers.ko");
+        let replacement = directory.uri("replacement.ko");
+        let text = r#"seiyaku App { include "./helpers.ko"; view fn run() -> int { answer() } }"#;
+        std::fs::write(directory.0.join("app.ko"), text).unwrap();
+        let mut documents = HashMap::from([
+            (app.clone(), text.into()),
+            (fragment.clone(), "fn answer() -> int { 7 }".into()),
+        ]);
+        let project =
+            lsp_local_source_project(&documents, Some(&app)).expect("unsaved declared fragment");
+        let workspace = Workspace::new(&documents, Some(&project), &app, false)
+            .with_versions(&HashMap::from([(app.clone(), 4), (fragment.clone(), 8)]));
+        assert!(workspace.snapshot.is_complete());
+        let request = norito::json!({"params":{"textDocument":{"uri":(app.clone())},"position":{"line":0,"character":(text.find("answer()").unwrap())},"newName":"value"}});
+        let definition = workspace
+            .response("textDocument/definition", &request)
+            .unwrap();
+        assert_eq!(
+            definition
+                .pointer("/uri")
+                .and_then(norito::json::Value::as_str),
+            Some(fragment.as_str())
+        );
+        let rename = workspace.response("textDocument/rename", &request).unwrap();
+        assert_eq!(
+            rename
+                .pointer("/documentChanges")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let updated = text.replace("helpers.ko", "replacement.ko");
+        documents.insert(app.clone(), updated.clone());
+        documents.insert(replacement.clone(), "fn answer() -> int { 9 }".into());
+        let workspace = Workspace::new(&documents, Some(&project), &app, false);
+        assert!(workspace.snapshot.is_complete());
+        let request = norito::json!({"params":{"textDocument":{"uri":(app.clone())},"position":{"line":0,"character":(updated.find("answer()").unwrap())}}});
+        let definition = workspace
+            .response("textDocument/definition", &request)
+            .unwrap();
+        assert_eq!(
+            definition
+                .pointer("/uri")
+                .and_then(norito::json::Value::as_str),
+            Some(replacement.as_str())
+        );
+        assert!(!workspace.uris.values().any(|uri| uri == &fragment));
+    }
+    #[test]
+    fn multifile_missing_sources_publish_at_the_native_referring_directive() {
+        let directory = SourceDirectory::new();
+        std::fs::create_dir_all(directory.0.join("contracts")).unwrap();
+        let app = directory.uri("contracts/app.ko");
+        let fragment = directory.uri("parts.ko");
+        let text = r#"seiyaku App { include "../parts.ko"; view fn run() -> int { 1 } }"#;
+        let part = "// unsaved fragment\ninclude \"./missing.ko\";";
+        let documents =
+            HashMap::from([(app.clone(), text.into()), (fragment.clone(), part.into())]);
+        let project =
+            lsp_local_source_project_with_root(&documents, Some(&app), Some(&directory.0))
+                .expect("retain broken graph root");
+        assert_eq!(project.graph.root.source_name, "contracts/app.ko");
+        assert!(lsp_project_with_open_overlays(&project, &documents).is_err());
+        let driver = BuildDriver::new(
+            CompilerSession::new(CompilerOptions::default()),
+            "lsp-multifile-test",
+        );
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, Some(&project));
+        let diagnostic = diagnostics[&fragment]
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E_SOURCE_NOT_FOUND")
+            .expect("missing dependency diagnostic");
+        let span = diagnostic.primary_span.as_ref().unwrap();
+        assert_eq!(span.source.as_deref(), Some(fragment.as_str()));
+        assert_eq!(span.start.line, 2);
+        assert!(diagnostics[&app].diagnostics.is_empty());
+    }
+    #[test]
+    fn multifile_manifest_overlay_uses_unsaved_sources_before_loading_the_closure() {
+        let directory = SourceDirectory::new();
+        let app = directory.uri("app.ko");
+        let manifest = directory.0.join("kotodama.project.json");
+        let manifest_uri = directory.uri("kotodama.project.json");
+        let disk = "seiyaku App { view fn run() -> int { 1 } }";
+        let manifest_text = r#"{"version":1,"root":"app.ko","imports":[],"packages":[]}"#;
+        std::fs::write(directory.0.join("app.ko"), disk).unwrap();
+        std::fs::write(&manifest, manifest_text).unwrap();
+        let project = load_source_project_manifest(&manifest).unwrap();
+        std::fs::write(
+            directory.0.join("app.ko"),
+            r#"seiyaku App { include "./missing.ko"; }"#,
+        )
+        .unwrap();
+        let documents = HashMap::from([
+            (
+                app.clone(),
+                r#"seiyaku App { include "./unsaved.ko"; view fn run() -> int { value() } }"#
+                    .into(),
+            ),
+            (
+                directory.uri("unsaved.ko"),
+                "fn value() -> int { 3 }".into(),
+            ),
+            (manifest_uri, format!("{manifest_text}\n")),
+        ]);
+        let workspace = Workspace::new(&documents, Some(&project), &app, false);
+        assert!(workspace.snapshot.is_complete());
+        assert_eq!(workspace.snapshot.sources().count(), 2);
     }
 }

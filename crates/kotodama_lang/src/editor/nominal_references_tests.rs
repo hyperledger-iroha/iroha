@@ -49,7 +49,7 @@ fn local_enum_references_cover_values_and_patterns_without_merging_equal_codes()
 
 #[test]
 fn imported_enum_references_rename_only_the_exact_locked_owner_and_enum_segment() {
-    let request = SourceLinkRequest {
+    let request = SourceLinkRequest { sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".into(),
             source: r#"seiyaku App {
@@ -62,7 +62,7 @@ fn imported_enum_references_rename_only_the_exact_locked_owner_and_enum_segment(
             ImportBinding { alias: "errors".into(), package: "local/errors@1".into() },
             ImportBinding { alias: "alternate".into(), package: "local/alternate@1".into() },
         ],
-        packages: ["local/errors@1", "local/alternate@1"].into_iter().map(|identity| SourcePackageUnit {
+        packages: ["local/errors@1", "local/alternate@1"].into_iter().map(|identity| SourcePackageUnit { sources: Vec::new(),
             identity: identity.into(),
             modules: vec![SourceModuleUnit {
                 source_name: "errors.ko".into(),

@@ -69,6 +69,14 @@ pub fn validate_contract_interface(
         &contract_interface.states,
     )?;
     validate_error_types(contract_interface)?;
+    if !iroha_data_model::smart_contract::manifest::validate_contract_error_messages(
+        &contract_interface.error_types,
+        &contract_interface.error_messages,
+    ) {
+        return Err(ContractArtifactError::invalid(
+            "CNTR error_messages must be sorted, unique, bounded text for declared error variants",
+        ));
+    }
     if profile == ValidationProfile::Production && contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
             "CNTR must declare at least one entrypoint",
@@ -1491,6 +1499,7 @@ mod tests {
                 name: "last_error".into(),
                 ty: EmbeddedStateType::Option(Box::new(EmbeddedStateType::Error(list.clone()))),
             }],
+            error_messages: Vec::new(),
             error_types: vec![list.clone(), numeric],
         };
         validate_error_types(&interface).expect("different types may share enum-local codes");

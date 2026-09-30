@@ -16,7 +16,7 @@ pub fn format_source(
     source: &SourceFile,
     budget: FrontendBudget,
 ) -> Result<String, DiagnosticBundle> {
-    let parsed = crate::syntax::parse_program(source, budget);
+    let parsed = crate::syntax::parse_source_or_fragment(source, budget);
     let crate::syntax::ProgramParseOutput {
         tree,
         program,
@@ -167,6 +167,10 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                             SyntaxKind::KwStruct
                                 | SyntaxKind::KwSeiyaku
                                 | SyntaxKind::KwModule
+                                | SyntaxKind::KwInclude
+                                | SyntaxKind::KwImport
+                                | SyntaxKind::KwAs
+                                | SyntaxKind::KwExport
                                 | SyntaxKind::KwIf
                                 | SyntaxKind::KwFor
                         )
@@ -883,6 +887,10 @@ const fn is_word(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwIn
             | SyntaxKind::KwSeiyaku
             | SyntaxKind::KwModule
+            | SyntaxKind::KwInclude
+            | SyntaxKind::KwImport
+            | SyntaxKind::KwAs
+            | SyntaxKind::KwExport
             | SyntaxKind::KwKotoage
             | SyntaxKind::KwHajimari
             | SyntaxKind::KwKaizen

@@ -50,6 +50,19 @@ checked constructors directly. Their private field carriers serve strict JSON
 decoding only; binary decoding retains the public owners' declared identities
 and does not cast archived values to a second wire type.
 
+## Contract error presentation metadata
+
+The V1 `EmbeddedContractInterfaceV1` payload appends `error_messages` after
+`error_types`. Each entry is the ordered record `(error_type: String, code:
+u32, message: String)`. The catalog is sorted uniquely by UTF-8 identity and
+numeric code, references declared variants, and limits each nonblank message
+to 4096 UTF-8 bytes. `ContractManifest` and its signature payload carry the
+optional catalog between `error_types` and `kotoba`; empty compiler catalogs
+are represented as `None` there. `ContractRejection` appends `message:
+Option<String>`, resolved from the originating authenticated interface.
+Presentation text does not enter nominal error descriptors or their schema
+hashes. It remains covered by the complete artifact hash and manifest signature.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload

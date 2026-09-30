@@ -468,3 +468,37 @@ fn saved_transfer_lists_apply_in_order_and_roll_back_on_failure() {
         }
     }
 }
+
+#[test]
+fn static_error_messages_preserve_nominal_schema_and_reach_rejections() {
+    fn source(message: &str) -> String {
+        format!(
+            r#"seiyaku Explained {{
+            error enum Failure {{ #[message("{message}")] Rejected = 7 }}
+            view fn main() {{ require(false, Failure::Rejected); }}
+        }}"#
+        )
+    }
+    let (first, first_manifest) = Compiler::new()
+        .compile_source_with_manifest(&source("残高が不足しています"))
+        .unwrap();
+    let (second, second_manifest) = Compiler::new()
+        .compile_source_with_manifest(&source("Insufficient balance"))
+        .unwrap();
+    assert_eq!(first_manifest.error_types, second_manifest.error_types);
+    assert_ne!(first_manifest.code_hash, second_manifest.code_hash);
+    assert_ne!(first, second);
+    let mut vm = compiled_main(&source("残高が不足しています"));
+    let error = vm.run().expect_err("declared failure");
+    assert!(
+        matches!(error.as_unmetered(), VMError::ContractAbort { code: 7, message: Some(text), .. } if text == "残高が不足しています")
+    );
+    assert!(error.to_string().contains("残高が不足しています"));
+    let mut second_vm = compiled_main(&source("Insufficient balance"));
+    second_vm.run().expect_err("declared failure");
+    assert_eq!(
+        second_vm.remaining_gas() - vm.remaining_gas(),
+        ("残高が不足しています".len() - "Insufficient balance".len()) as u64,
+        "abort execution and its quote charge the exact UTF-8 message bytes"
+    );
+}

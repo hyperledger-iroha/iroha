@@ -77,6 +77,7 @@ fn state_program(name: &str, write: bool) -> Vec<u8> {
             name: name.to_owned(),
             ty: EmbeddedStateType::Bytes,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     };
     let mut program = ProgramMetadata::default().encode();

@@ -205,6 +205,8 @@ pub enum VMError {
         schema_hash: [u8; 32],
         /// Validated nonzero enum-local variant code.
         code: u32,
+        /// Static presentation text authenticated by the originating contract interface.
+        message: Option<String>,
     },
     ExceededMaxCycles,
     InvalidMetadata,
@@ -411,9 +413,16 @@ impl fmt::Display for VMError {
             }
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ContractAbort {
-                error_type, code, ..
+                error_type,
+                code,
+                message,
+                ..
             } => {
-                write!(f, "seiyaku aborted with {error_type} code {code}")
+                write!(f, "seiyaku aborted with {error_type} code {code}")?;
+                if let Some(message) = message {
+                    write!(f, ": {message}")?;
+                }
+                Ok(())
             }
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),

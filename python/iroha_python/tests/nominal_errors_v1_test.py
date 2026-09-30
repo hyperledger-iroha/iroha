@@ -159,3 +159,22 @@ def test_exported_structs_retain_locked_identity_in_public_and_durable_schemas()
     value["error_types"] = []
     with pytest.raises(TypeError, match="error_types catalog"):
         ContractManifest.from_payload(value)
+
+
+def test_static_error_messages_bind_declared_variants():
+    value = payload()
+    entry = {"error_type": value["error_types"][0]["identity"], "code": 1, "message": "残高が不足しています"}
+    value["error_messages"] = [entry]
+    manifest = ContractManifest.from_payload(value)
+    assert manifest.error_messages[0].message == entry["message"]
+    assert manifest.error_types[0].identity == entry["error_type"]
+    for text in (" \n explanation \t", "\x1c", "😀"):
+        value["error_messages"] = [dict(entry, message=text)]
+        assert ContractManifest.from_payload(value).error_messages[0].message == text
+    for override in ({"code": 999}, {"error_type": "Other::Failure"}, {"message": " "}, {"message": "\u0085\u00a0"}, {"message": "\ud800"}, {"message": "é" * 2049}):
+        value["error_messages"] = [dict(entry, **override)]
+        with pytest.raises(TypeError):
+            ContractManifest.from_payload(value)
+    value["error_messages"] = [entry, entry]
+    with pytest.raises(TypeError):
+        ContractManifest.from_payload(value)

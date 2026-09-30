@@ -17,6 +17,7 @@ internal static class ToriiContractManifestJson
     // BEGIN GENERATED: kotodama-v1-validator-policy
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
+        "as",
         "authorize",
         "break",
         "const",
@@ -24,13 +25,16 @@ internal static class ToriiContractManifestJson
         "else",
         "enum",
         "error",
+        "export",
         "false",
         "fn",
         "for",
         "hajimari",
         "始まり",
         "if",
+        "import",
         "in",
+        "include",
         "kaizen",
         "改善",
         "kotoage",
@@ -279,6 +283,7 @@ internal static class ToriiContractManifestJson
             "entrypoints",
             "states",
             "error_types",
+            "error_messages",
             "kotoba",
             "provenance");
 
@@ -291,6 +296,7 @@ internal static class ToriiContractManifestJson
         var entrypoints = OptionalObjectList(root, "entrypoints", $"{context}.entrypoints", ParseEntrypoint);
         var states = OptionalObjectList(root, "states", $"{context}.states", ParseState);
         var errorTypes = OptionalObjectList(root, "error_types", $"{context}.error_types", ParseErrorType);
+        var errorMessages = OptionalObjectList(root, "error_messages", $"{context}.error_messages", ParseErrorMessage);
         var kotoba = OptionalObjectList(root, "kotoba", $"{context}.kotoba", ParseKotobaEntry);
         var accessSetHints = OptionalObject(root, "access_set_hints", $"{context}.access_set_hints")
             is { } access ? ParseAccessSetHints(access, $"{context}.access_set_hints") : null;
@@ -299,7 +305,7 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
-        ValidateManifestCollections(entrypoints, states, errorTypes, kotoba, context);
+        ValidateManifestCollections(entrypoints, states, errorTypes, errorMessages, kotoba, context);
         ValidateDynamicAccessHintStateMaps(accessSetHints, states, context);
 
         return new ToriiContractManifest
@@ -316,6 +322,7 @@ internal static class ToriiContractManifestJson
             Entrypoints = entrypoints,
             States = states,
             ErrorTypes = errorTypes,
+            ErrorMessages = errorMessages,
             Kotoba = kotoba,
             Provenance = OptionalObject(root, "provenance", $"{context}.provenance")
                 is { } provenance ? ParseProvenance(provenance, $"{context}.provenance") : null,
@@ -1120,6 +1127,40 @@ internal static class ToriiContractManifestJson
         };
     }
 
+    private static ToriiContractErrorMessage ParseErrorMessage(JsonObject root, string context)
+    {
+        EnsureOnly(root, context, "error_type", "code", "message");
+        var message = new ToriiContractErrorMessage
+        {
+            ErrorType = RequiredExactString(root, "error_type", $"{context}.error_type"),
+            Code = RequiredUInt32(root, "code", $"{context}.code"),
+            Message = RequiredStringAllowEmpty(root, "message", $"{context}.message"),
+        };
+        ValidateErrorMessage(message, context);
+        return message;
+    }
+
+    private static void ValidateErrorMessage(ToriiContractErrorMessage value, string context)
+    {
+        if (value.Code == 0 || string.IsNullOrWhiteSpace(value.Message))
+            throw new JsonException($"{context} requires a nonzero code and 1..4096 UTF-8 bytes of nonblank error text.");
+        try
+        {
+            if (new UTF8Encoding(false, true).GetByteCount(value.Message) > 4096)
+                throw new JsonException($"{context} error text exceeds 4096 UTF-8 bytes.");
+        }
+        catch (EncoderFallbackException error)
+        {
+            throw new JsonException($"{context} error text must contain valid Unicode scalar values.", error);
+        }
+    }
+
+    private static JsonObject BuildErrorMessage(ToriiContractErrorMessage value, string context)
+    {
+        ValidateErrorMessage(value, context);
+        return new JsonObject { ["error_type"] = value.ErrorType, ["code"] = value.Code, ["message"] = value.Message };
+    }
+
     private static ToriiContractErrorTypeDescriptor ParseErrorType(JsonObject root, string context)
     {
         EnsureOnly(root, context, "identity", "variants");
@@ -1209,6 +1250,7 @@ internal static class ToriiContractManifestJson
         IReadOnlyList<ToriiContractEntrypointDescriptor>? entrypoints,
         IReadOnlyList<ToriiContractStateDescriptor>? states,
         IReadOnlyList<ToriiContractErrorTypeDescriptor>? errorTypes,
+        IReadOnlyList<ToriiContractErrorMessage>? errorMessages,
         IReadOnlyList<ToriiContractKotobaTranslationEntry>? kotoba,
         string context)
     {
@@ -1257,6 +1299,20 @@ internal static class ToriiContractManifestJson
             {
                 throw new JsonException($"{context}.error_types must have unique nominal identities.");
             }
+        }
+        ToriiContractErrorMessage? previousMessage = null;
+        foreach (var entry in errorMessages ?? Array.Empty<ToriiContractErrorMessage>())
+        {
+            ValidateErrorMessage(entry, context);
+            if (!catalog.TryGetValue(entry.ErrorType, out var error) || !error.Variants.Any(variant => variant.Code == entry.Code))
+                throw new JsonException($"{context}.error_messages must reference declared nominal error variants.");
+            if (previousMessage is not null)
+            {
+                var order = Encoding.UTF8.GetBytes(previousMessage.ErrorType).AsSpan().SequenceCompareTo(Encoding.UTF8.GetBytes(entry.ErrorType));
+                if (order > 0 || (order == 0 && previousMessage.Code >= entry.Code))
+                    throw new JsonException($"{context}.error_messages must be sorted and unique.");
+            }
+            previousMessage = entry;
         }
         foreach (var entrypoint in entrypoints ?? Array.Empty<ToriiContractEntrypointDescriptor>())
         {
@@ -1416,6 +1472,7 @@ internal static class ToriiContractManifestJson
             ["entrypoints"] = BuildOptionalArray(value.Entrypoints, (item, itemContext) => BuildEntrypoint(item, itemContext), $"{context}.entrypoints"),
             ["states"] = BuildOptionalArray(value.States, BuildState, $"{context}.states"),
             ["error_types"] = BuildOptionalArray(value.ErrorTypes, BuildErrorType, $"{context}.error_types"),
+            ["error_messages"] = BuildOptionalArray(value.ErrorMessages, BuildErrorMessage, $"{context}.error_messages"),
             ["kotoba"] = BuildOptionalArray(value.Kotoba, BuildKotobaEntry, $"{context}.kotoba"),
             ["provenance"] = value.Provenance is null ? null : BuildProvenance(value.Provenance, $"{context}.provenance"),
         };
@@ -1429,7 +1486,7 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
-        ValidateManifestCollections(value.Entrypoints, value.States, value.ErrorTypes, value.Kotoba, context);
+        ValidateManifestCollections(value.Entrypoints, value.States, value.ErrorTypes, value.ErrorMessages, value.Kotoba, context);
         ValidateDynamicAccessHintStateMaps(value.AccessSetHints, value.States, context);
         return root;
     }
@@ -2160,6 +2217,11 @@ internal static class ToriiContractManifestJson
             return false;
         }
         var parts = value.Split("::", StringSplitOptions.None);
+        if (parts.Length == 4 && parts[0] == "local")
+        {
+            return parts[1].Length == 64 && parts[1].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f')
+                && IsCanonicalTypeDeclarationIdentifier(parts[2]) && IsCanonicalTypeDeclarationIdentifier(parts[3]);
+        }
         if (parts.Length != 3
             || !IsCanonicalTypeDeclarationIdentifier(parts[1])
             || !IsCanonicalTypeDeclarationIdentifier(parts[2]))

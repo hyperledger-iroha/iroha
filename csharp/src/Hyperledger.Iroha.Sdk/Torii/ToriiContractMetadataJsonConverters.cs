@@ -34,6 +34,21 @@ internal static class ToriiContractMetadataJson
         ValidateWarnings(response.Warnings, $"{context}.warnings");
         ValidateExactTokenText(response.RenderedSourceKind, $"{context}.rendered_source_kind");
         ValidateRenderedSourceText(response.RenderedSourceText, $"{context}.rendered_source_text");
+        try
+        {
+            _ = ToriiContractSourceBundle.Normalize(new ToriiContractVerifiedSourceSubmission
+            {
+                SourceName = response.VerifiedSourceReference?.SourceName,
+                SourceText = response.RenderedSourceText,
+                Sources = response.SourceFiles,
+                Imports = response.SourceImports,
+                Packages = response.SourcePackages,
+            }, requireRootName: false);
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException($"{context} contains an invalid source bundle: {error.Message}", error);
+        }
         ValidateOptionalVerifiedSourceReference(response.VerifiedSourceReference, $"{context}.verified_source_ref");
     }
 
@@ -455,6 +470,15 @@ internal static class ToriiContractMetadataJson
                     payload,
                     "rendered_source_text",
                     $"{context}.rendered_source_text"),
+                SourceFiles = payload.ContainsKey("source_files")
+                    ? ReadRequiredObjectList<ToriiContractSourceFile>(payload, "source_files", $"{context}.source_files", "contract source file")
+                    : Array.Empty<ToriiContractSourceFile>(),
+                SourceImports = payload.ContainsKey("source_imports")
+                    ? ReadRequiredObjectList<ToriiContractSourceImport>(payload, "source_imports", $"{context}.source_imports", "contract source import")
+                    : Array.Empty<ToriiContractSourceImport>(),
+                SourcePackages = payload.ContainsKey("source_packages")
+                    ? ReadRequiredObjectList<ToriiContractSourcePackage>(payload, "source_packages", $"{context}.source_packages", "contract source package")
+                    : Array.Empty<ToriiContractSourcePackage>(),
                 VerifiedSourceReference = ReadOptionalObject<ToriiContractVerifiedSourceReference>(
                     payload,
                     "verified_source_ref",
@@ -670,6 +694,21 @@ internal static class ToriiContractMetadataJson
         WriteStringList(writer, "warnings", value.Warnings);
         writer.WriteString("rendered_source_kind", value.RenderedSourceKind);
         writer.WriteString("rendered_source_text", value.RenderedSourceText);
+        if (value.SourceFiles.Count != 0)
+        {
+            writer.WritePropertyName("source_files");
+            JsonSerializer.Serialize(writer, value.SourceFiles);
+        }
+        if (value.SourceImports.Count != 0)
+        {
+            writer.WritePropertyName("source_imports");
+            JsonSerializer.Serialize(writer, value.SourceImports);
+        }
+        if (value.SourcePackages.Count != 0)
+        {
+            writer.WritePropertyName("source_packages");
+            JsonSerializer.Serialize(writer, value.SourcePackages);
+        }
         writer.WritePropertyName("verified_source_ref");
         if (value.VerifiedSourceReference is null)
         {

@@ -119,6 +119,10 @@ fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
         TokenKind::In => SyntaxKind::KwIn,
         TokenKind::Seiyaku => SyntaxKind::KwSeiyaku,
         TokenKind::Module => SyntaxKind::KwModule,
+        TokenKind::Include => SyntaxKind::KwInclude,
+        TokenKind::Import => SyntaxKind::KwImport,
+        TokenKind::As => SyntaxKind::KwAs,
+        TokenKind::Export => SyntaxKind::KwExport,
         TokenKind::Kotoage => SyntaxKind::KwKotoage,
         TokenKind::Hajimari => SyntaxKind::KwHajimari,
         TokenKind::Kaizen => SyntaxKind::KwKaizen,
@@ -353,12 +357,16 @@ struct PendingIfFrame {
 struct PendingProgramParts {
     items: Vec<Item>,
     fixtures: Vec<FixtureDecl>,
+    directives: Vec<SourceDirective>,
+    exports: Vec<ExportDecl>,
 }
 impl PendingProgramParts {
     fn new() -> Self {
         Self {
             items: Vec::new(),
             fixtures: Vec::new(),
+            directives: Vec::new(),
+            exports: Vec::new(),
         }
     }
     fn push_item(&mut self, item: Item) {
@@ -367,10 +375,19 @@ impl PendingProgramParts {
     fn push_fixture(&mut self, fixture: FixtureDecl) {
         self.fixtures.push(fixture);
     }
-    fn into_inner(mut self) -> (Vec<Item>, Vec<FixtureDecl>) {
+    fn into_inner(
+        mut self,
+    ) -> (
+        Vec<Item>,
+        Vec<FixtureDecl>,
+        Vec<SourceDirective>,
+        Vec<ExportDecl>,
+    ) {
         (
             std::mem::take(&mut self.items),
             std::mem::take(&mut self.fixtures),
+            std::mem::take(&mut self.directives),
+            std::mem::take(&mut self.exports),
         )
     }
 }
@@ -387,6 +404,8 @@ impl Drop for PendingProgramParts {
             items: std::mem::take(&mut self.items),
             test_target: None,
             fixtures: std::mem::take(&mut self.fixtures),
+            directives: std::mem::take(&mut self.directives),
+            exports: std::mem::take(&mut self.exports),
         });
     }
 }
@@ -442,12 +461,32 @@ pub fn parse_source(
     let output = crate::syntax::parse_program(source, budget);
     output.program.ok_or(output.diagnostics)
 }
+/// Parse a bare declaration fragment without inventing a source-unit wrapper.
+///
+/// Fragments retain their original byte ranges. The compiler graph assigns the
+/// enclosing unit and enforces its seiyaku or module declaration restrictions.
+pub fn parse_fragment_source(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<Program, DiagnosticBundle> {
+    let (spanned, _) = parse_fragment_source_spanned(source, budget)?;
+    let mut program = spanned.program;
+    crate::ast::strip_program_provenance(&mut program);
+    Ok(program)
+}
 /// Parse once and retain the exact significant token stream for later resolution/type diagnostics.
 pub(crate) fn parse_source_spanned(
     source: &SourceFile,
     budget: FrontendBudget,
 ) -> Result<(SpannedProgram, Vec<Token>), DiagnosticBundle> {
     crate::syntax::parser::parse_spanned_program(source, budget)
+}
+/// Parse a declaration fragment with the same source facts as named source units.
+pub(crate) fn parse_fragment_source_spanned(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<(SpannedProgram, Vec<Token>), DiagnosticBundle> {
+    crate::syntax::parser::parse_spanned_fragment_program(source, budget)
 }
 /// Editor-only declaration facts from an incomplete buffer. No recovered AST escapes this boundary.
 pub(crate) fn editor_source_facts(
@@ -473,8 +512,20 @@ pub(crate) fn parse_with_syntax(
     budget: FrontendBudget,
     tokens: &[Token],
 ) -> GrammarParseOutput {
+    parse_with_syntax_mode(source, budget, tokens, false)
+}
+pub(crate) fn parse_with_syntax_mode(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    tokens: &[Token],
+    fragment: bool,
+) -> GrammarParseOutput {
     let mut parser = CstAstLowerer::new(tokens, source, true, budget);
-    let parsed = parser.parse_program();
+    let parsed = if fragment {
+        parser.parse_fragment_program()
+    } else {
+        parser.parse_program()
+    };
     let mut errors = std::mem::take(&mut parser.errors);
     if let Err(error) = parsed.as_ref() {
         errors.push(error.as_ref().clone());
@@ -916,6 +967,12 @@ impl<'a> CstAstLowerer<'a> {
                 }
             }
         }
+        if matches!(
+            self.tokens.get(cursor).map(|token| &token.kind),
+            Some(TokenKind::Export)
+        ) {
+            cursor = cursor.saturating_add(1);
+        }
         match self.tokens.get(cursor).map(|token| &token.kind) {
             Some(
                 TokenKind::Fn
@@ -929,6 +986,8 @@ impl<'a> CstAstLowerer<'a> {
             Some(TokenKind::Const) => SyntaxKind::ConstItem,
             Some(TokenKind::State) => SyntaxKind::StateItem,
             Some(TokenKind::Trigger) => SyntaxKind::TriggerItem,
+            Some(TokenKind::Include) => SyntaxKind::IncludeItem,
+            Some(TokenKind::Import) => SyntaxKind::ImportItem,
             Some(TokenKind::Ident(name)) if name == "fixture" => SyntaxKind::FixtureItem,
             Some(TokenKind::Ident(name)) if name == "koto_test" => SyntaxKind::TestTargetItem,
             _ => SyntaxKind::ErrorNode,
@@ -1265,10 +1324,25 @@ impl<'a> CstAstLowerer<'a> {
                 "exactly one seiyaku or module is allowed per source file",
             ));
         }
-        let (items, fixtures) = parts.into_inner();
+        let (items, fixtures, directives, exports) = parts.into_inner();
         Ok(Program {
             unit,
             items,
+            directives,
+            exports,
+            test_target: self.test_target.take(),
+            fixtures,
+        })
+    }
+    fn parse_fragment_program(&mut self) -> ParseResult<Program> {
+        let (unit, parts) = self.parse_source_unit(SourceUnitKind::Fragment)?;
+        self.expect(TokenKind::EOF)?;
+        let (items, fixtures, directives, exports) = parts.into_inner();
+        Ok(Program {
+            unit,
+            items,
+            directives,
+            exports,
             test_target: self.test_target.take(),
             fixtures,
         })
@@ -1280,16 +1354,21 @@ impl<'a> CstAstLowerer<'a> {
         let start = self.current_start();
         let syntax_unit = self.syntax_start(SyntaxKind::SourceUnit, start);
         let node = self.begin_node(AstNodeKind::SourceUnit, start);
-        self.bump(); // `seiyaku`/`誓約` or `module`
-        let (name, name_token) = self.expect_ident_token()?;
-        self.record_declaration(
-            node,
-            name.clone(),
-            name_token.range,
-            DeclarationKind::SourceUnit,
-            None,
-        );
-        self.expect(TokenKind::LBrace)?;
+        let name = if kind == SourceUnitKind::Fragment {
+            String::new()
+        } else {
+            self.bump(); // `seiyaku`/`誓約` or `module`
+            let (name, name_token) = self.expect_ident_token()?;
+            self.record_declaration(
+                node,
+                name.clone(),
+                name_token.range,
+                DeclarationKind::SourceUnit,
+                None,
+            );
+            self.expect(TokenKind::LBrace)?;
+            name
+        };
         let syntax_items = self.syntax_start(SyntaxKind::ItemList, self.previous_end(start));
         let mut parts = PendingProgramParts::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
@@ -1302,6 +1381,39 @@ impl<'a> CstAstLowerer<'a> {
             let syntax_item = self.syntax_start(item_kind, declaration_start);
             let result = (|| -> ParseResult<()> {
                 let attrs = self.parse_function_attributes()?;
+                if self.peek(TokenKind::Include) || self.peek(TokenKind::Import) {
+                    if !attrs.is_empty() {
+                        return Err(self.error(
+                            self.tokens[self.pos].clone(),
+                            "source directives cannot have function attributes",
+                        ));
+                    }
+                    let directive = self.parse_source_directive(parts.items.len())?;
+                    parts.directives.push(directive);
+                    return Ok(());
+                }
+                let export = if self.peek(TokenKind::Export) {
+                    let token = self.bump();
+                    if kind == SourceUnitKind::Seiyaku {
+                        return Err(
+                            self.error(token, "`export` is only permitted in module declarations")
+                        );
+                    }
+                    if !matches!(
+                        self.tokens.get(self.pos).map(|token| &token.kind),
+                        Some(
+                            TokenKind::Fn | TokenKind::Struct | TokenKind::Error | TokenKind::Const
+                        )
+                    ) {
+                        return Err(self.error(
+                            self.tokens[self.pos].clone(),
+                            "`export` must precede fn, struct, error enum, or const",
+                        ));
+                    }
+                    Some(token.range)
+                } else {
+                    None
+                };
                 if self.peek(TokenKind::Struct) {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1476,6 +1588,25 @@ impl<'a> CstAstLowerer<'a> {
                         "source-unit item (fn, kotoage fn, view fn, hajimari, kaizen, trigger, struct, error enum, const, state)",
                     ));
                 }
+                if let Some(range) = export {
+                    let name = match parts
+                        .items
+                        .last()
+                        .expect("an exported declaration was parsed")
+                    {
+                        Item::Function(value) => &value.name,
+                        Item::Struct(value) => &value.name,
+                        Item::ErrorEnum(value) => &value.name,
+                        Item::Const(value) => &value.name,
+                        Item::State(_) | Item::Trigger(_) => {
+                            unreachable!("export kind was checked before parsing")
+                        }
+                    };
+                    parts.exports.push(ExportDecl {
+                        name: name.clone(),
+                        source: SourceRange::new(self.facts.source_map.source(), range),
+                    });
+                }
                 Ok(())
             })();
             if let Err(error) = result {
@@ -1495,10 +1626,43 @@ impl<'a> CstAstLowerer<'a> {
             self.syntax_finish(syntax_item, declaration_start);
         }
         self.syntax_finish_at(syntax_items, self.current_start());
-        self.expect(TokenKind::RBrace)?;
+        if kind != SourceUnitKind::Fragment {
+            self.expect(TokenKind::RBrace)?;
+        }
         self.finish_node(node);
         self.syntax_finish(syntax_unit, start);
         Ok((SourceUnit { kind, name }, parts))
+    }
+    fn parse_source_directive(&mut self, item_index: usize) -> ParseResult<SourceDirective> {
+        let keyword = self.bump();
+        let path_token = self.bump();
+        let TokenKind::String(path) = path_token.kind.clone() else {
+            return Err(self.error(path_token, "literal relative .ko source path"));
+        };
+        if path.trim().is_empty() || path.chars().any(char::is_control) {
+            return Err(self.error(
+                path_token,
+                "nonblank source path without control characters",
+            ));
+        }
+        let kind = if keyword.kind == TokenKind::Include {
+            SourceDirectiveKind::Include { path }
+        } else {
+            self.expect(TokenKind::As)?;
+            SourceDirectiveKind::Import {
+                path,
+                alias: self.expect_ident()?,
+            }
+        };
+        self.expect(TokenKind::Semicolon)?;
+        Ok(SourceDirective {
+            kind,
+            item_index,
+            source: SourceRange::new(
+                self.facts.source_map.source(),
+                TextRange::new(keyword.range.start, self.previous_end(keyword.range.start)),
+            ),
+        })
     }
     fn parse_error_enum_def(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::ErrorEnum, self.current_start());
@@ -1517,6 +1681,7 @@ impl<'a> CstAstLowerer<'a> {
         let mut names = std::collections::HashSet::new();
         let mut codes = std::collections::HashSet::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let message = self.parse_error_message_attribute()?;
             let variant_token = self.tokens[self.pos].clone();
             let variant_name = self.expect_ident()?;
             if !names.insert(variant_name.clone()) {
@@ -1548,6 +1713,7 @@ impl<'a> CstAstLowerer<'a> {
             variants.push(ErrorVariant {
                 name: variant_name,
                 code,
+                message,
             });
             if self.peek(TokenKind::Comma) || self.peek(TokenKind::Semicolon) {
                 self.bump();
@@ -1563,6 +1729,41 @@ impl<'a> CstAstLowerer<'a> {
         }
         self.finish_node(node);
         Ok(Item::ErrorEnum(ErrorEnumDef { name, variants }))
+    }
+    fn parse_error_message_attribute(&mut self) -> ParseResult<Option<String>> {
+        let mut message = None;
+        while self.peek(TokenKind::Hash) {
+            let start = self.current_start();
+            let syntax = self.syntax_start(SyntaxKind::Attribute, start);
+            let result = (|| -> ParseResult<String> {
+                self.bump();
+                self.expect(TokenKind::LBracket)?;
+                let attribute = self.bump();
+                if !matches!(&attribute.kind, TokenKind::Ident(name) if name == "message") {
+                    return Err(self.error(attribute, "error-variant attribute `message`"));
+                }
+                if message.is_some() {
+                    return Err(self.error(attribute, "one `message` attribute per error variant"));
+                }
+                self.expect(TokenKind::LParen)?;
+                let literal = self.bump();
+                let TokenKind::String(value) = literal.kind.clone() else {
+                    return Err(self.error(literal, "static string literal for error message"));
+                };
+                if value.trim().is_empty() || value.len() > 4096 {
+                    return Err(self.error(
+                        literal,
+                        "nonblank error message containing 1..=4096 UTF-8 bytes",
+                    ));
+                }
+                self.expect(TokenKind::RParen)?;
+                self.expect(TokenKind::RBracket)?;
+                Ok(value)
+            })();
+            self.syntax_finish(syntax, start);
+            message = Some(result?);
+        }
+        Ok(message)
     }
     fn parse_trigger_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Trigger, self.current_start());
@@ -3836,6 +4037,9 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Kaizen
                 | TokenKind::Seiyaku
                 | TokenKind::Module
+                | TokenKind::Include
+                | TokenKind::Import
+                | TokenKind::Export
         ) || matches!(
             &token.kind,
             TokenKind::Ident(name) if matches!(name.as_str(), "fixture" | "koto_test")

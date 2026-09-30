@@ -3,7 +3,7 @@ use super::*;
 use crate::linker::{SourceModuleUnit, SourcePackageUnit};
 
 fn request(member: &str, ty: &str) -> SourceLinkRequest {
-    SourceLinkRequest {
+    SourceLinkRequest { sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".into(),
             source: format!("誓約 App {{ view fn read(rows::{ty} row) -> int {{ row.{member} }} }}"),
@@ -12,7 +12,7 @@ fn request(member: &str, ty: &str) -> SourceLinkRequest {
             alias: "rows".into(),
             package: "local/rows@1".into(),
         }],
-        packages: vec![SourcePackageUnit {
+        packages: vec![SourcePackageUnit { sources: Vec::new(),
             identity: "local/rows@1".into(),
             modules: vec![SourceModuleUnit {
                 source_name: "model.ko".into(),
@@ -103,6 +103,7 @@ fn incomplete_package_receivers_use_their_own_imports_and_source_identity() {
             package: "local/adapter@1".into(),
         }];
         request.packages.push(SourcePackageUnit {
+            sources: Vec::new(),
             identity: "local/adapter@1".into(),
             modules: vec![SourceModuleUnit {
                 source_name: "model.ko".into(),

@@ -30,6 +30,7 @@ pub const DYNAMIC_ACCESS_HINT_KEY_TYPES_V1: &[&str] = &[
 pub const DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1: &[&str] = &["page", "take"];
 /// Exact keywords and compiler-reserved state declaration names.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
+    "as",
     "authorize",
     "break",
     "const",
@@ -37,12 +38,15 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "else",
     "enum",
     "error",
+    "export",
     "false",
     "fn",
     "for",
     "hajimari",
     "if",
+    "import",
     "in",
+    "include",
     "kaizen",
     "kotoage",
     "let",

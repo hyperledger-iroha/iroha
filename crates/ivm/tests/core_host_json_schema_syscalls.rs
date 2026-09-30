@@ -64,6 +64,7 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
                 value: Box::new(EmbeddedStateType::Bytes),
             },
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     }
 }

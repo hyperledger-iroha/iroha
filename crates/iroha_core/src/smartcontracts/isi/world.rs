@@ -25575,6 +25575,7 @@ pub mod isi {
                     triggers: Vec::new(),
                     entry_pc: 0,
                 }],
+                error_messages: Vec::new(),
                 error_types: Vec::new(),
                 states: Vec::new(),
             };
@@ -25872,6 +25873,7 @@ seiyaku GovernanceLifecycle {
                 access_set_hints: None,
                 entrypoints: None,
                 states: None,
+                error_messages: None,
                 error_types: None,
                 kotoba: None,
                 provenance: None,
@@ -34330,6 +34332,7 @@ seiyaku GovernanceLifecycle {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             };

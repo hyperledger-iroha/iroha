@@ -31,9 +31,7 @@ use kotodama_lang::{
     },
     session::CompilerSession,
 };
-use kotodama_toolchain::koto_test_driver::{
-    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
-};
+use kotodama_toolchain::koto_test_driver::declared_test_target_source_v1;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -276,7 +274,22 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
                     "clean publication package has no declared Kotodama library sources".to_owned(),
                 ));
             }
+            let (modules, mut sources) = partition_library_sources(modules)?;
+            let module_names = modules
+                .iter()
+                .map(|source| source.source_name.as_str())
+                .collect::<BTreeSet<_>>();
+            sources.extend(
+                packaged_source_inventory(plan)?
+                    .into_iter()
+                    .filter(|source| {
+                        !module_names.contains(source.source_name.as_str())
+                            && !sources_contains_path(&sources, &source.source_name)
+                    })
+                    .collect::<Vec<_>>(),
+            );
             Ok(SourcePackageUnit {
+                sources,
                 identity: registry_release(&verification_lock.root),
                 modules,
                 exports: library.exports.iter().map(ToString::to_string).collect(),
@@ -432,6 +445,7 @@ fn validate_packaged_contract_targets(
         let source_name = root.source_name.clone();
         driver
             .check_project(SourceLinkRequest {
+                sources: packaged_source_inventory(plan)?.into_iter().filter(|source| source.source_name != root.source_name).collect(),
                 root,
                 imports: imports.to_vec(),
                 packages: dependencies.to_vec(),
@@ -469,7 +483,7 @@ fn validate_packaged_test_targets(
                     "packaged test source `{source_name}` targets `{name}`, which is not a packaged manifest-declared contract"
                 )))
             }).transpose()?;
-            discover_declared_test_names_source_set_v1(&root, contract).map_err(|error| {
+            kotodama_toolchain::koto_test_driver::discover_declared_test_names_source_set_with_sources_v1(&root, contract, &packaged_source_inventory(plan)?).map_err(|error| {
                 CompilerBridgeErrorV1::Package(format!(
                     "packaged test target `{}` source `{source_name}` is not a valid V1 test source set: {error}",
                     target.name
@@ -483,6 +497,7 @@ fn validate_packaged_test_targets(
             graph
                 .build_test_project_with_sources(
                     SourceLinkRequest {
+                        sources: packaged_source_inventory(plan)?.into_iter().filter(|source| source.source_name != compile_root.source_name && !test_sources.iter().any(|test| test.source_name == source.source_name)).collect(),
                         root: compile_root,
                         imports: imports.to_vec(),
                         packages: dependencies.to_vec(),
@@ -517,6 +532,55 @@ fn packaged_contract_source_unit(
             "packaged contract target `{path}` must identify one exact `.ko` source file; contract directory discovery is not supported"
         )))?;
     packaged_source_unit(path, path, file.bytes(), PackagedTargetKindV1::Contract)
+}
+fn packaged_source_inventory(
+    plan: &PackagePlan,
+) -> Result<Vec<SourceModuleUnit>, CompilerBridgeErrorV1> {
+    plan.files()
+        .iter()
+        .filter(|file| has_kotodama_extension(file.path()))
+        .map(|file| {
+            packaged_source_unit(
+                file.path(),
+                file.path(),
+                file.bytes(),
+                PackagedTargetKindV1::Contract,
+            )
+        })
+        .collect()
+}
+fn sources_contains_path(sources: &[SourceModuleUnit], name: &str) -> bool {
+    sources.iter().any(|source| source.source_name == name)
+}
+pub(crate) fn partition_library_sources(
+    sources: Vec<SourceModuleUnit>,
+) -> Result<(Vec<SourceModuleUnit>, Vec<SourceModuleUnit>), CompilerBridgeErrorV1> {
+    let mut modules = Vec::new();
+    let mut companions = Vec::new();
+    for source in sources {
+        let file = kotodama_lang::source::SourceFile::new(
+            kotodama_lang::source::SourceId(0),
+            source.source_name.as_str(),
+            source.source.as_str(),
+        );
+        let lexed = kotodama_lang::syntax::lex(&file, kotodama_lang::source::FrontendBudget::v1());
+        let kind = lexed
+            .tokens
+            .iter()
+            .find(|token| !token.kind.is_trivia())
+            .map(|token| token.kind);
+        match kind {
+            Some(kotodama_lang::syntax::SyntaxKind::KwModule) => modules.push(source),
+            Some(kotodama_lang::syntax::SyntaxKind::KwSeiyaku) => {
+                return Err(CompilerBridgeErrorV1::Package(format!(
+                    "library source `{}` declares a deployable contract",
+                    source.source_name
+                )));
+            }
+            _ => companions.push(source),
+        }
+    }
+    Ok((modules, companions))
 }
 fn packaged_test_source_units(
     plan: &PackagePlan,
@@ -717,6 +781,12 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             let root = contract_source_unit(member, &target.path)?;
             result.contract_targets += 1;
             let graph = SourceLinkRequest {
+                sources: kotodama_lang::driver::load_source_companions(
+                    std::slice::from_ref(&root),
+                    &member.package_root,
+                    &BTreeMap::new(),
+                )
+                .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?,
                 root: root.clone(),
                 imports: imports.clone(),
                 packages: all_packages.clone(),
@@ -801,9 +871,24 @@ fn local_source_package(
     let Some(library) = member.manifest.library.as_ref() else {
         return Ok(None);
     };
-    let modules =
+    let mut units =
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
             .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+    for source in &mut units {
+        source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+    }
+    let (modules, mut sources) = partition_library_sources(units)?;
+    let loaded = kotodama_lang::driver::load_source_companions(
+        &modules,
+        &member.package_root,
+        &BTreeMap::new(),
+    )
+    .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+    for source in loaded {
+        if !sources_contains_path(&sources, &source.source_name) {
+            sources.push(source);
+        }
+    }
     if modules.is_empty() {
         return Err(CompilerBridgeErrorV1::Package(format!(
             "local package `{}` has no Kotodama library sources",
@@ -811,6 +896,7 @@ fn local_source_package(
         )));
     }
     Ok(Some(SourcePackageUnit {
+        sources,
         identity: local_package(&member.package.selector, &member.package.version),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
@@ -948,18 +1034,31 @@ fn cached_source_package(
             node.release
         )));
     }
-    let modules = cached
+    let inventory = cached
         .kotodama_sources
         .into_iter()
-        .filter_map(|source| {
-            relative_library_source(&source.path, &library.source_dir).map(|source_name| {
-                SourceModuleUnit {
-                    source_name,
-                    source: source.source,
-                }
-            })
+        .map(|source| SourceModuleUnit {
+            source_name: source.path,
+            source: source.source,
         })
         .collect::<Vec<_>>();
+    let (modules, _) = partition_library_sources(
+        inventory
+            .iter()
+            .filter(|source| {
+                relative_library_source(&source.source_name, &library.source_dir).is_some()
+            })
+            .cloned()
+            .collect(),
+    )?;
+    let sources = inventory
+        .into_iter()
+        .filter(|source| {
+            !modules
+                .iter()
+                .any(|module| module.source_name == source.source_name)
+        })
+        .collect();
     if modules.is_empty() {
         return Err(CompilerBridgeErrorV1::Package(format!(
             "cached release `{}` has no declared library sources",
@@ -975,6 +1074,7 @@ fn cached_source_package(
         })
         .collect();
     Ok(SourcePackageUnit {
+        sources,
         identity: registry_release(&node.release),
         modules,
         exports: semantic_exports,
@@ -1027,7 +1127,7 @@ fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<Stri
     let prefix = format!("{}/", source_dir.as_str());
     path.strip_prefix(&prefix)
         .filter(|relative| has_kotodama_extension(relative) && !relative.is_empty())
-        .map(ToOwned::to_owned)
+        .map(|_| path.to_owned())
 }
 fn has_kotodama_extension(path: &str) -> bool {
     path.strip_suffix(".ko").is_some()
@@ -1077,6 +1177,33 @@ mod tests {
     use iroha_model_base::topology::DataSpaceId;
     use std::fs;
     use tempfile::TempDir;
+    #[test]
+    fn library_source_inventory_classifies_entries_without_parsing_unused_fragments() {
+        let (modules, sources) = partition_library_sources(vec![
+            SourceModuleUnit {
+                source_name: "src/math.ko".into(),
+                source: "/* library */ module Math { include \"body.ko\"; }".into(),
+            },
+            SourceModuleUnit {
+                source_name: "src/body.ko".into(),
+                source: "fn value() -> int { return 7; }".into(),
+            },
+            SourceModuleUnit {
+                source_name: "src/unrelated.ko".into(),
+                source: "this deliberately malformed unused fragment".into(),
+            },
+        ])
+        .expect("classify inventory");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(sources.len(), 2);
+        assert!(
+            partition_library_sources(vec![SourceModuleUnit {
+                source_name: "src/app.ko".into(),
+                source: "seiyaku App {}".into()
+            }])
+            .is_err()
+        );
+    }
     struct EmptyRegistry;
     impl RegistryCompilerSourceV1 for EmptyRegistry {
         fn load(
@@ -1145,7 +1272,7 @@ exports = ["value"]
         .expect("manifest");
         fs::write(
             temp.path().join("src/lib.ko"),
-            "module Demo { fn value() -> int { return 1; } }",
+            "module Demo { export fn value() -> int { return 1; } }",
         )
         .expect("source");
         let workspace = load_workspace(temp.path()).expect("workspace");
@@ -1190,7 +1317,7 @@ exports = ["value"]
         let source_dir = PortablePath::new("src").expect("source dir");
         assert_eq!(
             relative_library_source("src/math/add.ko", &source_dir).as_deref(),
-            Some("math/add.ko")
+            Some("src/math/add.ko")
         );
         assert_eq!(relative_library_source("src2/add.ko", &source_dir), None);
         assert_eq!(relative_library_source("src/readme.txt", &source_dir), None);
@@ -1277,7 +1404,7 @@ exports = ["value"]
                 .to_owned(),
                 kotodama_sources: vec![CachedKotodamaSourceV1 {
                     path: "src/lib.ko".to_owned(),
-                    source: "module Dep { fn value() -> int { return 1; } }".to_owned(),
+                    source: "module Dep { export fn value() -> int { return 1; } }".to_owned(),
                 }],
                 semantic_release: MusubiSemanticReleaseManifestV1 {
                     release: dependency_release,
@@ -1706,7 +1833,7 @@ exports = []
         fs::create_dir_all(temp.path().join("src")).expect("source directory");
         fs::write(
             temp.path().join("src/lib.ko"),
-            "module Demo { fn value() -> int { return 1; } }",
+            "module Demo { export fn value() -> int { return 1; } }",
         )
         .expect("source");
         let package = MusubiPackageIdV1::new(

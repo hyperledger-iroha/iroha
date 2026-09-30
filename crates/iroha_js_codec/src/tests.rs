@@ -429,6 +429,7 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_messages: None,
         error_types: None,
         provenance: None,
     };
@@ -1066,6 +1067,7 @@ fn register_code_payload() -> Value {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_messages: None,
         error_types: None,
         provenance: None,
     };

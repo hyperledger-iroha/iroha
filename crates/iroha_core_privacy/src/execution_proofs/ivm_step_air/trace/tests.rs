@@ -46,6 +46,7 @@ fn contract_with_cycle_policy(body: &[u32], max_cycles: u64, mode: u8) -> Prepar
         },
         access_set_hints: None,
         kotoba: Vec::new(),
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {

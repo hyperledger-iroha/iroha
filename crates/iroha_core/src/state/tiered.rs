@@ -3435,6 +3435,13 @@ mod measured_bytes_impls {
             total
         }
     }
+    impl MeasuredBytes for iroha_data_model::smart_contract::manifest::ContractErrorMessage {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>()
+                .saturating_add(self.error_type.measured_bytes_extra())
+                .saturating_add(self.message.measured_bytes_extra())
+        }
+    }
     impl MeasuredBytes for KotobaTranslationEntry {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<KotobaTranslationEntry>();
@@ -3463,6 +3470,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.entrypoints.measured_bytes_extra());
             total = total.saturating_add(self.states.measured_bytes_extra());
             total = total.saturating_add(self.error_types.measured_bytes_extra());
+            total = total.saturating_add(self.error_messages.measured_bytes_extra());
             total = total.saturating_add(self.kotoba.measured_bytes_extra());
             total = total.saturating_add(self.provenance.measured_bytes_extra());
             total

@@ -47,40 +47,91 @@ impl TypedLinker {
             .map(|(index, package)| (package.identity.clone(), index))
             .collect();
         let imports = resolve_imports("root", &request.imports, &indexes)?;
-        let analyze =
-            |module: &ModuleUnit, imports: &BTreeMap<String, usize>, package: Option<&str>| {
-                let semantic = SemanticContext::with_capabilities(
-                    self.options.zk_enabled,
-                    self.options.test_builtins_enabled,
-                );
-                if let Some(package) = package {
-                    semantic.set_package_identity(package.to_owned());
-                }
-                let types = external_types(imports, &packages);
-                let signatures = semantic
-                    .resolve_resolved_function_signatures_with_types(&module.program, &types)
-                    .unwrap_or_default();
-                let (_, bindings, nodes) = semantic.analyze_editor(
-                    &module.program,
-                    external_signatures(imports, &packages),
-                    types,
-                );
-                (
-                    module.program.source_file().id(),
-                    EditorModuleFacts {
-                        signatures,
-                        bindings,
-                        nodes,
-                    },
-                )
-            };
-        let mut facts = BTreeMap::from([analyze(&request.root, &imports, None)]);
-        for package in &packages {
-            for module in &package.modules {
-                let (id, module_facts) =
-                    analyze(module.source, &package.imports, Some(&package.identity));
-                facts.insert(id, module_facts);
+        let mut base = ModuleEnvironment::default();
+        for (alias, index) in &imports {
+            base.add_package(alias, &packages[*index]);
+        }
+        request
+            .local_modules
+            .sort_by(|left, right| left.source_name.cmp(&right.source_name));
+        let local_modules = resolve_module_group(
+            self.options,
+            &request.local_modules,
+            &base,
+            None,
+            &request.root.ast().unit.name,
+            packages.len(),
+        )?;
+        let environment = base.with_local_imports(&request.root, &local_modules)?;
+        let mut facts = BTreeMap::new();
+        let mut analyze = |module: &ModuleUnit,
+                           environment: &ModuleEnvironment,
+                           owner: Option<&str>| {
+            let semantic = SemanticContext::with_capabilities(
+                self.options.zk_enabled,
+                self.options.test_builtins_enabled,
+            );
+            if let Some(owner) = owner {
+                semantic.set_package_identity(owner.to_owned());
             }
+            let signatures = semantic
+                .resolve_resolved_function_signatures_with_environment(
+                    &module.program,
+                    &environment.typed,
+                )
+                .unwrap_or_default();
+            let (_, bindings, nodes) =
+                semantic.analyze_editor_with_environment(&module.program, &environment.typed);
+            for native in module.program.source_programs() {
+                let id = native.source_file().id();
+                let mut local_bindings = if id == module.program.source_file().id() {
+                    bindings.clone()
+                } else {
+                    BTreeMap::new()
+                };
+                let local_nodes = nodes
+                    .iter()
+                    .filter(|node| node.id.source == id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for node in &local_nodes {
+                    if let Some(crate::resolved::ResolvedTarget::Value(
+                        crate::resolved::ResolvedValueTarget::Binding(binding),
+                    )) = node.target
+                    {
+                        local_bindings.insert(binding, node.ty.clone());
+                    }
+                }
+                let names = native
+                    .symbols()
+                    .filter(|symbol| symbol.kind == crate::resolved::ResolvedSymbolKind::Function)
+                    .map(|symbol| symbol.name.as_str())
+                    .collect::<BTreeSet<_>>();
+                facts.insert(
+                    id,
+                    EditorModuleFacts {
+                        signatures: signatures
+                            .iter()
+                            .filter(|(name, _)| names.contains(name.as_str()))
+                            .map(|(name, signature)| (name.clone(), signature.clone()))
+                            .collect(),
+                        bindings: local_bindings,
+                        nodes: local_nodes,
+                    },
+                );
+            }
+        };
+        analyze(&request.root, &environment, None);
+        for module in packages
+            .iter()
+            .flat_map(|package| &package.modules)
+            .chain(&local_modules)
+        {
+            analyze(
+                module.source,
+                &module.environment,
+                Some(&module.nominal_owner),
+            );
         }
         Ok(facts)
     }

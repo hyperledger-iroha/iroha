@@ -30,6 +30,16 @@ ABI policy
   surface. Tightening the unreleased V1 descriptor changes its hash, not its version; artifacts with
   any older V1 hash fail closed at admission.
 
+Contract error presentation
+- `#[message("...")]` creates a sorted `ContractErrorMessage { error_type, code, message }`
+  catalog in authenticated `CNTR`. Entries refer to declared nominal variants, contain nonblank
+  text, and are bounded to 4096 UTF-8 bytes. Catalog bytes affect artifact and manifest signatures;
+  wording does not change error, argument, or durable-state schema hashes.
+- `ContractRejection.message` is optional and comes from the originating VM's authenticated
+  catalog. Nested calls retain that origin and text through rollback. Runtime abort accounting
+  charges copied message bytes in addition to the existing nominal-error fields. A manifest-only
+  or caller-supplied label cannot override the originating catalog.
+
 Admission/host guardrails
 - Admission enforces manifest `code_hash`/`abi_hash` equality for both inline metadata manifests and
   WSV‑stored manifests before execution, returning `ManifestCodeHashMismatch`/`ManifestAbiHashMismatch`
@@ -134,7 +144,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
-- 0x04 CONTRACT_ABORT — Args: `r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12..r15=0` → Return: `u64=0` — Gas: G_abort + descriptor bytes (halts with an exact signed-CNTR-authenticated nominal rejection; descriptor frame at most 64 KiB)
+- 0x04 CONTRACT_ABORT — Args: `r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12..r15=0` → Return: `u64=0` — Gas: G_abort + descriptor bytes + selected message UTF-8 bytes (halts with an exact signed-CNTR-authenticated nominal rejection; descriptor frame at most 64 KiB)
 - 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=deterministic_execution_time_ms` — Gas: G_sysvar
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish + bytes (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_hash + bytes
@@ -601,7 +611,7 @@ node enforces that policy unconditionally.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
-| 0x04 | CONTRACT_ABORT | r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0 | u64=0 | asset:gas/G_abort@ivm.core/v2 + descriptor bytes |
+| 0x04 | CONTRACT_ABORT | r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0 | u64=0 | asset:gas/G_abort@ivm.core/v2 + descriptor bytes + selected message UTF-8 bytes |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
 | 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId(to) | u64=0 | asset:gas/G_transfer_domain@ivm.core/v2 |

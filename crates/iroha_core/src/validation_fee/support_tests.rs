@@ -395,6 +395,7 @@ fn minimal_bound_contract_artifact() -> (
                 entry_pc: u64::try_from(index).expect("fixture entrypoint index fits u64") * 16,
             })
             .collect(),
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

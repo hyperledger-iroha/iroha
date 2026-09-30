@@ -411,6 +411,19 @@ impl CompilerSession {
             request.source,
         );
         let (program, tokens) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())?;
+        if let Some(directive) = program.program.directives.first() {
+            let mut diagnostics = DiagnosticBundle::single(crate::diagnostic::Diagnostic::error(
+                "E_SOURCE_NOT_FOUND",
+                crate::diagnostic::DiagnosticPhase::Resolve,
+                "source dependencies require an explicit source bundle; supply companion files to build_source_bundle",
+                Some(crate::diagnostic::SourceSpan::from_range(
+                    &source,
+                    directive.source.range,
+                )),
+            ));
+            diagnostics.capture_source(&source);
+            return Err(diagnostics);
+        }
         reject_production_test_surface(
             self.options.mode,
             &program.program,
@@ -507,6 +520,35 @@ impl CompilerSession {
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         run_with_compiler_stack(move || self.build_inner(request))
             .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
+    }
+    /// Compile one complete, bounded source inventory without ambient file access.
+    pub fn build_source_bundle(
+        &self,
+        request: crate::linker::SourceLinkRequest,
+    ) -> Result<CompileOutput, DiagnosticBundle> {
+        run_with_compiler_stack(move || {
+            let _chain_discriminant = self.enter_chain_discriminant();
+            let name = request.root.source_name.clone();
+            let linked = crate::linker::ModuleBuildGraph::default()
+                .link(request, self.linker_options())
+                .map_err(crate::linker::SourceGraphError::into_diagnostics)?;
+            self.build_typed_program(linked.program, Some(&name))
+        })
+        .map_err(|_| compiler_worker_unavailable_diagnostic(None))?
+    }
+    /// Resolve and type-check an explicit source inventory without emitting an artifact.
+    pub fn check_source_bundle(
+        &self,
+        request: crate::linker::SourceLinkRequest,
+    ) -> Result<(), DiagnosticBundle> {
+        run_with_compiler_stack(move || {
+            let _chain_discriminant = self.enter_chain_discriminant();
+            crate::linker::ModuleBuildGraph::default()
+                .link(request, self.linker_options())
+                .map(|_| ())
+                .map_err(crate::linker::SourceGraphError::into_diagnostics)
+        })
+        .map_err(|_| compiler_worker_unavailable_diagnostic(None))?
     }
     fn build_inner(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();

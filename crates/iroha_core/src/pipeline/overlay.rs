@@ -4009,6 +4009,7 @@ mod tests_overlay_manifest {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -4133,6 +4134,7 @@ mod tests_overlay_manifest {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -6597,6 +6599,7 @@ seiyaku ProtectedProved {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         }
@@ -6749,6 +6752,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -7002,6 +7006,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -7184,6 +7189,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -7282,6 +7288,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -7323,6 +7330,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -7438,6 +7446,7 @@ seiyaku AliasBoundArguments {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         };

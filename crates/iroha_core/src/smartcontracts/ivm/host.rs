@@ -13276,6 +13276,7 @@ seiyaku PrivilegedBinding {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             }
@@ -17036,6 +17037,7 @@ seiyaku OpaqueInstructionSubmission {
                 entry_pc: 0,
             }],
             states: Vec::new(),
+            error_messages: Vec::new(),
             error_types: Vec::new(),
         };
         let contract_section = contract_interface.encode_section();
@@ -19232,7 +19234,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  error enum CalleeError { ForcedFailure = 1 }
+  error enum CalleeError { #[message("Caller explanation")] ForcedFailure = 1 }
   view fn main() -> int { return 0; }
 }
 "#,
@@ -19241,6 +19243,7 @@ seiyaku Caller {
         let callee_source = r#"
 seiyaku Callee {
   error enum CalleeError {
+    #[message("Callee rejected the operation")]
     ForcedFailure = 1,
   }
 
@@ -19295,6 +19298,7 @@ seiyaku Callee {
                 schema_hash: expected.schema_hash(),
                 name: "ForcedFailure".to_owned(),
                 code: 1,
+                message: Some("Callee rejected the operation".into()),
             }
         );
         assert_eq!(
@@ -19306,6 +19310,7 @@ seiyaku Callee {
                     schema_hash: expected.schema_hash(),
                     name: "ForcedFailure".to_owned(),
                     code: 1,
+                    message: Some("Callee rejected the operation".into()),
                 }
             ),
             "the caller's same-named variant must never replace the callee identity",

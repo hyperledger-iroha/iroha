@@ -6034,6 +6034,7 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         states: None,
         kotoba: None,
         error_types: None,
+        error_messages: None,
         provenance: None,
     };
     let register_code = norito::to_bytes(

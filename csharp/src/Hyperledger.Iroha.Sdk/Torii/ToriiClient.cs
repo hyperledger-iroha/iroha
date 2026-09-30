@@ -9208,12 +9208,12 @@ public sealed partial class ToriiClient : IDisposable
             throw new ArgumentException("Verified source language must be kotodama.", nameof(request.Language));
         }
 
-        return request with
+        return ToriiContractSourceBundle.Normalize(request with
         {
             Language = language,
             SourceName = NormalizeOptionalSourceName(request.SourceName, nameof(request.SourceName)),
             SourceText = NormalizeSourceText(request.SourceText, nameof(request.SourceText)),
-        };
+        });
     }
 
     private static ByteArrayContent CreateBinaryContent(ReadOnlyMemory<byte> bytes, string mediaType)

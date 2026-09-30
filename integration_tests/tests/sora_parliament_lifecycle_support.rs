@@ -275,6 +275,7 @@ pub(super) fn minimal_contract_artifact_with_identity(
             entry_pc: 0,
         }],
         error_types: Vec::new(),
+        error_messages: Vec::new(),
         states: Vec::new(),
     };
     let mut artifact = metadata.encode();
