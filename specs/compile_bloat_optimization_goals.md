@@ -5,7 +5,7 @@ and runtime performance. Migrate consumers directly: first release does not
 require public compatibility aliases. Sumeragi remains owned by the user's
 separate work; inspect current SCCP state before touching adjacent code.
 
-| Goal | Status | Completion evidence |
+| Goal | Status | Completion criteria |
 | --- | --- | --- |
 | O1: Finish compiler and Core ZK ownership | In progress | IVM's normal graph excludes the compiler; compiler/toolchain/VM and proof tests pass; source guards and external imports use their actual owners. |
 | O2: Extract state-free privacy verification | In progress | Separate privacy crate, original proof/wire fixtures and all tests preserved; Core retains state authority; native/Python/JS consumers drop the validator execution graph. |

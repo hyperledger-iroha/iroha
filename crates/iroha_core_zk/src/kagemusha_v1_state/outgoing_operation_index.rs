@@ -559,7 +559,6 @@ impl KagemushaOutgoingOperationRecordV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     /// Recheck the authenticated record before an operation-specific terminal release.
     ///
     /// The payment and redemption release modules must validate their own external receipt, but

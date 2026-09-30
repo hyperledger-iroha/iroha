@@ -6138,6 +6138,7 @@ pub mod test_fixtures {
                 initial_output,
             }
         }
+        #[cfg(test)]
         pub(super) fn verification_context<'a>(
             &'a self,
             snapshot: Option<&'a PrivacyProofManagedPoolSnapshotV1>,
