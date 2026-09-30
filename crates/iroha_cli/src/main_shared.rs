@@ -85,6 +85,14 @@ fn compiled_build_identity() -> core::result::Result<
 }
 static BUILD_METADATA: std::sync::OnceLock<CompiledBuildMetadata> = std::sync::OnceLock::new();
 
+/// Install one immutable identity, accepting retries only when exactly identical.
+fn install_build_metadata(
+    slot: &std::sync::OnceLock<CompiledBuildMetadata>,
+    build: CompiledBuildMetadata,
+) -> bool {
+    slot.set(build).is_ok() || slot.get() == Some(&build)
+}
+
 fn build_metadata() -> CompiledBuildMetadata {
     BUILD_METADATA.get().copied().unwrap_or_else(|| {
         CompiledBuildMetadata::from_compiled_parts(
@@ -1162,9 +1170,7 @@ impl Run for Version {
 ///
 /// The process installs its metadata once, before parsing or dispatching commands.
 pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
-    if let Err(build) = BUILD_METADATA.set(build)
-        && BUILD_METADATA.get() != Some(&build)
-    {
+    if !install_build_metadata(&BUILD_METADATA, build) {
         eprintln!("CLI executable build metadata is already installed with a different identity");
         return std::process::ExitCode::from(7);
     }

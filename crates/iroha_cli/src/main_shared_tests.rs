@@ -2865,6 +2865,32 @@ fn library_test_build_metadata_is_an_explicit_development_identity() {
 }
 
 #[test]
+fn metadata_installation_preserves_the_first_identity() {
+    let slot = std::sync::OnceLock::new();
+    let initial = CompiledBuildMetadata::from_compiled_parts(
+        "executable-version",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(install_build_metadata(&slot, initial));
+    assert!(install_build_metadata(&slot, initial));
+    let different = CompiledBuildMetadata::from_compiled_parts(
+        "another-executable-version",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(!install_build_metadata(&slot, different));
+    assert_eq!(slot.get(), Some(&initial));
+    assert!(install_build_metadata(&slot, initial));
+}
+
+#[test]
 fn version_is_supplied_by_the_executable() {
     let build = CompiledBuildMetadata::from_compiled_parts(
         "executable-version",

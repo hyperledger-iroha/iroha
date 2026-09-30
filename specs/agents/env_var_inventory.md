@@ -182,7 +182,7 @@ Total references: **907** · Unique variables: **216**
 - test: crates/iroha_cli/src/commands/sorafs/toolkit/validation/final_promotion_receipt_tests.rs:9 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_cli/src/commands/sorafs/toolkit/validation/tests.rs:21 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_cli/src/compute.rs:746 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
-- prod: crates/iroha_cli/src/main_shared.rs:1778 — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
+- prod: crates/iroha_cli/src/main_shared.rs:1784 — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - prod: crates/iroha_cli/src/soracloud.rs:21593 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_cli/src/soracloud/tests/part_01.rs:46 — `let target_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");`
 - test: crates/iroha_cli/src/soracloud/tests/part_01.rs:718 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -615,8 +615,8 @@ Total references: **907** · Unique variables: **216**
 ## CARGO_PKG_VERSION (prod: 15, test: 2, tool: 2)
 
 - test: crates/iroha_cli/bins/tests/cli_smoke.rs:701 — `let expected_version = env!("CARGO_PKG_VERSION");`
-- prod: crates/iroha_cli/src/main_shared.rs:91 — `env!("CARGO_PKG_VERSION"),`
-- prod: crates/iroha_cli/src/main_shared.rs:386 — `#[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]`
+- prod: crates/iroha_cli/src/main_shared.rs:99 — `env!("CARGO_PKG_VERSION"),`
+- prod: crates/iroha_cli/src/main_shared.rs:394 — `#[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]`
 - prod: crates/iroha_core/src/release_identity.rs:249 — `env!("CARGO_PKG_VERSION"),`
 - prod: crates/iroha_js_host/src/lib.rs:3738 — `metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));`
 - prod: crates/iroha_kagami/src/genesis/generate.rs:579 — `env!("CARGO_PKG_VERSION")`
