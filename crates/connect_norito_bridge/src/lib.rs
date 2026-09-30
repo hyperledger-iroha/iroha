@@ -170,15 +170,18 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaEnrollmentJournalResultV1, KagemushaEnrollmentJournalSelectionV1,
     KagemushaEnrollmentJournalStoreV1, KagemushaEnrollmentLiveSelectionV1,
     KagemushaEnrollmentPhaseOneBackendV1, KagemushaEnrollmentProvisionedContextV1,
-    KagemushaKernelEnrollmentDelegateV1, KagemushaQualifiedEnrollmentDelegateV1,
-    PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
-    SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
+    KagemushaKernelEnrollmentDelegateV1, KagemushaNativeEnrollmentProvisionerV1,
+    KagemushaNativeEnrollmentProvisioningV1, KagemushaNativeProvisionerInstallErrorV1,
+    KagemushaQualifiedEnrollmentDelegateV1, PendingIssuerEnrollmentV1, PreparedIssuerProofV1,
+    SignedAppPreparationErrorV1, SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
     install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
     kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
     kagemusha_core_coordinator_encode_response_v1,
     kagemusha_core_coordinator_validate_method_request_v1,
     kagemusha_core_coordinator_validate_method_response_v1,
-    kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
+    kagemusha_core_coordinator_validate_storage_path_v1,
+    provision_and_install_kagemusha_native_enrollment_v1,
+    register_kagemusha_native_enrollment_provisioner_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
 #[cfg(unix)]
@@ -1443,6 +1446,42 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_contract_v1(
         );
     }
     KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len() as c_int
+}
+
+/// Install the independently retained Rust platform owner for one storage path.
+///
+/// The application cannot pass policies, keys, roots, hardware claims or callbacks. Only a
+/// separately registered native provisioner can compose the qualified coordinator and durable
+/// journal. The exact successful same-path retry is idempotent; unknown or different-owner/path
+/// attempts reject. No registered native OEM owner returns unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_install_v1(
+    storage_path_ptr: *const c_uchar,
+    storage_path_len: usize,
+) -> c_int {
+    if storage_path_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    if storage_path_len == 0
+        || storage_path_len > KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let storage_path = Zeroizing::new(
+        unsafe { slice::from_raw_parts(storage_path_ptr, storage_path_len) }.to_vec(),
+    );
+    let Ok(path) = kagemusha_core_coordinator_validate_storage_path_v1(&storage_path) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        kagemusha_core_coordinator_v1::provision_and_install_kagemusha_native_enrollment_v1(path)
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
+            ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        }
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => ERR_KAGEMUSHA_V1,
+    }
 }
 
 /// Open a qualified authenticated durable KAGEMUSHA Core coordinator.
@@ -11276,6 +11315,35 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
         return ptr::null_mut();
     }
     output.into_raw()
+}
+
+/// Install only the independently registered Rust platform provisioner for the exact path.
+///
+/// The JVM cannot supply roots, release policy, hardware evidence or backend callbacks.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInstallV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    storage_path: jni::objects::JString<'_>,
+) -> jni::sys::jint {
+    let Ok(storage_path) = env.get_string(&storage_path) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    let Ok(storage_path) = storage_path.to_str() else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    unsafe {
+        connect_norito_kagemusha_core_coordinator_install_v1(
+            storage_path.as_ptr(),
+            storage_path.len(),
+        )
+    }
 }
 
 /// Open the qualified KAGEMUSHA Core coordinator through the Kotlin Android SDK.

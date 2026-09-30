@@ -56,6 +56,8 @@ enum Count {
     Mask,
     Galois,
     RankAlignment,
+    UniversalPositions,
+    InactivePositions,
     Outputs,
 }
 const COUNT_LENGTH: usize = Count::Outputs as usize + 1;
@@ -101,8 +103,10 @@ impl UnqualifiedPlan {
         self.counts[counter as usize]
     }
 
-    fn increment(&mut self, counter: Count) {
-        self.counts[counter as usize] += 1;
+    fn increment(&mut self, counter: Count) -> Result<(), PlanError> {
+        let count = &mut self.counts[counter as usize];
+        *count = count.checked_add(1).ok_or(PlanError::ArithmeticOverflow)?;
+        Ok(())
     }
 
     /// Symbolic base residue storage only. Neither N nor limb count selects or
@@ -215,29 +219,49 @@ impl Work {
     }
 
     fn new_value(&mut self, rank: usize) -> Result<usize, PlanError> {
-        if self.next == self.values.len() {
+        if self.next >= self.values.len() {
             return Err(PlanError::Capacity);
         }
         let id = self.next;
+        let next = self
+            .next
+            .checked_add(1)
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        let live = self
+            .live
+            .checked_add(1)
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        let components = live.checked_mul(2).ok_or(PlanError::ArithmeticOverflow)?;
         self.values[id] = [1, rank];
-        self.next += 1;
-        self.live += 1;
-        self.plan.peaks[0] = self.plan.peaks[0].max(self.live);
-        self.plan.peaks[1] = self.plan.peaks[1].max(self.live * 2);
+        self.next = next;
+        self.live = live;
+        self.plan.peaks[0] = self.plan.peaks[0].max(live);
+        self.plan.peaks[1] = self.plan.peaks[1].max(components);
         Ok(id)
     }
 
-    fn retain(&mut self, id: usize) {
+    fn retain(&mut self, id: usize) -> Result<(), PlanError> {
         assert_ne!(self.values[id][0], 0, "live symbolic owner");
-        self.values[id][0] += 1;
+        self.values[id][0] = self.values[id][0]
+            .checked_add(1)
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        Ok(())
     }
 
-    fn release(&mut self, id: usize) {
-        assert_ne!(self.values[id][0], 0, "live symbolic owner");
-        self.values[id][0] -= 1;
-        if self.values[id][0] == 0 {
-            self.live -= 1;
-        }
+    fn release(&mut self, id: usize) -> Result<(), PlanError> {
+        let references = self.values[id][0]
+            .checked_sub(1)
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        let live = if references == 0 {
+            self.live
+                .checked_sub(1)
+                .ok_or(PlanError::ArithmeticOverflow)?
+        } else {
+            self.live
+        };
+        self.values[id][0] = references;
+        self.live = live;
+        Ok(())
     }
 
     fn rank(&self, id: usize) -> usize {
@@ -245,18 +269,18 @@ impl Work {
         self.values[id][1]
     }
 
-    fn replace_register(&mut self, dst: u16, owned: usize) {
+    fn replace_register(&mut self, dst: u16, owned: usize) -> Result<(), PlanError> {
         let old = std::mem::replace(&mut self.registers[usize::from(dst)], owned);
-        self.release(old);
+        self.release(old)
     }
 
     fn unary(&mut self, src: usize, counter: Count) -> Result<usize, PlanError> {
-        self.plan.increment(counter);
+        self.plan.increment(counter)?;
         self.new_value(self.rank(src))
     }
 
     fn embed(&mut self) -> Result<usize, PlanError> {
-        self.plan.increment(Count::Embeddings);
+        self.plan.increment(Count::Embeddings)?;
         self.new_value(0)
     }
 
@@ -267,19 +291,27 @@ impl Work {
             if self.rank(id) < rank {
                 // Demand for an immutable aligned copy. Its physical transfer
                 // and noise are unresolved, even when logical ranks agree.
-                self.plan.increment(Count::RankAlignment);
+                self.plan.increment(Count::RankAlignment)?;
                 *slot = Some(self.new_value(rank)?);
             }
         }
-        self.plan.increment(counter);
+        self.plan.increment(counter)?;
         let multiply = matches!(counter, Count::Mul);
-        let result = self.new_value(rank + usize::from(multiply))?;
+        let result_rank = rank
+            .checked_add(usize::from(multiply))
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        let result = self.new_value(result_rank)?;
         if multiply {
-            self.plan.increment(Count::Relinearize);
-            self.plan.peaks[1] = self.plan.peaks[1].max(self.live * 2 + 3);
+            self.plan.increment(Count::Relinearize)?;
+            let components = self
+                .live
+                .checked_mul(2)
+                .and_then(|live| live.checked_add(3))
+                .ok_or(PlanError::ArithmeticOverflow)?;
+            self.plan.peaks[1] = self.plan.peaks[1].max(components);
         }
         for id in alignment.into_iter().flatten() {
-            self.release(id);
+            self.release(id)?;
         }
         Ok(result)
     }
@@ -289,8 +321,8 @@ impl Work {
         for _ in GALOIS_EXPONENTS {
             let rotated = self.unary(result, Count::Galois)?;
             let next = self.binary(result, rotated, Count::Add)?;
-            self.release(rotated);
-            self.release(result);
+            self.release(rotated)?;
+            self.release(result)?;
             result = next;
         }
         self.plan.required_galois = GALOIS_EXPONENTS;
@@ -303,51 +335,51 @@ impl Work {
         zero: usize,
         nonzero: usize,
     ) -> Result<usize, PlanError> {
-        self.retain(condition);
+        self.retain(condition)?;
         let mut base = condition;
         let one_result = self.embed()?;
         for _ in 0..8 {
             let squared = self.binary(base, base, Count::Mul)?;
-            self.release(base);
+            self.release(base)?;
             base = squared;
         }
         let powered = self.binary(one_result, base, Count::Mul)?;
-        self.release(one_result);
-        self.release(base);
+        self.release(one_result)?;
+        self.release(base)?;
         let one_indicator = self.embed()?;
         let indicator = self.binary(one_indicator, powered, Count::Sub)?;
-        self.release(one_indicator);
-        self.release(powered);
+        self.release(one_indicator)?;
+        self.release(powered)?;
         let delta = self.binary(zero, nonzero, Count::Sub)?;
         let selected = self.binary(indicator, delta, Count::Mul)?;
-        self.release(indicator);
-        self.release(delta);
+        self.release(indicator)?;
+        self.release(delta)?;
         let result = self.binary(nonzero, selected, Count::Add)?;
-        self.release(selected);
+        self.release(selected)?;
         Ok(result)
     }
 
     fn instruction(&mut self, op: Op) -> Result<(), PlanError> {
-        self.plan.increment(Count::Instructions);
+        self.plan.increment(Count::Instructions)?;
         match op {
             Op::LoadInput(dst, _) => {
                 let result = self.broadcast_input()?;
-                self.replace_register(dst, result);
+                self.replace_register(dst, result)?;
             }
             Op::LoadState(dst, lane) => {
                 let id = self.memory[usize::from(lane)];
-                self.retain(id);
-                self.replace_register(dst, id);
+                self.retain(id)?;
+                self.replace_register(dst, id)?;
             }
             Op::StoreState(lane, src) => {
                 let id = self.registers[usize::from(src)];
-                self.retain(id);
+                self.retain(id)?;
                 let old = std::mem::replace(&mut self.memory[usize::from(lane)], id);
-                self.release(old);
+                self.release(old)?;
             }
             Op::LoadConst(dst, _) => {
                 let id = self.embed()?;
-                self.replace_register(dst, id);
+                self.replace_register(dst, id)?;
             }
             Op::Add(dst, lhs, rhs) | Op::Mul(dst, lhs, rhs) => {
                 let counter = if matches!(op, Op::Mul(..)) {
@@ -360,7 +392,7 @@ impl Work {
                     self.registers[usize::from(rhs)],
                     counter,
                 )?;
-                self.replace_register(dst, id);
+                self.replace_register(dst, id)?;
             }
             Op::AddPlain(dst, src, _) | Op::SubPlain(dst, src, _) | Op::MulPlain(dst, src, _) => {
                 let counter = match op {
@@ -369,7 +401,7 @@ impl Work {
                     _ => Count::MulPlain,
                 };
                 let id = self.unary(self.registers[usize::from(src)], counter)?;
-                self.replace_register(dst, id);
+                self.replace_register(dst, id)?;
             }
             Op::SelectEqZero(dst, condition, zero, nonzero) => {
                 let id = self.select(
@@ -377,18 +409,18 @@ impl Work {
                     self.registers[usize::from(zero)],
                     self.registers[usize::from(nonzero)],
                 )?;
-                self.replace_register(dst, id);
+                self.replace_register(dst, id)?;
             }
             Op::Output(src) => {
                 let id = self.registers[usize::from(src)];
                 let output_index = self.plan.count(Count::Outputs);
                 self.plan.output_ranks[output_index] = self.rank(id);
-                self.plan.increment(Count::Outputs);
+                self.plan.increment(Count::Outputs)?;
                 let masked = self.unary(id, Count::Mask)?;
                 self.output = Some(if let Some(old) = self.output {
                     let sum = self.binary(old, masked, Count::Add)?;
-                    self.release(old);
-                    self.release(masked);
+                    self.release(old)?;
+                    self.release(masked)?;
                     sum
                 } else {
                     masked
@@ -419,8 +451,16 @@ fn plan_with_hook(
         return Err(PlanError::RequestShape);
     }
     let mut work = Work::new()?;
-    for (pc, op) in program.instructions().enumerate() {
-        work.instruction(op)?;
+    // Every universal position is accounted even for a short private tape.
+    // Inactive positions preserve every owner and emit nothing. This is neither
+    // an implemented proof relation nor a claim of constant-time planning.
+    for pc in 0..TAPE_CAPACITY {
+        work.plan.increment(Count::UniversalPositions)?;
+        if let Some(op) = program.instruction(pc) {
+            work.instruction(op)?;
+        } else {
+            work.plan.increment(Count::InactivePositions)?;
+        }
         hook(pc)?;
     }
     for (dst, id) in work
@@ -673,6 +713,84 @@ mod tests {
                 assert!(events.iter().all(|&(_, cleared)| cleared));
             });
         }
+    }
+
+    #[test]
+    fn every_universal_position_is_accounted_without_inactive_effects() {
+        for active in [1, 64, 255, 256] {
+            let program =
+                tape(std::iter::repeat_n(Op::LoadConst(0, 256), active - 1).chain([Op::Output(0)]));
+            let mut observed = Vec::new();
+            let plan = plan_with_hook(&program, 1, 0, |pc| {
+                observed.push(pc);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(observed, (0..TAPE_CAPACITY).collect::<Vec<_>>());
+            assert_eq!(plan.count(Count::UniversalPositions), TAPE_CAPACITY);
+            assert_eq!(plan.count(Count::InactivePositions), TAPE_CAPACITY - active);
+            assert_eq!(plan.count(Count::Instructions), active);
+            assert_eq!(plan.count(Count::Outputs), 1);
+            assert_eq!(plan.count(Count::Embeddings), 33 + active - 1);
+            assert_eq!(plan.count(Count::Mask), 1);
+            assert_eq!(plan.final_register_ranks, [0; 4]);
+            assert_eq!(plan.final_memory_ranks, [0; 32]);
+        }
+        let program = tape([Op::Output(0)]);
+        CLEARED.with_borrow_mut(Vec::clear);
+        assert_eq!(
+            plan_with_hook(&program, 1, 0, |pc| {
+                if pc == TAPE_CAPACITY - 1 {
+                    Err(PlanError::Interrupted)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err(),
+            PlanError::Interrupted
+        );
+        CLEARED.with_borrow(|events| {
+            assert!(events.iter().any(|&(kind, _)| kind == 0));
+            assert!(events.iter().any(|&(kind, _)| kind == 1));
+            assert!(events.iter().all(|&(_, cleared)| cleared));
+        });
+    }
+
+    #[test]
+    fn counter_reference_rank_and_tensor_arithmetic_fail_closed() {
+        let mut plan = UnqualifiedPlan::default();
+        plan.counts[Count::Mul as usize] = usize::MAX;
+        assert_eq!(
+            plan.increment(Count::Mul),
+            Err(PlanError::ArithmeticOverflow)
+        );
+        assert_eq!(plan.count(Count::Mul), usize::MAX);
+        let mut work = Work::new().unwrap();
+        work.values[33][0] = usize::MAX;
+        assert_eq!(work.retain(33), Err(PlanError::ArithmeticOverflow));
+        assert_eq!(work.values[33][0], usize::MAX);
+        work.values[0][0] = 0;
+        assert_eq!(work.release(0), Err(PlanError::ArithmeticOverflow));
+        work.values[0][0] = 1;
+        work.live = 0;
+        assert_eq!(work.release(0), Err(PlanError::ArithmeticOverflow));
+        assert_eq!(work.values[0][0], 1);
+        work.live = usize::MAX;
+        let next = work.next;
+        assert_eq!(work.new_value(0), Err(PlanError::ArithmeticOverflow));
+        assert_eq!(work.next, next);
+        let mut rank = Work::new().unwrap();
+        rank.values[33][1] = usize::MAX;
+        assert_eq!(
+            rank.binary(33, 33, Count::Mul),
+            Err(PlanError::ArithmeticOverflow)
+        );
+        let mut tensor = Work::new().unwrap();
+        tensor.live = usize::MAX / 2 - 1;
+        assert_eq!(
+            tensor.binary(33, 33, Count::Mul),
+            Err(PlanError::ArithmeticOverflow)
+        );
     }
 
     #[test]

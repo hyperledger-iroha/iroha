@@ -711,6 +711,12 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
     uint32_t* output_words, size_t output_capacity_words);
+// Install only a separately registered trusted Rust provisioner at this exact
+// existing storage path. No keys, roots, policies or authority claims are accepted.
+// Exact successful same-path retries recheck original custody; no native
+// provisioner returns UNAVAILABLE and rejected/uncertain installation fails closed.
+int32_t connect_norito_kagemusha_core_coordinator_install_v1(
+    const uint8_t* storage_path_utf8, size_t storage_path_length);
 int32_t connect_norito_kagemusha_core_coordinator_open_v1(
     const uint8_t* storage_path_utf8, size_t storage_path_length,
     uint64_t* output_handle);
@@ -719,11 +725,12 @@ int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
     const uint8_t* request_frame, size_t request_frame_length,
     uint8_t** output_frame, size_t* output_frame_length);
 int32_t connect_norito_kagemusha_core_coordinator_close_v1(uint64_t handle);
-// Generic builds install no backend, so open/invoke/close return
-// CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1. A qualified platform
-// build must install the Rust backend exactly once; there is no C/JNI
-// installer, replacement, uninstall, or monetary software fallback. Invoke
-// results are allocated by the bridge and released with connect_norito_free.
+// Generic builds provide no native OEM provisioner and fail closed as unavailable.
+// The path-only installer composes the independently retained Rust owner exactly
+// once; it provides no caller-selected backend, replacement, uninstall or monetary
+// software fallback. Contract words are metadata only; successful install and
+// Open establish the native handle. Invoke results are bridge-owned and released
+// with connect_norito_free.
 
 typedef enum ConnectNoritoKagemushaDeviceCapabilityV1 {
   CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1 = 1u << 0,

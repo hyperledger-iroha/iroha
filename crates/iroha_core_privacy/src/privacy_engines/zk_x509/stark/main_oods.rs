@@ -187,6 +187,11 @@ fn verify_composition_v1(
         .rev()
         .fold(E::ZERO, |sum, chunk| sum.mul(power).add(*chunk));
     if actual != expected {
+        #[cfg(test)]
+        super::super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-oods-composition-equality",
+            &(point, actual, expected),
+        );
         return Err(ZkX509StarkErrorV1::ConstraintOpening);
     }
     Ok(())
@@ -472,10 +477,24 @@ pub(super) fn verify_main_deep_constraints_v1(
     }
     let groups = aggregate::canonical_deep_trace_groups_v1(deep, AGGREGATE_PARAMETERS_V1, &shared)
         .map_err(map_aggregate_error_v1)?;
-    let prepared = prepare_main_deep_fixed_v1(layout, point, p256, projection, io, log19)?;
+    let prepared = prepare_main_deep_fixed_v1(layout, point, p256, projection, io, log19)
+        .inspect_err(|_error| {
+            #[cfg(test)]
+            super::super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                "main-oods-fixed-evaluation",
+                _error,
+            );
+        })?;
     let expected = main_deep_composition_v1(
         layout, &groups, point, alphas, p256, projection, io, log19, &prepared,
-    )?;
+    )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-oods-residues",
+            _error,
+        );
+    })?;
     verify_composition_v1(&shared, deep, point, expected)
 }
 

@@ -1855,6 +1855,8 @@ final class ToriiClientTests: XCTestCase {
               "total": 1,
               "items": [{
                 "policy_id":"email#retail",
+                "program_id":"identifier_lookup_retail",
+                "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                 "owner":"\(owner)",
                 "active":true,
                 "normalization":"email_address",
@@ -1891,6 +1893,15 @@ final class ToriiClientTests: XCTestCase {
               }]
             }
             """.data(using: .utf8)!
+            // Prove that the retired mode is the only malformed field.
+            var canonical = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            var items = try XCTUnwrap(canonical["items"] as? [[String: Any]])
+            var profile = try XCTUnwrap(items[0]["ram_fhe_profile"] as? [String: Any])
+            profile["encrypted_input_mode"] = "encrypted_envelope_v1"
+            items[0]["ram_fhe_profile"] = profile
+            canonical["items"] = items
+            XCTAssertNoThrow(try JSONDecoder().decode(ToriiIdentifierPolicyListResponse.self,
+                from: JSONSerialization.data(withJSONObject: canonical)))
             return (response, body)
         }
 
@@ -1920,6 +1931,8 @@ final class ToriiClientTests: XCTestCase {
               "total": 1,
               "items": [{
                 "policy_id":"email#retail",
+                "program_id":"identifier_lookup_retail",
+                "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                 "owner":"\(owner)",
                 "active":true,
                 "normalization":"email_address",
@@ -1955,6 +1968,15 @@ final class ToriiClientTests: XCTestCase {
               }]
             }
             """.data(using: .utf8)!
+            // Prove that the retired mode is the only malformed field.
+            var canonical = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            var items = try XCTUnwrap(canonical["items"] as? [[String: Any]])
+            var profile = try XCTUnwrap(items[0]["ram_fhe_profile"] as? [String: Any])
+            profile["encrypted_input_mode"] = "encrypted_envelope_v1"
+            items[0]["ram_fhe_profile"] = profile
+            canonical["items"] = items
+            XCTAssertNoThrow(try JSONDecoder().decode(ToriiIdentifierPolicyListResponse.self,
+                from: JSONSerialization.data(withJSONObject: canonical)))
             return (response, body)
         }
 
@@ -2176,8 +2198,16 @@ final class ToriiClientTests: XCTestCase {
             try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
         let execute = try object(ramLfeExecuteResponseJSON())
-        let receipt = try XCTUnwrap(execute["receipt"] as? [String: Any])
-        let execution = try XCTUnwrap(receipt["payload"] as? [String: Any])
+        // Identifier execution has four ciphertext/key binding hashes beyond
+        // the generic RAM-LFE receipt payload. Use its actual typed fixture.
+        let identifierPayload = makeSignedIdentifierReceiptPayload(
+            accountId: try canonicalOwnerLiteral(),
+            opaqueId: String(repeating: "11", count: 32),
+            receiptHash: String(repeating: "22", count: 32),
+            uaid: String(repeating: "33", count: 32),
+            backend: "bfv-programmed-v1"
+        )
+        let execution = try object(JSONEncoder().encode(identifierPayload.execution))
         let programList = try object(ramLfeProgramPoliciesJSON())
         let policies = try XCTUnwrap(programList["items"] as? [[String: Any]])
         let identifierPolicy: [String: Any] = [
@@ -10414,7 +10444,8 @@ final class ToriiClientTests: XCTestCase {
             _ = try await client.submitKagemushaRedemption(request,
                 withCurrentOwner: { action in
                     checks += 1
-                    if checks == 2 { throw OwnedTopUpTestFailure.ownerRevoked }
+                    // Revocation persists through the post-failure owner recheck.
+                    if checks >= 2 { throw OwnedTopUpTestFailure.ownerRevoked }
                     try action()
                 })
             XCTFail("The current owner must be checked at task resume")

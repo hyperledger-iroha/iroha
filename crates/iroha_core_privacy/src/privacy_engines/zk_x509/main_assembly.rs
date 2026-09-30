@@ -67,6 +67,7 @@ use super::{
     },
     verifier_profile::rfc_statement_with_crl_number_v1,
 };
+#[cfg(test)]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
 use p256::ecdsa::Signature as P256Signature;

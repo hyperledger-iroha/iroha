@@ -1,9 +1,10 @@
 //! Package-aware native deployment and authenticated on-chain views.
 use super::*;
 use crate::compiler::CompilerArtifactV1;
+use crate::deployment_runtime::DeploymentSlot;
 use iroha_contract_deploy::{
     DeploymentError, DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
-    DeploymentService, JournalDisposition,
+    DeploymentService,
 };
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard, smart_contract::ContractAlias,
@@ -100,16 +101,10 @@ pub(super) fn run_deploy(
         &artifact.package,
         &artifact.target,
     )?;
-    let writer = AtomicWriteRoot::open_or_create_private(&slot).map_err(atomic_diagnostic)?;
-    let _slot_lock = writer
-        .lock_exclusive(Path::new("deployment.lock"))
-        .map_err(atomic_diagnostic)?;
-    ensure_previous_terminal(
-        &writer,
-        &service,
-        build.workspace.root_manifest_path(),
-        &build.network,
-    )?;
+    let session = DeploymentSlot::open(&slot).map_err(runtime_diagnostic)?;
+    session
+        .ensure_previous_terminal(&service)
+        .map_err(runtime_diagnostic)?;
     let prepared = service
         .prepare(&DeploymentRequest {
             artifact: artifact_bytes,
@@ -118,14 +113,9 @@ pub(super) fn run_deploy(
             governance_approvers: Vec::new(),
         })
         .map_err(|error| deployment_diagnostic(&error))?;
-    let journal_id = plan_journal_id(prepared.preflight())?;
-    let journal = slot.join(&journal_id);
-    service
-        .persist(&prepared, &journal)
-        .map_err(|error| deployment_diagnostic(&error))?;
-    writer
-        .replace(Path::new("active-journal"), journal_id.as_bytes())
-        .map_err(atomic_diagnostic)?;
+    let journal = session
+        .persist(&service, &prepared)
+        .map_err(runtime_diagnostic)?;
     if args.prepare {
         return Ok(Success {
             message: format!(
@@ -199,23 +189,8 @@ fn recover_deployment(
     receipt_output(&receipt, journal)
 }
 
-/// Name the durable journal after the plan's final atomic commit transaction hash.
-fn plan_journal_id(preflight: &DeploymentPreflight) -> Result<String, Diagnostic> {
-    let hash = preflight.transaction_hashes.last().ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::Internal,
-            "deployment plan contains no atomic commit",
-        )
-    })?;
-    let hash = hash
-        .parse::<iroha::crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
-        .map_err(|_| {
-            Diagnostic::new(
-                ErrorCode::Internal,
-                "deployment plan contains an invalid transaction hash",
-            )
-        })?;
-    Ok(hex::encode(hash.as_ref()))
+fn runtime_diagnostic(error: eyre::Report) -> Diagnostic {
+    Diagnostic::new(ErrorCode::Network, format!("{error:#}"))
 }
 
 fn render_progress(event: DeploymentProgress) -> String {
@@ -457,44 +432,6 @@ pub(super) fn validate_journal_id(id: &str) -> Result<(), Diagnostic> {
             ErrorCode::PackageInvalid,
             "deployment journal must name one exact transaction hash",
         ));
-    }
-    Ok(())
-}
-
-fn ensure_previous_terminal(
-    writer: &AtomicWriteRoot,
-    service: &DeploymentService,
-    manifest: &Path,
-    network: &network::SelectedNetwork,
-) -> Result<(), Diagnostic> {
-    let Some(bytes) = writer
-        .load_immutable(Path::new("active-journal"), 64)
-        .map_err(atomic_diagnostic)?
-    else {
-        return Ok(());
-    };
-    let id = std::str::from_utf8(&bytes).map_err(|_| {
-        Diagnostic::new(
-            ErrorCode::PackageInvalid,
-            "invalid active deployment journal",
-        )
-    })?;
-    validate_journal_id(id)?;
-    let journal = writer.path().join(id);
-    if matches!(
-        service
-            .inspect_journal(&journal)
-            .map_err(|error| deployment_diagnostic(&error))?,
-        JournalDisposition::Pending { .. }
-    ) {
-        return Err(Diagnostic::new(
-            ErrorCode::Network,
-            "an earlier deployment plan is unresolved",
-        )
-        .with_help(format!(
-            "resume the exact plan with `{}`",
-            contract_resume_command("deploy", manifest, network, &journal)
-        )));
     }
     Ok(())
 }
@@ -836,6 +773,7 @@ mod tests {
 
     #[test]
     fn plan_journal_is_named_by_the_final_atomic_commit_hash() {
+        use crate::deployment_runtime::plan_journal_id;
         use iroha::crypto::Hash;
         let _profile = ChainDiscriminantGuard::enter(369);
         let (authority, id, address, fee) = authority_paid_identities();
@@ -860,12 +798,8 @@ mod tests {
             ),
         ] {
             preflight.transaction_hashes = hashes;
-            let diagnostic = plan_journal_id(&preflight).expect_err("unusable plan hashes");
-            assert_eq!(diagnostic.code(), ErrorCode::Internal);
-            let rendered = CommandOutput::failure("deploy", diagnostic)
-                .render(OutputFormat::Human)
-                .expect("render deploy failure");
-            assert!(rendered.stderr().contains(reason), "{}", rendered.stderr());
+            let error = plan_journal_id(&preflight).expect_err("unusable plan hashes");
+            assert!(error.to_string().contains(reason), "{error}");
         }
     }
 

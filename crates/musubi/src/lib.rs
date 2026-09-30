@@ -6,6 +6,8 @@ mod cli;
 mod command;
 mod compiler;
 mod compiler_identity;
+/// File and package contract deployment with an explicitly resolved runtime context.
+pub mod deployment_runtime;
 mod graph;
 mod local_file;
 mod lockfile;

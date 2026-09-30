@@ -165,7 +165,6 @@ enum CommandKind {
         output: PathBuf,
         profile: String,
         archive: bool,
-        kagami: Option<PathBuf>,
         matrix: Option<PathBuf>,
         smoke: bool,
         stage: Option<PathBuf>,
@@ -1148,12 +1147,11 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             output,
             profile,
             archive,
-            kagami,
             matrix,
             smoke,
             stage,
         } => {
-            let result = mochi::bundle_mochi(&output, &profile, archive, kagami.as_deref())?;
+            let result = mochi::bundle_mochi(&output, &profile, archive)?;
             let smoke_passed = if smoke {
                 mochi::run_bundle_smoke(&result)?;
                 true
@@ -2584,7 +2582,6 @@ where
             let mut output: Option<PathBuf> = None;
             let mut profile = String::from("release");
             let mut archive = true;
-            let mut kagami: Option<PathBuf> = None;
             let mut matrix: Option<PathBuf> = None;
             let mut smoke = false;
             let mut stage: Option<PathBuf> = None;
@@ -2604,12 +2601,6 @@ where
                         profile = value;
                     }
                     "--no-archive" => archive = false,
-                    "--kagami" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --kagami".into());
-                        };
-                        kagami = Some(normalize_path(Path::new(&path))?);
-                    }
                     "--matrix" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --matrix".into());
@@ -2635,7 +2626,6 @@ where
                 output,
                 profile,
                 archive,
-                kagami,
                 matrix,
                 smoke,
                 stage,

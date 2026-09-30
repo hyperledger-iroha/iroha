@@ -13,7 +13,9 @@ use std::{collections::BTreeMap, time::Duration};
 use super::initial_enrollment::FreshIssuerAdmissionV1;
 use super::native_deadline::NativeDeadlineV1;
 
-use iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
+use iroha_core_zk::kagemusha_v1_state::{
+    KagemushaAuthenticatedCoreOwnerV1, KagemushaRecoveryEnrollmentBindingV1,
+};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
     KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1, KagemushaEnabledProfileV1,
@@ -160,6 +162,39 @@ pub(crate) struct NativeStartupQualificationOwnerV1 {
 }
 
 impl NativeStartupQualificationOwnerV1 {
+    /// Recover catalog and credential floors only through the concrete production Core owner.
+    /// The P256 key is independently selected by the installed Rust provisioner, never a frame.
+    pub(super) fn from_authenticated_core_owner(
+        core: &KagemushaAuthenticatedCoreOwnerV1,
+        native_key: &KagemushaDevicePublicKeyV1,
+    ) -> Result<Self> {
+        let selected = core.current_recovery_selection()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        let checkpoint = selected.checkpoint().clone();
+        let enrollment = selected.enrollment_binding().clone();
+        let accepted = selected.accepted_credential_floor().credential;
+        let epoch = selected.hardware_epoch();
+        let binding = selected.device_policy_binding();
+        let release = core.authenticated_release()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        if release.purpose() != iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production
+            || release.network_id() != enrollment.owner.runtime.network_id {
+            return Err(ObservationErrorV1::InvalidQualification);
+        }
+        let mut observer = Self::new(&release, enrollment.clone(), native_key)?;
+        observer.advance_validated_core_floor(&enrollment, CoreEpochFloorV1 {
+            generation: epoch.generation, epoch_id: epoch.epoch_id,
+            key_reference: binding.device_key_reference,
+        }, accepted)?;
+        let current = core.current_recovery_selection()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        if current.checkpoint() != &checkpoint || current.enrollment_binding() != &enrollment
+            || current.accepted_credential_floor().credential != accepted {
+            return Err(ObservationErrorV1::Conflict);
+        }
+        Ok(observer)
+    }
+
     pub(super) fn from_pre_enrollment_context(
         release: &KagemushaAuthenticatedReleaseV1,
         enrollment: KagemushaRecoveryEnrollmentBindingV1,

@@ -122,7 +122,8 @@ private final class AppAttestCommitEndpoint: KagemushaCoreCoordinatorEndpointV1 
 
   func configure(_ newMode: Mode) { lock.lock(); mode = newMode; lock.unlock() }
   func calls() -> Int { lock.lock(); defer { lock.unlock() }; return invocationCount }
-  func contract() throws -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
+  func contract() throws -> [UInt32] { [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
+  func install(storagePath: Data) throws {}
   func open(storagePath: Data) throws -> UInt64 { 7 }
   func close(handle: UInt64) throws {}
 
@@ -616,10 +617,17 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let selected = try binding()
     _ = try await provider.assertTransition(
       keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0)
-    let endpoint = AppAttestCommitEndpoint()
-    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
-      storagePath: "/private/coordinator", endpoint: endpoint)
-    let coordinator = KagemushaNativeCoreCoordinatorAdapterV1(bridge: bridge)
+    // Each scripted endpoint represents a fresh process-owned native coordinator.
+    // A failed native response irrevocably closes its previous handle.
+    var endpoints: [AppAttestCommitEndpoint] = []
+    func freshCoordinator(_ mode: AppAttestCommitEndpoint.Mode) throws -> KagemushaNativeCoreCoordinatorAdapterV1 {
+      let endpoint = AppAttestCommitEndpoint()
+      endpoint.configure(mode)
+      endpoints.append(endpoint)
+      return KagemushaNativeCoreCoordinatorAdapterV1(bridge:
+        try .openEndpoint(storagePath: "/private/coordinator", endpoint: endpoint))
+    }
+    var coordinator = try freshCoordinator(.unavailable)
     let operationID = Data(repeating: 0x31, count: 32)
     let certificate = Data(repeating: 0x32, count: 32)
     let envelope = Data(repeating: 0x33, count: 32)
@@ -632,11 +640,19 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     do { try await acknowledge(); XCTFail("unavailable native owner advanced App Attest") } catch {}
     XCTAssertEqual(try store.load(keyID: "dedicated-key"),
       .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
-    endpoint.configure(.substituted)
+    let callsBeforeSubstitutedReopen = endpoints.reduce(0) { $0 + $1.calls() }
+    do { try await acknowledge(); XCTFail("revoked native owner was reused") }
+    catch { XCTAssertEqual(error as? KagemushaCoreCoordinatorErrorV1, .unavailable) }
+    XCTAssertEqual(endpoints.reduce(0) { $0 + $1.calls() }, callsBeforeSubstitutedReopen)
+    coordinator = try freshCoordinator(.substituted)
     do { try await acknowledge(); XCTFail("substituted native response advanced App Attest") } catch {}
     XCTAssertEqual(try store.load(keyID: "dedicated-key"),
       .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
-    endpoint.configure(.valid)
+    let callsBeforeReopen = endpoints.reduce(0) { $0 + $1.calls() }
+    do { try await acknowledge(); XCTFail("revoked native owner was reused") }
+    catch { XCTAssertEqual(error as? KagemushaCoreCoordinatorErrorV1, .unavailable) }
+    XCTAssertEqual(endpoints.reduce(0) { $0 + $1.calls() }, callsBeforeReopen)
+    coordinator = try freshCoordinator(.valid)
     try await acknowledge()
     let reopened = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
     XCTAssertEqual(try reopened.load(keyID: "dedicated-key"), .ready(counter: 1))
@@ -653,7 +669,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     XCTAssertEqual(nextEvidence.signCount, 2)
     let observations = await service.observations()
     XCTAssertEqual(observations.0, 1)
-    XCTAssertEqual(endpoint.calls(), 3)
+    XCTAssertEqual(endpoints.reduce(0) { $0 + $1.calls() }, 3)
   }
 
   func testRecoveryRejectsPendingAndTamperedCompletedAssertion() async throws {

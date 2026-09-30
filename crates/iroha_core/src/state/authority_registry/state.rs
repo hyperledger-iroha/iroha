@@ -34,7 +34,7 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
     native_execution_tip: native_execution_tip::TipCell => ("state.native_execution_tip",
         Role::History { source: "Original native height, Iroha hash, core header hash and execution result; current and undo cuts outside World", authentication: "Original worker verified exact quorum and output seal, or original signed-genesis execution; restore verifies the actual certified native prefix and configured chain/network before accepting snapshot claims" });
     native_world_cut: parking_lot::Mutex<Option<iroha_allocation::ChargedShared<world_projection::world_state_accumulator::world_state_cut::CutCapsule>>> => ("state.native_world_cut",
-        Role::Local("Private original execution journal retention for budgeted reconstruction; publication binds the exact native tip and generation and complete reconstruction rechecks its certified World root/count; no snapshot decoder or independent consensus authority, restoration requires native replay"));
+        Role::History { source: "Original pre-tail World root, count and native journal differences bound to the execution tip and publication generation", authentication: "Original completed executor captures R; frozen publication reconstructs that exact root and count from the complete native tail journal; restoration must replay original execution rather than decode a caller-supplied cut" });
     latest_block_header: PublicationRwLock<Option<BlockHeader>> => ("state.latest_block_header",
         Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("State::update_latest_block_header_cache from exact retained canonical tip") });
     transactions: TransactionsStorage => ("state.transactions",

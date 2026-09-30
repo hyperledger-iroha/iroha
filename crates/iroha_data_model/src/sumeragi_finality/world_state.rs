@@ -131,14 +131,15 @@ fn valid_hash(hash: Hash) -> bool {
 }
 
 /// Exact existing path hash; the kind is part of the field identity.
+/// World fields and the trigger owner's fields retain their registry namespaces.
 /// # Errors
 /// Invalid or unbounded canonical field identity.
 pub fn world_state_path_hash_v1(
     field_id: &str,
     kind: WorldStateElementKindV1,
 ) -> Result<Hash, FinalityError> {
-    // Trigger child tables already use these exact registry identities. Their
-    // path hashes must retain those bytes rather than acquire a `world.` prefix.
+    // Trigger child tables use these exact registry identities. Hash their
+    // declared namespaces without aliases or derived trigger indexes.
     let trigger_child = matches!(
         field_id,
         "triggers.data"
@@ -147,8 +148,8 @@ pub fn world_state_path_hash_v1(
             | "triggers.by_call"
             | "triggers.contracts"
     );
-    if (!field_id.starts_with("world.") && !trigger_child)
-        || field_id.len() <= 6
+    let world_field = field_id.strip_prefix("world.");
+    if (!trigger_child && world_field.is_none_or(|field| field.split('.').any(str::is_empty)))
         || field_id.len() > 192
         || !field_id
             .bytes()

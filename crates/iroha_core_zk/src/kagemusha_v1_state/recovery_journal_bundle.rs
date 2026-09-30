@@ -21,6 +21,19 @@ pub struct KagemushaPendingRecoveryJournalsV1 {
 }
 
 impl KagemushaPendingRecoveryJournalsV1 {
+    // Only the concrete authenticated bootstrap owner takes its already held descriptor pair.
+    // Bundling descriptors does not authenticate them; the consumer validates the complete pair
+    // against the opaque native machine and its fresh hardware checkpoint before returning.
+    pub(super) fn from_held_bootstrap_journals(
+        coordinator: KagemushaCoordinatorOperationStoreV1,
+        responses: KagemushaResponseEvidenceArchiveV1,
+    ) -> Self {
+        Self {
+            coordinator,
+            responses,
+        }
+    }
+
     /// Reopen and fully replay both retained journals while keeping their locks private.
     ///
     /// Complete surviving frames are synced by the existing journal opener. No missing file

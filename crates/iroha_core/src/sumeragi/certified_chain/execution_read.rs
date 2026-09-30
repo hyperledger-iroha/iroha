@@ -336,35 +336,74 @@ mod tests {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         chain.commit(Vec::new());
+        assert_independent_execution_reads(&chain);
+        assert_consumed_execution_graphs(&chain);
+    }
+
+    fn assert_independent_execution_reads(chain: &CertifiedTestChain) {
         let view = chain.state().view();
         let source = CertifiedChain::new(&view).unwrap();
         for height in 1..=2 {
             let authenticated = source.authenticated_execution(height).unwrap();
             assert_eq!(authenticated.committed().height(), height);
             let original = source.committed(height).unwrap();
+            // Independent reads may decode separate owned graphs. Their exact
+            // canonical carrier, header identity and execution result must agree.
             assert_eq!(
                 authenticated.block().encode_wire().unwrap(),
                 original.block().encode_wire().unwrap(),
                 "independent source reads retain the same exact certified frame"
             );
+            assert_eq!(
+                authenticated.committed().block_hash(),
+                original.block_hash()
+            );
+            assert_eq!(authenticated.committed().core_hash(), original.core_hash());
             assert_eq!(authenticated.committed().result(), original.result());
         }
+    }
+
+    fn assert_consumed_execution_graphs(chain: &CertifiedTestChain) {
+        let view = chain.state().view();
+        let source = CertifiedChain::new(&view).unwrap();
         // Consuming each verification receipt must retain its original graph. Separate
         // physical reads above need not share one allocation or a process-local cache.
-        let genesis = Arc::clone(chain.committed(1).block());
-        let successor = Arc::clone(chain.committed(2).block());
-        let mut prefix =
-            CertifiedPrefix::new(view.chain_id(), *view.network_id(), Arc::clone(&genesis))
-                .unwrap();
-        let (certified, anchored) = prefix.push(Arc::clone(&successor)).unwrap().into_parts();
+        let original_genesis = Arc::clone(chain.committed(GENESIS_HEIGHT).block());
+        let original_successor = Arc::clone(chain.committed(GENESIS_HEIGHT + 1).block());
+        let mut prefix = CertifiedPrefix::new(
+            view.chain_id(),
+            *view.network_id(),
+            Arc::clone(&original_genesis),
+        )
+        .unwrap();
+        let (certified, genesis) = prefix
+            .push(Arc::clone(&original_successor))
+            .unwrap()
+            .into_parts();
+        let genesis = genesis.expect("actual H2 authenticates genesis execution");
+        let authenticated_genesis = genesis.into_authenticated_execution();
         assert!(Arc::ptr_eq(
-            certified.into_authenticated_execution().unwrap().block(),
-            &successor,
+            authenticated_genesis.block(),
+            &original_genesis
         ));
+        let authenticated_successor = certified.into_authenticated_execution().unwrap();
         assert!(Arc::ptr_eq(
-            anchored.unwrap().into_authenticated_execution().block(),
-            &genesis,
+            authenticated_successor.block(),
+            &original_successor
         ));
+        for (height, authenticated) in [(1, &authenticated_genesis), (2, &authenticated_successor)]
+        {
+            assert_eq!(authenticated.committed().height(), height);
+            assert_eq!(
+                authenticated.block().encode_wire().unwrap(),
+                source
+                    .committed(height)
+                    .unwrap()
+                    .block()
+                    .encode_wire()
+                    .unwrap()
+            );
+        }
     }
     #[test]
     fn bounded_native_source_authenticates_original_h1_and_h2_frames() {

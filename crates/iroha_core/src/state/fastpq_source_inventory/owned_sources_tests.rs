@@ -93,7 +93,15 @@ fn fixture_with_effects(
         parameters.commit();
     }
     let domain = DomainId::try_new("owned-inventory", "universal").unwrap();
-    let asset = AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    let asset = if fee_and_protocol {
+        // Admission resolves the committed network XOR identity even when the Nexus fee is zero.
+        AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("canonical network XOR fee asset")
+    } else {
+        AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap())
+    };
     if fee_and_protocol {
         let fees = &mut state.nexus.get_mut().fees;
         fees.base_fee = Quantity::zero();

@@ -11,18 +11,30 @@ use rustix::fs::{AtFlags, Mode, OFlags, Stat};
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+#[cfg(not(windows))]
 use std::{
     ffi::OsString,
-    fmt,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
+    io::{Read, Write},
     sync::atomic::{AtomicU64, Ordering},
 };
+use std::{
+    fmt, io,
+    path::{Component, Path, PathBuf},
+};
+#[cfg(not(windows))]
 const TEMP_CREATE_ATTEMPTS: u64 = 128;
+#[cfg(not(windows))]
 const POST_LINK_CLEANUP_ATTEMPTS: usize = 2;
+#[cfg(not(windows))]
 const TEMP_FILE_PREFIX: &str = ".musubi-tmp-";
+#[cfg(not(windows))]
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+#[path = "atomic_io_windows.rs"]
+mod native_windows;
+#[cfg(windows)]
+pub use native_windows::AtomicWriteRoot;
 #[cfg(all(test, unix))]
 std::thread_local! {
     static TEST_DIRECTORY_SYNC_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -152,6 +164,7 @@ impl AtomicWriteError {
             recovery: None,
         }
     }
+    #[cfg(not(windows))]
     fn with_recovery_failure(mut self, recovery: &Self) -> Self {
         let recovery = recovery.to_string();
         self.recovery = Some(match self.recovery.take() {
@@ -205,12 +218,14 @@ impl std::error::Error for AtomicWriteError {
 }
 /// Trusted directory within which Musubi may atomically access project-state files.
 #[derive(Debug)]
+#[cfg(not(windows))]
 pub struct AtomicWriteRoot {
     canonical_root: PathBuf,
     root_identity: FileIdentity,
     #[cfg(unix)]
     root_handle: File,
 }
+#[cfg(not(windows))]
 impl AtomicWriteRoot {
     /// Create or bind one private user-state root without following a requested descendant link.
     ///
@@ -1129,10 +1144,12 @@ fn validate_relative_path(relative: &Path) -> Result<(), AtomicWriteError> {
     Ok(())
 }
 #[derive(Debug)]
+#[cfg(not(windows))]
 struct DirectorySnapshot {
     path: PathBuf,
     identity: FileIdentity,
 }
+#[cfg(not(windows))]
 impl DirectorySnapshot {
     fn new(path: PathBuf, metadata: &fs::Metadata) -> Self {
         Self {
@@ -1141,6 +1158,7 @@ impl DirectorySnapshot {
         }
     }
 }
+#[cfg(not(windows))]
 fn validate_directory_snapshots(snapshots: &[DirectorySnapshot]) -> Result<(), AtomicWriteError> {
     for snapshot in snapshots {
         let metadata = fs::symlink_metadata(&snapshot.path).map_err(|error| {
@@ -1160,6 +1178,7 @@ fn validate_directory_snapshots(snapshots: &[DirectorySnapshot]) -> Result<(), A
     Ok(())
 }
 #[derive(Debug)]
+#[cfg(not(windows))]
 enum TargetSnapshot {
     Absent,
     Present {
@@ -1167,6 +1186,7 @@ enum TargetSnapshot {
         permissions: fs::Permissions,
     },
 }
+#[cfg(not(windows))]
 impl TargetSnapshot {
     fn permissions(&self) -> Option<fs::Permissions> {
         match self {
@@ -1175,6 +1195,7 @@ impl TargetSnapshot {
         }
     }
 }
+#[cfg(not(windows))]
 fn inspect_target(target: &Path) -> Result<TargetSnapshot, AtomicWriteError> {
     match fs::symlink_metadata(target) {
         Ok(metadata) => {
@@ -1201,6 +1222,7 @@ fn inspect_target(target: &Path) -> Result<TargetSnapshot, AtomicWriteError> {
         )),
     }
 }
+#[cfg(not(windows))]
 fn validate_target_snapshot(
     target: &Path,
     snapshot: &TargetSnapshot,
@@ -1227,6 +1249,7 @@ fn validate_target_snapshot(
         )),
     }
 }
+#[cfg(not(windows))]
 fn bind_existing_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1273,6 +1296,7 @@ fn bind_existing_immutable_target(
         ))
     }
 }
+#[cfg(not(windows))]
 fn revalidate_existing_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1288,6 +1312,7 @@ fn revalidate_existing_immutable_target(
         ))
     }
 }
+#[cfg(not(windows))]
 fn validate_new_immutable_link(
     target: &Path,
     pending: &PendingTemp,
@@ -1314,6 +1339,7 @@ fn validate_new_immutable_link(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_installed_immutable_target(
     target: &Path,
     expected_identity: FileIdentity,
@@ -1334,6 +1360,7 @@ fn validate_installed_immutable_target(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn readback_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1344,10 +1371,12 @@ fn readback_immutable_target(
         ImmutableReadOutcome::Exceeded => Ok(false),
     }
 }
+#[cfg(not(windows))]
 enum ImmutableReadOutcome {
     Within(Vec<u8>),
     Exceeded,
 }
+#[cfg(not(windows))]
 fn read_immutable_target_bounded(
     target: &Path,
     max_bytes: usize,
@@ -1466,6 +1495,7 @@ fn read_immutable_target_bounded(
     Ok(ImmutableReadOutcome::Within(observed))
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 struct DescriptorParent {
     name: OsString,
     path: PathBuf,
@@ -1473,6 +1503,7 @@ struct DescriptorParent {
     snapshot: Stat,
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn bind_descriptor_parents(
     root: &File,
     relative: &Path,
@@ -1545,6 +1576,7 @@ fn bind_descriptor_parents(
     Ok(parents)
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn validate_descriptor_parents(
     root: &File,
     parents: &[DescriptorParent],
@@ -1581,6 +1613,7 @@ fn validate_descriptor_parents(
     Ok(())
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn private_descriptor_snapshot(
     parent: &File,
     name: &std::ffi::OsStr,
@@ -1610,6 +1643,7 @@ fn private_descriptor_snapshot(
     Ok(Some(snapshot))
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn read_private_immutable_target_bounded(
     parent: &File,
     name: &std::ffi::OsStr,
@@ -1695,10 +1729,12 @@ fn read_private_immutable_target_bounded(
     Ok(Some(observed))
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn same_descriptor_identity(left: &Stat, right: &Stat) -> bool {
     left.st_dev == right.st_dev && left.st_ino == right.st_ino
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn same_immutable_descriptor_snapshot(left: &Stat, right: &Stat) -> bool {
     same_descriptor_identity(left, right)
         && left.st_size == right.st_size
@@ -1709,6 +1745,7 @@ fn same_immutable_descriptor_snapshot(left: &Stat, right: &Stat) -> bool {
         && left.st_nlink == right.st_nlink
         && left.st_mode == right.st_mode
 }
+#[cfg(not(windows))]
 fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, AtomicWriteError> {
     let metadata = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
@@ -1730,6 +1767,7 @@ fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, A
     validate_single_link_immutable_metadata(target, &metadata)?;
     Ok(metadata)
 }
+#[cfg(not(windows))]
 fn validate_single_link_immutable_metadata(
     target: &Path,
     metadata: &fs::Metadata,
@@ -1744,6 +1782,7 @@ fn validate_single_link_immutable_metadata(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn cleanup_pending_and_sync(
     mut pending: PendingTemp,
     expected_links: u64,
@@ -1774,6 +1813,7 @@ fn cleanup_pending_and_sync(
     let sync = sync_directory_bounded(parent, parent_snapshot);
     preserve_primary_result(cleanup, sync)
 }
+#[cfg(not(windows))]
 fn recover_post_link_temp_and_sync(
     pending: &mut PendingTemp,
     parent: &Path,
@@ -1801,6 +1841,7 @@ fn recover_post_link_temp_and_sync(
     let sync = sync_directory_bounded(parent, parent_snapshot);
     preserve_primary_result(cleanup, sync)
 }
+#[cfg(not(windows))]
 fn sync_directory_bounded(
     parent: &Path,
     parent_snapshot: &DirectorySnapshot,
@@ -1814,6 +1855,7 @@ fn sync_directory_bounded(
     }
     Err(last_error.expect("the bounded synchronization loop executes at least once"))
 }
+#[cfg(not(windows))]
 fn preserve_primary_result<T>(
     primary: Result<T, AtomicWriteError>,
     recovery: Result<(), AtomicWriteError>,
@@ -1825,12 +1867,14 @@ fn preserve_primary_result<T>(
         (Err(primary), Err(recovery)) => Err(primary.with_recovery_failure(&recovery)),
     }
 }
+#[cfg(not(windows))]
 struct PendingTemp {
     path: PathBuf,
     file: File,
     identity: FileIdentity,
     armed: bool,
 }
+#[cfg(not(windows))]
 impl PendingTemp {
     fn create(parent: &Path) -> Result<Self, AtomicWriteError> {
         let process = std::process::id();
@@ -1958,6 +2002,7 @@ impl PendingTemp {
         self.armed = false;
     }
 }
+#[cfg(not(windows))]
 impl Drop for PendingTemp {
     fn drop(&mut self) {
         if !self.armed {
@@ -1977,6 +2022,7 @@ impl Drop for PendingTemp {
         }
     }
 }
+#[cfg(not(windows))]
 fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), AtomicWriteError> {
     #[cfg(all(test, unix))]
     if TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| {
@@ -2025,6 +2071,7 @@ fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), Atomi
         .map_err(|error| AtomicWriteError::io(path, "synchronize the destination directory", error))
 }
 #[cfg(all(test, unix))]
+#[cfg(not(windows))]
 fn substitute_immutable_read_target_with_fifo_for_test(
     path: &Path,
 ) -> Result<(), AtomicWriteError> {
@@ -2068,11 +2115,13 @@ fn substitute_immutable_read_target_with_fifo_for_test(
 }
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug)]
+#[cfg(not(windows))]
 struct FileIdentity {
     device: u64,
     inode: u64,
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 impl FileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
@@ -2086,8 +2135,10 @@ impl FileIdentity {
 }
 #[cfg(not(unix))]
 #[derive(Clone, Copy, Debug)]
+#[cfg(not(windows))]
 struct FileIdentity;
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 impl FileIdentity {
     fn from_metadata(_metadata: &fs::Metadata) -> Self {
         Self
@@ -2097,36 +2148,44 @@ impl FileIdentity {
     }
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     true
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn cleanup_identity_matches(identity: &FileIdentity, metadata: &fs::Metadata) -> bool {
     identity.matches(metadata)
 }
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 fn cleanup_identity_matches(_identity: &FileIdentity, _metadata: &fs::Metadata) -> bool {
     // Without a stable std-only file identity, leaking a private temporary file
     // is safer than deleting a path that another process may have substituted.
     false
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn has_multiple_hard_links(metadata: &fs::Metadata) -> bool {
     metadata.nlink() != 1
 }
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 fn has_multiple_hard_links(_metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
+#[cfg(not(windows))]
 fn hard_link_count(metadata: &fs::Metadata) -> u64 {
     metadata.nlink()
 }
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
     1
 }
@@ -2156,10 +2215,12 @@ compile_error!("Musubi atomic file reads are not qualified for this Android arch
 ))]
 compile_error!("Musubi atomic file reads are not qualified for this Unix target");
 #[cfg(unix)]
+#[cfg(not(windows))]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = Some(secure_no_follow_nonblocking_flags());
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     #[cfg(unix)]
     #[test]
@@ -2936,7 +2997,7 @@ mod tests {
         };
         assert!(!path.exists());
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn atomic_replacement_fails_closed_on_unsupported_platforms() {
         let root = tempfile::tempdir().expect("temporary root");

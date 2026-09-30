@@ -373,10 +373,7 @@ test("package dist requires a typed NetworkId in validation-fee ledger bindings"
     schema: "iroha.validation-fee-ledger-binding.v1",
     networkId: Buffer.from("13".repeat(32), "hex"),
     policyChainGenesisHash: "35".repeat(32),
-    checkpoint: {
-      height: 100,
-      contextId: "57".repeat(32),
-    },
+    checkpoint: { checkpointNorito: Buffer.from([100, 57]) },
   };
   assert.throws(
     () => packageExports.normalizeValidationFeeLedgerBindingV1(binding),

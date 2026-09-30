@@ -40,6 +40,7 @@ cli = [
 ]
 fetch_cli = ["cli"]
 [dependencies]
+iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 iroha_service_model = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }

@@ -203,6 +203,16 @@ impl KagemushaHardwareTransactionJournalV1 {
         self.wal.recovery_prefix().map_err(error)
     }
 
+    pub(super) fn require_storage_binding(&self, expected: [u8; 32]) -> Result<(), String> {
+        self.wal.recovery_prefix().map_err(error)?;
+        if expected == [0; 32] || self.verifier.storage_binding()? != expected {
+            return Err(
+                "hardware transaction journal differs from authenticated Core owner".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     fn append(&mut self, record: &Record) -> Result<(), String> {
         self.wal
             .append(&norito::encode_canonical(record).map_err(error)?)

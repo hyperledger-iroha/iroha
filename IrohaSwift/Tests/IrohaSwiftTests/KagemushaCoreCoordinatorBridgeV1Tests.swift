@@ -3,6 +3,38 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
+  func testInstallsOnlyExactStoragePathBeforeOpening() throws {
+    let endpoint = Endpoint()
+    let path = "/durable/🔒"
+    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: path, endpoint: endpoint)
+    XCTAssertEqual(endpoint.events, ["install", "open"])
+    XCTAssertEqual(endpoint.installedPaths, [Data(path.utf8)])
+    XCTAssertEqual(endpoint.openedPaths, endpoint.installedPaths)
+    try bridge.close()
+  }
+
+  func testFailedNativeInstallationCannotOpenOrGrantHandle() {
+    for error in [KagemushaCoreCoordinatorErrorV1.unavailable, .nativeFailure(-310)] {
+      let endpoint = Endpoint()
+      endpoint.installFailure = error
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath: "/durable/store", endpoint: endpoint)) { actual in
+        XCTAssertEqual(actual as? KagemushaCoreCoordinatorErrorV1, error)
+      }
+      XCTAssertEqual(endpoint.events, ["install"])
+      XCTAssertEqual(endpoint.openCalls, 0)
+      XCTAssertEqual(endpoint.closeCalls, 0)
+    }
+  }
+
+  func testRetiredNativeABIIsRejectedBeforeInstallation() {
+    let endpoint = Endpoint()
+    endpoint.contractWords[1] = 23
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+      storagePath: "/durable/store", endpoint: endpoint))
+    XCTAssertEqual(endpoint.events, [])
+  }
+
   func testTransportCorrelatesCallerIdentity() throws {
     let endpoint = Endpoint()
     let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
@@ -23,6 +55,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     mismatch.contractWords[0] = 1
     XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: mismatch))
     XCTAssertEqual(mismatch.openCalls, 0)
+    XCTAssertEqual(mismatch.installedPaths, [])
     let missing = Endpoint()
     missing.returnedHandle = 0
     XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: missing))
@@ -34,6 +67,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
       XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: path, endpoint: endpoint))
     }
     XCTAssertEqual(endpoint.openCalls, 0)
+    XCTAssertEqual(endpoint.installedPaths, [])
     let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/🔒", endpoint: endpoint)
     XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: []))
     XCTAssertEqual(endpoint.invokeCalls, 0)
@@ -85,7 +119,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
   }
 
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
-    var contractWords: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+    var contractWords: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
     var returnedHandle = UInt64.max
     var openCalls = 0
     var invokeCalls = 0
@@ -93,8 +127,20 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     var failClose = false
     var failInvoke = false
     var substituteResponse = false
+    var installFailure: KagemushaCoreCoordinatorErrorV1?
+    var installedPaths: [Data] = []
+    var openedPaths: [Data] = []
+    var events: [String] = []
     func contract() throws -> [UInt32] { contractWords }
-    func open(storagePath: Data) throws -> UInt64 { openCalls += 1; return returnedHandle }
+    func install(storagePath: Data) throws {
+      events.append("install")
+      installedPaths.append(storagePath)
+      if let installFailure { throw installFailure }
+    }
+    func open(storagePath: Data) throws -> UInt64 {
+      events.append("open"); openedPaths.append(storagePath)
+      openCalls += 1; return returnedHandle
+    }
     func close(handle: UInt64) throws {
       closeCalls += 1; XCTAssertEqual(handle, returnedHandle)
       if failClose { throw KagemushaCoreCoordinatorErrorV1.unavailable }

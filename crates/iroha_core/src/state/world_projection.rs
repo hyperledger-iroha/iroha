@@ -13,7 +13,7 @@
 //! canonical runtime policy, commit topologies) are not in the World accumulator;
 //! accelerated restoration must authenticate them separately.
 
-use super::{CellBlock, StorageBlock, World, WorldBlock};
+use super::{CellField, StorageField, World, WorldBlock};
 use iroha_crypto::Hash;
 use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
@@ -152,7 +152,8 @@ impl WorldDeltaBuilder {
         self.open_field = false;
     }
 
-    /// Append a storage's exact borrowed net changes, using its owner's value projection.
+    /// Append an original field's exact borrowed net changes in either readable phase.
+    /// Its owner supplies the value projection without regaining execution authority.
     /// No `is_dirty` shortcut can discard an explicit absent-to-absent journal row.
     pub(crate) fn append_storage_with<
         K: Key + Encode,
@@ -161,7 +162,7 @@ impl WorldDeltaBuilder {
     >(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         self.begin_field(name, 0)?;
@@ -180,7 +181,7 @@ impl WorldDeltaBuilder {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         self.begin_field(name, 1)?;

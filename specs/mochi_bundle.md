@@ -15,9 +15,11 @@ By default the command builds release binaries, assembles the bundle under
 `target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
 alongside a deterministic `manifest.json`. The manifest lists every file with
 its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+attestations. The helper builds `mochi`, `kagami`, and `iroha3d` together in one
+locked Cargo invocation and includes all three native executables. A prior
+binary's existence is not a freshness check. Arbitrary Kagami overrides are
+not accepted by the bundler, so it cannot mix a supplied helper with a newly
+built daemon.
 
 ### Flags
 
@@ -26,9 +28,8 @@ box.
 | `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
 | `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
 | `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
 | `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
+| `--smoke`           | Check packaged help, config-free source deployment, repeated deployment, and four-validator restart with retained identity/state. |
 | `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
 
 `--stage` is intended for CI pipelines where each build agent uploads its
@@ -40,27 +41,33 @@ The layout inside the bundle is intentionally simple:
 
 ```
 bin/mochi              # egui desktop executable
-bin/kagami             # kagami helper for genesis generation
-config/sample.toml     # starter supervisor configuration
+bin/kagami             # developer CLI and managed runtime worker
+bin/iroha3d            # matching native validator executable
 docs/README.md         # bundle overview and verification guide
 LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+`--smoke` runs the packaged Kagami from an empty workspace with an empty `PATH`.
+It supplies no TOML, starts the localnet through `contract deploy hello.ko`,
+checks repeated starts and deployments, then stops and restarts all four validators.
+The exact deployment receipt and journal must survive. Cleanup uses authenticated
+localnet control; failures retain the private runtime directory and diagnostics.
+This single-run smoke does not establish the twenty-run latency target or the
+remote private-dataspace acceptance gates.
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+### Workspace selection
+
+The packaged desktop selects the same workspace context as Kagami:
 
 ```
-./bin/mochi --data-root ./data --profile four-peer-bft \
-    --torii-start 12000 --p2p-start 14000 \
-    --irohad /path/to/iroha3d --kagami /path/to/kagami
+./bin/mochi --workspace /path/to/project
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+Omitting `--workspace` selects the current directory. Generated configuration,
+credentials and retained ledger state live in private OS application storage.
+The desktop uses the matching sibling Kagami and daemon; it does not require
+sample TOML, invoke Cargo, search PATH for a daemon or own a second supervisor.
 
 ## Snapshot automation
 

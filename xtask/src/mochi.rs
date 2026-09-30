@@ -1,3 +1,5 @@
+//! Build and inspect a complete native developer runtime bundle.
+
 use crate::workspace_root;
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
@@ -11,11 +13,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
+mod developer_smoke;
+#[cfg(test)]
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
-const MOCHI_UI_FEATURE: &str = "gui";
-const MOCHI_HELP_HEADER: &str = "MOCHI usage:";
-const MOCHI_SANDBOX_HELP: &str = "mochi sandbox serve [options]";
+const MOCHI_HELP_HEADER: &str = "Usage: mochi [--workspace <DIRECTORY>]";
+const RUNTIME_BINARIES: [&str; 3] = ["mochi", "kagami", "iroha3d"];
 #[derive(Debug, Clone)]
 pub(crate) struct MochiBundleResult {
     pub target: String,
@@ -30,9 +33,8 @@ pub(crate) fn bundle_mochi(
     output_root: &Path,
     profile: &str,
     archive: bool,
-    kagami_override: Option<&Path>,
 ) -> Result<MochiBundleResult, Box<dyn Error>> {
-    build_mochi_ui(profile)?;
+    build_runtime(profile)?;
     if !output_root.exists() {
         fs::create_dir_all(output_root)?;
     }
@@ -43,26 +45,15 @@ pub(crate) fn bundle_mochi(
         fs::remove_dir_all(&bundle_root)?;
     }
     fs::create_dir_all(bundle_root.join("bin"))?;
-    fs::create_dir_all(bundle_root.join("config"))?;
     fs::create_dir_all(bundle_root.join("docs"))?;
-    let binary_path = resolve_binary_path(profile)?;
-    let binary_target = bundle_root
-        .join("bin")
-        .join(format!("mochi{}", env::consts::EXE_SUFFIX));
-    fs::copy(binary_path, &binary_target)?;
-    let kagami_path = resolve_kagami_path(profile, kagami_override)?;
-    let kagami_target = bundle_root
-        .join("bin")
-        .join(format!("kagami{}", env::consts::EXE_SUFFIX));
-    fs::copy(kagami_path, &kagami_target)?;
+    copy_runtime_binaries(
+        &cargo_target_dir().join(profile_directory(profile)),
+        &bundle_root,
+    )?;
     copy_into_bundle("LICENSE", &bundle_root.join("LICENSE"))?;
     copy_into_bundle(
         "mochi/BUNDLE_README.md",
         &bundle_root.join("docs/README.md"),
-    )?;
-    copy_into_bundle(
-        "mochi/sample-config.toml",
-        &bundle_root.join("config/sample.toml"),
     )?;
     let manifest = generate_manifest_json(&bundle_root, profile)?;
     let manifest_path = bundle_root.join("manifest.json");
@@ -92,13 +83,10 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
     if !mochi_bin.exists() {
         return Err(format!("missing mochi binary at {}", mochi_bin.display()).into());
     }
-    let output = Command::new(&mochi_bin)
-        .args(["sandbox", "serve", "--help"])
-        .env("MOCHI_DATA_ROOT", result.bundle_root.join(".smoke"))
-        .output()?;
+    let output = Command::new(&mochi_bin).arg("--help").output()?;
     if !output.status.success() {
         Err(format!(
-            "`{}` sandbox serve --help exited with status {:?}: {}",
+            "`{}` --help exited with status {:?}: {}",
             mochi_bin.display(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
@@ -108,21 +96,23 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
         let stdout = String::from_utf8_lossy(&output.stdout);
         if let Err(reason) = validate_mochi_help_output(&stdout) {
             return Err(format!(
-                "`{}` sandbox serve --help did not expose the packaged MOCHI CLI: {reason}; stdout: {}",
+                "`{}` --help did not expose the packaged Mochi CLI: {reason}; stdout: {}",
                 mochi_bin.display(),
                 stdout.trim()
             )
             .into());
         }
-        Ok(())
+        developer_smoke::run(
+            &result
+                .bundle_root
+                .join("bin")
+                .join(format!("kagami{}", env::consts::EXE_SUFFIX)),
+        )
     }
 }
 fn validate_mochi_help_output(stdout: &str) -> Result<(), String> {
     if !stdout.contains(MOCHI_HELP_HEADER) {
         return Err(format!("missing `{MOCHI_HELP_HEADER}`"));
-    }
-    if !stdout.contains(MOCHI_SANDBOX_HELP) {
-        return Err(format!("missing `{MOCHI_SANDBOX_HELP}`"));
     }
     Ok(())
 }
@@ -269,20 +259,17 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error
     }
     Ok(())
 }
-fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
+fn build_runtime(profile: &str) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
-    command.args(mochi_ui_build_args(profile));
+    command.args(runtime_build_args(profile));
     command.current_dir(workspace_root());
     let status = command.status()?;
     if !status.success() {
-        return Err(format!(
-            "cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} --features {MOCHI_UI_FEATURE} --bin {MOCHI_BIN_NAME} failed"
-        )
-        .into());
+        return Err("building the complete Mochi/Kagami/iroha3d runtime failed".into());
     }
     Ok(())
 }
-fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
+fn runtime_build_args(profile: &str) -> Vec<OsString> {
     let mut args = vec![OsString::from("build")];
     if profile == "release" {
         args.push(OsString::from("--release"));
@@ -290,15 +277,25 @@ fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
         args.extend([OsString::from("--profile"), OsString::from(profile)]);
     }
     args.extend([
-        OsString::from("--manifest-path"),
-        mochi_ui_manifest_path().into_os_string(),
+        OsString::from("--locked"),
+        OsString::from("-p"),
+        OsString::from("mochi-ui"),
+        OsString::from("-p"),
+        OsString::from("iroha_kagami"),
+        OsString::from("-p"),
+        OsString::from("irohad"),
         OsString::from("--features"),
-        OsString::from(MOCHI_UI_FEATURE),
+        OsString::from("mochi-ui/gui"),
         OsString::from("--bin"),
         OsString::from(MOCHI_BIN_NAME),
+        OsString::from("--bin"),
+        OsString::from("kagami"),
+        OsString::from("--bin"),
+        OsString::from("iroha3d"),
     ]);
     args
 }
+#[cfg(test)]
 fn mochi_ui_manifest_path() -> PathBuf {
     workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
@@ -325,15 +322,30 @@ fn profile_directory(profile: &str) -> &str {
         other => other,
     }
 }
-fn resolve_binary_path(profile: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let profile_dir = profile_directory(profile);
-    let binary = cargo_target_dir()
-        .join(profile_dir)
-        .join(format!("mochi{}", env::consts::EXE_SUFFIX));
-    if !binary.exists() {
-        return Err(format!("expected MOCHI binary at {}", binary.display()).into());
+fn copy_runtime_binaries(source: &Path, bundle_root: &Path) -> Result<(), Box<dyn Error>> {
+    // All executables must come from the preceding single Cargo invocation.
+    // An arbitrary binary override can silently combine different protocols.
+    for name in RUNTIME_BINARIES {
+        let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
+        let binary = source.join(&filename);
+        let metadata = fs::symlink_metadata(&binary)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "runtime binary {} is not a direct regular file",
+                binary.display()
+            )
+            .into());
+        }
     }
-    Ok(binary)
+    fs::create_dir_all(bundle_root.join("bin"))?;
+    for name in RUNTIME_BINARIES {
+        let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
+        fs::copy(
+            source.join(&filename),
+            bundle_root.join("bin").join(filename),
+        )?;
+    }
+    Ok(())
 }
 pub(crate) fn resolve_kagami_path(
     profile: &str,
@@ -352,9 +364,6 @@ pub(crate) fn resolve_kagami_path(
     let candidate = cargo_target_dir()
         .join(profile_dir)
         .join(format!("kagami{}", env::consts::EXE_SUFFIX));
-    if candidate.exists() {
-        return Ok(candidate);
-    }
     build_kagami(profile)?;
     if candidate.exists() {
         Ok(candidate)
@@ -479,8 +488,8 @@ fn create_archive(
 #[cfg(test)]
 mod tests {
     use super::{
-        MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_SANDBOX_HELP, MOCHI_UI_FEATURE,
-        MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_build_args, mochi_ui_manifest_path,
+        MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_UI_MANIFEST_REL, RUNTIME_BINARIES,
+        copy_runtime_binaries, create_archive, mochi_ui_manifest_path, runtime_build_args,
         validate_mochi_help_output,
     };
     use std::{ffi::OsString, fs, process::Command};
@@ -503,12 +512,16 @@ mod tests {
     }
     #[test]
     fn mochi_ui_build_args_enable_gui_for_the_packaged_binary() {
-        let args = mochi_ui_build_args("debug");
+        let args = runtime_build_args("debug");
         let expected_tail = [
             OsString::from("--features"),
-            OsString::from(MOCHI_UI_FEATURE),
+            OsString::from("mochi-ui/gui"),
             OsString::from("--bin"),
             OsString::from(MOCHI_BIN_NAME),
+            OsString::from("--bin"),
+            OsString::from("kagami"),
+            OsString::from("--bin"),
+            OsString::from("iroha3d"),
         ];
         assert_eq!(args.first(), Some(&OsString::from("build")));
         assert_eq!(
@@ -518,7 +531,7 @@ mod tests {
     }
     #[test]
     fn mochi_ui_build_args_preserve_named_profiles() {
-        let args = mochi_ui_build_args("profiling");
+        let args = runtime_build_args("profiling");
         assert_eq!(
             args.get(0..3),
             Some(
@@ -533,15 +546,68 @@ mod tests {
     }
     #[test]
     fn mochi_ui_build_args_preserve_release_profile() {
-        let args = mochi_ui_build_args("release");
+        let args = runtime_build_args("release");
         assert_eq!(
             args.get(0..2),
             Some([OsString::from("build"), OsString::from("--release")].as_slice())
         );
     }
     #[test]
-    fn mochi_help_validation_accepts_headless_cli_usage() {
-        let stdout = format!("{MOCHI_HELP_HEADER}\n  {MOCHI_SANDBOX_HELP}\n");
+    fn runtime_build_is_locked_and_includes_every_runtime_package() {
+        let args = runtime_build_args("debug");
+        assert!(args.contains(&OsString::from("--locked")));
+        for package in ["mochi-ui", "iroha_kagami", "irohad"] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == [OsString::from("-p"), OsString::from(package)])
+            );
+        }
+    }
+    #[test]
+    fn runtime_bundle_contains_daemon_without_path_dependency() {
+        let root = tempdir().expect("temporary root");
+        let source = root.path().join("source");
+        let bundle = root.path().join("bundle");
+        fs::create_dir(&source).expect("source directory");
+        for name in RUNTIME_BINARIES {
+            fs::write(
+                source.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+                name,
+            )
+            .expect("fixture binary");
+        }
+        copy_runtime_binaries(&source, &bundle).expect("complete runtime");
+        for name in RUNTIME_BINARIES {
+            assert_eq!(
+                fs::read(
+                    bundle
+                        .join("bin")
+                        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                )
+                .unwrap(),
+                name.as_bytes()
+            );
+        }
+    }
+    #[test]
+    fn incomplete_runtime_is_rejected_before_any_binary_is_copied() {
+        let root = tempdir().expect("temporary root");
+        let source = root.path().join("source");
+        let bundle = root.path().join("bundle");
+        fs::create_dir(&source).unwrap();
+        for name in ["mochi", "kagami"] {
+            fs::write(
+                source.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+                name,
+            )
+            .unwrap();
+        }
+        assert!(copy_runtime_binaries(&source, &bundle).is_err());
+        assert!(!bundle.exists());
+    }
+    #[test]
+    fn mochi_help_validation_accepts_workspace_desktop_usage() {
+        let stdout = format!("{MOCHI_HELP_HEADER}\n");
         assert_eq!(validate_mochi_help_output(&stdout), Ok(()));
     }
     #[test]
@@ -553,10 +619,10 @@ mod tests {
         assert_eq!(error, format!("missing `{MOCHI_HELP_HEADER}`"));
     }
     #[test]
-    fn mochi_help_validation_requires_sandbox_command() {
-        let error = validate_mochi_help_output(MOCHI_HELP_HEADER)
-            .expect_err("generic help without the sandbox command must fail");
-        assert_eq!(error, format!("missing `{MOCHI_SANDBOX_HELP}`"));
+    fn mochi_help_validation_rejects_retired_sandbox_usage() {
+        let error = validate_mochi_help_output("MOCHI usage:\nmochi sandbox serve [options]")
+            .expect_err("retired supervisor CLI must not pass bundle smoke");
+        assert_eq!(error, format!("missing `{MOCHI_HELP_HEADER}`"));
     }
     #[test]
     fn create_archive_packages_bundle_directory() {

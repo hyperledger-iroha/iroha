@@ -1,9 +1,8 @@
 //! Readiness smoke tests against the in-process mock Torii service.
-#[path = "supervisor.rs"]
-mod supervisor;
 use color_eyre::Result;
 use iroha_data_model::{
     NetworkId,
+    block::stream::BlockMessage,
     events::{
         EventBox,
         pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
@@ -12,16 +11,19 @@ use iroha_data_model::{
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mochi_core::{
-    ReadinessOptions, ReadinessSmokePlan, SmokeCommitOptions, ToriiClient, ToriiError,
-    development_signing_authorities,
+    BlockStreamEvent, EventCategory, EventStreamEvent, ManagedBlockStream, ManagedEventStream,
+    OperatorSigningContext, ReadinessOptions, ReadinessSmokePlan, SmokeCommitOptions, ToriiClient,
+    ToriiError, development_signing_authorities,
 };
-use mochi_integration::{MockToriiBuilder, MockToriiFrame};
+use mochi_integration::{MockToriiBuilder, MockToriiData, MockToriiFrame};
+use norito::json::Value;
 use std::{
     net::{SocketAddr, TcpListener},
     num::NonZeroU64,
+    path::PathBuf,
     time::Duration,
 };
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 fn test_network_id() -> NetworkId {
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         .parse()
@@ -29,6 +31,17 @@ fn test_network_id() -> NetworkId {
 }
 fn stream_reader(addr: SocketAddr) -> iroha::client::AccountClient {
     stream_reader_for_network(addr, test_network_id())
+}
+fn observer_client(addr: SocketAddr) -> Result<ToriiClient> {
+    let network_id = test_network_id();
+    let operator = iroha_crypto::KeyPair::from_seed(
+        b"mochi-readiness-http-operator".to_vec(),
+        iroha_crypto::Algorithm::Ed25519,
+    );
+    Ok(ToriiClient::builder(format!("http://{addr}"))?
+        .with_network_id(network_id)
+        .with_operator_signing_context(OperatorSigningContext::new(network_id, operator))
+        .build()?)
 }
 fn stream_reader_for_network(
     addr: SocketAddr,
@@ -208,5 +221,173 @@ async fn streams_reject_another_network_and_an_ungranted_reader() -> Result<()> 
     ));
     assert_eq!(ungranted.authenticated_stream_count(), 0);
     ungranted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observer_reads_http_endpoints() -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+    let reader = stream_reader(addr);
+    let data = MockToriiData::default();
+    let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&reader)
+        .spawn()
+        .await?;
+    let unsigned =
+        ToriiClient::new_for_network(format!("http://{}", mock.addr()), test_network_id())?;
+    assert!(matches!(
+        unsigned.fetch_sumeragi_status().await,
+        Err(ToriiError::SignedQueryContext(_))
+    ));
+    let client = observer_client(mock.addr())?;
+    let status = client.fetch_status().await?;
+    assert_eq!(status.peers, data.status.peers);
+    let snapshot = client.fetch_status_snapshot().await?;
+    assert_eq!(snapshot.status.blocks, data.status.blocks);
+    let sumeragi = client.fetch_sumeragi_status().await?;
+    assert_eq!(sumeragi.leader, data.sumeragi.leader);
+    let diagnostics = client.fetch_sumeragi_diagnostics().await?;
+    assert_eq!(diagnostics, data.sumeragi_diagnostics);
+    let config = client.fetch_configuration().await?;
+    assert_eq!(config, data.configuration);
+    let metrics = client.fetch_metrics().await?;
+    assert_eq!(metrics, data.metrics);
+    let query = client.submit_query(&[0xCA, 0xFE]).await?;
+    assert_eq!(query, data.query_response);
+    mock.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observer_streams_receive_authenticated_binary_frames() -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+    let reader = stream_reader(addr);
+    let data = MockToriiData::default();
+    let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&reader)
+        .spawn()
+        .await?;
+    let reader = stream_reader(mock.addr());
+    let handle = tokio::runtime::Handle::current();
+    let block_stream = ManagedBlockStream::spawn(&handle, "peer0".into(), reader.clone());
+    let mut block_rx = block_stream.subscribe();
+    let event_stream = ManagedEventStream::spawn(&handle, "peer0".into(), reader);
+    let mut event_rx = event_stream.subscribe();
+    let block_event = timeout(Duration::from_secs(1), block_rx.recv())
+        .await
+        .expect("block event timeout")?
+        .clone();
+    match block_event {
+        BlockStreamEvent::Block { raw_len, .. } => {
+            assert_eq!(raw_len, data.block_frame.len());
+        }
+        other => panic!("unexpected block stream event: {other:?}"),
+    }
+    let event = timeout(Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("event stream timeout")?
+        .clone();
+    match event {
+        EventStreamEvent::Event { raw_len, .. } => {
+            assert_eq!(raw_len, data.event_frame.len());
+        }
+        other => panic!("unexpected event stream event: {other:?}"),
+    }
+    assert_eq!(mock.authenticated_stream_count(), 2);
+    block_stream.abort();
+    event_stream.abort();
+    mock.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observer_replays_exact_torii_fixture_streams() -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+    let reader = stream_reader(addr);
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
+    let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&reader)
+        .fixture_dir(&fixture_dir)?
+        .spawn()
+        .await?;
+    let client = observer_client(mock.addr())?;
+    let status = client.fetch_status().await?;
+    assert_eq!(status.blocks, 5);
+    assert!(status.crypto.sm_helpers_available);
+    assert_eq!(status.queue_size, 4);
+    assert_eq!(status.governance.manifest_quorum.total_checks, 0);
+    assert_eq!(status.governance.manifest_admission.total_checks, 0);
+    let sumeragi = client.fetch_sumeragi_status().await?;
+    assert_eq!(sumeragi.height, 10);
+    assert_eq!(sumeragi.view, 4);
+    assert_eq!(sumeragi.committed_height, 9);
+    let diagnostics = client.fetch_sumeragi_diagnostics().await?;
+    assert_eq!(diagnostics.tx_queue_depth, 4);
+    assert_eq!(diagnostics.tx_queue_capacity, 1024);
+    let configuration = client.fetch_configuration().await?;
+    assert_eq!(
+        configuration
+            .get("torii")
+            .and_then(|v| v.get("address"))
+            .and_then(Value::as_str),
+        Some("127.0.0.1:5555")
+    );
+    let metrics = client.fetch_metrics().await?;
+    assert!(
+        metrics.contains("iroha_blocks_total"),
+        "metrics fixture should surface canonical counter"
+    );
+    let query = client.submit_query(&[0xCA, 0xFE]).await?;
+    assert_eq!(query, vec![0x13, 0x37]);
+    let stream_data = MockToriiData::from_fixture_dir(&fixture_dir)?;
+    let expected_block: BlockMessage = norito::decode_from_bytes(&stream_data.block_frame)?;
+    let expected_event: EventBox = norito::decode_from_bytes::<
+        iroha_data_model::events::stream::EventMessage,
+    >(&stream_data.event_frame)?
+    .into();
+    let reader = stream_reader(mock.addr());
+    let handle = tokio::runtime::Handle::current();
+    let block_stream = ManagedBlockStream::spawn(&handle, "peer0".into(), reader.clone());
+    let mut block_rx = block_stream.subscribe();
+    let event_stream = ManagedEventStream::spawn(&handle, "peer0".into(), reader);
+    let mut event_rx = event_stream.subscribe();
+    let block_event = timeout(Duration::from_secs(1), block_rx.recv())
+        .await
+        .expect("block event timeout")?
+        .clone();
+    match block_event {
+        BlockStreamEvent::Block {
+            summary,
+            block,
+            raw_len,
+        } => {
+            assert_eq!(raw_len, stream_data.block_frame.len());
+            assert_eq!(block.as_ref(), &expected_block.0);
+            assert_eq!(summary.hash_hex, block.hash().to_string());
+            assert_eq!(summary.height, block.header().height().get());
+            assert_eq!(summary.transaction_count, block.external_entrypoint_count());
+        }
+        other => panic!("unexpected block stream event: {other:?}"),
+    }
+    let event = timeout(Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("event stream timeout")?
+        .clone();
+    match event {
+        EventStreamEvent::Event {
+            summary,
+            event,
+            raw_len,
+        } => {
+            assert_eq!(raw_len, stream_data.event_frame.len());
+            assert_eq!(summary.category, EventCategory::Pipeline);
+            assert_eq!(event.as_ref(), &expected_event);
+        }
+        other => panic!("unexpected event stream event: {other:?}"),
+    }
+    assert_eq!(mock.authenticated_stream_count(), 2);
+    block_stream.abort();
+    event_stream.abort();
+    mock.shutdown().await?;
     Ok(())
 }

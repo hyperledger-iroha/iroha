@@ -17,6 +17,11 @@
 //! verifier, including each epoch handoff, and requires fresh challenge-bound
 //! attestations from `2f + 1` members of the authenticated committee.
 //!
+//! [`managed`] owns persistent developer contexts and the native localnet process lifecycle.
+//! Canonical node/genesis generation is owned by [`localnet`]; subsequent
+//! starts retain the same network identity, signers and ledger. Kagami and Mochi use the same
+//! bounded owner-authenticated local control protocol and signed readiness checks.
+//!
 //! Later phases add planning and the decision hash, the converge executor and
 //! its journal, the local, container and SSH drivers, and the remaining
 //! verification gates.
@@ -24,5 +29,11 @@
 // and gates G0-G8/G11; P3 adds the SSH driver and edge renderers
 // (specs/network_deployment.md §13).
 
+pub mod bootstrap;
 pub mod definition;
+pub mod genesis;
+pub mod localnet;
+pub mod managed;
+pub mod secret_toml;
+pub mod shell;
 pub mod verify;

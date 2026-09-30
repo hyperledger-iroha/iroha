@@ -117,6 +117,7 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+iroha_fs = { workspace = true }
 iroha_core_privacy = { workspace = true }
 iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }

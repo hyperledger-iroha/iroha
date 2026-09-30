@@ -117,6 +117,98 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
     }
 }
 
+/// Rebind already authenticated artifacts to the complete finalized lifecycle.
+/// Local load order does not choose which release can issue or verify objects.
+impl AuthenticatedKagemushaV1RuntimeVerifier {
+    /// Bind the complete loaded artifact set to State's captured release roles.
+    ///
+    /// This preparation does not authenticate a chain head. State must still
+    /// consume its original opaque reload head at the locked installation boundary.
+    /// Failure drops the owned candidate and cannot change the installed verifier.
+    pub(crate) fn with_governed_lifecycle(
+        mut self,
+        network_id: iroha_data_model::NetworkId,
+        registry: &KagemushaGovernedVerifierRegistryV1,
+    ) -> Result<Self, String> {
+        registry.validate().map_err(str::to_owned)?;
+        self.lifecycle.validate()?;
+        if registry.active_release_id.is_none()
+            || self.releases.is_empty()
+            || self.releases.len() != registry.releases.len()
+        {
+            return Err(
+                "KAGEMUSHA reload requires the complete active governed registry".to_owned(),
+            );
+        }
+        // Authenticate all immutable identities before changing any lifecycle entry.
+        for ((release_id, runtime), governed) in self.releases.iter().zip(&registry.releases) {
+            let artifacts = runtime.artifacts.recursion_artifacts();
+            let local = KagemushaVerifierReleaseAuthorityV1 {
+                release_id: *release_id,
+                status: governed.status,
+                profile_digest: artifacts.profile_digest,
+                artifact_manifest_digest: artifacts.artifact_manifest_digest,
+                receipt_digest: runtime.release_receipt_digest,
+                attestation_digest: runtime.release_attestation_digest,
+                authority_policy_digest: runtime.release_authority_policy_digest,
+                hardware_policy_digest: runtime.release_hardware_policy_digest,
+                native_profile_digest: runtime.artifacts.native_profile_digest(),
+                provider_policy_root: runtime.artifacts.provider_policy_root(),
+                suite_id: runtime.artifacts.suite_id(),
+                vk_set_digest: runtime.artifacts.vk_set_digest(),
+            };
+            if runtime.network_id != network_id
+                || artifacts.release_id != *release_id
+                || !release_matches_governed(&local, governed)
+            {
+                return Err("KAGEMUSHA reload artifacts differ from finalized authority".to_owned());
+            }
+        }
+        adopt_governed_statuses(&mut self.lifecycle, registry)?;
+        runtime_matches_governed_registry(&self, registry)?;
+        Ok(self)
+    }
+}
+
+// The registry has been validated independently of the mutable local lifecycle.
+// Perform every fallible check before replacing the existing map's values; no
+// release key, artifact, or additional lifecycle allocation is introduced here.
+fn adopt_governed_statuses(
+    lifecycle: &mut super::KagemushaVerifierReleaseLifecycleV1,
+    registry: &KagemushaGovernedVerifierRegistryV1,
+) -> Result<(), String> {
+    registry.validate().map_err(str::to_owned)?;
+    lifecycle.validate()?;
+    if registry.active_release_id.is_none()
+        || lifecycle.statuses.len() != registry.releases.len()
+        || lifecycle
+            .statuses
+            .keys()
+            .zip(&registry.releases)
+            .any(|(key, row)| key != &row.release_id)
+    {
+        return Err(
+            "KAGEMUSHA reload lifecycle release set differs from finalized authority".to_owned(),
+        );
+    }
+    for (status, row) in lifecycle.statuses.values_mut().zip(&registry.releases) {
+        *status = match row.status {
+            iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_ACTIVE_V1 => {
+                KagemushaVerifierReleaseStatusV1::Active
+            }
+            iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1 => {
+                KagemushaVerifierReleaseStatusV1::Standby
+            }
+            iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_VERIFICATION_ONLY_V1 => {
+                KagemushaVerifierReleaseStatusV1::VerificationOnly
+            }
+            _ => unreachable!("complete registry status validation precedes mutation"),
+        };
+    }
+    lifecycle.active_release_id = registry.active_release_id;
+    Ok(())
+}
+
 /// Project only the two built-in runtime implementations; unknown local code
 /// cannot claim consensus authority by reporting plausible release identifiers.
 pub(crate) fn runtime_verifier_authority(
@@ -488,6 +580,127 @@ mod tests {
             variants
                 .iter()
                 .all(|variant| encode_canonical(variant).unwrap() != expected)
+        );
+    }
+
+    fn governed_lifecycle_fixture() -> KagemushaGovernedVerifierRegistryV1 {
+        let signer = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).unwrap();
+        let policy = KagemushaReleaseAuthorityPolicyV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            authority_set_id: [1; 32],
+            threshold: 1,
+            authorized_signers: vec![signer.public_key().clone()],
+        };
+        let policy_digest = policy.canonical_digest().unwrap();
+        let registry = KagemushaGovernedVerifierRegistryV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            authority_policy: Some(policy),
+            active_release_id: Some([2; 32]),
+            releases: [([1; 32], 3), ([2; 32], 1), ([3; 32], 2)]
+                .into_iter()
+                .map(|(release_id, status)| KagemushaGovernedVerifierReleaseV1 {
+                    release_id,
+                    status,
+                    profile_digest: [4; 32],
+                    artifact_manifest_digest: [5; 32],
+                    receipt_digest: [6; 32],
+                    attestation_digest: [7; 32],
+                    authority_policy_digest: policy_digest,
+                    hardware_policy_digest: [8; 32],
+                    native_profile_digest: [9; 32],
+                    provider_policy_root: [10; 32],
+                    suite_id: [11; 32],
+                    vk_set_digest: [12; 32],
+                })
+                .collect(),
+        };
+        registry.validate().unwrap();
+        registry
+    }
+
+    fn local_load_order() -> KagemushaVerifierReleaseLifecycleV1 {
+        let mut lifecycle = KagemushaVerifierReleaseLifecycleV1::default();
+        // These are lifecycle identities, not fabricated authenticated artifacts.
+        for release_id in [[3; 32], [1; 32], [2; 32]] {
+            lifecycle.register(release_id).unwrap();
+        }
+        lifecycle
+    }
+
+    #[test]
+    fn finalized_lifecycle_replaces_load_order_and_preserves_historical_verification() {
+        let registry = governed_lifecycle_fixture();
+        let mut lifecycle = local_load_order();
+        assert_eq!(lifecycle.active_release_id, Some([3; 32]));
+        adopt_governed_statuses(&mut lifecycle, &registry).unwrap();
+        lifecycle.validate().unwrap();
+        assert_eq!(lifecycle.active_release_id, Some([2; 32]));
+        assert!(!lifecycle.allows_new_top_up([1; 32]));
+        assert!(lifecycle.allows_terminal_verification([1; 32]));
+        assert!(lifecycle.allows_new_top_up([2; 32]));
+        assert!(lifecycle.allows_terminal_verification([2; 32]));
+        assert!(!lifecycle.allows_new_top_up([3; 32]));
+        assert!(!lifecycle.allows_terminal_verification([3; 32]));
+        let before = (lifecycle.statuses.clone(), lifecycle.active_release_id);
+        adopt_governed_statuses(&mut lifecycle, &registry).unwrap();
+        assert_eq!(
+            (lifecycle.statuses.clone(), lifecycle.active_release_id),
+            before
+        );
+    }
+
+    #[test]
+    fn lifecycle_mismatch_and_invalid_registry_leave_every_original_status_unchanged() {
+        for mutation in 0..6 {
+            let mut registry = governed_lifecycle_fixture();
+            let mut lifecycle = local_load_order();
+            match mutation {
+                0 => {
+                    lifecycle.statuses.remove(&[1; 32]);
+                }
+                1 => {
+                    lifecycle
+                        .statuses
+                        .insert([4; 32], KagemushaVerifierReleaseStatusV1::Standby);
+                }
+                2 => {
+                    registry.releases[0].status = 7;
+                }
+                3 => {
+                    registry.active_release_id = None;
+                }
+                4 => {
+                    registry.releases[0].release_id = [4; 32];
+                }
+                5 => {
+                    lifecycle.active_release_id = Some([99; 32]);
+                }
+                _ => unreachable!(),
+            }
+            let before = (lifecycle.statuses.clone(), lifecycle.active_release_id);
+            assert!(adopt_governed_statuses(&mut lifecycle, &registry).is_err());
+            assert_eq!(
+                (lifecycle.statuses.clone(), lifecycle.active_release_id),
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn empty_runtime_cannot_acquire_the_identity_of_an_active_governed_registry() {
+        let runtime = AuthenticatedKagemushaV1RuntimeVerifier {
+            releases: BTreeMap::new(),
+            lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
+        };
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"runtime lifecycle test",
+            )),
+        );
+        assert!(
+            runtime
+                .with_governed_lifecycle(network_id, &governed_lifecycle_fixture())
+                .is_err()
         );
     }
 }

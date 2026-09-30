@@ -26,7 +26,7 @@ use iroha_data_model::{
     transaction::FeePaymentIntent,
     zk::OpenVerifyEnvelope,
 };
-use iroha_test_network::{Network, NetworkBuilder};
+use iroha_test_network::{Network, NetworkBuilder, read_on_dedicated_thread};
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -91,13 +91,13 @@ async fn record_on_every_validator(
         client.transaction_status_timeout = Duration::from_secs(600);
         client.transaction_ttl = Some(Duration::from_secs(660));
     });
-    tokio::task::spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         client.submit(
             VerifyProof::new(attachment),
             FeePaymentIntent::authority(Vec::new(), None),
         )
     })
-    .await??;
+    .await?;
     let id_text = id.to_string();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
     for (index, peer) in network.peers().iter().enumerate() {

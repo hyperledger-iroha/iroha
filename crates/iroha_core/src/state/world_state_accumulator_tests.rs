@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     smartcontracts::isi::triggers::set::AUTHORITY_FIELDS,
-    state::{World, authority_registry::STATE_FIELDS},
+    state::{World, authority_registry::STATE_FIELDS, block_field::BlockField},
 };
 use iroha_model_base::state_path::StatePath;
 use mv::storage::Storage;
@@ -379,7 +379,7 @@ fn a_foreign_predecessor_yields_a_root_that_differs_from_the_actual_world() {
 fn incremental_encoding_is_limited_to_touched_values() {
     let index = field_index().as_ref().unwrap();
     let storage: Storage<u64, Vec<u8>> = (0..512).map(|key| (key, vec![key as u8])).collect();
-    let mut block = storage.block();
+    let mut block = BlockField::new(storage.block());
     let builder = |accumulator, direction| Builder {
         index,
         accumulator,
@@ -426,7 +426,7 @@ fn incremental_encoding_is_limited_to_touched_values() {
 fn field_identity_and_kind_are_bound_into_each_entry() {
     let index = field_index().as_ref().unwrap();
     let storage: Storage<u64, Vec<u8>> = [(1, vec![1])].into_iter().collect();
-    let block = storage.block();
+    let block = BlockField::new(storage.block());
     let mut roots = Vec::new();
     for name in ["smart_contract_state", "contract_code"] {
         let mut builder = Builder {
@@ -447,6 +447,7 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
         "the same entry in another field differs"
     );
     let cell = mv::cell::Cell::new(Vec::<u8>::new());
+    let block = BlockField::new(cell.block());
     let mut builder = Builder {
         index,
         accumulator: WorldStateAccumulator::empty(),
@@ -457,7 +458,7 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
     };
     assert!(
         builder
-            .append_cell_with("smart_contract_state", &cell.block(), hash_value)
+            .append_cell_with("smart_contract_state", &block, hash_value)
             .is_err(),
         "a table cannot be projected as a cell"
     );

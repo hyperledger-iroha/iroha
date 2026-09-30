@@ -45,6 +45,85 @@ fn certify(snapshot: &WorldStateSnapshotV1) -> VerifiedSumeragiBlock {
 }
 
 #[test]
+fn canonical_trigger_owner_identities_roundtrip_and_bind_exact_hash_preimages() {
+    let (mut snapshot, _, _, _) = snapshot();
+    let trigger: crate::trigger::TriggerId = "snapshot_trigger".parse().unwrap();
+    let value = vec![1_u8, 2, 3];
+    let fields = [
+        "triggers.by_call",
+        "triggers.contracts",
+        "triggers.data",
+        "triggers.pipeline",
+        "triggers.time",
+    ];
+    for (index, field) in fields.into_iter().enumerate() {
+        let kind = WorldStateElementKindV1::Table;
+        let path = world_state_path_hash_v1(field, kind).unwrap();
+        assert_eq!(
+            path,
+            Hash::new_from_chunks(&[
+                PATH,
+                &[kind.tag()],
+                &(field.len() as u64).to_le_bytes(),
+                field.as_bytes(),
+            ]),
+            "the trigger registry identity is hashed exactly as declared"
+        );
+        snapshot.entries.insert(
+            index,
+            WorldStateSnapshotEntryV1 {
+                field_id: field.into(),
+                kind,
+                key_hash: Some(world_state_value_hash_v1(&trigger).unwrap()),
+                value_hash: world_state_value_hash_v1(&value).unwrap(),
+            },
+        );
+    }
+    let wire = norito::encode_canonical(&snapshot).unwrap();
+    let decoded = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap();
+    assert_eq!(decoded, snapshot);
+    assert_eq!(
+        norito::json::from_json::<WorldStateSnapshotV1>(&norito::json::to_json(&snapshot).unwrap())
+            .unwrap(),
+        snapshot
+    );
+    let verified = snapshot.authenticate(&certify(&snapshot)).unwrap();
+    for field in fields {
+        verified
+            .verify_table_value(field, &trigger, &value)
+            .unwrap();
+    }
+    let mut changed = snapshot;
+    changed.entries.remove(0);
+    assert!(changed.authenticate(&certify(&decoded)).is_err());
+}
+
+#[test]
+fn world_path_hash_rejects_foreign_namespaces_and_empty_identity_components() {
+    for field in [
+        "state.world",
+        "runtime.lanes",
+        "data",
+        "world.",
+        "triggers.",
+        "world..accounts",
+        "triggers..data",
+        "world.accounts.",
+        "triggers.data.",
+        "triggers.data/row",
+    ] {
+        assert!(
+            world_state_path_hash_v1(field, WorldStateElementKindV1::Table).is_err(),
+            "invalid registry identity {field}"
+        );
+    }
+    for namespace in ["world", "triggers"] {
+        let excessive = format!("{namespace}.{}", "a".repeat(192));
+        assert!(world_state_path_hash_v1(&excessive, WorldStateElementKindV1::Table).is_err());
+    }
+}
+
+#[test]
 fn complete_snapshot_binds_real_typed_asset_and_registry_preimages_to_certified_root() {
     let (snapshot, asset, incarnation, registry) = snapshot();
     let tip = certify(&snapshot);

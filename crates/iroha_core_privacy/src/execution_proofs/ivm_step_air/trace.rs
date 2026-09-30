@@ -8,7 +8,11 @@
 //! destination when false. POPCNT/CLZ/CTZ share the existing Boolean source
 //! bits and one zero-prefix bank. MUL/MULHU/MULHSU/MULH reuse that workspace
 //! for exact product digits with bounded carries and signed corrections. DIV/DIVU/
-//! REM/REMU include exact last-attempt gas/arithmetic traps before invocation cleanup.
+//! REM/REMU and signed ABS include exact last-attempt gas/arithmetic traps before
+//! invocation cleanup. ABS rejects i64::MIN after the one-unit gas debit.
+//! MEAN computes the signed 65-bit sum and truncates toward zero, charging two
+//! gas units and completing three cycles. Final-attempt cycle admission follows
+//! the interpreter pre-dispatch limit, including a completed last-step crossing.
 //! JAL with a link register is excluded. This relation does not prove
 //! call entry/return, memory, private
 //! values, host effects, deployment authority, finality or invocation completion.
@@ -19,8 +23,10 @@
 // TODO: Bind this substrate into the sole complete IVM invocation AIR only after
 // memory, host/state, private execution, call ownership and terminal relations exist.
 
+mod absolute;
 mod bit_count;
 mod division;
+mod mean;
 mod multiply;
 
 use ivm::{
@@ -58,14 +64,17 @@ const SHIFT: usize = BRANCH + branch::BANK_WIDTH;
 const RESULT: usize = SHIFT + shift::BANK_WIDTH;
 const BIT_COUNT: usize = RESULT + 2;
 const MULTIPLY: usize = BIT_COUNT + bit_count::WIDTH;
-const ROW_WIDTH: usize = MULTIPLY + multiply::WIDTH;
+const ABSOLUTE: usize = MULTIPLY + multiply::WIDTH;
+const MEAN_GAS: usize = ABSOLUTE + absolute::WIDTH;
+const ROW_WIDTH: usize = MEAN_GAS + mean::GAS_WIDTH;
 const EXEC: usize = 0;
 const TRANSITION: usize = 1;
 const FIRST: usize = 2;
 const END: usize = 3;
 const OUT_OF_GAS: usize = 4;
 const ASSERTION_FAILED: usize = 5;
-const FIXED_WIDTH: usize = 6;
+const LAST_ATTEMPT: usize = 6;
+const FIXED_WIDTH: usize = 7;
 // Fetch Boolean/disabled-word checks, sum and PC; source links; result links;
 // every register transition and r0; PC/gas/cycle transitions; u64 range/carries;
 // full boundary register/control checks; arithmetic banks.
@@ -84,7 +93,12 @@ const CONSTRAINT_COUNT: usize = 2 * MAX_WORDS
     + shift::BANK_CONSTRAINTS
     + bit_count::CONSTRAINTS
     + multiply::CONSTRAINTS
-    + division::CONSTRAINTS;
+    + division::CONSTRAINTS
+    + absolute::CONSTRAINTS
+    + mean::CONSTRAINTS
+    + absolute::WIDTH
+    + mean::GAS_WIDTH
+    + 2;
 const CONTEXT: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::execution_v1(b"ivm-public-scalar-segment-v1");
 const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
@@ -105,7 +119,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-scalar-segment-fri-beta-v1",
     query_seed: b"ivm-scalar-segment-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:getgas:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
+const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:getgas:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
 const BRANCH_OPS: [u8; 6] = [
     wide::control::BEQ,
     wide::control::BNE,
@@ -165,6 +179,8 @@ enum Family {
     Count(usize),
     Multiply(usize),
     Division(usize),
+    Absolute,
+    Mean,
 }
 
 fn family(word: u32) -> Option<Family> {
@@ -186,6 +202,8 @@ fn family(word: u32) -> Option<Family> {
                 i64::from(wide::imm8(word)) as u64
             )));
         }
+        wide::arithmetic::ABS => return Some(Family::Absolute),
+        wide::arithmetic::MEAN => return Some(Family::Mean),
         wide::arithmetic::NEG => return Some(Family::Alu(wide::arithmetic::SUB)),
         wide::arithmetic::NOT => return Some(Family::Alu(wide::arithmetic::XOR)),
         wide::system::GETGAS => return Some(Family::Alu(wide::arithmetic::ADD)),
@@ -230,6 +248,16 @@ fn family(word: u32) -> Option<Family> {
         .iter()
         .position(|candidate| *candidate == opcode)
         .map(Family::Shift)
+}
+
+// This is the canonical completed dispatch cost, not the gas price. MEAN
+// charges two gas units but completes three cycles in the sole interpreter.
+fn completed_cycles(word: u32) -> u64 {
+    if wide::opcode(word) == wide::arithmetic::MEAN {
+        3
+    } else {
+        1
+    }
 }
 
 fn immediate(word: u32) -> Option<u64> {
@@ -278,7 +306,7 @@ fn operands(word: u32, family: Family) -> [Operand; 2] {
         _ => match family {
             Family::Branch(_) => [Register(wide::rd(word)), Register(wide::rs1(word))],
             Family::Jump(_) => [Constant(0), Constant(0)],
-            Family::Count(_) => [Register(wide::rs1(word)), Constant(0)],
+            Family::Count(_) | Family::Absolute => [Register(wide::rs1(word)), Constant(0)],
             Family::Move(_) => [
                 Register(if wide::opcode(word) == wide::arithmetic::CMOV {
                     wide::rs2(word)
@@ -309,7 +337,7 @@ fn signed(value: i64) -> F {
     }
 }
 
-/// Public opcode-boundary outcome. Traps end the final attempted DIV-family
+/// Public opcode-boundary outcome. Traps end the final attempted DIV-family, ABS or MEAN
 /// instruction before global invocation cleanup; they do not authorize effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -400,6 +428,21 @@ impl ScalarSegment {
             .checked_sub(usize::from(self.outcome.trapped()))
             .and_then(|count| u64::try_from(count).ok())
             .ok_or(Error::InvalidProfile)?;
+        let maximum_step_cycles = self
+            .words
+            .iter()
+            .copied()
+            .map(completed_cycles)
+            .max()
+            .unwrap_or(1);
+        let maximum_completed = completed
+            .checked_mul(maximum_step_cycles)
+            .ok_or(Error::InvalidProfile)?;
+        let observed_completed = self
+            .after
+            .cycles
+            .checked_sub(self.before.cycles)
+            .ok_or(Error::InvalidProfile)?;
         let last_attempt = self
             .steps
             .checked_sub(1)
@@ -427,10 +470,11 @@ impl ScalarSegment {
                 .checked_sub(self.contract.header_len())
                 != Some(self.first_pc as usize)
             || u64::from(self.first_pc) + executable.len() as u64 > u64::from(u32::MAX)
-            || self.before.cycles.checked_add(completed) != Some(self.after.cycles)
+            || (observed_completed < completed || observed_completed > maximum_completed)
             || self.before.vector_length != self.after.vector_length
             || (self.cycle_limit() != 0
-                && (self.after.cycles > self.cycle_limit() || last_attempt >= self.cycle_limit()))
+                && (self.after.cycles > self.cycle_limit().saturating_add(maximum_step_cycles - 1)
+                    || last_attempt >= self.cycle_limit()))
         {
             return Err(Error::InvalidProfile);
         }
@@ -499,6 +543,7 @@ impl ScalarSegment {
             F(u64::from(
                 row + 1 == self.steps && self.outcome == SegmentOutcome::AssertionFailed,
             )),
+            F(u64::from(row + 1 == self.steps)),
         ]
     }
 
@@ -519,14 +564,6 @@ impl ScalarSegment {
             } else {
                 SegmentOutcome::Continue
             };
-            let expected_before = self
-                .before
-                .cycles
-                .checked_add(index as u64)
-                .ok_or(Error::InvalidTrace)?;
-            let expected_after = expected_before
-                .checked_add(u64::from(!outcome.trapped()))
-                .ok_or(Error::InvalidTrace)?;
             if record.outcome != outcome.diagnostic()
                 || (index > 0 && records[index - 1].after != record.before)
                 || record
@@ -541,8 +578,6 @@ impl ScalarSegment {
                 || record.after.constraint_failed
                 || record.before.vector_length != self.before.vector_length
                 || record.after.vector_length != self.before.vector_length
-                || record.before.cycles != expected_before
-                || record.after.cycles != expected_after
             {
                 return Err(Error::InvalidTrace);
             }
@@ -557,8 +592,18 @@ impl ScalarSegment {
                 || record.instruction != Some(word)
                 || record.opcode != Some(wide::opcode(word))
                 || record.opcode_gas != super::gas::cost_of(word)
+                || record
+                    .before
+                    .cycles
+                    .checked_add(completed_cycles(word) * u64::from(!outcome.trapped()))
+                    != Some(record.after.cycles)
+                || (self.cycle_limit() != 0 && record.before.cycles >= self.cycle_limit())
                 || family(word).is_none()
-                || (outcome.trapped() && !matches!(family(word), Some(Family::Division(_))))
+                || (outcome.trapped()
+                    && !matches!(
+                        family(word),
+                        Some(Family::Division(_) | Family::Absolute | Family::Mean)
+                    ))
             {
                 return Err(Error::InvalidTrace);
             }
@@ -605,13 +650,18 @@ impl ScalarSegment {
                     branch_opcode = BRANCH_OPS[COMPARE_PREDICATES[index]]
                 }
                 Some(
-                    Family::Jump(_) | Family::Count(_) | Family::Multiply(_) | Family::Division(_),
+                    Family::Jump(_)
+                    | Family::Count(_)
+                    | Family::Multiply(_)
+                    | Family::Division(_)
+                    | Family::Absolute
+                    | Family::Mean,
                 ) => {}
                 Some(Family::Move(_)) => branch_opcode = wide::control::BNE,
                 None => unreachable!("validated scalar instruction"),
             }
             let cost = super::gas::cost_of(word).expect("admitted scalar cost");
-            let division_trap = match selected_family {
+            let arithmetic_trap = match selected_family {
                 Some(Family::Division(kind)) => {
                     state.gas_remaining < cost
                         || right == 0
@@ -619,10 +669,14 @@ impl ScalarSegment {
                             && left == i64::MIN as u64
                             && right == u64::MAX)
                 }
+                Some(Family::Absolute) => state.gas_remaining < cost || left == i64::MIN as u64,
+                Some(Family::Mean) => state.gas_remaining < cost,
                 _ => false,
             };
-            let effective_cost = if matches!(selected_family, Some(Family::Division(_)))
-                && state.gas_remaining < cost
+            let effective_cost = if matches!(
+                selected_family,
+                Some(Family::Division(_) | Family::Absolute | Family::Mean)
+            ) && state.gas_remaining < cost
             {
                 0
             } else {
@@ -632,7 +686,8 @@ impl ScalarSegment {
                 (state.gas_remaining & 0xffff_ffff) < effective_cost,
             ));
             row[CYCLE_CARRY] = F(u64::from(
-                !division_trap && (state.cycles & 0xffff_ffff) == 0xffff_ffff,
+                !arithmetic_trap
+                    && (state.cycles & 0xffff_ffff) + completed_cycles(word) > 0xffff_ffff,
             ));
         }
         row[SOURCES..ALU].copy_from_slice(&word::witness(left, right));
@@ -685,7 +740,7 @@ impl ScalarSegment {
             prefixes
         };
         row[BIT_COUNT..MULTIPLY].copy_from_slice(&workspace);
-        row[MULTIPLY..].copy_from_slice(&multiply::witness(
+        row[MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(
             left,
             right,
             &workspace,
@@ -693,14 +748,14 @@ impl ScalarSegment {
         ));
         if let Some(Family::Multiply(index)) = selected_family {
             for half in 0..2 {
-                row[RESULT + half] = multiply::result_half(&row[MULTIPLY..], index, half);
+                row[RESULT + half] = multiply::result_half(&row[MULTIPLY..ABSOLUTE], index, half);
             }
         }
         if let Some(Family::Division(kind)) = selected_family {
             let witness = division::witness(left, right, state.gas_remaining, kind);
             row[SHIFT..RESULT].copy_from_slice(&witness.bank);
             row[BIT_COUNT..MULTIPLY].copy_from_slice(&witness.digits);
-            row[MULTIPLY..].copy_from_slice(&witness.product);
+            row[MULTIPLY..ABSOLUTE].copy_from_slice(&witness.product);
             row[BRANCH..SHIFT].copy_from_slice(&branch::bank_witness(
                 wide::control::BEQ,
                 witness.remainder,
@@ -709,6 +764,21 @@ impl ScalarSegment {
             for half in 0..2 {
                 row[RESULT + half] = division::result_half(&witness.bank, kind, half);
             }
+        }
+        if let Some(Family::Absolute) = selected_family {
+            let bank = absolute::witness(left, state.gas_remaining);
+            for half in 0..2 {
+                row[RESULT + half] = half_from_limbs(&bank, 0, half);
+            }
+            row[ABSOLUTE..MEAN_GAS].copy_from_slice(&bank);
+        }
+        if let Some(Family::Mean) = selected_family {
+            let (bank, gas) = mean::witness(left, right, state.gas_remaining);
+            for half in 0..2 {
+                row[RESULT + half] = half_from_limbs(&bank, 0, half);
+            }
+            row[ABSOLUTE..MEAN_GAS].copy_from_slice(&bank);
+            row[MEAN_GAS..].copy_from_slice(&gas);
         }
         row
     }
@@ -761,6 +831,9 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     let mut count_selectors = [F::ZERO; 3];
     let mut multiply_selectors = [F::ZERO; 4];
     let mut division_selectors = [F::ZERO; 4];
+    let mut absolute_selected = F::ZERO;
+    let mut mean_selected = F::ZERO;
+    let mut last_cycle_refusal = F::ZERO;
     let mut alu_selected = F::ZERO;
     let mut branch_selected = F::ZERO;
     let mut shift_selected = F::ZERO;
@@ -790,6 +863,16 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             right[half] = right[half].add(selected.mul(sources[1].half(row, half)));
         }
         cost = cost.add(selected.mul(F(super::gas::cost_of(word).ok_or(Error::InvalidProfile)?)));
+        // The last attempt's exact start cycle is determined by the bound public
+        // end cycle and selected canonical opcode. All earlier successful rows
+        // advance by a positive amount, so this also admits their start cycles.
+        let increment = completed_cycles(word) * u64::from(!segment.outcome.trapped());
+        let last_allowed = segment
+            .after
+            .cycles
+            .checked_sub(increment)
+            .is_some_and(|before| segment.cycle_limit() == 0 || before < segment.cycle_limit());
+        last_cycle_refusal = last_cycle_refusal.add(selected.mul(F(u64::from(!last_allowed))));
         if !matches!(family, Family::Branch(_) | Family::Jump(_)) && wide::rd(word) != 0 {
             writes[wide::rd(word)] = writes[wide::rd(word)].add(selected);
         }
@@ -827,6 +910,8 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                 jump_selected = jump_selected.add(selected);
                 jump_displacement = jump_displacement.add(selected.mul(signed(displacement)));
             }
+            Family::Absolute => absolute_selected = absolute_selected.add(selected),
+            Family::Mean => mean_selected = mean_selected.add(selected),
             Family::Division(index) => {
                 division_selectors[index] = division_selectors[index].add(selected);
             }
@@ -847,6 +932,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             }
         }
     }
+    out.push(fixed[LAST_ATTEMPT].mul(last_cycle_refusal));
     out.push(fetch_sum.sub(fixed[EXEC]));
     out.push(fixed[EXEC].mul(row[PC]).sub(fetched_pc));
     // Non-selected banks still execute a fully constrained dummy operation on
@@ -868,7 +954,8 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     let division_selected = division_selectors.into_iter().fold(F::ZERO, F::add);
     let division_signed = division_selectors[0].add(division_selectors[2]);
     let trap = fixed[OUT_OF_GAS].add(fixed[ASSERTION_FAILED]);
-    cost = cost.sub(F(10).mul(fixed[OUT_OF_GAS]));
+    cost = cost.mul(F::ONE.sub(fixed[OUT_OF_GAS]));
+    let division_trap = trap.mul(division_selected);
     let taken = row[BRANCH + branch::TAKEN_BANK_OFFSET];
     let compare_boolean = compare_selectors[..4].iter().copied().fold(F::ZERO, F::add);
     let source_bits = sources.bits(0);
@@ -901,6 +988,11 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                 .sub(taken.mul(move_value[half]))
                 .sub(F::ONE.sub(taken).mul(move_retained[half]))
                 .sub(if half == 0 { count } else { F::ZERO })
+                .sub(absolute_selected.add(mean_selected).mul(half_from_limbs(
+                    &row[ABSOLUTE..MEAN_GAS],
+                    0,
+                    half,
+                )))
                 .sub(division_selectors.iter().enumerate().fold(
                     F::ZERO,
                     |sum, (kind, selector)| {
@@ -914,7 +1006,11 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                 .sub(multiply_selectors.iter().enumerate().fold(
                     F::ZERO,
                     |sum, (kind, selector)| {
-                        sum.add(selector.mul(multiply::result_half(&row[MULTIPLY..], kind, half)))
+                        sum.add(selector.mul(multiply::result_half(
+                            &row[MULTIPLY..ABSOLUTE],
+                            kind,
+                            half,
+                        )))
                     },
                 )),
         );
@@ -954,7 +1050,11 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     out.push(
         fixed[TRANSITION].mul(
             row[CYCLES]
-                .add(fixed[EXEC].sub(trap))
+                .add(
+                    fixed[EXEC]
+                        .add(mean_selected.mul(F(2)))
+                        .mul(F::ONE.sub(trap)),
+                )
                 .sub(next[CYCLES])
                 .sub(row[CYCLE_CARRY].mul(F(1 << 32))),
         ),
@@ -1026,30 +1126,71 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     }
     multiply::append_residues(
         &mut out,
-        &row[MULTIPLY..],
+        &row[MULTIPLY..ABSOLUTE],
         &row[BIT_COUNT..MULTIPLY],
         sources,
         multiply::Selection {
             multiply: multiply_selected,
             division: division_selected,
             signed: division_signed,
-            success: division_selected.sub(trap),
+            success: division_selected.sub(division_trap),
             quotient: std::array::from_fn(|limb| row[SHIFT + division::QUOTIENT + limb]),
         },
     );
     division::append_residues(
         &mut out,
         &row[SHIFT..RESULT],
-        &row[MULTIPLY..],
+        &row[MULTIPLY..ABSOLUTE],
         sources,
         &row[GAS_DIGITS..GAS_DIGITS + 32],
         row[BRANCH + branch::BORROW + 3],
         division::Selection {
             active: division_selected,
             signed: division_signed,
-            out_of_gas: fixed[OUT_OF_GAS],
-            assertion_failed: fixed[ASSERTION_FAILED],
+            out_of_gas: fixed[OUT_OF_GAS].mul(division_selected),
+            assertion_failed: fixed[ASSERTION_FAILED].mul(division_selected),
         },
+    );
+    absolute::append_residues(
+        &mut out,
+        &row[ABSOLUTE..MEAN_GAS],
+        sources,
+        &row[GAS_DIGITS..GAS_DIGITS + 32],
+        absolute_selected,
+        fixed[OUT_OF_GAS].mul(absolute_selected),
+        fixed[ASSERTION_FAILED].mul(absolute_selected),
+    );
+    mean::append_residues(
+        &mut out,
+        &row[ABSOLUTE..MEAN_GAS],
+        &row[MEAN_GAS..],
+        &row[ALU..BRANCH],
+        sources,
+        &row[GAS_DIGITS..GAS_DIGITS + 32],
+        mean_selected,
+        fixed[OUT_OF_GAS].mul(mean_selected),
+        fixed[ASSERTION_FAILED].mul(mean_selected),
+    );
+    // Every newly introduced cell has a canonical inactive value. In particular,
+    // the ABS inverse cells must not become free witness cells on other opcodes.
+    out.extend(
+        row[ABSOLUTE..MEAN_GAS]
+            .iter()
+            .map(|cell| F::ONE.sub(absolute_selected).sub(mean_selected).mul(*cell)),
+    );
+    out.extend(
+        row[MEAN_GAS..]
+            .iter()
+            .map(|cell| F::ONE.sub(mean_selected).mul(*cell)),
+    );
+    // A declared trap must belong to an explicitly constrained trapping family.
+    out.push(
+        trap.mul(
+            F::ONE
+                .sub(division_selected)
+                .sub(absolute_selected)
+                .sub(mean_selected),
+        ),
     );
     debug_assert_eq!(out.len(), CONSTRAINT_COUNT);
     Ok(out)

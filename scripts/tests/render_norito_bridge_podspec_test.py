@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -29,7 +30,60 @@ sys.modules[SPEC.name] = renderer
 SPEC.loader.exec_module(renderer)
 
 
+def run_isolated_renderer_case(
+    case: unittest.TestCase, result: unittest.TestResult | None = None
+) -> unittest.TestResult:
+    """Execute one real isolated case and report its outcome to the parent runner."""
+    owns_result = result is None
+    if result is None:
+        result = case.defaultTestResult()
+        result.startTestRun()
+    result.startTest(case)
+    try:
+        selected = f"{type(case).__name__}.{case._testMethodName}"
+        command = [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), selected]
+        child = subprocess.run(
+            command,
+            cwd=REPOSITORY_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if child.returncode != 0 or "Ran 1 test" not in child.stdout:
+            raise AssertionError(
+                f"isolated renderer case {selected} failed (exit {child.returncode}):\n"
+                f"{child.stdout}"
+            )
+    except AssertionError:
+        result.addFailure(case, sys.exc_info())
+    except Exception:
+        result.addError(case, sys.exc_info())
+    else:
+        result.addSuccess(case)
+    finally:
+        result.stopTest(case)
+        if owns_result:
+            result.stopTestRun()
+    return result
+
+
 class NoritoBridgePodspecRendererTests(unittest.TestCase):
+    def run(self, result: unittest.TestResult | None = None) -> unittest.TestResult:
+        # A normally collected pytest/unittest case crosses the same real
+        # interpreter boundary as the maintained renderer caller. The child
+        # keeps the original setup check and every assertion body unchanged.
+        if sys.flags.isolated:
+            return super().run(result)
+        return run_isolated_renderer_case(self, result)
+
+    def _assert_real_isolated_runtime(self) -> None:
+        self.assertEqual(sys.version_info[:2], (3, 12))
+        self.assertTrue(sys.flags.isolated)
+        self.assertTrue(sys.flags.no_site)
+
+    def _deliberate_isolated_failure(self) -> None:
+        self.fail("isolated child assertion propagation probe")
+
     def setUp(self) -> None:
         if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
             self.fail("tests require isolated Python 3.12")
@@ -118,6 +172,12 @@ class NoritoBridgePodspecRendererTests(unittest.TestCase):
         )
         self.assertIn(f":sha256 => '{digest}'", rendered)
         self.assertIn("s.vendored_frameworks = 'NoritoBridge.xcframework'", rendered)
+        frameworks = re.search(r"s\.frameworks\s*=\s*\[([^]]+)\]", rendered)
+        self.assertIsNotNone(frameworks)
+        self.assertEqual(
+            re.findall(r"'([^']+)'", frameworks.group(1)),
+            ["Foundation", "Security", "Metal", "CoreGraphics", "Accelerate"],
+        )
         for placeholder in ("__VERSION__", "__SOURCE_URL__", "__ARCHIVE_SHA256__"):
             self.assertNotIn(placeholder, rendered)
 
@@ -463,6 +523,32 @@ class NoritoBridgePodspecRendererTests(unittest.TestCase):
         self.archive.write_bytes(encrypted)
         with self.assertRaisesRegex(renderer.RenderError, "encrypted"):
             renderer.validate_archive(self.archive, "0.1.0")
+
+
+class RendererIsolationLauncherTests(unittest.TestCase):
+    def test_parent_executes_one_genuinely_isolated_case(self) -> None:
+        case = NoritoBridgePodspecRendererTests("_assert_real_isolated_runtime")
+        result = unittest.TestResult()
+        with mock.patch.object(subprocess, "run", wraps=subprocess.run) as executed:
+            run_isolated_renderer_case(case, result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual(executed.call_args.args[0][1:4], ["-I", "-S", "-B"])
+        self.assertEqual(
+            executed.call_args.args[0][-1],
+            "NoritoBridgePodspecRendererTests._assert_real_isolated_runtime",
+        )
+
+    def test_child_assertion_failure_is_reported_to_parent(self) -> None:
+        case = NoritoBridgePodspecRendererTests("_deliberate_isolated_failure")
+        result = unittest.TestResult()
+        run_isolated_renderer_case(case, result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertFalse(result.wasSuccessful())
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 1)
+        self.assertIs(result.failures[0][0], case)
+        self.assertIn("isolated child assertion propagation probe", result.failures[0][1])
 
 
 if __name__ == "__main__":

@@ -4,20 +4,22 @@ use super::*;
 
 /// Exhaustive semantic World visitor shared by delta owners and the World state accumulator.
 /// Each owner supplies the hash of its actual borrowed value, excluding caches.
+/// Field owners retain immutable access to the same journal through execution
+/// and freeze; this visitor never borrows execution or publication authority.
 pub(crate) trait WorldProjection {
     /// Owner-specific errors retain local resource custody through this visitor.
     type Error: From<String>;
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
@@ -32,7 +34,7 @@ pub(crate) trait WorldProjection {
     /// publication journal retains the full original row through this default.
     fn append_musubi_archive_availability(
         &mut self,
-        storage: &StorageBlock<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
+        storage: &StorageField<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_archive_availability", storage, hash_value)
     }
@@ -41,7 +43,7 @@ pub(crate) trait WorldProjection {
     /// The physical publication journal keeps complete rows through this default.
     fn append_musubi_resolver_index(
         &mut self,
-        storage: &StorageBlock<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        storage: &StorageField<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_resolver_index", storage, hash_value)
     }
@@ -50,7 +52,7 @@ pub(crate) trait WorldProjection {
     /// The physical publication journal keeps complete rows through this default.
     fn append_musubi_public_directory(
         &mut self,
-        storage: &StorageBlock<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+        storage: &StorageField<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_public_directory", storage, hash_value)
     }
@@ -64,7 +66,7 @@ impl<T: WorldProjection> WorldProjection for &mut T {
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         (**self).append_storage_with(name, storage, encode)
@@ -72,7 +74,7 @@ impl<T: WorldProjection> WorldProjection for &mut T {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         (**self).append_cell_with(name, cell, encode)
@@ -80,21 +82,21 @@ impl<T: WorldProjection> WorldProjection for &mut T {
 
     fn append_musubi_archive_availability(
         &mut self,
-        storage: &StorageBlock<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
+        storage: &StorageField<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
     ) -> Result<(), Self::Error> {
         (**self).append_musubi_archive_availability(storage)
     }
 
     fn append_musubi_resolver_index(
         &mut self,
-        storage: &StorageBlock<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        storage: &StorageField<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
     ) -> Result<(), Self::Error> {
         (**self).append_musubi_resolver_index(storage)
     }
 
     fn append_musubi_public_directory(
         &mut self,
-        storage: &StorageBlock<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+        storage: &StorageField<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     ) -> Result<(), Self::Error> {
         (**self).append_musubi_public_directory(storage)
     }
@@ -105,7 +107,7 @@ impl WorldProjection for WorldDeltaBuilder {
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         Self::append_storage_with(self, name, storage, encode)
@@ -114,7 +116,7 @@ impl WorldProjection for WorldDeltaBuilder {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         Self::append_cell_with(self, name, cell, encode)
@@ -130,7 +132,7 @@ pub(super) trait AppendWorldField {
 }
 
 impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> AppendWorldField
-    for StorageBlock<'_, K, V, M>
+    for StorageField<'_, K, V, M>
 {
     fn append_world_field<P: WorldProjection>(
         &self,
@@ -141,7 +143,7 @@ impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> Appe
     }
 }
 
-impl<V: Value + Encode, C: Send + Sync + 'static> AppendWorldField for CellBlock<'_, V, C> {
+impl<V: Value + Encode, C: Send + Sync + 'static> AppendWorldField for CellField<'_, V, C> {
     fn append_world_field<P: WorldProjection>(
         &self,
         name: &'static str,

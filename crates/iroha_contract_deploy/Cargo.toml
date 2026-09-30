@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 iroha = { workspace = true }
+iroha_fs = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
 iroha_executor_data_model = { workspace = true }
 iroha_model_base = { workspace = true }
@@ -25,9 +26,6 @@ norito = { workspace = true, default-features = false, features = ["json"] }
 eyre = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

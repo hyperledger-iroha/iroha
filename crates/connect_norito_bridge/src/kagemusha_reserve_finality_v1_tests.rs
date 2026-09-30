@@ -539,6 +539,73 @@ mod top_up_submission_binding_tests {
             0
         );
     }
+    /// Generate the cross-SDK top-up wire fixture with the same native owner
+    /// that seals IDs, checks recipient envelope shape and validates ingress.
+    /// Proof and ciphertext contents are structural fixtures, never monetary authority.
+    #[test]
+    fn shared_top_up_submission_fixture_matches_native_authority() {
+        let request = top_up_request();
+        let canonical_request = request_bytes(&request);
+        let key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+        let creation_time_ms = 1_717_000_222_000_u64;
+        let ttl_ms = 60_000_u64;
+        let mut builder = TransactionBuilder::new(
+            request.network_id,
+            request.payer.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("native instruction")]);
+        builder.set_creation_time(std::time::Duration::from_millis(creation_time_ms));
+        builder.set_ttl(std::time::Duration::from_millis(ttl_ms));
+        let payload = builder.encode_payload();
+        let transaction = builder
+            .try_sign(key.private_key())
+            .expect("fixture signature");
+        transaction
+            .verify_signature()
+            .expect("native signature verification");
+        let signed = transaction
+            .encode_wire_v1()
+            .expect("canonical transaction wire");
+        validate_top_up_submission(&signed, &canonical_request).expect("exact native ingress");
+        assert!(validate_top_up_submission(&signed[1..], &canonical_request).is_err());
+        let mut tampered = signed.clone();
+        *tampered.last_mut().expect("nonempty signed wire") ^= 1;
+        assert!(validate_top_up_submission(&tampered, &canonical_request).is_err());
+        let expected = norito::json!({
+            "schema": "iroha.kagemusha.top_up_submission_fixture.v1",
+            "scope": "Native shape and signed-ingress fixture only; structural proof and ciphertext bytes confer no monetary or hardware authority",
+            "test_only_payer_private_key_hex": (hex::encode(key.private_key().to_bytes().1)),
+            "payer_public_key_hex": (hex::encode(key.public_key().to_bytes().1)),
+            "creation_time_ms": creation_time_ms,
+            "ttl_ms": ttl_ms,
+            "canonical_request_hex": (hex::encode(&canonical_request)),
+            "transaction_payload_hex": (hex::encode(&payload)),
+            "signed_transaction_wire_hex": (hex::encode(&signed)),
+        });
+        let rendered = format!(
+            "{}\n",
+            norito::json::to_string_pretty(&expected).expect("fixture JSON")
+        );
+        let destination = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/offline/kagemusha_top_up_submission_v1.json");
+        if let Some(output) = std::env::var_os("PRINT_KAGEMUSHA_TOP_UP_FIXTURE_V1") {
+            let output = std::path::PathBuf::from(output);
+            assert!(
+                output.is_absolute(),
+                "fixture output must be an explicit absolute path"
+            );
+            std::fs::write(&output, &rendered).expect("write native-generated fixture");
+            return;
+        }
+        let actual = std::fs::read_to_string(&destination)
+            .expect("generate the canonical top-up fixture with PRINT_KAGEMUSHA_TOP_UP_FIXTURE_V1");
+        assert_eq!(
+            actual, rendered,
+            "top-up fixture must match its native producer byte-for-byte"
+        );
+    }
+
     #[test]
     fn different_valid_reviewed_requests_cannot_authorize_signed_bytes() {
         let expected = top_up_request();

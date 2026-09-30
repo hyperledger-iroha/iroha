@@ -11,8 +11,8 @@
 //!   offline checks: `--check-config` and `--check-storage` never open them.
 //!
 //! Every file is read through [`load_bounded_runtime_credential_v1`]: an absolute path with no
-//! symlinked, foreign-owned or group/world-writable ancestor, opened with `O_NOFOLLOW`, one regular
-//! file with a single link, owned by root or the effective user, readable only by its owner, with
+//! untrusted links, foreign ownership or shared write access in its ancestors. Retained native
+//! handles admit one single-link regular file, readable only by its current owner, with
 //! the exact (or bounded) size of its record. The bytes are zeroized after parsing. The path is
 //! walked as written first: a symlinked component is admitted only when the link and its directory
 //! are root-owned and not group/world-writable (system links such as macOS `/var`), so a symlinked
@@ -78,9 +78,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use std::{
-    fmt, fs,
+    fmt,
     io::ErrorKind,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
     str::FromStr as _,
     sync::Arc,
@@ -161,8 +160,8 @@ impl fmt::Display for NodeSecretsErrorV1 {
                 file.relative_path(),
                 match error {
                     RuntimeCredentialErrorV1::InvalidSource =>
-                        "it must be one owner-only regular file with a single link, owned by root or \
-                         this user, reached through trusted directories without symlinks",
+                        "it must be one owner-only regular file with a single link, owned by \
+                         this user, reached through trusted directories without untrusted links",
                     RuntimeCredentialErrorV1::InvalidLength =>
                         "its size is not the exact record size",
                     RuntimeCredentialErrorV1::Unavailable => "it could not be read",
@@ -394,73 +393,26 @@ impl IrohaRuntimeProviderRegistryV1 for NodeSecretsV1 {
     }
 }
 
-/// `<data_dir>/secrets/<file>` through the canonical secrets directory, or `None` when absent.
-///
-/// The secrets directory is walked as written ([`walk_trusted_symlinks`]) before it is
-/// canonicalized, so the loader's ancestor checks see the real directories and no symlink the
-/// operator's account could replace is followed.
+/// Admit the fixed secret path through the native retained-handle custody boundary.
+/// Missing files remain optional until the caller applies its role-specific requirement.
 fn existing_secret_path(
     data_dir: &DataDir,
     file: NodeSecretFile,
 ) -> Result<Option<PathBuf>, NodeSecretsErrorV1> {
-    let custody = |error| NodeSecretsErrorV1::Custody { file, error };
-    if !walk_trusted_symlinks(&data_dir.secrets_dir()).map_err(custody)? {
-        return Ok(None);
-    }
-    let secrets_dir = match fs::canonicalize(data_dir.secrets_dir()) {
-        Ok(path) => path,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(custody(RuntimeCredentialErrorV1::Unavailable)),
-    };
-    let path = secrets_dir.join(file.relative_path());
-    match fs::symlink_metadata(&path) {
-        Ok(_) => Ok(Some(path)),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(custody(RuntimeCredentialErrorV1::Unavailable)),
-    }
-}
-
-/// Walk the absolute `path` component by component as written.
-///
-/// Returns `Ok(false)` when a component does not exist. A symlinked component is admitted only
-/// when the link and the directory holding it are owned by root and that directory is not
-/// group- or world-writable: only root could then have planted or could replace it (system links
-/// such as macOS `/var` and `/tmp`). Any other symlink, a relative path or a `..` component is
-/// [`RuntimeCredentialErrorV1::InvalidSource`].
-fn walk_trusted_symlinks(path: &Path) -> Result<bool, RuntimeCredentialErrorV1> {
+    let path = data_dir.secret(file);
+    let refused = |error| NodeSecretsErrorV1::Custody { file, error };
     if !path.is_absolute()
         || path
             .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+            .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
     {
-        return Err(RuntimeCredentialErrorV1::InvalidSource);
+        return Err(refused(RuntimeCredentialErrorV1::InvalidSource));
     }
-    let mut prefix = PathBuf::new();
-    for component in path.components() {
-        let parent = prefix.clone();
-        prefix.push(component.as_os_str());
-        if matches!(component, Component::RootDir | Component::Prefix(_)) {
-            continue;
-        }
-        let metadata = match fs::symlink_metadata(&prefix) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err(RuntimeCredentialErrorV1::Unavailable),
-        };
-        if !metadata.file_type().is_symlink() {
-            continue;
-        }
-        let holder =
-            fs::symlink_metadata(&parent).map_err(|_| RuntimeCredentialErrorV1::Unavailable)?;
-        if metadata.uid() != 0
-            || holder.uid() != 0
-            || !holder.is_dir()
-            || holder.permissions().mode() & 0o022 != 0
-        {
-            return Err(RuntimeCredentialErrorV1::InvalidSource);
-        }
+    match iroha_fs::RetainedFile::open_private(&path) {
+        Ok(_) => Ok(Some(path)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(refused(RuntimeCredentialErrorV1::InvalidSource)),
     }
-    Ok(true)
 }
 
 /// Check the custody of every [`CONFIG_KEY_FILES_V1`] file that exists under
@@ -851,5 +803,30 @@ impl SoracloudRuntimeMutationSignerV1 for FileRuntimeSignerV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+mod native_custody_tests {
+    use super::*;
+    use iroha_fs::{PrivateDirectory, PublishMode};
+
+    #[test]
+    fn fixed_secret_paths_are_admitted_through_native_private_handles() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::open_or_create(temporary.path().join("node")).unwrap();
+        let secrets = root.create_child("secrets").unwrap();
+        let data_dir = DataDir::new(root.path().to_owned());
+        let file = NodeSecretFile::Validator;
+        assert_eq!(existing_secret_path(&data_dir, file).unwrap(), None);
+        secrets
+            .write_atomic("validator.key", b"bounded fixture", PublishMode::CreateNew)
+            .unwrap();
+        assert_eq!(
+            existing_secret_path(&data_dir, file).unwrap(),
+            Some(data_dir.secret(file))
+        );
+        std::fs::hard_link(data_dir.secret(file), secrets.path().join("linked.key")).unwrap();
+        assert!(existing_secret_path(&data_dir, file).is_err());
+    }
+}

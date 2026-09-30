@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -126,7 +127,7 @@ final class ToriiElectionTallyV1Tests: XCTestCase {
         ElectionTallyURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.path, "/v1/zk/vote/tally")
-            XCTAssertEqual(request.httpBody, expectedBody)
+            XCTAssertEqual(toriiClientTestBodyData(from: request), expectedBody)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let expectedHeaders = try ToriiCanonicalRequest.buildHeaders(
@@ -139,9 +140,26 @@ final class ToriiElectionTallyV1Tests: XCTestCase {
                 timestampMs: authorization.timestampMs!,
                 nonce: authorization.nonce!
             )
-            for (key, value) in expectedHeaders {
+            for (key, value) in expectedHeaders where key != ToriiCanonicalRequest.headerSignature {
                 XCTAssertEqual(request.value(forHTTPHeaderField: key), value)
             }
+            // A valid Ed25519 signature need not equal a second signing result.
+            // Authenticate the exact transmitted body and freshness/network binding.
+            let signatureText = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            let signature = try XCTUnwrap(Data(base64Encoded: signatureText))
+            let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: authorization.privateKey)
+            let message = try ToriiCanonicalRequest.signatureMessage(
+                networkId: TestNetworkIds.canonical,
+                method: "POST", url: request.url!, body: expectedBody,
+                timestampMs: authorization.timestampMs!, nonce: authorization.nonce!
+            )
+            XCTAssertTrue(signer.publicKey.isValidSignature(signature, for: message))
+            let changedBodyMessage = try ToriiCanonicalRequest.signatureMessage(
+                networkId: TestNetworkIds.canonical,
+                method: "POST", url: request.url!, body: Data(#"{"election_id":"election-2"}"#.utf8),
+                timestampMs: authorization.timestampMs!, nonce: authorization.nonce!
+            )
+            XCTAssertFalse(signer.publicKey.isValidSignature(signature, for: changedBodyMessage))
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                 headerFields: ["Content-Type": "application/json"])!,

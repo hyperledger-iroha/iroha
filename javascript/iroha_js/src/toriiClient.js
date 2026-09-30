@@ -156,6 +156,7 @@ import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
 import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
+import { snapshotSorafsOrderbookSubmissionBytes } from "./sorafsOrderbookSubmissionBytes.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
 const CANONICAL_AUTH_FIELD = "canonicalAuth";
@@ -11012,6 +11013,19 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
+    const normalized = requirePlainObjectOption(options, `${context} options`);
+    assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
+    const { signal } = normalizeSignalOption(normalized, context);
+    if (!(this._localSigningContext instanceof LocalSigningContext)) {
+      rejectType(`${context} requires ToriiClient options.localSigningContext`);
+    }
+    // The lazy import yields: take custody of caller input and dispatch methods first.
+    const transactionBytes = snapshotSorafsOrderbookSubmissionBytes(signedTransaction, context);
+    const expectedReceiptSigner = normalized.expectedReceiptSigner;
+    const request = this._request.bind(this);
+    const validateDataModel = this._ensureDataModelValidation.bind(this);
+    const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" };
+    const requestHeaders = this._createHeaders(fixedHeaders);
     const {
       assertSorafsOrderbookFixedHeaders,
       createSorafsOrderbookSubmissionDeadline,
@@ -11022,19 +11036,14 @@ export class ToriiClient {
       validateSorafsOrderbookSubmissionHeaders,
       verifySorafsOrderbookSubmissionReceipt,
     } = await loadToriiOptionalModule();
-    const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
-    const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
-      rejectType(`${context} requires ToriiClient options.localSigningContext`);
-    }
-    const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
     validateSorafsOrderbookSubmissionTransport(this._baseUrl, this.#allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
     assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
-    const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" }; const requestHeaders = this._createHeaders(fixedHeaders); const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
+    const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
     const prepared = prepareSorafsOrderbookSubmission({
-      route, signedTransaction,
+      route, signedTransaction: transactionBytes,
       expectedNetworkIdBytes: networkIdBytes(this._localSigningContext.networkId, `${context}.networkId`),
       expectedChainDiscriminant: this._localSigningContext.chainDiscriminant,
-      expectedReceiptSigner: normalized.expectedReceiptSigner,
+      expectedReceiptSigner,
       native: resolveOptionalNativeBinding(this._nativeRuntime), context,
     });
     const operation = createSorafsOrderbookSubmissionDeadline(signal, this.#config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted, abortReason: signalAbortReason });

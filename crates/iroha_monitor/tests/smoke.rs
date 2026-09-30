@@ -57,7 +57,7 @@ fn serve_stub(app: axum::Router) -> Option<StatusStub> {
 }
 #[test]
 fn status_stub_retains_listener_until_its_owner_drops() {
-    let _serial = serial_guard();
+    let _serial = crate::serial_guard();
     let stub = spawn_status_metrics_stub().expect("local status stub");
     let response = attohttpc::get(format!("http://{}/status", stub.addr))
         .send()

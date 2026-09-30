@@ -1299,6 +1299,27 @@ mod tests {
     }
 
     #[test]
+    fn retained_terminal_record_validation_rejects_incomplete_or_underfunded_tombstones() {
+        let index = released_redemption_index();
+        let record = index.records.values().next().unwrap();
+        record.validate().unwrap();
+        for change in 0..5 {
+            let mut invalid = record.clone();
+            match change {
+                0 => invalid.terminal_receipt_digest = None,
+                1 => invalid.terminal_receipt_digest = Some([0; 32]),
+                2 => invalid.commit_certificate_digest = None,
+                3 => invalid.phase = KagemushaOutgoingOperationPhaseV1::Installed,
+                _ => invalid.reserved_record_bytes = canonical_len(record).unwrap() - 1,
+            }
+            assert_eq!(
+                invalid.validate(),
+                Err(KagemushaOutgoingOperationIndexErrorV1::SnapshotIntegrity)
+            );
+        }
+    }
+
+    #[test]
     fn captured_outgoing_index_frame_identity() {
         let index = released_redemption_index();
         index.validate_internal(None).unwrap();

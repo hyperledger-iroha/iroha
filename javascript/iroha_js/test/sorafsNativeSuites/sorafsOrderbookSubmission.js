@@ -106,12 +106,12 @@ export function registerSorafsOrderbookSubmissionTests(context) {
     };
     const signed = Buffer.from([1, 2, 3]);
     const native = nativeBinding();
+    const options = { expectedReceiptSigner: SIGNER };
     const pending = client(fetchImpl, native, {
       validation: () => capabilitiesGate,
-    }).submitSorafsOrderbookOrder(signed, {
-      expectedReceiptSigner: SIGNER,
-    });
+    }).submitSorafsOrderbookOrder(signed, options);
     signed.fill(0xff);
+    options.expectedReceiptSigner = "replacement";
     native.verifySorafsOrderbookSubmissionReceiptV1 = () => { throw new Error("mutable replacement"); };
     releaseCapabilities();
     const receipt = await pending;
@@ -165,11 +165,13 @@ export function registerSorafsOrderbookSubmissionTests(context) {
 
   test("orderbook submit keeps its original target and transport across validation", async () => {
     let releaseCapabilities;
+    let validationEntered;
+    const validationStarted = new Promise((resolve) => { validationEntered = resolve; });
     let originalFetches = 0;
     let substitutedFetches = 0;
     let substitutedRequests = 0;
     const sdk = client(async () => { originalFetches += 1; return acceptedResponse(); }, nativeBinding(), {
-      validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
+      validation: () => new Promise((resolve) => { releaseCapabilities = resolve; validationEntered(); }),
     });
     const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
@@ -177,6 +179,8 @@ export function registerSorafsOrderbookSubmissionTests(context) {
     assert.throws(() => { sdk._baseUrl = "https://attacker.example"; }, TypeError);
     assert.throws(() => { sdk._fetch = async () => { substitutedFetches += 1; }; }, TypeError);
     sdk._request = async () => { substitutedRequests += 1; };
+    sdk._ensureDataModelValidation = async () => { throw new Error("substituted validator"); };
+    await validationStarted;
     releaseCapabilities();
     await pending;
     assert.equal(originalFetches, 1);
@@ -352,19 +356,22 @@ export function registerSorafsOrderbookSubmissionTests(context) {
 
   test("orderbook submit snapshots caller-owned fixed headers before validation", async () => {
     let releaseCapabilities;
+    let validationEntered;
+    const validationStarted = new Promise((resolve) => { validationEntered = resolve; });
     const dispatched = [];
     const defaultHeaders = {};
     const sdk = client(async (_url, init) => {
       dispatched.push(init);
       return acceptedResponse();
     }, nativeBinding(), {
-      validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
+      validation: () => new Promise((resolve) => { releaseCapabilities = resolve; validationEntered(); }),
       defaultHeaders,
     });
     const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
     });
     defaultHeaders.Prefer = "return=minimal";
+    await validationStarted;
     releaseCapabilities();
     await pending;
     assert.equal(dispatched.length, 1);
@@ -390,9 +397,11 @@ export function registerSorafsOrderbookSubmissionTests(context) {
       },
     ]) {
       let releaseCapabilities;
+      let validationEntered;
+      const validationStarted = new Promise((resolve) => { validationEntered = resolve; });
       const dispatched = [];
       const callerOptions = {
-        validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
+        validation: () => new Promise((resolve) => { releaseCapabilities = resolve; validationEntered(); }),
         defaultHeaders: {
           Authorization: "Bearer original",
           "X-Tenant": "original",
@@ -407,6 +416,7 @@ export function registerSorafsOrderbookSubmissionTests(context) {
         expectedReceiptSigner: SIGNER,
       });
       mutate(callerOptions);
+      await validationStarted;
       releaseCapabilities();
       await pending;
       assert.equal(dispatched.length, 1);

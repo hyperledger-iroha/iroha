@@ -226,6 +226,17 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
             .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)
     }
 
+    /// Exact hardware journal binding retained by the already authenticated Guard owner.
+    /// This digest conveys no authority and cannot create a Guard or transaction verifier.
+    pub(crate) fn hardware_transaction_storage_binding(&self) -> Result<[u8; 32]> {
+        self.authenticated_release()?;
+        self.transactions
+            .as_ref()
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?
+            .storage_binding()
+            .map_err(|_| KagemushaGuardVerificationErrorV1::Binding)
+    }
+
     fn verify_transaction(
         &self,
         transaction: super::KagemushaHardwareTransactionV1,

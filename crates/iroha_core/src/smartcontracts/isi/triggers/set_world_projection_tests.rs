@@ -453,6 +453,106 @@ fn trigger_contract_projection_checks_key_hash_and_derived_four_store_count() {
 }
 
 #[test]
+fn frozen_trigger_world_projection_preserves_original_changes_and_noop_journals() {
+    let set = Set::default();
+    let mut block = set.block();
+    let canceled: TriggerId = "frozen_canceled".parse().unwrap();
+    {
+        let mut tx = block.transaction();
+        let blob = halt_blob();
+        let mut data = SpecializedAction::new(
+            Executable::Ivm(blob.clone()),
+            Repeats::Exactly(3),
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        )
+        .unwrap();
+        data.metadata = global_data_trigger_scope_metadata_for_testing(&ALICE_ID);
+        assert!(
+            tx.add_data_trigger(SpecializedTrigger::new(
+                "frozen_data".parse().unwrap(),
+                data
+            ))
+            .unwrap()
+        );
+        let pipeline_filter = iroha_data_model::events::pipeline::BlockEventFilter {
+            height: Some(NonZeroU64::new(5).unwrap()),
+            status: Some(iroha_data_model::prelude::BlockStatus::Committed),
+        }
+        .into();
+        assert!(
+            tx.add_pipeline_trigger(SpecializedTrigger::new(
+                "frozen_pipeline".parse().unwrap(),
+                SpecializedAction::new(
+                    Executable::Ivm(blob.clone()),
+                    Repeats::Exactly(3),
+                    ALICE_ID.clone(),
+                    pipeline_filter,
+                )
+                .unwrap(),
+            ))
+            .unwrap()
+        );
+        assert!(
+            tx.add_time_trigger(SpecializedTrigger::new(
+                "frozen_time".parse().unwrap(),
+                SpecializedAction::new(
+                    Executable::Ivm(blob.clone()),
+                    Repeats::Exactly(3),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
+                        Duration::from_millis(5),
+                    ))),
+                )
+                .unwrap(),
+            ))
+            .unwrap()
+        );
+        register_call(&mut tx, "frozen_call", Executable::Ivm(blob.clone()));
+        register_call(&mut tx, "frozen_canceled", Executable::Ivm(blob));
+        assert!(tx.remove(&canceled));
+        tx.apply();
+    }
+    let before = project(&block);
+    assert_eq!(
+        before.changed_values(),
+        13,
+        "four actions, ids, active ids and shared blob"
+    );
+    let contract_key = HashOf::new(&halt_blob());
+    assert_eq!(block.contracts.get(&contract_key).unwrap().count.get(), 4);
+    let original_contract = std::ptr::from_ref(block.contracts.get(&contract_key).unwrap());
+
+    for frozen in [false, true] {
+        if frozen {
+            block.begin_freeze();
+            block.finish_freeze();
+        }
+        assert_eq!(
+            project(&block),
+            before,
+            "freeze retains the original semantic delta"
+        );
+        block.validate_world_contract_rows().unwrap();
+        assert_eq!(
+            std::ptr::from_ref(block.contracts.get(&contract_key).unwrap()),
+            original_contract,
+            "freeze retains the original validated contract row"
+        );
+        macro_rules! assert_canceled_touch {
+            ($($field:ident),+ $(,)?) => {$(
+                let touch = block.$field.touched_entries()
+                    .find(|entry| entry.key == &canceled)
+                    .expect("canceled registration retains its original journal row");
+                assert!(touch.before.is_none() && touch.after.is_none(),
+                    "absent-to-absent touch is retained through freeze: {}", stringify!($field));
+            )+};
+        }
+        assert_canceled_touch!(by_call_triggers, ids, active_by_call_trigger_ids);
+    }
+}
+
+#[test]
 fn proved_ivm_trigger_registration_rejects_every_filter_without_mutation() {
     fn proved_executable() -> Executable {
         Executable::IvmProved(iroha_data_model::transaction::executable::IvmProved {
@@ -747,7 +847,7 @@ fn net_delta_hook_mentions_every_trigger_block_store() {
         .next()
         .unwrap();
     let method = source
-        .split("pub(crate) fn append_world_projection(")
+        .split("pub(crate) fn append_world_projection")
         .nth(1)
         .unwrap()
         .split("\n    }\n}")

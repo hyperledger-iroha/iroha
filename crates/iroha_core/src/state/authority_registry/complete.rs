@@ -19,6 +19,8 @@ const BLOCK_HISTORY_AUTHENTICATION: &str =
 // owner and verified restore prefix remain the source of execution authority.
 const NATIVE_EXECUTION_HISTORY_SOURCE: &str = "Original native height, Iroha hash, core header hash and execution result; current and undo cuts outside World";
 const NATIVE_EXECUTION_HISTORY_AUTHENTICATION: &str = "Original worker verified exact quorum and output seal, or original signed-genesis execution; restore verifies the actual certified native prefix and configured chain/network before accepting snapshot claims";
+const NATIVE_WORLD_CUT_HISTORY_SOURCE: &str = "Original pre-tail World root, count and native journal differences bound to the execution tip and publication generation";
+const NATIVE_WORLD_CUT_HISTORY_AUTHENTICATION: &str = "Original completed executor captures R; frozen publication reconstructs that exact root and count from the complete native tail journal; restoration must replay original execution rather than decode a caller-supplied cut";
 #[path = "complete/native_capture.rs"]
 mod native_capture;
 pub(crate) use native_capture::{
@@ -99,6 +101,10 @@ fn check_history_field(
         "state.native_execution_tip" => (
             NATIVE_EXECUTION_HISTORY_SOURCE,
             NATIVE_EXECUTION_HISTORY_AUTHENTICATION,
+        ),
+        "state.native_world_cut" => (
+            NATIVE_WORLD_CUT_HISTORY_SOURCE,
+            NATIVE_WORLD_CUT_HISTORY_AUTHENTICATION,
         ),
         _ => return Err(CompleteInventoryError::HistoryDescriptorMismatch(field.id)),
     };
@@ -505,7 +511,11 @@ mod tests {
 
     #[test]
     fn historical_derivation_base_is_closed_and_bound_to_its_state_field() {
-        for id in ["state.block_hashes", "state.native_execution_tip"] {
+        for id in [
+            "state.block_hashes",
+            "state.native_execution_tip",
+            "state.native_world_cut",
+        ] {
             let field = find_identity(STATE_FIELDS, id).expect("actual history owner");
             let Role::History {
                 source,

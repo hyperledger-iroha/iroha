@@ -105,10 +105,26 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
     }
 
     func testNativeIngressAcceptsOnlyTheVersionedExactSignedTopUp() throws {
-        let key = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
+        let fixture = try nativeTopUpFixture()
+        let key = try SigningKey.ed25519(privateKey: XCTUnwrap(Data(hexString: fixture.testOnlyPayerPrivateKeyHex)))
         let authority = try AccountId.makeI105(publicKey: key.publicKey())
-        let request = try kagemushaTopUpRequest(payer: authority)
+        XCTAssertEqual(key.publicKey(), try XCTUnwrap(Data(hexString: fixture.payerPublicKeyHex)))
+        XCTAssertEqual(fixture.creationTimeMs, creationTimeMs)
+        XCTAssertEqual(fixture.ttlMs, ttlMs)
+        let canonicalRequest = try XCTUnwrap(Data(hexString: fixture.canonicalRequestHex))
+        let request = try KagemushaNoritoV1.decodeTopUpRequestShapeExact(canonicalRequest)
+        XCTAssertEqual(request.payer, try KagemushaAccountIDV1(authority))
+        XCTAssertEqual(try KagemushaNoritoV1.encodeTopUpRequestShape(request), canonicalRequest)
+        let nativeSigned = try XCTUnwrap(Data(hexString: fixture.signedTransactionWireHex))
+        XCTAssertNoThrow(try KagemushaPreparedTopUpSubmissionV1(
+            signedTransaction: nativeSigned, expectedRequest: request))
         let envelope = try build(request, authority: authority, signingKey: key)
+        let (signature, payload, _) = try signedParts(envelope)
+        XCTAssertEqual(payload, try XCTUnwrap(Data(hexString: fixture.transactionPayloadHex)))
+        // CryptoKit may randomize Ed25519 signatures. Verify the exact native
+        // payload rather than comparing independently generated signature bytes.
+        XCTAssertTrue(try Curve25519.Signing.PublicKey(rawRepresentation: key.publicKey())
+            .isValidSignature(signature, for: IrohaHash.hash(payload)))
         let prepared = try KagemushaPreparedTopUpSubmissionV1(
             signedTransaction: envelope.norito, expectedRequest: request)
         XCTAssertEqual(prepared.signedTransactionBytes, envelope.norito)
@@ -123,6 +139,12 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         tampered[tampered.index(before: tampered.endIndex)] ^= 1
         XCTAssertThrowsError(try KagemushaPreparedTopUpSubmissionV1(
             signedTransaction: tampered, expectedRequest: request)) {
+            XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
+        }
+        let unsealed = try kagemushaTopUpRequest(payer: authority)
+        let unsealedEnvelope = try build(unsealed, authority: authority, signingKey: key)
+        XCTAssertThrowsError(try KagemushaPreparedTopUpSubmissionV1(
+            signedTransaction: unsealedEnvelope.norito, expectedRequest: unsealed)) {
             XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
         }
     }
@@ -270,6 +292,37 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
 
     private func makeSDK() -> IrohaSDK {
         IrohaSDK(baseURL: URL(string: "https://torii.example")!, creationTimeProvider: { 7 })
+    }
+
+    private struct NativeTopUpFixture: Decodable {
+        let schema: String
+        let testOnlyPayerPrivateKeyHex: String
+        let payerPublicKeyHex: String
+        let creationTimeMs: UInt64
+        let ttlMs: UInt64
+        let canonicalRequestHex: String
+        let transactionPayloadHex: String
+        let signedTransactionWireHex: String
+
+        private enum CodingKeys: String, CodingKey {
+            case schema
+            case testOnlyPayerPrivateKeyHex = "test_only_payer_private_key_hex"
+            case payerPublicKeyHex = "payer_public_key_hex"
+            case creationTimeMs = "creation_time_ms"
+            case ttlMs = "ttl_ms"
+            case canonicalRequestHex = "canonical_request_hex"
+            case transactionPayloadHex = "transaction_payload_hex"
+            case signedTransactionWireHex = "signed_transaction_wire_hex"
+        }
+    }
+
+    private func nativeTopUpFixture() throws -> NativeTopUpFixture {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<3 { root.deleteLastPathComponent() }
+        let url = root.appendingPathComponent("fixtures/offline/kagemusha_top_up_submission_v1.json")
+        let fixture = try JSONDecoder().decode(NativeTopUpFixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.schema, "iroha.kagemusha.top_up_submission_fixture.v1")
+        return fixture
     }
 
     private func build(_ request: KagemushaTopUpRequestV1, authority: String,

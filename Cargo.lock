@@ -2825,17 +2825,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_plot"
-version = "0.34.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67fc9b427a837264e55381a5cade6e28fe83ac5b165a61b9c888548c732a9c95"
-dependencies = [
- "ahash",
- "egui",
- "emath",
-]
-
-[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4711,6 +4700,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
@@ -4916,6 +4906,7 @@ dependencies = [
  "iroha_config",
  "iroha_crypto",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
@@ -4924,7 +4915,6 @@ dependencies = [
  "ivm_artifact_admission",
  "kotodama_lang",
  "norito",
- "rustix 1.1.4",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -5238,21 +5228,38 @@ name = "iroha_deploy"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.22.1",
+ "blake3",
+ "color-eyre",
  "error-stack",
  "halo2curves",
+ "hex",
  "humantime",
+ "iroha",
  "iroha_allocation",
+ "iroha_config",
  "iroha_config_base",
+ "iroha_core",
+ "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_executor_data_model",
+ "iroha_fs",
+ "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_sumeragi",
+ "iroha_test_samples",
+ "libc",
  "norito",
+ "rand 0.9.4",
+ "rustix 1.1.4",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.9.12+spec-1.1.0",
  "url",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -5319,6 +5326,16 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "memmap2",
  "tempfile",
+]
+
+[[package]]
+name = "iroha_fs"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "rustix 1.1.4",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -5427,13 +5444,17 @@ dependencies = [
  "derive_more",
  "hex",
  "inquire",
+ "iroha",
  "iroha_config",
+ "iroha_contract_deploy",
  "iroha_core",
  "iroha_core_privacy",
  "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_deploy",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",
@@ -5443,6 +5464,7 @@ dependencies = [
  "iroha_swarm",
  "iroha_test_samples",
  "libc",
+ "musubi",
  "norito",
  "owo-colors",
  "rand 0.9.4",
@@ -6116,6 +6138,7 @@ dependencies = [
  "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_futures",
  "iroha_genesis",
  "iroha_i18n",
@@ -6553,6 +6576,7 @@ dependencies = [
  "indexmap 2.14.0",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_i18n",
  "iroha_model_base",
  "iroha_primitives",
@@ -6984,25 +7008,23 @@ name = "mochi-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "blake3",
  "color-eyre",
  "futures",
  "httpmock",
  "iroha",
  "iroha_config",
- "iroha_core_zk",
+ "iroha_contract_deploy",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_deploy",
  "iroha_executor_data_model",
- "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
- "izanami",
+ "musubi",
  "norito",
- "once_cell",
  "rand 0.9.4",
  "reqwest",
  "tempfile",
@@ -7010,9 +7032,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
- "toml 0.9.12+spec-1.1.0",
  "url",
- "zeroize",
 ]
 
 [[package]]
@@ -7023,10 +7043,8 @@ dependencies = [
  "base64 0.22.1",
  "color-eyre",
  "iroha",
- "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
- "iroha_genesis",
  "iroha_model_base",
  "iroha_torii_shared",
  "mochi-core",
@@ -7042,18 +7060,14 @@ name = "mochi-ui"
 version = "0.1.0"
 dependencies = [
  "eframe",
- "egui_plot",
  "hex",
  "iroha_data_model",
- "iroha_executor_data_model",
- "iroha_model_base",
  "iroha_test_samples",
  "iroha_torii_shared",
  "mochi-core",
  "norito",
  "tempfile",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -7083,6 +7097,7 @@ dependencies = [
  "iroha",
  "iroha_contract_deploy",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_primitives",
@@ -10366,6 +10381,7 @@ dependencies = [
  "httpdate",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",

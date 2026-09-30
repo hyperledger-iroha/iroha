@@ -121,7 +121,7 @@ mod tests {
     fn queue_and_execution_share_both_height_guards_and_checked_successor() {
         let mut lane = LaneConfig {
             id: LaneId::new(1),
-            alias: "physical-elastic".into(),
+            alias: "elastic-lane-1".into(),
             ..Default::default()
         };
         lane.metadata

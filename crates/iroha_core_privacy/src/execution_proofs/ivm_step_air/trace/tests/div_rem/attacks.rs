@@ -100,7 +100,7 @@ fn adjusted_quotient_and_remainder_cannot_bypass_strict_remainder_bound() {
             .copy_from_slice(&multiply::correction_witness(17, 0));
         product[multiply::SIGNED_SIGNED..].copy_from_slice(&multiply::correction_witness(5, 0));
         rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&digits);
-        rows[0][MULTIPLY..].copy_from_slice(&product);
+        rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&product);
         rows[0][BRANCH..SHIFT].copy_from_slice(&branch::bank_witness(wide::control::BEQ, 7, 5));
         assert!(rejects(&changed, &rows));
     }
@@ -139,7 +139,7 @@ fn coherent_signed_results_false_sources_high_products_and_carries_fail_division
         ));
         rows[0][SHIFT..RESULT].copy_from_slice(&false_witness.bank);
         rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&false_witness.digits);
-        rows[0][MULTIPLY..].copy_from_slice(&false_witness.product);
+        rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&false_witness.product);
         assert!(rejects(&changed, &rows));
     }
     let (segment, records) = single(1, u64::MAX, 1, 1_000);

@@ -1,187 +1,49 @@
-# MOCHI Development Notes
+# Mochi development
 
-## Regression Checks
+Mochi is a desktop client of the same managed workspace used by Kagami. The
+native bundle contains matching `mochi`, `kagami` and `iroha3d` executables.
+`mochi --workspace <directory>` selects the workspace; no user-supplied TOML,
+source build, PATH discovery or project-local secret export is involved.
 
-Run the following commands from the workspace root before submitting changes to MOCHI components:
+## Ownership
 
-```sh
-cargo check -p mochi-core -p mochi-ui -p mochi-integration --all-targets --features mochi-ui/gui,mochi-integration/dev-tools
-cargo test -p mochi-core --lib torii::tests::
-cargo test -p mochi-core --test composer_drafts torii_streams::
-cargo test -p mochi-integration --features dev-tools --test readiness_smoke
-bash -n scripts/mochi_local_sandbox.sh
-```
+- `iroha_deploy::managed` owns generated configuration, four-validator lifecycle,
+  retained identities, context selection, native worker authentication and logs.
+- `mochi-core::developer` binds desktop observations and transaction previews to
+  an immutable managed context. Closing Mochi does not stop the managed network.
+- Musubi and `iroha_contract_deploy` own compilation, quoted-fee review, original
+  transaction recovery and authenticated contract readback. Desktop recovery
+  reviews the exact retained plan again before any new dispatch.
+- `iroha_fs` owns private filesystem custody on native Unix and Windows.
 
-The `mochi-integration` crate provides lightweight Torii mocks and supervisor smoke tests so we can validate local workflows without compiling the full Iroha binary set.
+The UI provides aggregate Start, Stop and explicit stopped-network Reset actions.
+Individual validator selection changes the observer endpoint only. It provides
+no per-peer lifecycle or alternate generation path. The desktop preserves state
+pagination, canonical block/event streams, bounded logs, balance/block summaries,
+structured and JSON transaction drafts, signed previews and deployment receipts.
 
-The desktop shell's `gui/navigation.rs` owns the pure view choices, labels and
-exact persisted identities. Rendering and storage integration remain in the shell.
+The generated client signer is also the ledger-stream authority. Node HTTP
+operator signing uses a distinct generated key validated against all four node
+configs. Neither account defaults to a bundled sample key. Observations and
+previews reject a removed/replaced generation and never adopt a new network
+implicitly. Canonical stream transport checks endpoint and network identity.
 
-The desktop shell's `gui/cli_options.rs` owns command selection, validated
-startup overrides and profile parsing. Its `tests.rs` covers argument validation
-and precedence; `gui/cli_tests.rs` covers integration with startup, readiness and
-the supervisor. Both GUI and headless sandbox workflows consume these same
-options. Runtime stream ownership, persistence and rendering stay in their
-respective modules.
-
-## Ledger stream ownership
-
-Mochi uses the Rust SDK's `AccountClient` event and block capabilities. The
-Supervisor creates its reader from the validated generation's genesis account,
-which default Kagami genesis grants `CanReadAllLedgerData`. Reconnects retain
-that immutable endpoint, network and authority. The selected composer/vault
-signer and node operator credentials are separate authorities.
-
-Readiness and lane lifecycle workflows receive the explicit reader and reject
-cross-endpoint or cross-network contexts before network I/O. Mochi owns the UI
-summaries, 128-item fanout and reconnect policy. Binary lengths are the actual
-received bytes; transport errors have no invented length. Cancellation releases
-pending connections, readers and backoff waits. The mock harness verifies
-account signatures and replay nonces; it does not qualify a real node's grants,
-revocation or four-validator execution. `ci/check_mochi.sh` separately builds
-Kagami and verifies its generated genesis grants.
-
-## Fast Local Loop
-
-For the desktop shell itself, the quickest happy path is:
+## Focused checks
 
 ```sh
-cargo run -p mochi-ui --features gui --bin mochi -- --profile four-peer-bft --build-binaries
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p mochi-ui --features gui --bin mochi
+cargo test -p mochi-core
+cargo test -p mochi-integration
+cargo test -p mochi-ui --features gui --bin mochi
+ci/check_mochi.sh
 ```
 
-The default four-validator topology is the smallest exact Sumeragi committee.
-Custom profiles may use four or seven validators and use the one-second
-localnet cadence so crash-safe consensus persistence can keep up when all
-validators share one development machine. Explicit Kagami genesis profiles
-retain their profile-defined cadence. The only built-in topology preset is the
-exact name `four-peer-bft`.
+Shared generator/worker tests live in `iroha_deploy`; custody tests live in
+`iroha_fs`. Mochi tests cover context binding, query authority, canonical stream
+transport and desktop review cancellation. Mock services do not qualify native
+four-validator operation or Windows filesystem/process semantics. Release bundle
+qualification must exercise the packaged binaries on each native platform.
 
-The desktop app now treats the selected workspace as the home for bootstrap files and uses
-`<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the
-headless `sandbox serve` flow both write `.env.local` plus `.mochi/generated/*` into that
-workspace, while runtime logs/storage/session metadata stay under `.mochi/sandbox/<profile>`.
-Secret-bearing vault and `.env.local` writes are supported on Unix hosts in the
-first release and fail closed before filesystem mutation elsewhere.
-
-On a clean launch, Mochi now opens a first-run wizard instead of dropping you
-into the raw ops view. The default home is the Dashboard, which surfaces:
-
-- prefunded dev accounts and explorer balances;
-- recent blocks and one-click composer actions;
-- copyable local shell exports for app bootstrap;
-- generated bootstrap files in `.env.local` and `.mochi/generated/*`; and
-- a Chaos Lab tab for quick peer bounce / partition / slowdown drills against
-  the current supervised sandbox.
-
-The Network page still exposes the lower-level launch recipe, app env snippet,
-and `/status` curl probe so the same setup can move between GUI and shell
-without reconstructing the config by hand.
-
-## Headless Local Sandbox
-
-Use the helper when you want Ganache/localton-style startup from a shell or from Codex:
-
-```sh
-scripts/mochi_local_sandbox.sh up
-scripts/mochi_local_sandbox.sh status
-scripts/mochi_local_sandbox.sh env
-scripts/mochi_local_sandbox.sh mcp-add-command
-```
-
-By default the helper uses the current directory as `MOCHI_WORKSPACE_ROOT` and starts the
-`four-peer-bft` preset. Set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not
-already in the target app workspace.
-Set `MOCHI_PYTHON=/absolute/path/to/python3` when you need to select a specific validated
-interpreter; the helper uses that one interpreter for every Python step.
-
-`env` and the GUI's copyable app snippet expose only public connection metadata and
-`IROHA_ENV_FILE`, the path to the generated private `.env.local`. The shell helper
-requires that file to be a regular owner-owned 0600 file with one link, and checks
-its metadata without reading its contents. Load it through your application's
-private dotenv configuration loader. For a Node application, use
-`node --env-file="$IROHA_ENV_FILE" app.js`; the existing generated connection
-sample then receives the signer through `process.env` inside the application.
-Keep this file private; do not source it in a traced shell or print its contents.
-
-`up` launches `cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve` in a detached process group, waits for Torii
-readiness, runs a local smoke transaction, validates the local MCP surface, writes
-`<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
-`.mochi/generated/*` under the workspace. The helper records the long-lived Mochi process in
-`serve.pid`, so `status` stays `ready` after the shell command returns and `down` can stop the
-sandbox with SIGTERM. Cargo artifacts stay isolated under `<workspace>/.mochi/build-target` by
-default (override with `MOCHI_CARGO_TARGET_DIR`) so local sandbox startup does not contend with
-unrelated workspace builds.
-
-The generated local Torii config enables both the curated `/v1/mcp` endpoint and local Norito-RPC
-transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clients and local SDK
-smoke tests without extra hand-edited config.
-
-Mochi also provisions signer-backed local account onboarding for the universal dataspace. The
-owner-only signer and token remain under the sandbox `runtime/` directory; `session.json` omits
-the dev signer private key and exposes only the `local-dev` credential identifier and the `onboarding_signer_file` and
-`onboarding_token_file` paths so local applications can use the bundle without copying its raw
-secrets or digest into generated metadata.
-
-To qualify the transactional wipe path against real binaries, use the bounded one-shot rehearsal
-with a fresh data root:
-
-```sh
-rehearsal_root="$(mktemp -d)"
-cargo run -p mochi-ui --features gui --bin mochi -- \
-  sandbox rehearse-wipe-and-regenerate \
-  --data-root "$rehearsal_root" \
-  --profile four-peer-bft \
-  --build-binaries \
-  --enable-smoke
-```
-
-The command starts four real peers, proves committed genesis, readiness, and the local MCP surface,
-calls `Supervisor::wipe_and_regenerate` while that exact peer set is running, and repeats every
-proof against the new generation. It fails unless the selected generation changes and all four
-aliases return. On success it stops the peers and prints one bounded Norito JSON evidence record;
-the disposable data root remains available for audit.
-
-Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
-mandatory Nexus routing (with no availability switch) and `confidential.enabled = true`. Consensus mode is
-carried by signed genesis and committed state, so Mochi does not emit the retired mutable
-`sumeragi.consensus_mode` setting. The canonical one-lane topology works with permissioned
-consensus; Mochi requires an NPoS signed genesis for custom multi-lane topology.
-
-Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
-Each published peer config selects that generation's one checked
-`genesis/genesis.expected_hash` artifact through `genesis.expected_hash_file`; only the transient
-pre-signing config carries the unresolved inline value needed to derive genesis policies.
-The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
-`current-generation` record is replaced atomically while `.generation.lock` serializes writers.
-Failed candidates never replace the selected record, and previously published generations remain
-available for audit. Generation V1 seals at most 8,192 files, 16,384 total tree entries, 32
-directory levels, 4 MiB of relative-path text, and an 8 MiB canonical compact inventory. Mochi
-walks and hashes the tree incrementally and rejects the first over-limit entry before retaining it,
-so corrupt local state cannot turn publication or recovery into a directory-sized allocation.
-
-Each peer keeps mutable runtime data under
-`peers/<alias>/storage-generations/<generation-id>`, with independent `kura`, `snapshot`, and
-`torii` children. A config-only generation keeps using the current storage generation, while wipe
-and re-genesis prepares a fresh empty storage generation before committing its config/genesis
-generation. This avoids a partially wiped peer set after the atomic selection point. Kura receives
-the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initializes the matching
-`snapshot/generations` directory whenever it creates a fresh runtime generation.
-Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
-unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
-genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
-storage and logs. Snapshot copy and digest traversal share the V1 limits of 65,536 entries per
-directory, 262,144 entries per tree, and 64 directory levels. Digesting loads and sorts each
-directory once while streaming file contents, so long Kura histories do not require a whole-tree
-path inventory or a file-sized comparison buffer. Restore stages and verifies every bounded copy
-before stopping peers, then uses a durable journal and commit marker to roll back an interrupted
-swap or finish committed cleanup when the supervisor starts again.
-
-## Repo-Shared Skill
-
-The repo now ships a standalone skill at `skills/mochi-local-sandbox/`. Install or symlink that
-directory into `$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to:
-
-- bring the local Mochi sandbox up through `scripts/mochi_local_sandbox.sh up`;
-- print or verify the exact `codex mcp add mochi-local --url ...` command;
-- prefer curated local `iroha.*` MCP tools; and
-- wire local apps from `.env.local` and `.mochi/generated/*` instead of ad-hoc env snippets.
+See [the bundle contract](../specs/mochi_bundle.md) and
+[developer-experience implementation goals](../specs/kagami_mochi_devex_goals.md).
+Public guides are maintained in [Iroha documentation](https://docs.iroha.tech/).

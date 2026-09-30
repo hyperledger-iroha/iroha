@@ -1,5 +1,6 @@
 //! Filesystem authentication and immutable durable record regressions.
 use super::*;
+#[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 #[test]
@@ -24,6 +25,7 @@ fn journal_roundtrip_is_immutable_and_exclusively_locked() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
 fn journal_rejects_symlink_hardlink_and_nonprivate_records() -> Result<()> {
     let root = tempfile::tempdir()?;
     let path = root.path().join("journal");
@@ -50,20 +52,35 @@ fn journal_rejects_symlink_hardlink_and_nonprivate_records() -> Result<()> {
 
 #[test]
 fn journal_rejects_truncated_and_oversized_evidence() -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::io::Write as _;
     let root = tempfile::tempdir()?;
     let path = root.path().join("journal");
     let journal = Journal::open(&path, true)?;
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path.join("partial.json"))?;
+    let mut file = journal.directory.open_lock("partial.json")?;
     file.write_all(b"{\"partial\":")?;
     file.sync_all()?;
     assert!(journal.read::<norito::json::Value>("partial.json").is_err());
     assert!(journal.put_exact("partial.json", &"replacement").is_err());
-    file.set_len(MAX_RECORD_BYTES + 1)?;
+    file.set_len(MAX_RECORD_BYTES as u64 + 1)?;
     assert!(journal.exists("partial.json").is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_inspection_never_creates_missing_custody_and_cancellation_rejects_unknown_evidence()
+-> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("journal");
+    assert!(Journal::open(&path, false).is_err());
+    assert!(!path.exists());
+    let directory = PrivateDirectory::open_or_create(&path)?;
+    assert!(Journal::open(&path, false).is_err());
+    assert!(directory.entries(10)?.is_empty());
+    let journal = Journal::open(&path, true)?;
+    journal.require_unattempted()?;
+    journal.put_exact("plan.json", &"signed exact plan")?;
+    journal.require_unattempted()?;
+    journal.put_exact("attempt.json", &"ambiguous dispatch")?;
+    assert!(journal.require_unattempted().is_err());
     Ok(())
 }
