@@ -2,7 +2,7 @@
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
   "generated_at": "2026-09-30T04:56:34Z",
   "root": "iroha",
-  "total_refs": 909,
+  "total_refs": 907,
   "unique_vars": 216,
   "variables": {
     "CARGO": {
@@ -835,7 +835,7 @@
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 12294,
+          "line": 12305,
           "path": "crates/iroha_cli/src/commands/sorafs.rs",
           "scope": "test"
         },
@@ -3424,8 +3424,8 @@
     },
     "CARGO_PKG_VERSION": {
       "counts": {
-        "prod": 16,
-        "test": 3,
+        "prod": 15,
+        "test": 2,
         "tool": 2
       },
       "paths": [
@@ -3434,12 +3434,6 @@
           "line": 701,
           "path": "crates/iroha_cli/bins/tests/cli_smoke.rs",
           "scope": "test"
-        },
-        {
-          "context": "metadata.insert(\"version\".into(), Value::from(env!(\"CARGO_PKG_VERSION\")));",
-          "line": 4847,
-          "path": "crates/iroha_cli/src/commands/sorafs.rs",
-          "scope": "prod"
         },
         {
           "context": "env!(\"CARGO_PKG_VERSION\"),",
@@ -3452,12 +3446,6 @@
           "line": 386,
           "path": "crates/iroha_cli/src/main_shared.rs",
           "scope": "prod"
-        },
-        {
-          "context": "&[(\"version\", env!(\"CARGO_PKG_VERSION\"))],",
-          "line": 2271,
-          "path": "crates/iroha_cli/src/main_shared_tests.rs",
-          "scope": "test"
         },
         {
           "context": "env!(\"CARGO_PKG_VERSION\"),",

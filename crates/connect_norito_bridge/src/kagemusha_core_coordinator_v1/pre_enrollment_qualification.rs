@@ -126,6 +126,7 @@ pub(super) mod tests {
                 &c.release,
                 enrollment,
                 &c.native_authorization_public_key,
+                selected.hardware_profile_id,
             )
             .unwrap(),
         )

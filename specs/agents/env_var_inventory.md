@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **909** · Unique variables: **216**
+Total references: **907** · Unique variables: **216**
 
 ## CARGO (prod: 2, test: 3)
 
@@ -178,7 +178,7 @@ Total references: **909** · Unique variables: **216**
 - test: crates/iroha_cli/bins/tests/cli_smoke.rs:163 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_cli/bins/tests/cli_smoke.rs:4948 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_cli/bins/tests/sorafs_validate_cli.rs:36 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_cli/src/commands/sorafs.rs:12294 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_cli/src/commands/sorafs.rs:12305 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_cli/src/commands/sorafs/toolkit/validation/final_promotion_receipt_tests.rs:9 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_cli/src/commands/sorafs/toolkit/validation/tests.rs:21 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_cli/src/compute.rs:746 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -612,13 +612,11 @@ Total references: **909** · Unique variables: **216**
 
 - test: crates/norito_derive/tests/ui.rs:26 — `let crate_name = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "norito_derive".to_owned());`
 
-## CARGO_PKG_VERSION (prod: 16, test: 3, tool: 2)
+## CARGO_PKG_VERSION (prod: 15, test: 2, tool: 2)
 
 - test: crates/iroha_cli/bins/tests/cli_smoke.rs:701 — `let expected_version = env!("CARGO_PKG_VERSION");`
-- prod: crates/iroha_cli/src/commands/sorafs.rs:4847 — `metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));`
 - prod: crates/iroha_cli/src/main_shared.rs:91 — `env!("CARGO_PKG_VERSION"),`
 - prod: crates/iroha_cli/src/main_shared.rs:386 — `#[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]`
-- test: crates/iroha_cli/src/main_shared_tests.rs:2271 — `&[("version", env!("CARGO_PKG_VERSION"))],`
 - prod: crates/iroha_core/src/release_identity.rs:249 — `env!("CARGO_PKG_VERSION"),`
 - prod: crates/iroha_js_host/src/lib.rs:3738 — `metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));`
 - prod: crates/iroha_kagami/src/genesis/generate.rs:579 — `env!("CARGO_PKG_VERSION")`

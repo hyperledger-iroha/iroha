@@ -1,3 +1,5 @@
+//! One-GiB chunking regression against the actual Cargo-built chunk-dump executable.
+
 use blake3::{Hash, Hasher};
 use norito::json::Value;
 use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
@@ -45,7 +47,7 @@ fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> (blake3::Hash, Vec<blake3
     (overall.finalize(), per_chunk)
 }
 #[test]
-#[ignore = "expensive 1 GiB regression; run with `cargo test --test one_gib -- --ignored`"]
+#[ignore = "expensive 1 GiB regression; run with `cargo test -p sorafs_chunker --features dev-tools --test one_gib -- --ignored`"]
 fn chunk_profile_default_handles_one_gib_stream() {
     let template = PROFILE.generate_input();
     assert_eq!(

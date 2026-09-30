@@ -164,13 +164,21 @@ impl NativeStartupQualificationOwnerV1 {
         release: &KagemushaAuthenticatedReleaseV1,
         enrollment: KagemushaRecoveryEnrollmentBindingV1,
         native_authorization_public_key: &KagemushaDevicePublicKeyV1,
+        selected_hardware_profile_id: [u8; 32],
     ) -> Result<Self> {
         if release.purpose() != iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production
             || release.network_id() != enrollment.owner.runtime.network_id
         {
             return Err(ObservationErrorV1::InvalidQualification);
         }
-        Self::new(release, enrollment, native_authorization_public_key)
+        let enabled = release
+            .enabled_profile(selected_hardware_profile_id)
+            .ok_or(ObservationErrorV1::InvalidQualification)?;
+        let mut owner = Self::new(release, enrollment, native_authorization_public_key)?;
+        // The journal selects one profile. Membership elsewhere in the same authenticated
+        // catalog cannot substitute another hardware/provider authority for this attempt.
+        owner.catalog.enabled_profiles = vec![enabled.clone()];
+        Ok(owner)
     }
 
     /// Pin the owner and exact credential proved by the one-use native issuer ceremony.

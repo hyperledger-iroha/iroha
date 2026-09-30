@@ -180,6 +180,7 @@ impl KagemushaQualifiedEnrollmentDelegateV1 for KagemushaKernelEnrollmentDelegat
         };
         let observer = super::startup_qualification::NativeStartupQualificationOwnerV1::from_pre_enrollment_context(
             &context.release, enrollment, &context.native_authorization_public_key,
+            pins.hardware_profile_id,
         ).map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
         Ok(super::KagemushaPreEnrollmentQualificationOwnerV1::new(
             observer,

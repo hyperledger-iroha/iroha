@@ -2274,6 +2274,31 @@ pub fn kagemusha_hardware_policy_digest_v1(
     )
 }
 
+/// Return the exact bounded transcript hashed by the hardware-policy identity.
+///
+/// A deployment may retain these original bytes alongside its signed release.
+/// This encoding grants no hardware or release authority; callers must compare
+/// it with the profiles of an independently authenticated release.
+///
+/// # Errors
+/// Rejects every profile set rejected by [`kagemusha_hardware_policy_digest_v1`].
+pub fn kagemusha_hardware_policy_digest_preimage_v1(
+    enabled_profiles: &[KagemushaEnabledProfileV1],
+) -> Result<Vec<u8>, KagemushaReleaseErrorV1> {
+    validate_enabled_profiles(enabled_profiles)?;
+    let frame = norito::encode_canonical(&KagemushaHardwarePolicyDigestSubjectV1 {
+        enabled_profiles: enabled_profiles.to_vec(),
+    })
+    .map_err(|_| KagemushaReleaseErrorV1::Encode)?;
+    let frame_len = u64::try_from(frame.len()).map_err(|_| KagemushaReleaseErrorV1::Encode)?;
+    let mut bytes = Vec::with_capacity(HARDWARE_POLICY_DIGEST_DOMAIN.len() + 1 + 8 + frame.len());
+    bytes.extend_from_slice(HARDWARE_POLICY_DIGEST_DOMAIN);
+    bytes.push(0);
+    bytes.extend_from_slice(&frame_len.to_le_bytes());
+    bytes.extend_from_slice(&frame);
+    Ok(bytes)
+}
+
 /// Derive the fixed-depth SHA-256 provider registry from the complete admitted inventory.
 ///
 /// Every enabled profile has exactly one row. Class and capabilities come from
