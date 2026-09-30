@@ -82,7 +82,8 @@ pub(crate) enum ZkX509DerClassV1 {
 }
 /// Canonically decoded DER identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509DerTagV1 {
+#[doc(hidden)]
+pub struct ZkX509DerTagV1 {
     /// ASN.1 class.
     pub(crate) class: ZkX509DerClassV1,
     /// Whether the value uses constructed form.
