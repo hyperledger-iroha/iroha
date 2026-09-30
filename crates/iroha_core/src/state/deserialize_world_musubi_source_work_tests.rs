@@ -4,8 +4,8 @@ use super::super::decode_tests::{
     seed_provider_attested_location, seeded_musubi_publication_snapshot,
 };
 use super::*;
-use iroha_data_model::musubi::{MusubiArchiveLocationIdV1, MusubiContentDigestV1};
 use iroha_allocation::AllocationRefusal;
+use iroha_data_model::musubi::{MusubiArchiveLocationIdV1, MusubiContentDigestV1};
 use std::{
     future::Future,
     pin::pin,

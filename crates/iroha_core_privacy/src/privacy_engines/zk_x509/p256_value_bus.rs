@@ -2463,6 +2463,7 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
         Ok(base)
     }
     /// Challenge-independent endpoint.
+    #[cfg(test)]
     pub(crate) const fn endpoint_v1(self) -> &'a P256ValueBusBaseEndpointTraceV1 {
         self.endpoint
     }
@@ -2480,9 +2481,8 @@ pub(crate) struct P256ValueBusStarkAuxSourceV1<'a> {
     next_row: usize,
     trace_size: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
-    #[cfg(test)]
     fn new_v1(
         endpoint: &'a P256ValueBusBaseEndpointTraceV1,
         expected: P256ValueBusStarkEndpointV1,
@@ -2501,6 +2501,9 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             trace_size,
         })
     }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ValueBusStarkAuxSourceV1<'_> {
     /// Emit the next exact challenge-dependent auxiliary row.
     pub(crate) fn next_aux_row_v1(
         &mut self,

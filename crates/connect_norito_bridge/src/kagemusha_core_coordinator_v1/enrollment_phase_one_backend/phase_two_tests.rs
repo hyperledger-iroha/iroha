@@ -845,9 +845,24 @@ fn phase_six_uncertain_revocation_drops_all_process_local_authority() {
 #[test]
 fn phase_two_requires_typed_delegate_and_original_policy_pins() {
     let (backend, delegate, challenge) = selected_backend(DelegateResult::Valid, false);
+    let fields = kagemusha_core_coordinator_decode_request_v1(&challenge).unwrap();
+    let preparation = kagemusha_core_coordinator_encode_request_v1(&[
+        super::super::INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1
+            .to_le_bytes()
+            .to_vec(),
+        fields[1].clone(),
+        fields[2].clone(),
+    ])
+    .unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &preparation),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+    );
+    assert!(backend.owner.lock().unwrap().app_preparation.is_none());
+    // Phase 2 cannot skip an unavailable original-preparation verifier.
     assert_eq!(
         backend.invoke_initial_enrollment(7, &challenge),
-        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
     );
     assert_eq!(delegate.challenges.load(Ordering::SeqCst), 0);
     assert_eq!(delegate.generic_challenges.load(Ordering::SeqCst), 0);

@@ -42,13 +42,18 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
 ) : KagemushaNativeCoreCoordinatorV1, AutoCloseable {
     private val enrollmentPhases = KagemushaNativeEnrollmentPhasesV1(bridge)
+    private val recoveredEnrollment = KagemushaNativeRecoveredEnrollmentV1(bridge)
 
     /** Reuse this coordinator's sole native owner for bounded initial-enrollment phases. */
     fun initialEnrollment(): KagemushaNativeEnrollmentPhasesV1 = enrollmentPhases
 
+    /** Authenticate the original enrolled native owner after process restart. */
+    fun recoveredEnrollment(): KagemushaNativeRecoveredEnrollmentV1 = recoveredEnrollment
+
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {
         enrollmentPhases.revokeLocal()
+        recoveredEnrollment.revokeLocal()
         bridge.close()
     }
 

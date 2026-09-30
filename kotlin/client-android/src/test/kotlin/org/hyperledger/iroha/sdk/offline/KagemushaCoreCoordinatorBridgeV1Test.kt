@@ -16,6 +16,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     fun `native transport retains the caller identity even if JNI mutates its inputs`() {
         val endpoint = Endpoint()
         val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        assertEquals(listOf("contract", "install:/durable/store", "open:/durable/store"), endpoint.openingCalls)
         val id = ByteArray(32) { 7 }
         val fields = listOf(KagemushaCoreCoordinatorFrameV1.u32(22), id, byteArrayOf(1))
         assertContentEquals(id, bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, fields).single())
@@ -77,10 +78,12 @@ class KagemushaCoreCoordinatorBridgeV1Test {
                 KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", retired)
             }
             assertEquals(0, retired.openCalls)
+            assertEquals(0, retired.installCalls)
         }
         val mismatch = Endpoint().apply { contractWords[0] = 1 }
         assertFailsWith<IllegalStateException> { KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", mismatch) }
         assertEquals(0, mismatch.openCalls)
+        assertEquals(0, mismatch.installCalls)
         val missing = Endpoint().apply { returnedHandle = 0 }
         assertFailsWith<IllegalStateException> { KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", missing) }
     }
@@ -92,6 +95,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
             assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorBridgeV1.openEndpoint(it, endpoint) }
         }
         assertEquals(0, endpoint.openCalls)
+        assertEquals(0, endpoint.installCalls)
         val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/🔒", endpoint)
         assertFailsWith<IllegalArgumentException> { bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, emptyList()) }
         assertEquals(0, endpoint.invokeCalls)
@@ -106,6 +110,39 @@ class KagemushaCoreCoordinatorBridgeV1Test {
                 listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1)))
         }
         assertEquals(1, endpoint.invokeCalls)
+    }
+
+    @Test
+    fun `missing qualified provisioner is explicit and cannot open a native owner`() {
+        val endpoint = Endpoint().apply { installStatus = -312 }
+        assertFailsWith<KagemushaNativeProvisioningUnavailableExceptionV1> {
+            KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        }
+        assertEquals(1, endpoint.installCalls)
+        assertEquals(0, endpoint.openCalls)
+        assertEquals(0, endpoint.invokeCalls)
+    }
+
+    @Test
+    fun `rejected uncertain or unknown installer status cannot open a native owner`() {
+        for (status in listOf(-311, -1, 1, Int.MIN_VALUE, Int.MAX_VALUE)) {
+            val endpoint = Endpoint().apply { installStatus = status }
+            assertFailsWith<IllegalStateException> {
+                KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+            }
+            assertEquals(1, endpoint.installCalls)
+            assertEquals(0, endpoint.openCalls)
+        }
+    }
+
+    @Test
+    fun `missing installer JNI never falls through to an older native open`() {
+        val endpoint = Endpoint().apply { throwLinkageOnInstall = true }
+        assertFailsWith<UnsatisfiedLinkError> {
+            KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        }
+        assertEquals(1, endpoint.installCalls)
+        assertEquals(0, endpoint.openCalls)
     }
 
     @Test
@@ -153,6 +190,10 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
         val contractWords = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         var openCalls = 0
+        var installCalls = 0
+        var installStatus = 0
+        var throwLinkageOnInstall = false
+        val openingCalls = mutableListOf<String>()
         var invokeCalls = 0
         var closeCalls = 0
         var closeStatus = 0
@@ -162,8 +203,14 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         var throwLinkageOnInvoke = false
         var substituteExportOperation = false
         var oversizeExportProof = false
-        override fun contract() = contractWords.copyOf()
-        override fun open(storagePath: String): Long { openCalls++; return returnedHandle }
+        override fun contract(): IntArray { openingCalls += "contract"; return contractWords.copyOf() }
+        override fun install(storagePath: String): Int {
+            installCalls++
+            openingCalls += "install:$storagePath"
+            if (throwLinkageOnInstall) throw UnsatisfiedLinkError("missing native installer")
+            return installStatus
+        }
+        override fun open(storagePath: String): Long { openingCalls += "open:$storagePath"; openCalls++; return returnedHandle }
         override fun close(handle: Long): Int { closeCalls++; assertEquals(returnedHandle, handle); return closeStatus }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {
             invokeCalls++

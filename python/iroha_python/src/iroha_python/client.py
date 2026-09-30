@@ -8439,7 +8439,11 @@ class AccountTransaction:
 
 @dataclass(frozen=True)
 class VerifiedCommittedTransaction:
-    """A selected full output authenticated by a rooted consensus finality chain."""
+    """A selected full output authenticated by a rooted consensus finality chain.
+
+    Contract rejection schema hashes are canonical 64-character uppercase
+    Norito hexadecimal strings.
+    """
 
     proof_kind: str
     transaction_hash: str
@@ -8620,8 +8624,15 @@ class VerifiedCommittedTransaction:
             if not _canonical_contract_error_identity(contract_error_type):
                 raise ValueError("verified transaction contract rejection error_type is not canonical")
             contract_schema_hash = contract_rejection_value["schema_hash"]
-            if not isinstance(contract_schema_hash, list) or len(contract_schema_hash) != 32 or any(isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255 for byte in contract_schema_hash) or contract_schema_hash[-1] & 1 != 1:
-                raise ValueError("verified transaction contract rejection schema_hash must be exactly 32 canonical hash bytes")
+            if (
+                not isinstance(contract_schema_hash, str)
+                or re.fullmatch(r"[0-9A-F]{64}", contract_schema_hash) is None
+                or int(contract_schema_hash[-2:], 16) & 1 != 1
+            ):
+                raise ValueError(
+                    "verified transaction contract rejection schema_hash must be "
+                    "exactly 32 canonical hash bytes encoded as uppercase hexadecimal"
+                )
             contract_error_name = _require_exact_non_empty_string(
                 contract_rejection_value["name"],
                 "verified transaction contract rejection name",
@@ -8648,7 +8659,7 @@ class VerifiedCommittedTransaction:
             contract_rejection = {
                 "contract": contract_name,
                 "error_type": contract_error_type,
-                "schema_hash": tuple(contract_schema_hash),
+                "schema_hash": contract_schema_hash,
                 "name": contract_error_name,
                 "code": contract_error_code,
             }

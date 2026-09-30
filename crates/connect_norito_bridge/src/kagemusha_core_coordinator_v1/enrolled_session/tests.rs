@@ -49,6 +49,7 @@ impl FixtureOwner {
 impl sealed::RecoveredOwner for FixtureOwner {}
 
 impl RecoveredOwnerAccessV1 for FixtureOwner {
+    fn require_current(&self) -> Result<()> { Ok(()) }
     fn begin_possession(&self, deadline: NativeDeadlineV1) -> Result<PendingEnrolledOpenV1> {
         self.metadata_reads.fetch_add(1, Ordering::SeqCst);
         if let Some((entered, resume)) = &self.begin_pause {

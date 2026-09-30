@@ -58,7 +58,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        65 + usize::from(cfg!(feature = "telemetry"))
+        62 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),
@@ -273,6 +273,24 @@ fn native_execution_tip_is_authenticated_history_without_a_snapshot_decoder() {
     assert!(authentication.contains("restoration must replay original execution"));
     assert!(authentication.contains("rather than decode a caller-supplied cut"));
     assert_eq!(witness.disclosure, Disclosure::CommitmentOnly);
+}
+
+#[test]
+fn original_world_cut_retention_has_no_decoded_or_independent_authority() {
+    let fields = fields();
+    let cut = fields["state.native_world_cut"];
+    let Role::History {
+        source,
+        authentication,
+    } = cut.role
+    else {
+        panic!("original journal retention cannot add a canonical State row");
+    };
+    assert!(source.contains("execution tip and publication generation"));
+    assert!(authentication.contains("exact root and count"));
+    assert!(authentication.contains("restoration must replay original execution"));
+    assert!(authentication.contains("rather than decode a caller-supplied cut"));
+    assert_eq!(cut.disclosure, Disclosure::CommitmentOnly);
 }
 
 #[test]

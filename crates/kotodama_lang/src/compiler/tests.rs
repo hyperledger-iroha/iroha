@@ -316,7 +316,7 @@ fn dynamic_state_fallback_preserves_registry_read_write_class() {
     );
 }
 fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
-    let encoded = super::encode_pointer_tlv_bytes(kind, value)
+    let encoded = super::encode_pointer_tlv_bytes(kind, value, false)
         .expect("encode canonical pointer-backed numeric state key");
     format!("state:{base}/{}", hex::encode(encoded))
 }
@@ -398,7 +398,8 @@ fn axt_descriptor_literal_encoding_enforces_host_invariants() {
     };
     let valid_literal = literal(&valid);
     assert!(
-        super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &valid_literal).is_some()
+        super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &valid_literal, false)
+            .is_some()
     );
     assert_eq!(
         super::decode_axt_descriptor_literal(&valid_literal),
@@ -412,7 +413,7 @@ fn axt_descriptor_literal_encoding_enforces_host_invariants() {
     };
     assert_ne!(alternate_literal, valid_literal);
     assert!(
-        super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &alternate_literal)
+        super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &alternate_literal, false)
             .is_none(),
         "the compiler must not normalize an alternate Norito layout"
     );
@@ -453,7 +454,7 @@ fn axt_descriptor_literal_encoding_enforces_host_invariants() {
     for descriptor in invalid {
         let raw = literal(&descriptor);
         assert!(
-            super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &raw).is_none(),
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &raw, false).is_none(),
             "compiler must reject host-invalid descriptor: {descriptor:?}"
         );
         assert_eq!(
@@ -475,7 +476,8 @@ fn proof_pointer_encoding_rejects_empty_payload() {
         expiry_slot: None,
     });
     assert!(
-        super::encode_pointer_tlv_bytes(ir::DataRefKind::ProofBlob, &empty_proof_literal).is_none()
+        super::encode_pointer_tlv_bytes(ir::DataRefKind::ProofBlob, &empty_proof_literal, false)
+            .is_none()
     );
 }
 #[test]
@@ -514,11 +516,11 @@ fn instruction_access_hints_do_not_unwrap_prewrapped_norito_tlvs() {
     ));
     let instruction_literal = canonical_norito_hex(&instruction);
     let prewrapped =
-        super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &instruction_literal)
+        super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &instruction_literal, false)
             .expect("wrap the canonical instruction as a source-level NoritoBytes TLV");
     let prewrapped_literal = format!("0x{}", hex::encode(&prewrapped));
     let emitted =
-        super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &prewrapped_literal)
+        super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &prewrapped_literal, false)
             .expect("emit the literal's exact bytes in the outer pointer TLV");
     let emitted_tlv =
         crate::pointer_abi::validate_tlv_bytes(&emitted).expect("validate emitted pointer TLV");
@@ -4837,8 +4839,9 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             .any(|window| window == resolve),
         "canonical AccountId literals must not emit alias resolution syscalls"
     );
-    let static_tlv = super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Account, &canonical)
-        .expect("encode static AccountId tlv");
+    let static_tlv =
+        super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Account, &canonical, false)
+            .expect("encode static AccountId tlv");
     assert!(
         bytes
             .windows(static_tlv.len())
@@ -7092,7 +7095,7 @@ fn manifest_access_set_hints_include_literal_pointer_map_keys() {
     let hints = manifest
         .access_set_hints
         .expect("expected access_set_hints");
-    let tlv = super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Name, "alice")
+    let tlv = super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Name, "alice", false)
         .expect("encode pointer tlv");
     let raw = format!("0x{}", hex::encode(tlv));
     let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
@@ -7155,6 +7158,18 @@ fn state_path_for_norito_key_uses_reversible_canonical_hex() {
         super::state_path_for_norito_key(base, raw).as_deref(),
         Some("Map/6162")
     );
+}
+#[test]
+fn source_string_pointer_encoding_keeps_hex_prefix_literal() {
+    for spelling in ["0x", "0x1", "0xzz", "0x6162"] {
+        let encoded = super::encode_pointer_tlv_bytes(ir::DataRefKind::Blob, spelling, true)
+            .expect("all UTF-8 source strings encode directly");
+        let length = u32::from_be_bytes(encoded[3..7].try_into().expect("TLV length")) as usize;
+        assert_eq!(&encoded[7..7 + length], spelling.as_bytes());
+    }
+    let encoded = super::encode_pointer_tlv_bytes(ir::DataRefKind::Blob, "0x6162", false)
+        .expect("byte carrier hex still decodes");
+    assert_eq!(&encoded[7..9], b"ab");
 }
 #[test]
 fn state_codegen_rejects_legacy_name_literal_carrier() {

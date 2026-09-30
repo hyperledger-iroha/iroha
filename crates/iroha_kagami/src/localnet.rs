@@ -99,6 +99,10 @@ pub struct Args {
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
+    /// Account-address chain prefix written into genesis and client/peer configs.
+    /// Public chain identities retain their fixed prefix.
+    #[arg(long, value_name = "PREFIX")]
+    chain_discriminant: Option<u16>,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
     /// Requires at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
@@ -165,6 +169,7 @@ impl<T: Write> RunArgs<T> for Args {
             peers,
             seed,
             chain_id,
+            chain_discriminant,
             sora_profile,
             private_dataspace,
             perf_profile,
@@ -216,14 +221,20 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_with_chain(&opts, writer, Some(&chain_id))
+        generate_localnet_with_chain(&opts, writer, Some(&chain_id), chain_discriminant)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_deploy::genesis::profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID};
+    use iroha_config::{base::toml::TomlSource, parameters::actual};
+    use iroha_data_model::prelude::NetworkId;
+    use iroha_deploy::genesis::profile::{
+        PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID, known_chain_discriminant_for_chain_id,
+    };
+    use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
+    use std::fs;
     #[test]
     fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
         use clap::Parser as _;
@@ -355,5 +366,176 @@ mod tests {
     fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {
         let mode = resolve_requested_consensus_mode(None, None);
         assert_eq!(mode, SumeragiConsensusMode::Permissioned);
+    }
+
+    #[test]
+    fn localnet_chain_discriminant_cli_generates_matching_native_artifacts() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct TestArgs {
+            #[command(flatten)]
+            localnet: Args,
+        }
+
+        let parent = tempfile::tempdir().expect("create isolated localnet parent");
+        let private = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
+            .expect("create private localnet parent");
+        let output = private.path().join("isolated");
+        let parsed = TestArgs::try_parse_from([
+            "kagami-localnet-test",
+            "--out-dir",
+            output.to_str().expect("UTF-8 temporary path"),
+            "--chain-discriminant",
+            "369",
+            "--seed",
+            "isolated-native-chain-prefix",
+            "--bind-host",
+            "127.0.0.1",
+            "--public-host",
+            "127.0.0.1",
+        ])
+        .expect("parse explicit native chain prefix");
+        assert_eq!(parsed.localnet.chain_id, DEFAULT_CHAIN_ID);
+        assert_eq!(parsed.localnet.chain_discriminant, Some(369));
+        parsed
+            .localnet
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect("generate isolated localnet with native prefix");
+
+        let manifest = RawGenesisTransaction::from_path(output.join("genesis.json"))
+            .expect("parse generated native genesis");
+        assert_eq!(manifest.chain_id().to_string(), DEFAULT_CHAIN_ID);
+        assert_eq!(manifest.chain_discriminant(), 369);
+        let signed = read_signed_genesis(&output.join("genesis.signed.nrt"))
+            .expect("decode generated signed genesis");
+        signed
+            .validate_output_merkle_cache()
+            .expect("signed genesis has authenticated execution outputs");
+        for index in 0..signed.network_entrypoint_count() {
+            let (_, result) = signed
+                .network_output_at(u32::try_from(index).expect("genesis index fits u32"))
+                .expect("every genesis input has its Network output");
+            assert!(result.result.is_ok(), "genesis input {index} must apply");
+        }
+        let expected_hash = fs::read_to_string(output.join(GENESIS_EXPECTED_HASH_FILE))
+            .expect("read exact signed genesis identity")
+            .trim()
+            .parse::<NetworkId>()
+            .expect("parse exact signed genesis identity");
+        assert_eq!(signed.hash(), expected_hash.into_genesis_hash());
+
+        let client = fs::read_to_string(output.join("client.toml"))
+            .expect("read generated client")
+            .parse::<toml::Table>()
+            .expect("parse generated client");
+        assert_eq!(
+            client.get("chain").and_then(toml::Value::as_str),
+            Some(DEFAULT_CHAIN_ID)
+        );
+        assert_eq!(
+            client["account"]["chain_discriminant"].as_integer(),
+            Some(369)
+        );
+        for index in 0..4 {
+            let path = output.join(format!("peer{index}.toml"));
+            let peer = fs::read_to_string(&path)
+                .expect("read generated peer")
+                .parse::<toml::Table>()
+                .expect("parse generated peer");
+            assert_eq!(
+                peer.get("chain").and_then(toml::Value::as_str),
+                Some(DEFAULT_CHAIN_ID)
+            );
+            assert_eq!(
+                peer.get("chain_discriminant")
+                    .and_then(toml::Value::as_integer),
+                Some(369)
+            );
+            let authority = peer["torii"]["account_onboarding"]["authority"]
+                .as_str()
+                .expect("onboarding authority account literal");
+            assert!(
+                iroha_data_model::account::address::AccountAddress::parse_encoded(
+                    authority,
+                    Some(369)
+                )
+                .is_ok()
+            );
+            assert!(
+                iroha_data_model::account::address::AccountAddress::parse_encoded(
+                    authority,
+                    Some(753)
+                )
+                .is_err()
+            );
+            let config = actual::Root::from_toml_source(
+                TomlSource::from_file(&path).expect("read native peer config"),
+            )
+            .expect("native config accepts generated genesis and account prefix");
+            assert_eq!(config.genesis.expected_hash, signed.hash());
+            assert!(
+                !peer["soracloud_runtime"]
+                    .get("production_mode")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false)
+            );
+        }
+    }
+
+    #[test]
+    fn localnet_chain_discriminant_public_conflicts_leave_no_partial_output() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct TestArgs {
+            #[command(flatten)]
+            localnet: Args,
+        }
+        let parent = tempfile::tempdir().expect("create public-chain validation parent");
+        let private = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
+            .expect("create private public-chain validation parent");
+        for (index, chain) in [PUBLIC_TAIRA_CHAIN_ID, PUBLIC_NEXUS_CHAIN_ID]
+            .into_iter()
+            .enumerate()
+        {
+            let output = private.path().join(format!("conflict{index}"));
+            let wrong = known_chain_discriminant_for_chain_id(chain)
+                .unwrap()
+                .wrapping_add(1)
+                .to_string();
+            let parsed = TestArgs::try_parse_from([
+                "kagami-localnet-test",
+                "--out-dir",
+                output.to_str().unwrap(),
+                "--chain-id",
+                chain,
+                "--chain-discriminant",
+                &wrong,
+                "--sora-profile",
+                "nexus",
+                "--consensus-mode",
+                "npos",
+            ])
+            .expect("parse typed public-chain prefix conflict");
+            assert!(
+                parsed
+                    .localnet
+                    .run(&mut BufWriter::new(Vec::new()))
+                    .is_err()
+            );
+            assert!(
+                !output.exists(),
+                "invalid public prefix must not create output"
+            );
+        }
+        assert!(
+            TestArgs::try_parse_from([
+                "kagami-localnet-test",
+                "--out-dir",
+                "/tmp/unused-chain-prefix-test",
+                "--chain-discriminant",
+                "65536",
+            ])
+            .is_err()
+        );
     }
 }

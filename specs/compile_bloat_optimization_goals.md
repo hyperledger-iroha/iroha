@@ -1,7 +1,7 @@
 # Compile-time and code-bloat optimization goals
 
-The optimization preserves the current compilation and ownership boundaries. Preserve features, wire declarations, deterministic execution
-and runtime performance. Migrate consumers directly: first release does not
+Separate compilation owners while preserving features, wire declarations,
+deterministic execution and runtime performance. Migrate consumers directly: first release does not
 require public compatibility aliases. Sumeragi remains owned by the user's
 separate work; inspect current SCCP state before touching adjacent code.
 
@@ -12,7 +12,7 @@ separate work; inspect current SCCP state before touching adjacent code.
 | O3: Extract state-free timed-OVN verification | In progress | Public evidence, casting archive and TLE verification have a separate owner; authenticated constructors, state reads and signers stay in Core; bridge tests preserve authorization and replay checks. |
 | O4: Isolate executable build metadata | In progress | Thin daemon/CLI packages supply compiled identity to build-script-free libraries; executable names/features remain coherent; metadata-only changes leave libraries fresh. |
 | O5: Remove production parsing of large test bodies | Complete | Four cohesive P2P/compiler/model test modules moved without dropping tests or fixtures; source guards and each preserved runtime harness pass, including the transparent model assertions. |
-| O6: Complete codec and merged-source validation | In progress | Norito/IVM-only, feature, dependency and target guards pass; focused tests, merged workspace check and applicable lint/test gates remain; actual exit codes and unresolved external failures are recorded. |
+| O6: Complete codec and merged-source validation | In progress | Norito/IVM-only, feature, dependency and target guards, focused tests, merged workspace check and applicable lint/test gates pass; actual exit codes and unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | Warm same-package check timings compared with the September 27 baseline; source/toolchain and competing build load recorded. Optional further extraction/router work requires measured benefit. |
 
 The recovered baseline checked `irohad`, `iroha_cli` and `iroha_kagami`

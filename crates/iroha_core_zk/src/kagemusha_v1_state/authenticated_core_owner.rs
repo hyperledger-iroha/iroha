@@ -35,7 +35,67 @@ pub type KagemushaAuthenticatedBootstrapStageV1 = KagemushaBootstrapJournalStage
     KagemushaDiskAuthenticatedHistoryStoreV1,
 >;
 
+/// Completed bootstrap using only the actual production recursive, Guard and history owners.
+pub type KagemushaAuthenticatedBootstrappedWalletV1 = KagemushaBootstrappedWalletV1<
+    Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
+    KagemushaAuthenticatedGuardBundleVerifierV1,
+    KagemushaDiskAuthenticatedHistoryStoreV1,
+>;
+
 impl KagemushaAuthenticatedCoreOwnerV1 {
+    /// Consume the completed production bootstrap without reopening or dropping journal locks.
+    ///
+    /// Only `KagemushaAuthenticatedBootstrapStageV1` followed by its genuine hardware checkpoint
+    /// finish can supply this concrete wallet type. Generic accepting verifiers and decoded
+    /// snapshots cannot substitute it. The separately held hardware transaction journal must
+    /// match the complete release/profile/lane binding retained by the machine's actual Guard.
+    /// A newly challenged hardware selection and both descriptor pairs are rechecked before
+    /// returning the owner; failure consumes all inputs and leaves no partial monetary handle.
+    ///
+    /// # Errors
+    /// Rejects foreign transaction storage, changed journals, stale hardware or lost authority.
+    ///
+    /// ```compile_fail
+    /// use iroha_core_zk::kagemusha_v1_state::{
+    ///     KagemushaAuthenticatedCoreOwnerV1, KagemushaBootstrappedWalletV1,
+    ///     KagemushaHardwareTransactionJournalV1,
+    /// };
+    /// fn cannot_promote_generic_wallet<R, G, H>(
+    ///     wallet: KagemushaBootstrappedWalletV1<R, G, H>,
+    ///     transactions: KagemushaHardwareTransactionJournalV1,
+    /// ) {
+    ///     let _ = KagemushaAuthenticatedCoreOwnerV1::from_bootstrapped_wallet(wallet, transactions);
+    /// }
+    /// ```
+    pub fn from_bootstrapped_wallet(
+        wallet: KagemushaAuthenticatedBootstrappedWalletV1,
+        transactions: KagemushaHardwareTransactionJournalV1,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        let (machine, coordinator, responses) = wallet.into_parts();
+        let expected_binding = machine
+            .guard_verifier
+            .hardware_transaction_storage_binding()
+            .map_err(|error| KagemushaStateErrorV1::GuardRejected(error.to_string()))?;
+        transactions
+            .require_storage_binding(expected_binding)
+            .map_err(KagemushaStateErrorV1::RecoveryMaterial)?;
+        let journals = KagemushaPendingRecoveryJournalsV1::from_held_bootstrap_journals(
+            coordinator,
+            responses,
+        );
+        journals.validate_pair(&machine)?;
+        machine.current_recovery_selection()?;
+        journals.validate_pair(&machine)?;
+        transactions
+            .require_storage_binding(expected_binding)
+            .map_err(KagemushaStateErrorV1::RecoveryMaterial)?;
+        Ok(Self {
+            machine,
+            journals,
+            transactions,
+        })
+    }
+
     /// Stage a fresh zero-balance lane from current independently verified enrollment and
     /// account/device possession, then authenticate both actual paired proof relations.
     ///
@@ -261,6 +321,21 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             .recovery_prefix()
             .map_err(KagemushaStateErrorV1::RecoveryMaterial)?;
         Ok(selection)
+    }
+
+    /// Clone the original production release retained by the concrete authenticated Guard.
+    /// This immutable catalog grants no session or current hardware freshness by itself.
+    ///
+    /// # Errors
+    /// Rejects changed held journals or absent native production release authority.
+    pub fn authenticated_release(
+        &self,
+    ) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, KagemushaStateErrorV1> {
+        self.journals.validate_pair(&self.machine)?;
+        let release = self.machine.guard_verifier.authenticated_release()
+            .map_err(|error| KagemushaStateErrorV1::GuardRejected(error.to_string()))?;
+        self.journals.validate_pair(&self.machine)?;
+        Ok(release)
     }
 }
 

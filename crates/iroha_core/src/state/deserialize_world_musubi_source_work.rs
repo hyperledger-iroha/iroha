@@ -7,10 +7,10 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::musubi::source_work::{
     SourceGeometry, SourceGeometryError, SourceGeometryLimits, SourceShape,
 };
-use iroha_allocation::AllocationBudget;
 
 /// Required independent local bounds for validation dependencies, not output rows.
 #[derive(Clone, Copy, Debug)]

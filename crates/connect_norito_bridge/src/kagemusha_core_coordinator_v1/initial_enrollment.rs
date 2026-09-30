@@ -335,7 +335,6 @@ impl PendingIssuerEnrollmentV1 {
         Ok(&self.canonical_qualification)
     }
 
-    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.require_unexpired()?;
         if let Some(live) = &self.live_selection {
@@ -548,6 +547,7 @@ impl PendingIssuerEnrollmentV1 {
             evidence,
             canonical_proof,
             canonical_certificate,
+            verified_app: verified_app.clone(),
         })
     }
 }
@@ -723,9 +723,69 @@ pub struct FreshIssuerAdmissionV1 {
     evidence: KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1,
     canonical_proof: Vec<u8>,
     canonical_certificate: Vec<u8>,
+    verified_app: KagemushaVerifiedAppEnrollmentV1,
 }
 
 impl FreshIssuerAdmissionV1 {
+    /// Consume the original live admission into the actual current model bootstrap evidence.
+    ///
+    /// `trusted_native_now_ms` must be newly authenticated by the retained native service or
+    /// hardware owner, never an app timestamp or the issuer's historical decision instant. Both
+    /// exact original signatures are reauthenticated at that same current time under this
+    /// admission's independently selected policies, release and already verified app assertion.
+    /// These evidence objects alone grant no hardware checkpoint, paired proof or monetary owner.
+    ///
+    /// # Errors
+    /// Rejects expired/revoked native selection, noncurrent certificates, or any original mismatch.
+    pub fn into_current_bootstrap_evidence(
+        self,
+        trusted_native_now_ms: u64,
+    ) -> Result<(
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentPossessionV1,
+    )> {
+        self.require_live()?;
+        let certificate = KagemushaRetailEnrollmentCertificateV1::decode_canonical_exact(
+            &self.canonical_certificate,
+        )
+        .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
+        let proof = KagemushaRetailEnrollmentPossessionProofV1::decode_canonical_exact(
+            &self.canonical_proof,
+        )
+        .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
+        let selected = KagemushaRetailEnrollmentSelectionV1 {
+            enrollment_id: self.pending.enrollment.enrollment_id,
+            account_id: self.pending.enrollment.owner.account_id.clone(),
+            lane_id: self.pending.enrollment.owner.lane_id,
+            issuance: certificate.subject.issuance.clone(),
+        };
+        let enrollment = certificate
+            .authenticate(
+                &self.pending.policy,
+                &self.pending.release,
+                &selected,
+                trusted_native_now_ms,
+                &self.verified_app,
+            )
+            .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        let possession = proof
+            .authenticate(
+                &proof.challenge,
+                &self.pending.policy,
+                &self.pending.release,
+                trusted_native_now_ms,
+            )
+            .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        if enrollment.certificate().subject.challenge_evidence_digest
+            != possession.evidence_digest()
+            || enrollment.certificate().subject.owner != self.pending.enrollment.owner
+            || possession.challenge().owner != self.pending.enrollment.owner
+        {
+            return Err(InitialEnrollmentErrorV1::Binding);
+        }
+        self.require_live()?;
+        Ok((enrollment, possession))
+    }
     /// Recheck the original live ticket and deadline before this admission is used.
     pub(super) fn require_live(&self) -> Result<()> {
         self.pending.require_unexpired()

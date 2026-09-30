@@ -2106,7 +2106,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect("sign the exact unbound provisional genesis");
         let provisional_error =
-            restage_signed_sumeragi_context_hashes(&raw, Some(&config), &provisional.0)
+            staged_signed_sumeragi_context_hashes(&raw, &provisional.0, &config)
                 .err()
                 .expect("the original unbound draft must report its exact policy mismatch");
         assert!(
@@ -2204,12 +2204,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .amx_group_budget_ms
             .checked_add(1)
             .expect("test AMX budget increment must not overflow");
-        let nexus_error = verify_final_signed_sumeragi_context(
+        let nexus_error = staged_signed_sumeragi_context_hashes(
             &bound_manifest,
-            Some(&tampered_nexus_config),
             &signed.0,
-            Hash::prehashed(signed_parameters.nexus_amx_context_hash),
-            Hash::prehashed(signed_parameters.execution_policy_hash),
+            &tampered_nexus_config,
         )
         .expect_err("a final-identity Nexus/AMX policy mismatch must fail closed");
         let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
@@ -2240,12 +2238,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .quarantine_max_txs_per_block
             .checked_add(1)
             .expect("test quarantine limit increment must not overflow");
-        let execution_error = verify_final_signed_sumeragi_context(
+        let execution_error = staged_signed_sumeragi_context_hashes(
             &bound_manifest,
-            Some(&tampered_execution_config),
             &signed.0,
-            Hash::prehashed(signed_parameters.nexus_amx_context_hash),
-            Hash::prehashed(signed_parameters.execution_policy_hash),
+            &tampered_execution_config,
         )
         .expect_err("a final-identity execution-policy mismatch must fail closed");
         let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
@@ -2267,53 +2263,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         assert_ne!(actual_execution, expected_execution);
         assert_eq!(actual_nexus, expected_nexus);
-    }
-
-    #[test]
-    fn default_genesis_staging_authenticates_catalog_and_reproduces_signed_context() {
-        let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
-            .expect("derive deterministic default staging key");
-        let raw =
-            GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
-                .set_topology_for_test(valid_test_topology_entries(4))
-                .build_raw()
-                .expect("complete generic four-validator genesis")
-                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-                .with_consensus_meta();
-        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
-            raw,
-            &genesis_key_pair,
-            None,
-            None,
-            iroha_core::state::default_genesis_confidential_policy_hash(),
-            Some(1_700_000_000_000),
-        )
-        .expect("no-config signing must authenticate default storage before executing genesis");
-        assert!(signed.0.network_entrypoint_count() > 0);
-        assert!(signed.0.has_results());
-        assert!(
-            signed
-                .0
-                .output_results()
-                .all(|result| result.as_ref().is_ok())
-        );
-        signed
-            .0
-            .validate_output_merkle_cache()
-            .expect("complete executed genesis outputs");
-        assert_genesis_signatures_verify(&signed.0, &genesis_key_pair);
-        let restaged = restage_signed_sumeragi_context_hashes(&bound_manifest, None, &signed.0)
-            .expect("default staging must also accept the final signed network identity");
-        let parameters = bound_manifest.sumeragi_context_parameters();
-        assert_eq!(
-            restaged.nexus_amx_context_hash,
-            Hash::prehashed(parameters.nexus_amx_context_hash)
-        );
-        assert_eq!(
-            restaged.execution_policy_hash,
-            Hash::prehashed(parameters.execution_policy_hash)
-        );
-        assert_eq!(restaged.executed_block.hash(), signed.0.hash());
     }
 
     fn checked_genesis_sign_keypair() -> CryptoKeyPair {

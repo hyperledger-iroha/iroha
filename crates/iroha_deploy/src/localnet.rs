@@ -1022,7 +1022,7 @@ pub fn generate_localnet<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
 ) -> Result<()> {
-    generate_localnet_with_chain(opts, writer, None)
+    generate_localnet_with_chain(opts, writer, None, None)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions, taira: bool) -> Result<ResolvedHosts> {
@@ -1116,28 +1116,33 @@ fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
 #[allow(clippy::too_many_lines)]
-/// Generate a localnet with an optional explicit canonical chain identity.
+/// Generate a localnet with an optional canonical chain identity and account-address prefix.
+/// Fixed public chain prefixes reject conflicting explicit values before any output is created.
 pub fn generate_localnet_with_chain<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
+    configured_discriminant: Option<u16>,
 ) -> Result<()> {
-    generate_localnet_runtime(opts, writer, chain_id, false)
+    generate_localnet_runtime(opts, writer, chain_id, configured_discriminant, false)
 }
 
 /// Materialize a native managed localnet without shell launchers or inherited seed descriptors.
 pub fn generate_managed_localnet(opts: &LocalnetOptions) -> Result<()> {
-    generate_localnet_runtime(opts, &mut BufWriter::new(std::io::sink()), None, true)
+    generate_localnet_runtime(opts, &mut BufWriter::new(std::io::sink()), None, None, true)
 }
 
 fn generate_localnet_runtime<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
+    configured_discriminant: Option<u16>,
     managed: bool,
 ) -> Result<()> {
     init_instruction_registry();
     let chain_id = resolve_localnet_chain_id(chain_id)?;
+    let chain_discriminant =
+        resolve_localnet_chain_discriminant(&chain_id, configured_discriminant)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     let hosts = validate_localnet_options(opts, taira)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
@@ -1164,7 +1169,6 @@ fn generate_localnet_runtime<T: Write>(
     write_localnet_gitignore(&out_dir)?;
     let rans_tables_path = copy_rans_tables(&out_dir)?;
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-    let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
     // generation scoped to the selected chain.  Applying the guard only while
     // rendering/parsing peer configs is too late: the genesis and alias intent
@@ -2172,6 +2176,19 @@ pub fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
         .wrap_err("`--chain-id` must be canonical")?;
     Ok(chain_id.to_owned())
 }
+fn resolve_localnet_chain_discriminant(
+    chain_id: &str,
+    configured: Option<u16>,
+) -> Result<Option<u16>> {
+    let fixed = known_chain_discriminant_for_chain_id(chain_id);
+    if let (Some(requested), Some(required)) = (configured, fixed) {
+        ensure!(
+            requested == required,
+            "`--chain-discriminant` {requested} conflicts with the fixed prefix {required} for chain {chain_id}"
+        );
+    }
+    Ok(configured.or(fixed))
+}
 #[derive(Clone, Copy)]
 struct RenderPeerFeatures<'a> {
     mcp_enabled: bool,
@@ -2432,7 +2449,7 @@ fn render_peer_config(
         Value::String(gas_account_id.to_owned()),
     );
     nexus.insert("staking".into(), Value::Table(staking));
-    if npos_bootstrap {
+    if npos_bootstrap || chain_discriminant.is_some() {
         let fee_asset_id = localnet_xor_asset_literal();
         let mut fees = Table::new();
         fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));

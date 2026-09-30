@@ -3922,7 +3922,7 @@ mod platform_tests {
                 .files()
                 .iter()
                 .map(|file| file.bytes().len() as u64)
-                .sum()
+                .sum::<u64>()
         );
         assert!(!root.join("Musubi.lock").exists());
         assert!(!root.join("target").exists());

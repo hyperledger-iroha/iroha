@@ -822,3 +822,113 @@ fn install_staged_nexus_policies(
     state.install_lane_compliance_engine(lane_compliance);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, bls_normal_pop_prove};
+    use iroha_data_model::{
+        block::consensus::SumeragiGenesisContextParameters,
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
+        },
+    };
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::peer::PeerId;
+
+    fn default_test_topology() -> Vec<GenesisTopologyEntry> {
+        let mut entries = (0x40..=0x43)
+            .map(|seed| {
+                let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic default staging validator");
+                let pop = bls_normal_pop_prove(key.private_key()).expect("checked topology proof");
+                GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+        entries
+    }
+
+    #[test]
+    fn default_genesis_staging_authenticates_catalog_and_reproduces_signed_context() {
+        let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
+            .expect("derive deterministic default staging key");
+        let topology = default_test_topology();
+        let validators = topology
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xA0_u8.wrapping_add(u8::try_from(index).expect("four-validator roster")); 32],
+                    0,
+                    entry.peer.clone(),
+                )
+                .expect("derive exact deterministic staging Pasta authority")
+            })
+            .collect();
+        let raw =
+            GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
+                .set_topology(topology)
+                .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+                .with_kagemusha_mint_finality_genesis_parameters(
+                    KagemushaMintFinalityGenesisParametersV1 {
+                        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+                            version: KAGEMUSHA_CHAIN_VERSION_V1,
+                            generation: 0,
+                            validators,
+                        },
+                    },
+                )
+                .build_raw()
+                .expect("complete generic four-validator genesis")
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+                .with_consensus_meta();
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
+            raw,
+            &genesis_key_pair,
+            None,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .expect("no-config signing must authenticate default storage before executing genesis");
+        assert!(signed.0.network_entrypoint_count() > 0);
+        assert!(signed.0.has_results());
+        assert!(
+            signed
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
+        signed
+            .0
+            .validate_output_merkle_cache()
+            .expect("complete executed genesis outputs");
+        assert!(signed.0.external_transactions().next().is_some());
+        for transaction in signed.0.external_transactions() {
+            transaction
+                .verify_signature()
+                .expect("original transaction signature");
+        }
+        assert!(signed.0.signatures().next().is_some());
+        for signature in signed.0.signatures() {
+            signature
+                .signature()
+                .verify_hash(genesis_key_pair.public_key(), signed.0.hash())
+                .expect("original final genesis signature");
+        }
+        let restaged = restage_signed_sumeragi_context_hashes(&bound_manifest, None, &signed.0)
+            .expect("default staging must also accept the final signed network identity");
+        let parameters = bound_manifest.sumeragi_context_parameters();
+        assert_eq!(
+            restaged.nexus_amx_context_hash,
+            Hash::prehashed(parameters.nexus_amx_context_hash)
+        );
+        assert_eq!(
+            restaged.execution_policy_hash,
+            Hash::prehashed(parameters.execution_policy_hash)
+        );
+        assert_eq!(restaged.executed_block.hash(), signed.0.hash());
+    }
+}

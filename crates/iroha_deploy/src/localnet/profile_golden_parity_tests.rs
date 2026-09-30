@@ -108,6 +108,7 @@ impl KagamiTaira {
             &opts,
             &mut BufWriter::new(Vec::new()),
             Some(PUBLIC_TAIRA_CHAIN_ID),
+            None,
         )
         .expect("generate canonical Taira localnet");
         let _discriminant = ChainDiscriminantGuard::enter(taira_discriminant());

@@ -60,7 +60,7 @@ def _copy_fixture_tree(destination: Path) -> Path:
 def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 301
-    assert stats.tests == 591
+    assert stats.tests == 592
 
 
 def test_out_of_line_test_module_is_required(tmp_path: Path) -> None:

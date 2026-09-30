@@ -261,7 +261,6 @@ def validate_current(
     for path in PATHS:
         source = source_map[path].decode("utf-8")
         current_ids.extend(MIGRATED_PATTERN.findall(source))
-        assert source.count("\n") <= 16_100
     assert current_ids == ids
     assert collect_test_inventory(source_map) == EXPECTED_TEST_INVENTORY
     function_names = {
@@ -301,6 +300,19 @@ class FcmpSourceContractGroupsSourceTest(unittest.TestCase):
     def test_current_asset_matches_consumer_and_executable_owners(self) -> None:
         validate_current(current_sources(), (REPO / ASSET).read_bytes())
 
+    def test_source_trivia_growth_preserves_all_semantic_controls(self) -> None:
+        """Each owner accepts extra whitespace with its exact assertion inventory."""
+        sources = current_sources()
+        asset = (REPO / ASSET).read_bytes()
+        inventory = collect_test_inventory(sources)
+        for path in PATHS:
+            with self.subTest(path=path):
+                expanded = dict(sources)
+                expanded[path] += b"\n" * 16_101
+                self.assertGreater(expanded[path].count(b"\n"), 16_100)
+                self.assertEqual(collect_test_inventory(expanded), inventory)
+                validate_current(expanded, asset)
+
     def test_mutations_fail_closed(self) -> None:
         sources = current_sources()
         asset = (REPO / ASSET).read_bytes()
@@ -331,10 +343,6 @@ class FcmpSourceContractGroupsSourceTest(unittest.TestCase):
             b"fn assert_source_contract_group(id: &str, source: &str) {\n    // callback mutation",
             1,
         )
-        mutations.append((changed, asset))
-
-        changed = dict(sources)
-        changed[RUNTIME] = sources[RUNTIME] + b"\n" * 16_101
         mutations.append((changed, asset))
 
         for index, (mutated_sources, mutated_asset) in enumerate(mutations):

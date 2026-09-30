@@ -207,7 +207,8 @@ fn localnet_kagemusha_authority_matches_canonical_four_validator_topology() {
 
 #[test]
 fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("temporary Taira directory");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("temporary Taira directory");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -224,7 +225,7 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut output = BufWriter::new(Vec::new());
-    generate_localnet_with_chain(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID))
+    generate_localnet_with_chain(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID), None)
         .expect("generate canonical Taira localnet");
     let peers = build_peers(
         TAIRA_TESTNET_PEERS,
@@ -1498,7 +1499,7 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
         consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut command_output = BufWriter::new(Vec::new());
-    generate_localnet_with_chain(&opts, &mut command_output, None)
+    generate_localnet_with_chain(&opts, &mut command_output, None, None)
         .expect("generate fresh-custody localnet files");
     let command_output = String::from_utf8(
         command_output

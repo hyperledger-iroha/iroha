@@ -38,7 +38,6 @@ pub trait KagemushaCurrentRecoveryOwnerV1: current_recovery_owner_sealed::Sealed
 #[derive(Clone, Copy)]
 pub struct KagemushaCurrentRecoverySelectionV1<'a> {
     enrollment: &'a KagemushaRecoveryEnrollmentBindingV1,
-    #[cfg(test)]
     credential_floor: &'a KagemushaAcceptedCredentialFloorV1,
     checkpoint: &'a DurabilityAnchorV1,
 }
@@ -50,7 +49,6 @@ impl<'a> KagemushaCurrentRecoverySelectionV1<'a> {
         self.enrollment
     }
 
-    #[cfg(test)]
     /// Original governed credential and its independently authenticated historical release.
     #[must_use]
     pub fn accepted_credential_floor(&self) -> &'a KagemushaAcceptedCredentialFloorV1 {
@@ -113,7 +111,6 @@ where
         }
         Ok(KagemushaCurrentRecoverySelectionV1 {
             enrollment: &self.recovery_metadata.enrollment,
-            #[cfg(test)]
             credential_floor: &self.recovery_metadata.accepted_credential,
             checkpoint: &checkpoint.anchor,
         })

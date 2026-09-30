@@ -229,7 +229,6 @@ fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
     }
 }
 
-
 #[test]
 fn invalid_chain_requests_do_not_create_partial_output_directories() {
     fn options(out_dir: PathBuf) -> LocalnetOptions {
@@ -250,12 +249,17 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         }
     }
 
-    let parent = crate::localnet::localnet_test_helpers::private_tempdir().expect("create localnet validation parent");
+    let parent = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("create localnet validation parent");
     let malformed_out = parent.path().join("malformed-chain");
     let malformed = options(malformed_out.clone());
-    let _error =
-        generate_localnet_with_chain(&malformed, &mut BufWriter::new(Vec::new()), Some(" padded"))
-            .expect_err("malformed chain must fail");
+    let _error = generate_localnet_with_chain(
+        &malformed,
+        &mut BufWriter::new(Vec::new()),
+        Some(" padded"),
+        None,
+    )
+    .expect_err("malformed chain must fail");
     assert!(
         !malformed_out.exists(),
         "malformed chain must fail before creating its output directory"
@@ -267,6 +271,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         &invalid_taira,
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
+        None,
     )
     .expect_err("Taira profile mismatch must fail");
     assert!(
@@ -304,7 +309,8 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
         }
     }
 
-    let parent = crate::localnet::localnet_test_helpers::private_tempdir().expect("create asset-validation parent");
+    let parent = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("create asset-validation parent");
     let valid_id = localnet_sample_asset_literal();
     let cases = [
         ("invalid-id", vec![asset("not-an-id".to_owned(), None)]),
@@ -1154,7 +1160,8 @@ fn client_config_records_chain_discriminant_when_known() {
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(369);
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("temporary Taira directory");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("temporary Taira directory");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1174,6 +1181,7 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
         &opts,
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
+        None,
     )
     .expect("generate Taira with its runtime operator");
     let client_config: toml::Value = toml::from_str(
@@ -1849,7 +1857,8 @@ fn omitted_seed_uses_independent_os_random_keys() {
 ))]
 #[test]
 fn localnet_refuses_to_mix_with_existing_output() {
-    let output = crate::localnet::localnet_test_helpers::private_tempdir().expect("localnet output");
+    let output =
+        crate::localnet::localnet_test_helpers::private_tempdir().expect("localnet output");
     fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
         .expect("harden localnet output directory");
     let sentinel = output.path().join("keep.txt");
@@ -1900,7 +1909,8 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
             .public_key
     );
     assert_ne!(ledger.public_key, http.public_key);
-    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("runtime bundle parent");
+    let root =
+        crate::localnet::localnet_test_helpers::private_tempdir().expect("runtime bundle parent");
     let bundle = write_localnet_runtime_bundle(root.path(), &ledger, &http, &onboarding)
         .expect("write separated runtime bundle");
     assert_eq!(
@@ -1933,7 +1943,8 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
         (&ledger, &http, &ledger),
         (&ledger, &http, &http),
     ] {
-        let rejected = crate::localnet::localnet_test_helpers::private_tempdir().expect("rejected bundle parent");
+        let rejected = crate::localnet::localnet_test_helpers::private_tempdir()
+            .expect("rejected bundle parent");
         assert!(write_localnet_runtime_bundle(rejected.path(), ledger, http, onboarding).is_err());
         assert!(!rejected.path().join(LOCALNET_RUNTIME_DIRECTORY).exists());
     }
@@ -1945,8 +1956,10 @@ fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         .expect("derive operator identity");
     let onboarding = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"onboarding-root")
         .expect("derive onboarding identity");
-    let first = crate::localnet::localnet_test_helpers::private_tempdir().expect("first runtime parent");
-    let second = crate::localnet::localnet_test_helpers::private_tempdir().expect("second runtime parent");
+    let first =
+        crate::localnet::localnet_test_helpers::private_tempdir().expect("first runtime parent");
+    let second =
+        crate::localnet::localnet_test_helpers::private_tempdir().expect("second runtime parent");
     let http_operator =
         localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"http-operator-root")
             .expect("derive HTTP operator identity");
@@ -2614,7 +2627,8 @@ fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation
 }
 #[test]
 fn mint_finality_private_output_rejects_git_directory_and_worktree_pointer() {
-    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("private output test");
+    let root =
+        crate::localnet::localnet_test_helpers::private_tempdir().expect("private output test");
     let output = root.path().join("future/runtime/output");
     require_taira_private_output_outside_git(&output).expect("outside checkout");
     fs::create_dir(root.path().join(".git")).expect("repository marker");
@@ -2630,4 +2644,28 @@ fn mint_finality_private_output_rejects_git_directory_and_worktree_pointer() {
         !output.exists(),
         "rejected request must not create runtime output"
     );
+}
+
+#[test]
+fn localnet_chain_discriminant_preserves_defaults_and_fixed_public_prefixes() {
+    assert_eq!(
+        resolve_localnet_chain_discriminant(DEFAULT_CHAIN_ID, None).unwrap(),
+        None
+    );
+    assert_eq!(
+        resolve_localnet_chain_discriminant(DEFAULT_CHAIN_ID, Some(369)).unwrap(),
+        Some(369)
+    );
+    for chain in [PUBLIC_TAIRA_CHAIN_ID, PUBLIC_NEXUS_CHAIN_ID] {
+        let fixed = known_chain_discriminant_for_chain_id(chain).expect("known public prefix");
+        assert_eq!(
+            resolve_localnet_chain_discriminant(chain, None).unwrap(),
+            Some(fixed)
+        );
+        assert_eq!(
+            resolve_localnet_chain_discriminant(chain, Some(fixed)).unwrap(),
+            Some(fixed)
+        );
+        assert!(resolve_localnet_chain_discriminant(chain, Some(fixed.wrapping_add(1))).is_err());
+    }
 }

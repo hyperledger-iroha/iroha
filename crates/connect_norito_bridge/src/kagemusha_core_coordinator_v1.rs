@@ -14,8 +14,14 @@ mod archives;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
+mod native_installation;
 mod pre_enrollment_qualification;
 mod qualified_enrollment_delegate;
+pub use native_installation::{
+    KagemushaNativeEnrollmentProvisionerV1, KagemushaNativeEnrollmentProvisioningV1,
+    KagemushaNativeProvisionerInstallErrorV1, provision_and_install_kagemusha_native_enrollment_v1,
+    register_kagemusha_native_enrollment_provisioner_v1,
+};
 pub use pre_enrollment_qualification::{
     KagemushaPreEnrollmentQualificationOwnerV1, KagemushaVerifiedPreEnrollmentQualificationV1,
 };
@@ -45,15 +51,12 @@ pub use signed_app_preparation::{
     SignedAppPreparationErrorV1, SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
     verify_signed_app_preparation_v1,
 };
-// These remaining lifecycle kernels have only structural test owners. Production sessions
-// are owned by the qualified backend installed through KagemushaCoreCoordinatorBackendV1.
-#[cfg(test)]
+// Production recovery uses only the concrete authenticated Core owner. Structural owners
+// remain inside the test modules and cannot supply the installed native selection.
 mod enrolled_open;
-#[cfg(test)]
 mod enrolled_session;
 mod initial_enrollment;
 pub(crate) mod native_deadline;
-#[cfg(test)]
 mod session_registry;
 pub(crate) mod startup_qualification;
 pub use crate::kagemusha_device_bridge_v1::sender_payload::{
@@ -327,8 +330,8 @@ static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<
 ///
 /// The installed backend is always wrapped in a process-exclusive owner: one
 /// attempted open and serialized invocations on its original handle. Stock
-/// builds never call this function. There is intentionally no uninstall,
-/// overwrite, software implementation, or C/JNI installer.
+/// builds call it only through the independently retained native provisioner. There is no
+/// uninstall, overwrite, software substitute or C/JNI intake for a backend or authority.
 pub fn install_kagemusha_core_coordinator_backend_v1(
     backend: Arc<dyn KagemushaCoreCoordinatorBackendV1>,
 ) -> Result<(), KagemushaCoreCoordinatorInstallErrorV1> {

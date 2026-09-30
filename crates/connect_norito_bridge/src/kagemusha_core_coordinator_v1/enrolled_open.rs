@@ -1,4 +1,4 @@
-//! Test-only one-use native account/device possession bound to authenticated retail enrollment.
+//! One-use native account/device possession bound to authenticated retail enrollment.
 //!
 //! Pending challenges cannot be decoded, copied or created from host paths, owner projections
 //! or caller freshness claims. Completion consumes the pending instance. Its opaque result is
@@ -8,11 +8,12 @@
 use std::time::Duration;
 
 use iroha_core_zk::kagemusha_v1_state::{
-    DurabilityAnchorStatementV1, KagemushaRecoveryEnrollmentBindingV1,
+    DurabilityAnchorStatementV1, KagemushaAuthenticatedCoreOwnerV1,
+    KagemushaCurrentRecoverySelectionV1, KagemushaRecoveryEnrollmentBindingV1,
 };
 use iroha_crypto::{Algorithm, HashOf, Signature, SignatureOf};
 use iroha_data_model::kagemusha::{
-    KagemushaDeviceReadCredentialCommandV1, KagemushaHardwareCredentialV1,
+    KagemushaDevicePublicKeyV1, KagemushaDeviceReadCredentialCommandV1, KagemushaHardwareCredentialV1,
     KagemushaRetailEnrollmentOwnerV1, kagemusha_decode_device_success_response_v1,
 };
 use norito::codec::{Decode, Encode};
@@ -30,6 +31,7 @@ use crate::kagemusha_device_bridge_v1::{
 
 const ACCOUNT_DOMAIN: &str = "iroha:kagemusha:v1:enrolled-open-account-possession";
 const INITIAL_CERTIFICATE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:enrolled-open-initial-certificate";
+const RECOVERY_CERTIFICATE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:enrolled-open-recovery-certificate";
 const CHALLENGE_MAX_BYTES: usize = 16 * 1024;
 pub(super) const LIFETIME: Duration = Duration::from_secs(120);
 const LIFETIME_MS: u64 = 120_000;
@@ -130,6 +132,31 @@ pub(super) struct PendingEnrolledOpenV1 {
 }
 
 impl PendingEnrolledOpenV1 {
+    pub(super) fn from_authenticated_core_owner(
+        core: &KagemushaAuthenticatedCoreOwnerV1,
+        native_key: &KagemushaDevicePublicKeyV1,
+        deadline: NativeDeadlineV1,
+    ) -> Result<Self> {
+        deadline.check().map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        let observer = NativeStartupQualificationOwnerV1::from_authenticated_core_owner(core, native_key)?;
+        let selected = core.current_recovery_selection().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let source = authenticated_recovery_source(&selected)?;
+        let enrollment = selected.enrollment_binding().clone();
+        let epoch = selected.hardware_epoch();
+        let binding = selected.device_policy_binding();
+        let release = core.authenticated_release().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let pending = Self::begin(observer, enrollment.clone(), source.clone(),
+            RequiredCredentialV1::Recovered { generation: epoch.generation, epoch_id: epoch.epoch_id,
+                key_reference: binding.device_key_reference }, release.release_id(),
+            release.hardware_policy_digest(), hardware_authorization_key_reference_v1(native_key), deadline)?;
+        let current = core.current_recovery_selection().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        if authenticated_recovery_source(&current)? != source || current.enrollment_binding() != &enrollment {
+            return Err(EnrolledOpenErrorV1::DeviceBinding);
+        }
+        pending.require_unexpired()?;
+        Ok(pending)
+    }
+
     /// Consume the fresh nonce-bound issuer admission before initial device possession.
     /// This preserves its original deadline and exact evidence; it supplies no hardware
     /// commit clock or monetary bootstrap authority. Existing Core owners require recovery.
@@ -255,6 +282,8 @@ impl PendingEnrolledOpenV1 {
         }
         Ok(())
     }
+
+    pub(super) fn deadline(&self) -> NativeDeadlineV1 { self.deadline.clone() }
 
     /// Consume the one-use account/device proof under the retained challenge and native clock.
     pub(super) fn complete(
@@ -447,6 +476,17 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
     digest.finalize().into()
+}
+
+pub(super) fn authenticated_recovery_source(
+    selected: &KagemushaCurrentRecoverySelectionV1<'_>,
+) -> Result<EnrolledOpenAuthoritySourceV1> {
+    let checkpoint = selected.checkpoint();
+    let wire = norito::encode_canonical(checkpoint).map_err(|_| EnrolledOpenErrorV1::Encoding)?;
+    Ok(EnrolledOpenAuthoritySourceV1::RecoveryCheckpoint {
+        statement: checkpoint.statement.clone(),
+        terminal_certificate_digest: digest(RECOVERY_CERTIFICATE_DOMAIN, &wire),
+    })
 }
 
 #[cfg(test)]

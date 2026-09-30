@@ -4164,6 +4164,7 @@
         "manifest_access_set_hints_include_literal_pointer_map_keys",
         "manifest_access_set_hints_include_create_trigger",
         "state_path_for_norito_key_uses_reversible_canonical_hex",
+        "source_string_pointer_encoding_keeps_hex_prefix_literal",
         "state_codegen_rejects_legacy_name_literal_carrier",
         "entry_spills_use_stack_frame",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
@@ -4193,7 +4194,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "ef78863d0147dd57c354fbfba8b91142791e06df64496a21249bb60af4433d34"
+      "test_names_sha256": "2293836dac8947f64816afe9b1fc3fc2a46056aedd4ebe2640c1558c1a77c7ab"
     },
     {
       "external_fixtures": [],
@@ -4559,5 +4560,5 @@
       "test_names_sha256": "1b35e9ea05f0d5134738d066f94d499d980beab890dc37fc66364142eae07ccd"
     }
   ],
-  "test_inventory_sha256": "1b171e8c58cbabba4521bb48852ede3209d1dc5b45479ef37f71a1bf9760c302"
+  "test_inventory_sha256": "f0f35d88a7515ba6e60bd1d66e5ef0e432601f9a60ede2175ce819f2a4ef1a8a"
 }

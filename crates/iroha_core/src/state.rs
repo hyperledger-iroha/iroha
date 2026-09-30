@@ -12717,6 +12717,7 @@ impl Drop for StateBlock<'_> {
                 hashes.with_deferred_refund_notifications(|_| {
                     mv::BlockRetirement::release_writers(self);
                     // Every original sibling unlocks before payload refunds or notices.
+                    drop(self.world_cut_capture.take());
                     drop(self.fields.take());
                     drop(self.publication.take());
                 })

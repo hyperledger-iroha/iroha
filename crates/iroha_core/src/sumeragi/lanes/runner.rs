@@ -55,12 +55,14 @@ use crate::{
                 SystemClock,
             },
         },
-        metrics::{InstanceMetrics, MetricsInstance},
         net::SumeragiIngress,
         node::{LogObserver, local_params, startup_nonce},
         records::{FileRecordStore, fresh_store_id},
     },
 };
+
+#[cfg(feature = "telemetry")]
+use crate::sumeragi::metrics::{InstanceMetrics, MetricsInstance};
 
 /// How often the runner re-checks the lane set without a new global height.
 const IDLE_CHECK: Duration = Duration::from_millis(500);
@@ -322,6 +324,7 @@ impl Inner {
         for key in retired {
             if let Some(lane) = running.remove(&key) {
                 self.stop_lane(lane);
+                #[cfg(feature = "telemetry")]
                 InstanceMetrics::retire(&self.inputs.state.telemetry, MetricsInstance::Lane(key.0));
                 iroha_logger::info!(lane = %key.0, "sumeragi: lane instance retired");
             }
@@ -472,6 +475,7 @@ impl Inner {
         );
         let signer = KeyPairSigner::new(&inputs.key_pair).map_err(|error| error.to_string())?;
         let observer: Arc<dyn Observer> = Arc::new(LogObserver);
+        #[cfg(feature = "telemetry")]
         let metrics = MetricsInstance::Lane(record.lane);
         let driver = Driver::new(
             Arc::clone(&self.net),
@@ -481,26 +485,30 @@ impl Inner {
             Arc::new(SystemClock::new()),
             executor,
             observer,
-        )
-        .with_metrics(InstanceMetrics::for_node(&inputs.state.telemetry, metrics))
-        .spawn(
-            inputs.driver,
-            DriverStart {
-                node_gate: inputs.state.view().kura().native_consensus_gate(),
-                allocation_budget: inputs.state.ivm_execution_budget(),
-                local: local_params(config.committee.n(), &inputs.local),
-                init,
-                signers: vec![Arc::new(signer)],
-                crypto: shared,
-                attestor: Box::new(NoAttestation),
-                verifier: Box::new(NoAttestation),
-            },
-        )
-        .map_err(|error| {
-            // A lane that did not start exports no series.
-            InstanceMetrics::retire(&inputs.state.telemetry, metrics);
-            error.to_string()
-        })?;
+        );
+        #[cfg(feature = "telemetry")]
+        let driver =
+            driver.with_metrics(InstanceMetrics::for_node(&inputs.state.telemetry, metrics));
+        let driver = driver
+            .spawn(
+                inputs.driver,
+                DriverStart {
+                    node_gate: inputs.state.view().kura().native_consensus_gate(),
+                    allocation_budget: inputs.state.ivm_execution_budget(),
+                    local: local_params(config.committee.n(), &inputs.local),
+                    init,
+                    signers: vec![Arc::new(signer)],
+                    crypto: shared,
+                    attestor: Box::new(NoAttestation),
+                    verifier: Box::new(NoAttestation),
+                },
+            )
+            .map_err(|error| {
+                // A lane that did not start exports no series.
+                #[cfg(feature = "telemetry")]
+                InstanceMetrics::retire(&inputs.state.telemetry, metrics);
+                error.to_string()
+            })?;
         if let Some(ingress) = &inputs.ingress {
             ingress.register(instance, Arc::new(driver.handle()));
         }

@@ -9252,6 +9252,7 @@ fn build_state(
         nexus: parking_lot::RwLock::new(nexus),
         canonical_runtime,
         native_execution_tip,
+        // Decoded claims cannot recreate original pre-tail journal custody.
         native_world_cut: parking_lot::Mutex::new(None),
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),

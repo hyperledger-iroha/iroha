@@ -1218,11 +1218,16 @@ mod tests {
             &kagemusha::OPERATION,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
+        builder.route(
+            &kagemusha::AUTHORITY_STATE,
+            catalog_get(|| async { StatusCode::NO_CONTENT }),
+        );
         let (router, manifest) = builder
             .finish()
             .expect("app-api routes require and accept the complete KAGEMUSHA family");
         assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(kagemusha::READINESS_PATH)
@@ -1231,6 +1236,19 @@ mod tests {
             )
             .await
             .expect("KAGEMUSHA route response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        kagemusha::AUTHORITY_STATE_PATH
+                            .replace("{asset_definition_id}", "839FV3NJC8NfgWQvghXU2hEFQm9a"),
+                    )
+                    .body(Body::empty())
+                    .expect("canonical native fixture asset resource request"),
+            )
+            .await
+            .expect("KAGEMUSHA authority-state route response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             RouteCatalog::new(kagemusha::ROUTES)
