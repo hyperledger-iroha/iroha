@@ -6,9 +6,8 @@ use crate::{
     block::ValidBlock, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{
-    block::consensus::{ConsensusMode, SumeragiGenesisContextParameters, ValidatorPower},
-    prelude::*,
+use iroha_data_model::block::consensus::{
+    ConsensusMode, SumeragiGenesisContextParameters, ValidatorPower,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 use iroha_model_base::{chain::ChainId, peer::PeerId};

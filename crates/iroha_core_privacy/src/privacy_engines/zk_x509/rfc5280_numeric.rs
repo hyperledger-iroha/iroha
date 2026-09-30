@@ -17,6 +17,7 @@ pub(super) const SLACK_BITS_V1: usize = 38;
 pub(super) const TIME_NODE_DOMAIN_V1: u64 = 100;
 pub(super) const TIMESTAMP_DOMAIN_V1: u64 = 101;
 pub(super) const LOOKUP_LANES_V1: usize = 4;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) const LOOKUP_AUX_WIDTH_V1: usize = 4 * LOOKUP_LANES_V1;
 pub(super) const LOOKUP_RESIDUES_V1: usize = 3 + 12 * LOOKUP_LANES_V1;
 const _: () = assert!(MAXIMUM_TIMESTAMP_V1 + 300 < 1_u64 << SLACK_BITS_V1);
@@ -64,6 +65,7 @@ impl TemporalSlotV1 {
     }
 
     /// Every time except the CRL update is consumed once by a numeric relation.
+    #[cfg(test)]
     pub(super) fn numeric_multiplicity_v1<A: PolynomialAirFieldV1>(self, entries: A) -> A {
         if self == Self::CrlThisUpdate {
             A::from_base(F(2)).add(entries)
@@ -83,9 +85,11 @@ pub(super) enum NumericOperandV1 {
     },
 }
 
+#[cfg(test)]
 impl NumericOperandV1 {
     /// A private operand query removes its public affine offset before lookup.
     /// Public operands are bound directly to verifier-generated fixed cells.
+    #[cfg(test)]
     pub(super) fn timestamp_tuple_v1<A: PolynomialAirFieldV1>(
         self,
         certificate_two: A,

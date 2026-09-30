@@ -236,24 +236,30 @@ fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
         #[command(flatten)]
         localnet: Args,
     }
-    let parsed = TestArgs::try_parse_from([
-        "kagami-localnet-test",
-        "--out-dir",
-        "/tmp/kagami-localnet-test",
-        "--sora-profile",
-        "dataspace",
-        "--private-dataspace",
-        "sbp",
-    ])
-    .expect("parse typed SBP private dataspace selector");
-    assert_eq!(
-        resolve_sora_profile(
-            parsed.localnet.sora_profile,
-            parsed.localnet.private_dataspace,
-        )
-        .expect("resolve typed SBP private dataspace selector"),
-        Some(SoraProfile::PrivateSbp)
-    );
+    for (name, expected) in [
+        ("sbp", SoraProfile::PrivateSbp),
+        ("cbuae", SoraProfile::PrivateCbuae),
+        ("bpng", SoraProfile::PrivateBpng),
+    ] {
+        let parsed = TestArgs::try_parse_from([
+            "kagami-localnet-test",
+            "--out-dir",
+            "/tmp/kagami-localnet-test",
+            "--sora-profile",
+            "dataspace",
+            "--private-dataspace",
+            name,
+        ])
+        .expect("parse typed private dataspace selector");
+        assert_eq!(
+            resolve_sora_profile(
+                parsed.localnet.sora_profile,
+                parsed.localnet.private_dataspace,
+            )
+            .expect("resolve typed private dataspace selector"),
+            Some(expected)
+        );
+    }
     assert!(
         TestArgs::try_parse_from([
             "kagami-localnet-test",
@@ -456,7 +462,7 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn private_dataspace_profiles_match_the_pk_routing_contract() {
+fn private_dataspace_profiles_match_their_exact_routing_contract() {
     fn expected_dataspace(
         alias: &str,
         id: i64,
@@ -540,6 +546,14 @@ fn private_dataspace_profiles_match_the_pk_routing_contract() {
         ("instruction", "smartcontract::deploy", 2, "universal"),
         ("instruction", "transfer::asset@cbuae", 4, "cbuae"),
     ];
+    const BPNG_ROUTES: &[(&str, &str, i64, &str)] = &[
+        ("account", "*@bpng", 5, "bpng"),
+        ("account", "*@mibank.bpng", 5, "bpng"),
+        ("instruction", "governance", 1, "universal"),
+        ("instruction", "smartcontract::deploy", 2, "universal"),
+        ("instruction", "transfer::asset@bpng", 5, "bpng"),
+        ("instruction", "transfer::asset@mibank.bpng", 5, "bpng"),
+    ];
     let cases = [
         Case {
             profile: SoraProfile::PrivateSbp,
@@ -561,6 +575,16 @@ fn private_dataspace_profiles_match_the_pk_routing_contract() {
             lane_description: "CBUAE private lane",
             routes: CBUAE_ROUTES,
         },
+        Case {
+            profile: SoraProfile::PrivateBpng,
+            alias: "bpng",
+            id: 8_648_377_547_929_788_715,
+            lane: 5,
+            lane_count: 6,
+            dataspace_description: "Bank of Papua New Guinea dataspace",
+            lane_description: "Bank of Papua New Guinea private lane",
+            routes: BPNG_ROUTES,
+        },
     ];
     for case in cases {
         let profile = Some(case.profile);
@@ -576,7 +600,7 @@ fn private_dataspace_profiles_match_the_pk_routing_contract() {
                 ),
                 expected_dataspace(case.alias, case.id, case.dataspace_description, 1,),
             ],
-            "private dataspace catalog must exactly match the canonical PK catalog"
+            "private dataspace catalog must exactly match the selected physical identity"
         );
         let (lane_count, lane_catalog) =
             localnet_lane_catalog(profile, false).expect("private lane catalog");
@@ -610,7 +634,7 @@ fn private_dataspace_profiles_match_the_pk_routing_contract() {
                     Some("parliament"),
                 ),
             ],
-            "private lane catalog must exactly match the canonical PK catalog (CBUAE leaves lane 3 sparse)"
+            "private lane catalog must preserve the selected identity and leave unrelated lanes absent"
         );
         let routing = localnet_routing_policy(profile, false).expect("private routing policy");
         let observed = routing
@@ -681,6 +705,7 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
     for (profile, alias) in [
         (SoraProfile::PrivateSbp, "sbp"),
         (SoraProfile::PrivateCbuae, "cbuae"),
+        (SoraProfile::PrivateBpng, "bpng"),
     ] {
         let temp = tempfile::tempdir().expect("tmp dir");
         let manifest_directory =

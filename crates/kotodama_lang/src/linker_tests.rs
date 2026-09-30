@@ -150,6 +150,7 @@ fn package(modules: Vec<ModuleUnit>, exports: &[&str]) -> PackageUnit {
 }
 fn request(root: ModuleUnit, package: PackageUnit) -> LinkRequest {
     LinkRequest {
+        local_modules: Vec::new(),
         root,
         imports: vec![ImportBinding {
             alias: "arith".to_owned(),
@@ -170,17 +171,17 @@ fn locked_graph_order_preserves_complete_nominal_error_identity_and_schema() {
                 let mut modules = vec![
                     source_module(
                         "errors.ko",
-                        "module Errors { error enum Fault { Denied = 1; Missing = 2; } }",
+                        "module Errors { export error enum Fault { Denied = 1; Missing = 2; } }",
                     ),
                     source_module(
                         "more.ko",
-                        "module MoreErrors { error enum OtherFault { Denied = 1; Missing = 2; } }",
+                        "module MoreErrors { export error enum OtherFault { Denied = 1; Missing = 2; } }",
                     ),
                 ];
                 if order & 2 != 0 {
                     modules.reverse();
                 }
-                SourcePackageUnit {
+                SourcePackageUnit { sources: Vec::new(),
                     identity: format!("std/{name}@1.0.0"),
                     modules,
                     exports: ["Fault", "OtherFault"]
@@ -206,7 +207,7 @@ fn locked_graph_order_preserves_complete_nominal_error_identity_and_schema() {
         }
         let linked = ModuleBuildGraph::default()
                     .link(
-                        SourceLinkRequest {
+                        SourceLinkRequest { sources: Vec::new(),
                             root: source_module("app.ko", "seiyaku App { view fn run() -> (left::Fault, right::Fault, left::OtherFault, right::OtherFault) { (left::Fault::Denied, right::Fault::Missing, left::OtherFault::Missing, right::OtherFault::Denied) } }"),
                             imports,
                             packages,
@@ -274,12 +275,12 @@ fn locked_graph_order_preserves_complete_nominal_error_identity_and_schema() {
 
 #[test]
 fn imported_nominal_types_support_construction_patterns_and_error_values() {
-    let linked = ModuleBuildGraph::default().link(SourceLinkRequest {
+    let linked = ModuleBuildGraph::default().link(SourceLinkRequest { sources: Vec::new(),
             root: source_module("app.ko", "seiyaku App { view fn run() -> int { let arith::Receipt receipt = arith::Receipt { amount: 7, ignored: 9 }; let arith::Receipt { amount, .. } = receipt; let arith::Fault failure = arith::Fault::Denied; let result = match failure { arith::Fault::Denied => amount }; arith::read(receipt: arith::Receipt { amount: result, ignored: 0 }) } }"),
             imports: vec![ImportBinding { alias: "arith".into(), package: "std/math@1.0.0".into() }],
-            packages: vec![SourcePackageUnit {
+            packages: vec![SourcePackageUnit { sources: Vec::new(),
                 identity: "std/math@1.0.0".into(),
-                modules: vec![source_module("math.ko", "module Math { struct Receipt { int ignored; int amount; } error enum Fault { Denied = 1; } fn read(Receipt receipt) -> int { let Receipt { amount, .. } = receipt; amount } }")],
+                modules: vec![source_module("math.ko", "module Math { export struct Receipt { int ignored; int amount; } export error enum Fault { Denied = 1; } export fn read(Receipt receipt) -> int { let Receipt { amount, .. } = receipt; amount } }")],
                 exports: ["Receipt", "Fault", "read"].into_iter().map(str::to_owned).collect(),
                 imports: Vec::new(),
             }],
@@ -324,17 +325,17 @@ fn imported_structs_keep_locked_identity_in_public_and_durable_schemas() {
         );
         let linked = ModuleBuildGraph::default()
                 .link(
-                    SourceLinkRequest {
+                    SourceLinkRequest { sources: Vec::new(),
                         root: source_module("app.ko", &root),
                         imports: vec![ImportBinding {
                             alias: alias.into(),
                             package: package_identity.into(),
                         }],
-                        packages: vec![SourcePackageUnit {
+                        packages: vec![SourcePackageUnit { sources: Vec::new(),
                             identity: package_identity.into(),
                             modules: vec![source_module(
                                 "math.ko",
-                                "module Math { error enum Fault { Denied = 7; } struct Receipt { () marker; int amount; Result<(), Fault> outcome; } }",
+                                "module Math { export error enum Fault { Denied = 7; } export struct Receipt { () marker; int amount; Result<(), Fault> outcome; } }",
                             )],
                             exports: ["Receipt", "Fault"]
                                 .into_iter()
@@ -417,19 +418,21 @@ fn imported_structs_keep_locked_identity_in_public_and_durable_schemas() {
 #[test]
 fn imported_types_resolve_dependency_signatures_before_identity_order() {
     let base = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "z/base@1.0.0".into(),
         modules: vec![source_module(
             "base.ko",
-            "module Base { struct Value { int amount; } }",
+            "module Base { export struct Value { int amount; } }",
         )],
         exports: ["Value".to_owned()].into_iter().collect(),
         imports: Vec::new(),
     };
     let derived = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "a/derived@1.0.0".into(),
         modules: vec![source_module(
             "derived.ko",
-            "module Derived { fn read(base::Value value) -> int { let base::Value { amount } = value; amount } }",
+            "module Derived { export fn read(base::Value value) -> int { let base::Value { amount } = value; amount } }",
         )],
         exports: ["read".to_owned()].into_iter().collect(),
         imports: vec![ImportBinding {
@@ -437,7 +440,7 @@ fn imported_types_resolve_dependency_signatures_before_identity_order() {
             package: base.identity.clone(),
         }],
     };
-    ModuleBuildGraph::default().link(SourceLinkRequest {
+    ModuleBuildGraph::default().link(SourceLinkRequest { sources: Vec::new(),
             root: source_module("app.ko", "seiyaku App { view fn run() -> int { derived::read(value: base::Value { amount: 7 }) } }"),
             imports: vec![ImportBinding { alias: "derived".into(), package: derived.identity.clone() }, ImportBinding { alias: "base".into(), package: base.identity.clone() }],
             packages: vec![derived, base],
@@ -448,10 +451,11 @@ fn same_named_imported_errors_remain_nominally_distinct() {
     let packages = ["left", "right"]
         .into_iter()
         .map(|name| SourcePackageUnit {
+            sources: Vec::new(),
             identity: format!("std/{name}@1.0.0"),
             modules: vec![source_module(
                 "errors.ko",
-                "module Errors { error enum Fault { Denied = 1; } }",
+                "module Errors { export error enum Fault { Denied = 1; } }",
             )],
             exports: ["Fault".to_owned()].into_iter().collect(),
             imports: Vec::new(),
@@ -465,7 +469,7 @@ fn same_named_imported_errors_remain_nominally_distinct() {
             package: package.identity.clone(),
         })
         .collect();
-    let error = ModuleBuildGraph::default().link(SourceLinkRequest {
+    let error = ModuleBuildGraph::default().link(SourceLinkRequest { sources: Vec::new(),
             root: source_module("app.ko", "seiyaku App { view fn run() -> int { let left::Fault failure = left::Fault::Denied; match failure { right::Fault::Denied => 1 } } }"),
             imports, packages,
         }, LinkerOptions::default()).expect_err("equal variant names and codes do not erase nominal identity");
@@ -486,14 +490,15 @@ fn package_interface_fingerprint_tracks_declared_call_modes() {
             .interface_fingerprint
     };
     assert_ne!(
-        validate("module Quotes { fn quote(int value) -> int { value } }"),
-        validate("module Quotes { fn quote(int _ value) -> int { value } }")
+        validate("module Quotes { export fn quote(int value) -> int { value } }"),
+        validate("module Quotes { export fn quote(int _ value) -> int { value } }")
     );
 }
 fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
     let base_identity = "std/base@1.0.0".to_owned();
     let derived_identity = "std/derived@1.0.0".to_owned();
     SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".to_owned(),
             source: "seiyaku App { view fn run() -> int { return derived::value(); } }".to_owned(),
@@ -504,6 +509,7 @@ fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
         }],
         packages: vec![
             SourcePackageUnit {
+                sources: Vec::new(),
                 identity: base_identity.clone(),
                 modules: vec![SourceModuleUnit {
                     source_name: "base.ko".to_owned(),
@@ -513,11 +519,13 @@ fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
                 imports: Vec::new(),
             },
             SourcePackageUnit {
+                sources: Vec::new(),
                 identity: derived_identity,
                 modules: vec![SourceModuleUnit {
                     source_name: "derived.ko".to_owned(),
-                    source: "module Derived { fn value() -> int { return base::value() + 1; } }"
-                        .to_owned(),
+                    source:
+                        "module Derived { export fn value() -> int { return base::value() + 1; } }"
+                            .to_owned(),
                 }],
                 exports: BTreeSet::from(["value".to_owned()]),
                 imports: vec![ImportBinding {
@@ -539,7 +547,7 @@ fn links_explicit_export_after_independent_type_analysis() {
             package(
                 vec![source(
                     "math.ko",
-                    "module Math { fn add(int left, int right) -> int { return left + right; } }",
+                    "module Math { export fn add(int left, int right) -> int { return left + right; } }",
                 )],
                 &["add"],
             ),
@@ -566,12 +574,12 @@ fn links_explicit_export_after_independent_type_analysis() {
     assert_eq!(name, &module.name);
 }
 #[test]
-fn imported_parameters_preserve_declared_named_call_mode() {
+fn imported_parameters_accept_positional_and_named_calls() {
     let dependency = || {
         package(
             vec![source(
                 "math.ko",
-                "module Math { fn choose(int left, int right) -> int { return left; } }",
+                "module Math { export fn choose(int left, int right) -> int { return left; } }",
             )],
             &["choose"],
         )
@@ -584,16 +592,8 @@ fn imported_parameters_preserve_declared_named_call_mode() {
             ),
             dependency(),
         ))
-        .expect_err("an imported named parameter requires its declaration label");
-    assert_eq!(positional.diagnostic_code(), "E_NAMED_ARGUMENTS_REQUIRED");
-    let positional = positional.into_diagnostics();
-    assert_eq!(
-        positional.diagnostics[0]
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.source.as_deref()),
-        Some("app.ko"),
-    );
+        .expect("imported ordinary parameters accept positional arguments");
+    assert_eq!(positional.items.len(), 2);
     let linked = TypedLinker::default()
         .link(request(
             source(
@@ -650,7 +650,7 @@ fn rejects_unexported_and_unknown_calls() {
             package(
                 vec![source(
                     "math.ko",
-                    "module Math { fn add() -> int { return 1; } }",
+                    "module Math { export fn add() -> int { return 1; } }",
                 )],
                 &["add"],
             ),
@@ -733,6 +733,7 @@ fn source_graph_unknown_calls_retain_every_exact_resolver_span() {
     let error = ModuleBuildGraph::default()
         .link(
             SourceLinkRequest {
+                sources: Vec::new(),
                 root: SourceModuleUnit {
                     source_name: "app.ko".to_owned(),
                     source: root_source.to_owned(),
@@ -772,6 +773,7 @@ fn source_graph_unknown_import_aliases_retain_every_exact_resolved_call_span() {
     let error = ModuleBuildGraph::default()
         .link(
             SourceLinkRequest {
+                sources: Vec::new(),
                 root: SourceModuleUnit {
                     source_name: "app.ko".to_owned(),
                     source: root_source.to_owned(),
@@ -809,7 +811,7 @@ fn rejects_import_aliases_that_collide_with_builtin_namespaces() {
     let dependency = package(
         vec![source(
             "hash.ko",
-            "module Hash { fn sha256(bytes value) -> bytes { return value; } }",
+            "module Hash { export fn sha256(bytes value) -> bytes { return value; } }",
         )],
         &["sha256"],
     );
@@ -847,8 +849,14 @@ fn rejects_ambiguous_duplicate_export() {
             ),
             package(
                 vec![
-                    source("a.ko", "module A { fn value() -> int { return 1; } }"),
-                    source("b.ko", "module B { fn value() -> int { return 2; } }"),
+                    source(
+                        "a.ko",
+                        "module A { export fn value() -> int { return 1; } }",
+                    ),
+                    source(
+                        "b.ko",
+                        "module B { export fn value() -> int { return 2; } }",
+                    ),
                 ],
                 &["value"],
             ),
@@ -882,11 +890,11 @@ fn same_private_function_name_in_two_modules_remains_module_local() {
                     vec![
                         source(
                             "left.ko",
-                            "module Left { fn helper() -> int { return 1; } fn left() -> int { return helper(); } }",
+                            "module Left { fn helper() -> int { return 1; } export fn left() -> int { return helper(); } }",
                         ),
                         source(
                             "right.ko",
-                            "module Right { fn helper() -> int { return 2; } fn right() -> int { return helper(); } }",
+                            "module Right { fn helper() -> int { return 2; } export fn right() -> int { return helper(); } }",
                         ),
                     ],
                     &["left", "right"],
@@ -914,7 +922,7 @@ fn rejects_compiler_reserved_declaration() {
     let package_identity = "std/math@1.0.0".to_owned();
     let error = ModuleBuildGraph::default()
             .link(
-                SourceLinkRequest {
+                SourceLinkRequest { sources: Vec::new(),
                     root: SourceModuleUnit {
                         source_name: "app.ko".to_owned(),
                         source:
@@ -925,11 +933,11 @@ fn rejects_compiler_reserved_declaration() {
                         alias: "math".to_owned(),
                         package: package_identity.clone(),
                     }],
-                    packages: vec![SourcePackageUnit {
+                    packages: vec![SourcePackageUnit { sources: Vec::new(),
                         identity: package_identity,
                         modules: vec![SourceModuleUnit {
                             source_name: "reserved.ko".to_owned(),
-                            source: "module Reserved { fn __kotodama_link_private() -> int { return 1; } fn ok() -> int { return 1; } }".to_owned(),
+                            source: "module Reserved { fn __kotodama_link_private() -> int { return 1; } export fn ok() -> int { return 1; } }".to_owned(),
                         }],
                         exports: BTreeSet::from(["ok".to_owned()]),
                         imports: Vec::new(),
@@ -1060,7 +1068,7 @@ fn reused_graph_parses_only_changes_and_rechecks_dependents() {
     let graph = ModuleBuildGraph::default();
     let first = graph
         .link(
-            transitive_source_request("module Base { fn value() -> int { return 1; } }"),
+            transitive_source_request("module Base { export fn value() -> int { return 1; } }"),
             LinkerOptions::default(),
         )
         .expect("link initial transitive graph");
@@ -1068,7 +1076,7 @@ fn reused_graph_parses_only_changes_and_rechecks_dependents() {
     assert_eq!(graph.link_attempt_count(), 1);
     let implementation_changed = graph
         .link(
-            transitive_source_request("module Base { fn value() -> int { return 2; } }"),
+            transitive_source_request("module Base { export fn value() -> int { return 2; } }"),
             LinkerOptions::default(),
         )
         .expect("implementation-only dependency change remains valid");
@@ -1090,7 +1098,7 @@ fn reused_graph_parses_only_changes_and_rechecks_dependents() {
     let error = graph
         .link(
             transitive_source_request(
-                "module Base { fn value(int input) -> int { return input; } }",
+                "module Base { export fn value(int input) -> int { return input; } }",
             ),
             LinkerOptions::default(),
         )
@@ -1120,12 +1128,14 @@ fn reused_graph_parses_only_changes_and_rechecks_dependents() {
 #[test]
 fn source_graph_accumulates_independent_parse_and_resolution_failures() {
     let request = |root_source: &str, module_source: &str| SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".to_owned(),
             source: root_source.to_owned(),
         },
         imports: Vec::new(),
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "example/math@1.0.0".to_owned(),
             modules: vec![SourceModuleUnit {
                 source_name: "src/lib.ko".to_owned(),
@@ -1171,7 +1181,8 @@ fn source_graph_accumulates_independent_parse_and_resolution_failures() {
 }
 #[test]
 fn linked_typed_hir_retains_path_and_order_stable_distinct_source_ids() {
-    let request = transitive_source_request("module Base { fn value() -> int { return 1; } }");
+    let request =
+        transitive_source_request("module Base { export fn value() -> int { return 1; } }");
     let mut reordered = request.clone();
     reordered.packages.reverse();
     reordered.root.source_name = r".\app.ko".to_owned();
@@ -1288,12 +1299,14 @@ fn source_graph_rejects_excessive_module_count_before_parsing() {
         })
         .collect();
     let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "root.ko".to_owned(),
             source: "also not parsed".to_owned(),
         },
         imports: Vec::new(),
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "oversized@1".to_owned(),
             modules,
             exports: BTreeSet::new(),
@@ -1307,6 +1320,7 @@ fn source_graph_rejects_excessive_module_count_before_parsing() {
 #[test]
 fn source_graph_rejects_excessive_aggregate_bytes_before_parsing() {
     let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "root.ko".to_owned(),
             source: "x".repeat(MAX_MODULE_GRAPH_SOURCE_BYTES + 1),
@@ -1332,15 +1346,17 @@ fn graph_fingerprint_is_order_stable_and_binds_exports() {
         source: "seiyaku App { view fn run() -> int { return arith::value(); } }".to_owned(),
     };
     let package = SourcePackageUnit {
+        sources: Vec::new(),
         identity: "std/math@1.0.0".to_owned(),
         modules: vec![SourceModuleUnit {
             source_name: "math.ko".to_owned(),
-            source: "module Math { fn value() -> int { return 1; } }".to_owned(),
+            source: "module Math { export fn value() -> int { return 1; } }".to_owned(),
         }],
         exports: ["value".to_owned()].into_iter().collect(),
         imports: Vec::new(),
     };
     let left = SourceLinkRequest {
+        sources: Vec::new(),
         root: root.clone(),
         imports: vec![ImportBinding {
             alias: "arith".to_owned(),
@@ -1370,6 +1386,7 @@ fn graph_fingerprint_is_order_stable_and_binds_exports() {
 }
 fn publish_package(modules: Vec<SourceModuleUnit>, exports: &[&str]) -> SourcePackageUnit {
     SourcePackageUnit {
+        sources: Vec::new(),
         identity: "local/quotes@1.0.0".to_owned(),
         modules,
         exports: exports.iter().map(|name| (*name).to_owned()).collect(),
@@ -1454,7 +1471,7 @@ fn package_graph_validates_unique_typed_export_and_locked_call() {
     let mut local = publish_package(
         vec![source_module(
             "src/lib.ko",
-            "module Quotes { fn quote(int value) -> int { return arith::add(left: value, right: 1); } }",
+            "module Quotes { export fn quote(int value) -> int { return arith::add(left: value, right: 1); } }",
         )],
         &["quote"],
     );
@@ -1465,10 +1482,11 @@ fn package_graph_validates_unique_typed_export_and_locked_call() {
     let request = SourcePackageGraphRequest {
         package: local,
         dependencies: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: dependency_identity,
             modules: vec![source_module(
                 "src/lib.ko",
-                "module Math { fn add(int left, int right) -> int { return left + right; } }",
+                "module Math { export fn add(int left, int right) -> int { return left + right; } }",
             )],
             exports: BTreeSet::from(["add".to_owned()]),
             imports: Vec::new(),
@@ -1492,9 +1510,9 @@ fn package_interface_fingerprint_tracks_types_not_function_bodies() {
             )
             .expect("typed package graph")
     };
-    let first = validate("module Quotes { fn quote() -> int { return 1; } }");
-    let body_changed = validate("module Quotes { fn quote() -> int { return 2; } }");
-    let type_changed = validate("module Quotes { fn quote() -> bool { return true; } }");
+    let first = validate("module Quotes { export fn quote() -> int { return 1; } }");
+    let body_changed = validate("module Quotes { export fn quote() -> int { return 2; } }");
+    let type_changed = validate("module Quotes { export fn quote() -> bool { return true; } }");
     assert_ne!(first.fingerprint, body_changed.fingerprint);
     assert_eq!(
         first.interface_fingerprint,
@@ -1509,6 +1527,7 @@ fn package_interface_fingerprint_tracks_types_not_function_bodies() {
 fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
     let graph = ModuleBuildGraph::default();
     let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module(
             "contracts/app.ko",
             "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() -> int { return reward(); } }",
@@ -1518,10 +1537,11 @@ fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
             package: "demo/math@1.0.0".to_owned(),
         }],
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "demo/math@1.0.0".to_owned(),
             modules: vec![source_module(
                 "tests/unit.ko",
-                "module Math { fn value() -> int { return 7; } }",
+                "module Math { export fn value() -> int { return 7; } }",
             )],
             exports: BTreeSet::from(["value".to_owned()]),
             imports: Vec::new(),
@@ -1592,6 +1612,7 @@ fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
 #[test]
 fn standalone_test_graph_rejects_target_duplicates_and_source_budget_overflow() {
     let request = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module("app.ko", "seiyaku App { fn value() -> int { return 1; } }"),
         imports: Vec::new(),
         packages: Vec::new(),
@@ -1628,6 +1649,7 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
     let output = ModuleBuildGraph::default()
         .build_test_project(
             SourceLinkRequest {
+                sources: Vec::new(),
                 root: source_module(
                     "tests/unit.ko",
                     r#"
@@ -1645,10 +1667,11 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
                     package: dependency_identity.clone(),
                 }],
                 packages: vec![SourcePackageUnit {
+                    sources: Vec::new(),
                     identity: dependency_identity,
                     modules: vec![source_module(
                         "src/lib.ko",
-                        "module Math { fn value() -> int { return 7; } }",
+                        "module Math { export fn value() -> int { return 7; } }",
                     )],
                     exports: BTreeSet::from(["value".to_owned()]),
                     imports: Vec::new(),
@@ -1684,7 +1707,8 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
 #[test]
 fn package_and_test_graphs_handoff_from_a_small_caller() {
     let expression = boundary_list_expression();
-    let module_source = format!("module Deep {{ fn value() {{ let nested = {expression}; }} }}");
+    let module_source =
+        format!("module Deep {{ export fn value() {{ let nested = {expression}; }} }}");
     let test_source = format!(
         "seiyaku Deep {{ hajimari() {{ let nested = {expression}; }} #[test] fn boundary() {{ let nested = {expression}; }} }}"
     );
@@ -1710,6 +1734,7 @@ fn package_and_test_graphs_handoff_from_a_small_caller() {
             let output = graph
                 .build_test_project(
                     SourceLinkRequest {
+                        sources: Vec::new(),
                         root: source_module("tests/deep.ko", &test_source),
                         imports: Vec::new(),
                         packages: Vec::new(),
@@ -1747,8 +1772,8 @@ fn package_graph_rejects_missing_and_ambiguous_exports() {
         )
         .expect_err("missing export must fail");
     assert_eq!(missing.diagnostic_code(), "E_MISSING_EXPORT", "{missing:?}");
-    let first_source = "module A { fn quote() -> int { return 1; } }";
-    let second_source = "module B { fn quote() -> int { return 2; } }";
+    let first_source = "module A { export fn quote() -> int { return 1; } }";
+    let second_source = "module B { export fn quote() -> int { return 2; } }";
     let ambiguous = graph
         .validate_package(
             SourcePackageGraphRequest {
@@ -1800,12 +1825,12 @@ fn package_graph_rejects_missing_and_ambiguous_exports() {
 fn package_graph_rejects_invalid_types_and_bodies() {
     for (source, expected_code, expected_phase) in [
         (
-            "module Quotes { fn quote(MissingType value) -> int { return 1; } }",
+            "module Quotes { export fn quote(MissingType value) -> int { return 1; } }",
             "K2002",
             DiagnosticPhase::Resolve,
         ),
         (
-            "module Quotes { fn quote() -> int { return true; } }",
+            "module Quotes { export fn quote() -> int { return true; } }",
             "E_RETURN_TYPE_MISMATCH",
             DiagnosticPhase::Semantic,
         ),
@@ -1846,7 +1871,7 @@ fn package_graph_rejects_duplicate_symbols_and_module_names() {
                     package: publish_package(
                         vec![source_module(
                             "duplicate.ko",
-                            "module Quotes { fn quote() -> int { return 1; } fn quote() -> int { return 2; } }",
+                            "module Quotes { export fn quote() -> int { return 1; } export fn quote() -> int { return 2; } }",
                         )],
                         &["quote"],
                     ),
@@ -1865,7 +1890,10 @@ fn package_graph_rejects_duplicate_symbols_and_module_names() {
             SourcePackageGraphRequest {
                 package: publish_package(
                     vec![
-                        source_module("a.ko", "module Quotes { fn quote() -> int { return 1; } }"),
+                        source_module(
+                            "a.ko",
+                            "module Quotes { export fn quote() -> int { return 1; } }",
+                        ),
                         source_module("b.ko", "module Quotes { fn other() -> int { return 2; } }"),
                     ],
                     &["quote"],
@@ -1913,7 +1941,7 @@ fn package_graph_rejects_seiyaku_and_test_only_exports() {
                 package: publish_package(
                     vec![source_module(
                         "test.ko",
-                        "module Quotes { #[test] fn quote() -> int { return 1; } }",
+                        "module Quotes { #[test] export fn quote() -> int { return 1; } }",
                     )],
                     &["quote"],
                 ),
@@ -1930,7 +1958,7 @@ fn package_graph_rejects_dependency_hidden_call() {
     let mut local = publish_package(
         vec![source_module(
             "quotes.ko",
-            "module Quotes { fn quote() -> int { return arith::hidden(); } }",
+            "module Quotes { export fn quote() -> int { return arith::hidden(); } }",
         )],
         &["quote"],
     );
@@ -1943,11 +1971,11 @@ fn package_graph_rejects_dependency_hidden_call() {
             .validate_package(
                 SourcePackageGraphRequest {
                     package: local,
-                    dependencies: vec![SourcePackageUnit {
+                    dependencies: vec![SourcePackageUnit { sources: Vec::new(),
                         identity: dependency_identity,
                         modules: vec![source_module(
                             "math.ko",
-                            "module Math { fn hidden() -> int { return 1; } fn visible() -> int { return 2; } }",
+                            "module Math { fn hidden() -> int { return 1; } export fn visible() -> int { return 2; } }",
                         )],
                         exports: BTreeSet::from(["visible".to_owned()]),
                         imports: Vec::new(),
@@ -1965,7 +1993,7 @@ fn package_graph_rejects_import_cycles_without_call_cycles() {
     let mut local = publish_package(
         vec![source_module(
             "quotes.ko",
-            "module Quotes { fn quote() -> int { return 1; } }",
+            "module Quotes { export fn quote() -> int { return 1; } }",
         )],
         &["quote"],
     );
@@ -1979,10 +2007,11 @@ fn package_graph_rejects_import_cycles_without_call_cycles() {
             SourcePackageGraphRequest {
                 package: local,
                 dependencies: vec![SourcePackageUnit {
+                    sources: Vec::new(),
                     identity: dependency_identity,
                     modules: vec![source_module(
                         "math.ko",
-                        "module Math { fn value() -> int { return 2; } }",
+                        "module Math { export fn value() -> int { return 2; } }",
                     )],
                     exports: BTreeSet::from(["value".to_owned()]),
                     imports: vec![ImportBinding {
@@ -2033,7 +2062,7 @@ fn package_fingerprint_normalizes_portable_logical_source_paths() {
         package: publish_package(
             vec![source_module(
                 "src/lib.ko",
-                "module Quotes { fn quote() -> int { return 1; } }",
+                "module Quotes { export fn quote() -> int { return 1; } }",
             )],
             &["quote"],
         ),
@@ -2049,9 +2078,11 @@ fn package_fingerprint_normalizes_portable_logical_source_paths() {
 #[test]
 fn source_graph_fingerprint_normalizes_root_and_package_paths() {
     let left = SourceLinkRequest {
+        sources: Vec::new(),
         root: source_module("src/app.ko", "not parsed"),
         imports: Vec::new(),
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "std/arith@1.0.0".to_owned(),
             modules: vec![source_module("src/lib.ko", "also not parsed")],
             exports: BTreeSet::new(),
@@ -2073,6 +2104,7 @@ fn invalid_root_paths_fail_closed_before_any_parse_or_link_attempt() {
         let error = graph
             .link(
                 SourceLinkRequest {
+                    sources: Vec::new(),
                     root: source_module(&source_name, "not parsed"),
                     imports: Vec::new(),
                     packages: Vec::new(),
@@ -2141,6 +2173,7 @@ fn root_path_is_canonical_in_parse_diagnostics() {
     let error = graph
         .link(
             SourceLinkRequest {
+                sources: Vec::new(),
                 root: source_module(r".\src\nested\..\app.ko", "@"),
                 imports: Vec::new(),
                 packages: Vec::new(),

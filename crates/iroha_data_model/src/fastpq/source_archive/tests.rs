@@ -210,7 +210,7 @@ fn archive_verification_binds_complete_contents_source_root_and_version() {
             12 => {
                 changed.leaves.remove(0);
                 for (index, leaf) in changed.leaves.iter_mut().enumerate() {
-                    leaf.statement_index = index as u32;
+                    leaf.statement_index = u32::try_from(index).unwrap();
                 }
             }
             _ => unreachable!(),

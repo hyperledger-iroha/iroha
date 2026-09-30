@@ -57,6 +57,7 @@ mod source_set;
 use source_set::discover_declared_suite_from_source_set;
 pub use source_set::{
     declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+    discover_declared_test_names_source_set_with_sources_v1,
     run_tests_structured_source_set_with_modules_v1,
 };
 const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -112,6 +113,8 @@ struct DiscoveredSuite {
     test_modules: Vec<DiscoveredTestModule>,
     tests: Vec<TestCase>,
     fixtures: HashMap<String, FixtureDecl>,
+    sources: Vec<SourceModuleUnit>,
+    source_root: Option<PathBuf>,
 }
 struct DiscoveredTestModule {
     path: PathBuf,
@@ -221,6 +224,8 @@ impl KotoTestRunRequestV1 {
 /// discovery is disabled when this graph is used.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KotoTestModuleGraphV1 {
+    /// Explicit companion files shared by the target and selected test sources.
+    pub sources: Vec<SourceModuleUnit>,
     /// Direct aliases visible to the declared test root.
     pub imports: Vec<ImportBinding>,
     /// Complete locked package graph, including transitive modules.
@@ -337,8 +342,23 @@ pub fn run_tests_structured_with_modules_v1(
     modules: &KotoTestModuleGraphV1,
 ) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
     validate_structured_request(request)?;
-    let suite = discover_declared_suite(&request.target)
-        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+    let suite = (|| {
+        let path = fs::canonicalize(&request.target).map_err(|error| error.to_string())?;
+        let (source, program) = parse_program_file(&path)?;
+        if program.test_target.is_some() {
+            return Err("exact module graphs require a directly declared test root".to_owned());
+        }
+        let source_root = path.parent().map(Path::to_path_buf);
+        finalize_suite_with_sources(
+            path,
+            source,
+            program,
+            Vec::new(),
+            modules.sources.clone(),
+            source_root,
+        )
+    })()
+    .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, Some(modules))
 }
 /// Run one caller-supplied test root against an exact locked module graph.
@@ -484,6 +504,7 @@ fn validate_structured_source(root: &SourceModuleUnit) -> Result<(), String> {
         ));
     }
     ModuleBuildGraph::fingerprint(&SourceLinkRequest {
+        sources: Vec::new(),
         root: root.clone(),
         imports: Vec::new(),
         packages: Vec::new(),
@@ -537,9 +558,47 @@ struct KotoTestHost {
     supplemental_delta_trace: Vec<ivm::zk::DeltaEntry>,
 }
 /// Run the VM-backed Kotodama test harness for the unified `koto test` command.
-pub fn run_cli(args: Vec<String>) -> Result<(), String> {
+pub fn run_cli(mut args: Vec<String>) -> Result<(), String> {
+    let mut source_root = None;
+    let mut project = None;
+    for flag in ["--source-root", "--project"] {
+        if let Some(index) = args.iter().position(|arg| arg == flag) {
+            args.remove(index);
+            if index >= args.len() || args[index].starts_with('-') {
+                return Err(format!("{flag} requires a path"));
+            }
+            let path = PathBuf::from(args.remove(index));
+            if flag == "--source-root" {
+                source_root = Some(path);
+            } else {
+                project = Some(
+                    kotodama_lang::driver::load_source_project_manifest(&path)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+        }
+    }
+    if source_root.is_some() && project.is_some() {
+        return Err("--source-root cannot be combined with --project".into());
+    }
+    if let Some(project) = &project {
+        source_root = project
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.path().parent().map(Path::to_path_buf));
+        if parse_args(args.clone()).is_err_and(|error| error.starts_with("usage: koto test")) {
+            args.push(
+                source_root
+                    .as_ref()
+                    .expect("local project root")
+                    .join(&project.graph.root.source_name)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
     let options = parse_args(args)?;
-    let mut suite = discover_suite(&options.path)?;
+    let mut suite = discover_suite_with_root(&options.path, source_root.as_deref())?;
     filter_and_order_tests(&mut suite.tests, &options);
     if options.command == Command::List {
         return print_test_list(&suite, options.output);
@@ -547,7 +606,29 @@ pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     if suite.tests.is_empty() {
         return Err("no Kotodama tests matched the requested filter".to_owned());
     }
-    let compiled = compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)?;
+    let compiled = if let Some(project) = project {
+        let mut sources = project.graph.sources;
+        for source in &suite.sources {
+            if !sources
+                .iter()
+                .any(|known| known.source_name == source.source_name)
+            {
+                sources.push(source.clone());
+            }
+        }
+        compile_suite_with_modules_for_chain(
+            &suite,
+            &KotoTestModuleGraphV1 {
+                sources,
+                imports: project.graph.imports,
+                packages: project.graph.packages,
+            },
+            options.zk_enabled,
+            options.chain_discriminant,
+        )?
+    } else {
+        compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)?
+    };
     let trace_mode = match options.command {
         Command::Run => TraceMode::Off,
         Command::Coverage => TraceMode::PcOnly,
@@ -746,13 +827,26 @@ fn seeded_test_key(seed: u64, name: &str) -> u64 {
         })
 }
 fn discover_suite(path: &Path) -> Result<DiscoveredSuite, String> {
+    discover_suite_with_root(path, None)
+}
+fn discover_suite_with_root(
+    path: &Path,
+    source_root: Option<&Path>,
+) -> Result<DiscoveredSuite, String> {
+    let default_root = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let source_root = source_root.or(Some(default_root.as_path()));
     let input_path = fs::canonicalize(path)
         .map_err(|err| format!("failed to resolve {}: {err}", path.display()))?;
     let (input_source, input_program) = parse_program_file(&input_path)?;
     if input_program.test_target.is_some() {
-        discover_suite_from_standalone_test(&input_path, input_source, input_program)
+        discover_suite_from_standalone_test(&input_path, input_source, input_program, source_root)
     } else {
-        discover_suite_from_target(&input_path, input_source, input_program)
+        discover_suite_from_target(&input_path, input_source, input_program, source_root)
     }
 }
 fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
@@ -768,28 +862,31 @@ fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     finalize_suite(input_path, source, program, Vec::new())
 }
 fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<DiscoveredSuite, String> {
-    discover_declared_suite_from_source_set(root, None)
+    discover_declared_suite_from_source_set(root, None, &[])
 }
 fn discover_suite_from_target(
     path: &Path,
     target_source: String,
     target_program: Program,
+    source_root: Option<&Path>,
 ) -> Result<DiscoveredSuite, String> {
     let standalone_tests = discover_standalone_tests_for_target(path)?;
     for test in &standalone_tests {
         validate_standalone_test_program(&test.path, path, &test.program)?;
     }
-    finalize_suite(
+    finalize_suite_files(
         path.to_path_buf(),
         target_source,
         target_program,
         standalone_tests,
+        source_root,
     )
 }
 fn discover_suite_from_standalone_test(
     test_path: &Path,
     test_source: String,
     test_program: Program,
+    source_root: Option<&Path>,
 ) -> Result<DiscoveredSuite, String> {
     let target_decl = test_program.test_target.as_ref().ok_or_else(|| {
         format!(
@@ -800,7 +897,7 @@ fn discover_suite_from_standalone_test(
     let target_path = resolve_target_path(test_path, &target_decl.target)?;
     let (target_source, target_program) = parse_program_file(&target_path)?;
     validate_standalone_test_program(test_path, &target_path, &test_program)?;
-    finalize_suite(
+    finalize_suite_files(
         target_path,
         target_source,
         target_program,
@@ -809,6 +906,7 @@ fn discover_suite_from_standalone_test(
             source: test_source,
             program: test_program,
         }],
+        source_root,
     )
 }
 fn finalize_suite(
@@ -817,11 +915,96 @@ fn finalize_suite(
     target_program: Program,
     test_modules: Vec<DiscoveredTestModule>,
 ) -> Result<DiscoveredSuite, String> {
+    finalize_suite_files(
+        target_path,
+        target_source,
+        target_program,
+        test_modules,
+        None,
+    )
+}
+fn finalize_suite_files(
+    target_path: PathBuf,
+    target_source: String,
+    target_program: Program,
+    test_modules: Vec<DiscoveredTestModule>,
+    explicit_root: Option<&Path>,
+) -> Result<DiscoveredSuite, String> {
+    let source_root = explicit_root
+        .map(Path::canonicalize)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .or_else(|| {
+            target_path
+                .is_absolute()
+                .then(|| target_path.parent().map(Path::to_path_buf))
+                .flatten()
+        });
+    let sources = if let Some(root) = source_root.as_deref() {
+        let mut entries = vec![SourceModuleUnit {
+            source_name: kotodama_lang::driver::logical_source_name(&target_path, root)
+                .map_err(|error| error.to_string())?,
+            source: target_source.clone(),
+        }];
+        for module in &test_modules {
+            entries.push(SourceModuleUnit {
+                source_name: kotodama_lang::driver::logical_source_name(&module.path, root)
+                    .map_err(|error| error.to_string())?,
+                source: module.source.clone(),
+            });
+        }
+        kotodama_lang::driver::load_source_companions(&entries, root, &BTreeMap::new())
+            .map_err(|error| error.to_string())?
+    } else {
+        Vec::new()
+    };
+    finalize_suite_with_sources(
+        target_path,
+        target_source,
+        target_program,
+        test_modules,
+        sources,
+        source_root,
+    )
+}
+fn finalize_suite_with_sources(
+    target_path: PathBuf,
+    target_source: String,
+    target_program: Program,
+    test_modules: Vec<DiscoveredTestModule>,
+    sources: Vec<SourceModuleUnit>,
+    source_root: Option<PathBuf>,
+) -> Result<DiscoveredSuite, String> {
     let mut tests = Vec::new();
     let mut test_names = HashSet::new();
+    let source_name = |path: &Path| match source_root.as_deref() {
+        Some(root) => kotodama_lang::driver::logical_source_name(path, root)
+            .map_err(|error| error.to_string()),
+        None => Ok(path.display().to_string()),
+    };
+    let mut included_programs = Vec::new();
+    collect_included_test_programs(
+        &source_name(&target_path)?,
+        &target_program,
+        &sources,
+        &mut BTreeSet::new(),
+        &mut included_programs,
+    )?;
+    for module in &test_modules {
+        collect_included_test_programs(
+            &source_name(&module.path)?,
+            &module.program,
+            &sources,
+            &mut BTreeSet::new(),
+            &mut included_programs,
+        )?;
+    }
     collect_tests_into(&target_program, &mut test_names, &mut tests)?;
     for module in &test_modules {
         collect_tests_into(&module.program, &mut test_names, &mut tests)?;
+    }
+    for program in &included_programs {
+        collect_tests_into(program, &mut test_names, &mut tests)?;
     }
     if tests.is_empty() {
         return Err(format!(
@@ -838,6 +1021,11 @@ fn finalize_suite(
                     .iter()
                     .flat_map(|module| module.program.fixtures.iter()),
             )
+            .chain(
+                included_programs
+                    .iter()
+                    .flat_map(|program| program.fixtures.iter()),
+            )
             .cloned()
             .collect::<Vec<_>>(),
     )?;
@@ -848,7 +1036,45 @@ fn finalize_suite(
         test_modules,
         tests,
         fixtures,
+        sources,
+        source_root,
     })
+}
+fn collect_included_test_programs(
+    source_name: &str,
+    program: &Program,
+    sources: &[SourceModuleUnit],
+    visited: &mut BTreeSet<String>,
+    output: &mut Vec<Program>,
+) -> Result<(), String> {
+    let mut pending = vec![(source_name.to_owned(), program.directives.clone())];
+    while let Some((name, directives)) = pending.pop() {
+        for directive in directives {
+            let kotodama_lang::ast::SourceDirectiveKind::Include { path } = directive.kind else {
+                continue;
+            };
+            let name = kotodama_lang::linker::resolve_source_path(&name, &path)
+                .map_err(|error| error.to_string())?;
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            let source = sources
+                .iter()
+                .find(|source| source.source_name == name)
+                .ok_or_else(|| format!("missing included test source `{name}`"))?;
+            let file = kotodama_lang::source::SourceFile::new(
+                kotodama_lang::source::SourceId(0),
+                name.as_str(),
+                source.source.as_str(),
+            );
+            let program =
+                parser::parse_fragment_source(&file, kotodama_lang::source::FrontendBudget::v1())
+                    .map_err(|diagnostics| diagnostics.render_human())?;
+            pending.push((name, program.directives.clone()));
+            output.push(program);
+        }
+    }
+    Ok(())
 }
 fn parse_program_file(path: &Path) -> Result<(String, Program), String> {
     let src = read_source_file(path)
@@ -1034,6 +1260,17 @@ fn compile_suite_for_chain(
     zk_enabled: bool,
     chain_discriminant: u16,
 ) -> Result<CompiledSuite, String> {
+    if !suite.sources.is_empty() {
+        return compile_suite_with_modules_for_chain(
+            suite,
+            &KotoTestModuleGraphV1 {
+                sources: suite.sources.clone(),
+                ..KotoTestModuleGraphV1::default()
+            },
+            zk_enabled,
+            chain_discriminant,
+        );
+    }
     let source_name = suite.target_path.display().to_string();
     let test_opts = CompilerOptions {
         force_zk: zk_enabled,
@@ -1065,12 +1302,16 @@ fn compile_suite_with_modules_for_chain(
     chain_discriminant: u16,
 ) -> Result<CompiledSuite, String> {
     let source_name = if suite.target_path.is_absolute() {
-        let project_root = suite.target_path.parent().ok_or_else(|| {
-            format!(
-                "Kotodama test target `{}` has no project parent directory",
-                suite.target_path.display()
-            )
-        })?;
+        let project_root = suite
+            .source_root
+            .as_deref()
+            .or_else(|| suite.target_path.parent())
+            .ok_or_else(|| {
+                format!(
+                    "Kotodama test target `{}` has no project parent directory",
+                    suite.target_path.display()
+                )
+            })?;
         kotodama_lang::driver::logical_source_name(&suite.target_path, project_root)
             .map_err(|error| error.to_string())?
     } else {
@@ -1079,6 +1320,7 @@ fn compile_suite_with_modules_for_chain(
     let outputs = ModuleBuildGraph::default()
         .build_test_project_with_sources(
             SourceLinkRequest {
+                sources: modules.sources.clone(),
                 root: SourceModuleUnit {
                     source_name: source_name.clone(),
                     source: suite.target_source.clone(),
@@ -1089,11 +1331,21 @@ fn compile_suite_with_modules_for_chain(
             &suite
                 .test_modules
                 .iter()
-                .map(|module| SourceModuleUnit {
-                    source_name: module.path.display().to_string(),
-                    source: module.source.clone(),
+                .map(|module| {
+                    Ok(SourceModuleUnit {
+                        source_name: suite
+                            .source_root
+                            .as_deref()
+                            .map(|root| {
+                                kotodama_lang::driver::logical_source_name(&module.path, root)
+                            })
+                            .transpose()
+                            .map_err(|error| error.to_string())?
+                            .unwrap_or_else(|| module.path.display().to_string()),
+                        source: module.source.clone(),
+                    })
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Result<Vec<_>, String>>()?,
             CompilerOptions {
                 force_zk: zk_enabled,
                 chain_discriminant,
@@ -1196,8 +1448,14 @@ fn prepare_compiled_suite(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let (profile_report, profile_pc_base) = profile_source(&suite_artifact, runtime.as_ref());
-    let coverage_functions =
+    let mut coverage_functions =
         build_coverage_functions(&suite.target_program, profile_report, profile_pc_base);
+    coverage_functions.retain(|function| {
+        !suite
+            .tests
+            .iter()
+            .any(|test| test.name == function.display_name)
+    });
     Ok(CompiledSuite {
         suite: suite_artifact,
         runtime,

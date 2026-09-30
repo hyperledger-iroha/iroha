@@ -24,6 +24,7 @@ use iroha_model_base::{
 };
 use thiserror::Error;
 
+pub use super::custody::CustodyViolation;
 use super::{lane_genesis_hash, lane_genesis_result, lane_policy, merge::LaneStepInput};
 use crate::{
     state::{StateBlock, StateReadOnly, WorldReadOnly, live_consensus_key_pop_for_peer_with_role},
@@ -50,12 +51,18 @@ pub enum LaneStep {
     Done(Result<(), LaneStepError>),
 }
 
-/// Why a lane step failed (the block is then invalid).
+/// Why a lane step failed; local allocation refusal is retryable, semantic failures are invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum LaneStepError {
     /// A merge names a lane the state no longer has.
     #[error("merged lane {0} has no record")]
     MissingLane(LaneId),
+    /// Original pinned stake custody or its global lifetime is invalid.
+    #[error("lane custody: {0}")]
+    Custody(CustodyViolation),
+    /// Local bounded-table allocation refused; this is retried, never a block-invalid verdict.
+    #[error("local lane custody allocation refused")]
+    CustodyAllocation,
     /// The step never ran.
     #[error("the lane step did not run")]
     NotAdvanced,
@@ -89,7 +96,7 @@ impl StateBlock<'_> {
 /// Run the lane step of the block `block` executes (height `h`).
 ///
 /// # Errors
-/// A merge names a lane without a record.
+/// A merge or original custody binding is inconsistent, or local custody allocation refused.
 pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), LaneStepError> {
     let height = block._curr_block.height().get();
     let time_ms = u64::try_from(block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
@@ -98,11 +105,34 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
     let mut state = block.world.sumeragi_lanes.get().clone();
     apply_merges(&mut state, input, height)?;
     record_sample(&mut state, policy.as_ref(), input, height, time_ms);
+    super::custody::prepare_retirement(&mut state, &block.world, height)
+        .map_err(LaneStepError::Custody)?;
     retire(&mut state, height);
     let pool = |incarnation: &[u8; 32], size: u32| {
         elastic_committee(&block.world, height, incarnation, size)
     };
-    reconcile(&mut state, policy.as_ref(), &network, height, pool);
+    let creation_capacity = super::custody::creation_capacity(&state, &block.world);
+    reconcile(
+        &mut state,
+        policy.as_ref(),
+        &network,
+        height,
+        creation_capacity,
+        pool,
+    );
+    super::custody::pin_created(
+        &mut state,
+        &block.world,
+        &block.nexus,
+        &network,
+        block.chain_id().as_str(),
+        policy.as_ref(),
+        height,
+    )
+    .map_err(|error| match error {
+        super::custody::CustodyError::Invalid(reason) => LaneStepError::Custody(reason),
+        super::custody::CustodyError::Allocation => LaneStepError::CustodyAllocation,
+    })?;
     *block.world.sumeragi_lanes.get_mut() = state;
     Ok(())
 }
@@ -187,6 +217,7 @@ fn reconcile(
     policy: Option<&SumeragiLanePolicy>,
     network: &NetworkId,
     height: u64,
+    mut creation_capacity: usize,
     mut pool: impl FnMut(&[u8; 32], u32) -> Option<Vec<SumeragiLaneMember>>,
 ) {
     let close_at = height.saturating_add(1);
@@ -217,7 +248,7 @@ fn reconcile(
         }
     }
     for fixed in &policy.fixed {
-        if state.lane(fixed.lane).is_none() {
+        if creation_capacity > 0 && state.lane(fixed.lane).is_none() {
             let record = create(
                 state,
                 policy,
@@ -228,6 +259,7 @@ fn reconcile(
                 height,
             );
             state.upsert(record);
+            creation_capacity -= 1;
         }
     }
     let Some(transition) = autoscale_decision(state, policy, height) else {
@@ -235,6 +267,9 @@ fn reconcile(
     };
     match transition {
         Transition::Open(lane) => {
+            if creation_capacity == 0 {
+                return;
+            }
             let autoscale = policy
                 .autoscale
                 .as_ref()
@@ -550,6 +585,28 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_custody_defers_creation_without_blocking_closure() {
+        let mut state = SumeragiLaneState::default();
+        let policy = policy();
+        reconcile(&mut state, Some(&policy), &network(), 1, 0, pool);
+        assert!(state.lanes.is_empty());
+        assert_eq!(state.incarnations, 0);
+        state.samples = samples(9, 1, 5);
+        reconcile(&mut state, Some(&policy), &network(), 20, 1, pool);
+        assert_eq!(
+            state.lanes.len(),
+            1,
+            "fixed creation consumed the one free obligation"
+        );
+        assert!(state.lane(LaneId::new(16)).is_none());
+        assert_eq!(state.last_transition, 0);
+        reconcile(&mut state, None, &network(), 21, 0, pool);
+        assert_eq!(state.lanes[0].closing, Some(22));
+        retire(&mut state, 27);
+        assert!(state.lanes.is_empty());
+    }
+
+    #[test]
     fn utilization_needs_a_full_window() {
         // One lane at 10 tx/s over one-second intervals carrying 8 tx each: 800 ‰.
         assert_eq!(utilization_permille(&samples(8, 1, 5), 4, 10), Some(800));
@@ -568,7 +625,7 @@ mod tests {
     fn genesis_policy_creates_fixed_lanes_with_distinct_incarnations() {
         let mut state = SumeragiLaneState::default();
         let policy = policy();
-        reconcile(&mut state, Some(&policy), &network(), 1, pool);
+        reconcile(&mut state, Some(&policy), &network(), 1, usize::MAX, pool);
         let record = state.lane(LaneId::new(2)).expect("fixed lane");
         assert_eq!(record.active_from, 3);
         assert_eq!(record.anchor_freshness, 4);
@@ -578,7 +635,7 @@ mod tests {
         // Removing it from the policy closes it; after retirement a relisting recreates it.
         let mut without = policy.clone();
         without.fixed.clear();
-        reconcile(&mut state, Some(&without), &network(), 5, pool);
+        reconcile(&mut state, Some(&without), &network(), 5, usize::MAX, pool);
         assert_eq!(state.lane(LaneId::new(2)).unwrap().closing, Some(6));
         retire(&mut state, 10);
         assert!(
@@ -587,10 +644,10 @@ mod tests {
         );
         retire(&mut state, 11);
         assert!(state.lane(LaneId::new(2)).is_none());
-        reconcile(&mut state, Some(&policy), &network(), 12, pool);
+        reconcile(&mut state, Some(&policy), &network(), 12, usize::MAX, pool);
         assert_ne!(state.lane(LaneId::new(2)).unwrap().incarnation, first);
         // Without a policy every lane closes.
-        reconcile(&mut state, None, &network(), 13, pool);
+        reconcile(&mut state, None, &network(), 13, usize::MAX, pool);
         assert_eq!(state.lane(LaneId::new(2)).unwrap().closing, Some(14));
     }
 
@@ -601,24 +658,24 @@ mod tests {
             samples: samples(9, 1, 5),
             ..SumeragiLaneState::default()
         };
-        reconcile(&mut state, Some(&policy), &network(), 20, pool);
+        reconcile(&mut state, Some(&policy), &network(), 20, usize::MAX, pool);
         let opened = state.lane(LaneId::new(16)).expect("scaled out");
         assert_eq!(opened.committee.len(), 2);
         assert_eq!(state.last_transition, 20);
         // Within the cooldown nothing changes, even under load.
-        reconcile(&mut state, Some(&policy), &network(), 22, pool);
+        reconcile(&mut state, Some(&policy), &network(), 22, usize::MAX, pool);
         assert!(state.lane(LaneId::new(17)).is_none());
-        reconcile(&mut state, Some(&policy), &network(), 23, pool);
+        reconcile(&mut state, Some(&policy), &network(), 23, usize::MAX, pool);
         assert!(
             state.lane(LaneId::new(17)).is_some(),
             "the next free elastic id"
         );
         // The range is exhausted: no further lane.
-        reconcile(&mut state, Some(&policy), &network(), 26, pool);
+        reconcile(&mut state, Some(&policy), &network(), 26, usize::MAX, pool);
         assert_eq!(state.lanes.len(), 3);
         // Idle: the highest active elastic lane closes.
         state.samples = samples(0, 3, 5);
-        reconcile(&mut state, Some(&policy), &network(), 29, pool);
+        reconcile(&mut state, Some(&policy), &network(), 29, usize::MAX, pool);
         assert_eq!(state.lane(LaneId::new(17)).unwrap().closing, Some(30));
         assert_eq!(state.lane(LaneId::new(16)).unwrap().closing, None);
     }
@@ -627,7 +684,7 @@ mod tests {
     fn merges_advance_frontiers_and_stalled_lanes_close() {
         let policy = policy();
         let mut state = SumeragiLaneState::default();
-        reconcile(&mut state, Some(&policy), &network(), 1, pool);
+        reconcile(&mut state, Some(&policy), &network(), 1, usize::MAX, pool);
         let lane = LaneId::new(2);
         let incarnation = state.lane(lane).unwrap().incarnation;
         let merge = SumeragiLaneMerge {
@@ -652,9 +709,9 @@ mod tests {
             ..LaneStepInput::default()
         };
         apply_merges(&mut state, &rescued, 6).expect("rescued");
-        reconcile(&mut state, Some(&policy), &network(), 14, pool);
+        reconcile(&mut state, Some(&policy), &network(), 14, usize::MAX, pool);
         assert_eq!(state.lane(lane).unwrap().closing, None);
-        reconcile(&mut state, Some(&policy), &network(), 15, pool);
+        reconcile(&mut state, Some(&policy), &network(), 15, usize::MAX, pool);
         assert_eq!(state.lane(lane).unwrap().closing, Some(16));
         // A merge naming a lane without a record is an error.
         let mut empty = SumeragiLaneState::default();

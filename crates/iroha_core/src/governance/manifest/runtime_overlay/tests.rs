@@ -1,9 +1,7 @@
 //! Deterministic additive manifest derivation and immutable baseline regression tests.
 
 use super::*;
-use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::nexus::{DataSpaceMetadata, LaneLifecyclePlan, NativeLaneValidatorBindingV1};
-use iroha_primitives::json::Json;
+use iroha_data_model::nexus::{DataSpaceMetadata, LaneLifecyclePlan};
 use nonzero_ext::nonzero;
 
 fn fixture() -> (

@@ -170,7 +170,7 @@ fn retained_fri_seeded_input_matches_two_replays_roots_transcript_and_openings()
         )
         .unwrap();
         let rows = layout.common_lde_size();
-        let root = goldilocks_primitive_root_v1(layout.common_lde_log2).unwrap();
+        let root = goldilocks_primitive_root_v1(layout.common_lde_log2()).unwrap();
         let evaluations = || {
             let mut rng = StdRng::from_seed([73; 32]);
             let coefficients = (0..17)

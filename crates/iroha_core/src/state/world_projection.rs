@@ -13,7 +13,7 @@
 //! canonical runtime policy, commit topologies) are not in the World accumulator;
 //! accelerated restoration must authenticate them separately.
 
-use super::{CellBlock, StorageBlock, World, WorldBlock};
+use super::{CellField, StorageField, World, WorldBlock};
 use iroha_crypto::Hash;
 use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
@@ -22,6 +22,7 @@ use iroha_data_model::musubi::{
 use mv::{Key, Value};
 use norito::codec::Encode;
 
+#[cfg(test)]
 const VALUE_DOMAIN: &[u8] = b"iroha:world-net-delta:value:bare-v1\0";
 const START_DOMAIN: &[u8] = b"iroha:world-net-delta:start:v1\0";
 const PUBLICATION_START_DOMAIN: &[u8] = b"iroha:world-publication-journal:start:v1\0";
@@ -66,15 +67,8 @@ pub(crate) struct WorldDeltaBuilder {
 /// Hash one canonical semantic value without allocating its encoded payload.
 /// The domain fixes the bare Norito V1 layout and binds its exact encoded length.
 pub(crate) fn hash_value<T: Encode>(value: &T) -> Result<Hash, String> {
-    Hash::new_from_writer(|mut writer| {
-        writer.write_all(VALUE_DOMAIN)?;
-        let len = norito::codec::encode_adaptive_into(value, &mut writer)
-            .map_err(std::io::Error::other)?;
-        let len = u64::try_from(len)
-            .map_err(|_| std::io::Error::other("canonical value length exceeds u64"))?;
-        writer.write_all(&len.to_le_bytes())
-    })
-    .map_err(|error| format!("World net-delta value encoding failed: {error}"))
+    iroha_data_model::sumeragi_finality::world_state_value_hash_v1(value)
+        .map_err(|error| error.to_string())
 }
 
 impl WorldDeltaBuilder {
@@ -158,7 +152,8 @@ impl WorldDeltaBuilder {
         self.open_field = false;
     }
 
-    /// Append a storage's exact borrowed net changes, using its owner's value projection.
+    /// Append an original field's exact borrowed net changes in either readable phase.
+    /// Its owner supplies the value projection without regaining execution authority.
     /// No `is_dirty` shortcut can discard an explicit absent-to-absent journal row.
     pub(crate) fn append_storage_with<
         K: Key + Encode,
@@ -167,7 +162,7 @@ impl WorldDeltaBuilder {
     >(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         self.begin_field(name, 0)?;
@@ -186,7 +181,7 @@ impl WorldDeltaBuilder {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         self.begin_field(name, 1)?;
@@ -339,5 +334,5 @@ impl WorldBlock<'_> {
 mod tests;
 
 #[path = "world_state_accumulator.rs"]
-mod world_state_accumulator;
+pub(crate) mod world_state_accumulator;
 pub(crate) use world_state_accumulator::WorldStateAccumulator;

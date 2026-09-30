@@ -2464,6 +2464,12 @@ pub mod query {
             .execute(&guardian_id, &mut stx)
             .expect_err("finalized request must not be replayable");
             assert_smart_contract_error_contains(err, "is not pending");
+            let err = CancelAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_id, &mut stx)
+            .expect_err("cancellation must not reverse finalized recovery");
+            assert_smart_contract_error_contains(err, "is not pending");
         }
         #[test]
         fn recovery_lineage_accepts_only_explicit_account_id_rekey_suffix() {
@@ -2577,6 +2583,12 @@ pub mod query {
             .execute(&guardian_one_id, &mut stx)
             .expect_err("finalization must reject before quorum");
             assert_smart_contract_error_contains(err, "guardian quorum");
+            let err = CancelAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_one_id, &mut stx)
+            .expect_err("one guardian cannot cancel without quorum");
+            assert_smart_contract_error_contains(err, "not allowed to cancel");
             ApproveAccountRecovery {
                 alias: alias.clone(),
             }
@@ -2593,6 +2605,10 @@ pub mod query {
                 .get(&alias)
                 .expect("cancelled request should remain queryable");
             assert_eq!(request.status, AccountRecoveryStatus::Cancelled);
+            let err = FinalizeAccountRecovery { alias }
+                .execute(&guardian_two_id, &mut stx)
+                .expect_err("a canceled recovery must reject queued finalization");
+            assert_smart_contract_error_contains(err, "is not pending");
         }
         #[test]
         fn find_accounts_returns_registered_accounts_for_pass_predicate() {

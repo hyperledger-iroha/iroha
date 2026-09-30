@@ -1,4 +1,4 @@
-import { normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
+import { normalizeContractErrorMessagesV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
 import { crc64Xz as noritoCrc64 } from "../crc64Xz.js";
 import { blake2b256 } from "../blake2b.js";
 import {
@@ -632,7 +632,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
   }
 
   const state = { offset: 0 };
-  const fields = Array.from({ length: 10 }, (_, index) =>
+  const fields = Array.from({ length: 11 }, (_, index) =>
     readCompactField(payload, state, `${label}.field${index}`));
   if (state.offset !== payload.length) {
     rejectType(`${label} contains trailing or unknown fields`);
@@ -684,12 +684,27 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     [6, manifest.entrypoints, "entrypoints"],
     [8, manifest.states, "states"],
     [9, manifest.error_types ?? [], "error_types"],
+    [10, manifest.error_messages ?? [], "error_messages"],
   ]) {
     if (visitEmbeddedVector(fields[fieldIndex], `${label}.${fieldLabel}`, MAX_MANIFEST_ITEMS) !== manifestValue.length) {
       rejectType(
         `${TEXT_KOTODAMA_MANIFEST}${fieldLabel} count${TEXT_DOES_NOT_MATCH}the embedded interface`,
       );
     }
+  }
+  const messages = [];
+  visitEmbeddedVector(fields[10], `${label}.error_messages`, MAX_MANIFEST_ITEMS, (entry, entryLabel) => {
+    const cursor = { offset: 0 };
+    const identity = readCompactField(entry, cursor, `${entryLabel}.error_type`);
+    const code = readCompactField(entry, cursor, `${entryLabel}.code`);
+    const message = readCompactField(entry, cursor, `${entryLabel}.message`);
+    if (cursor.offset !== entry.length || code.length !== 4) rejectType(`${entryLabel} has an invalid error message record`);
+    messages.push({ error_type: decodeEmbeddedString(identity, `${entryLabel}.error_type`),
+      code: readU32Le(code, 0, `${entryLabel}.code`), message: decodeEmbeddedString(message, `${entryLabel}.message`) });
+  });
+  const normalizedMessages = normalizeContractErrorMessagesV1(messages, manifest.error_types, `${label}.error_messages`);
+  if (JSON.stringify(normalizedMessages) !== JSON.stringify(manifest.error_messages ?? [])) {
+    rejectType(`${TEXT_KOTODAMA_MANIFEST}error_messages do not match the embedded contract interface`);
   }
   return validateEmbeddedCallables(fields[7], headerMode, manifest.entrypoints.length, `${label}.callables`);
 }
@@ -1410,6 +1425,7 @@ function validateCompilerManifest(manifest) {
       "entrypoints",
       "states",
       "error_types",
+      "error_messages",
       "kotoba",
       "provenance",
     ],

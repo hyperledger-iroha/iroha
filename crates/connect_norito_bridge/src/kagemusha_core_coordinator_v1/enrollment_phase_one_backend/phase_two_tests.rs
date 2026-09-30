@@ -7,7 +7,8 @@ use std::sync::{
 
 use iroha_crypto::Signature;
 use iroha_data_model::kagemusha::{
-    KagemushaRetailEnrollmentCertificateV1, KagemushaRetailEnrollmentPossessionProofV1,
+    KagemushaDeviceReadCredentialCommandV1, KagemushaRetailEnrollmentCertificateV1,
+    KagemushaRetailEnrollmentPossessionProofV1, kagemusha_decode_device_success_response_v1,
 };
 
 use super::*;
@@ -116,6 +117,16 @@ impl KagemushaCoreCoordinatorBackendV1 for Delegate {
 }
 
 impl KagemushaQualifiedEnrollmentDelegateV1 for Delegate {
+    fn verify_app_preparation(
+        &self,
+        handle: u64,
+        live: KagemushaEnrollmentLiveSelectionV1,
+        original: &[u8],
+    ) -> Result<[u8; 32], KagemushaCoreCoordinatorBackendErrorV1> {
+        KagemushaKernelEnrollmentDelegateV1::new(Arc::new(FixedContextProvider))
+            .verify_app_preparation(handle, live, original)
+    }
+
     fn accept_challenge(
         &self,
         _: u64,
@@ -236,6 +247,17 @@ fn selected_backend_with_store(
     let selection = backend.owner.lock().unwrap().selection.clone().unwrap();
     let challenge_fields =
         super::super::initial_enrollment::tests::journal_challenge_fields(&selection);
+    if qualified {
+        let verify = kagemusha_core_coordinator_encode_request_v1(&[
+            super::super::INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1
+                .to_le_bytes()
+                .to_vec(),
+            selection.ticket.to_le_bytes().to_vec(),
+            challenge_fields[2].clone(),
+        ])
+        .unwrap();
+        backend.invoke_initial_enrollment(7, &verify).unwrap();
+    }
     let challenge = kagemusha_core_coordinator_encode_request_v1(&challenge_fields).unwrap();
     (backend, delegate, challenge, store)
 }
@@ -345,6 +367,50 @@ fn consuming_kernel_delegate_completes_the_durable_phase_adapter_and_revokes_wit
     )));
     let selection = backend.owner.lock().unwrap().selection.clone().unwrap();
 
+    let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
+    let observation = backend
+        .invoke(
+            7,
+            KagemushaCoreCoordinatorMethodV1::BeginObservation,
+            &kagemusha_core_coordinator_encode_request_v1(&[
+                1_u32.to_le_bytes().to_vec(),
+                command.clone(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+    let nonce: [u8; 32] = kagemusha_core_coordinator_decode_response_v1(&observation).unwrap()[0]
+        .as_slice()
+        .try_into()
+        .unwrap();
+    let qualification =
+        super::super::initial_enrollment::tests::journal_qualification_fields(&selection);
+    backend
+        .invoke(
+            7,
+            KagemushaCoreCoordinatorMethodV1::AcceptQualification,
+            &kagemusha_core_coordinator_encode_request_v1(&qualification).unwrap(),
+        )
+        .unwrap();
+    let original_reply =
+        super::super::initial_enrollment::tests::journal_qualification_response(&selection, nonce);
+    let reply = kagemusha_decode_device_success_response_v1(&original_reply, 1, nonce).unwrap();
+    let mut fields = vec![
+        1_u32.to_le_bytes().to_vec(),
+        nonce.to_vec(),
+        command,
+        reply.payload.to_vec(),
+        reply.authenticator.to_vec(),
+    ];
+    fields.extend(qualification[..5].iter().cloned());
+    backend
+        .invoke(
+            7,
+            KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply,
+            &kagemusha_core_coordinator_encode_request_v1(&fields).unwrap(),
+        )
+        .unwrap();
+
     let accepted = backend.invoke_initial_enrollment(7, &challenge).unwrap();
     let fields = kagemusha_core_coordinator_decode_response_v1(&accepted).unwrap();
     let original = kagemusha_core_coordinator_decode_request_v1(&challenge).unwrap();
@@ -370,6 +436,19 @@ fn consuming_kernel_delegate_completes_the_durable_phase_adapter_and_revokes_wit
     let cancel = cancel_request(&backend);
     backend.invoke_initial_enrollment(7, &cancel).unwrap();
     assert!(admission.require_live().is_err());
+}
+
+#[test]
+fn consuming_kernel_delegate_rejects_challenge_without_original_native_qualification() {
+    let (mut backend, _, challenge, _) = selected_backend_with_store(DelegateResult::Valid, true);
+    backend.qualified_enrollment = Some(Arc::new(KagemushaKernelEnrollmentDelegateV1::new(
+        Arc::new(FixedContextProvider),
+    )));
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &challenge),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+    assert!(backend.owner.lock().unwrap().accepted.is_none());
 }
 
 #[test]

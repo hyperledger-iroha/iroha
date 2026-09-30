@@ -7,7 +7,7 @@ use crate::{
 use iroha_version::codec::DecodeVersioned as _;
 use std::{path::Path, sync::Arc};
 const XOR_ASSET_DEFINITION: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
-pub(crate) fn fixture_config() -> Config {
+pub fn fixture_config() -> Config {
     // Published deterministic SDK fixture, never an operational wallet identity.
     let source = br#"
 chain = "00000000-0000-0000-0000-000000000000"

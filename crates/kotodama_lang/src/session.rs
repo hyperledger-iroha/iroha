@@ -411,6 +411,19 @@ impl CompilerSession {
             request.source,
         );
         let (program, tokens) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())?;
+        if let Some(directive) = program.program.directives.first() {
+            let mut diagnostics = DiagnosticBundle::single(crate::diagnostic::Diagnostic::error(
+                "E_SOURCE_NOT_FOUND",
+                crate::diagnostic::DiagnosticPhase::Resolve,
+                "source dependencies require an explicit source bundle; supply companion files to build_source_bundle",
+                Some(crate::diagnostic::SourceSpan::from_range(
+                    &source,
+                    directive.source.range,
+                )),
+            ));
+            diagnostics.capture_source(&source);
+            return Err(diagnostics);
+        }
         reject_production_test_surface(
             self.options.mode,
             &program.program,
@@ -466,7 +479,7 @@ impl CompilerSession {
                     Some(resolved.program.get()),
                 )
             })?;
-        enforce_call_table_bounds(&typed, &resolved.source, resolved.program.get())?;
+        enforce_call_table_bounds(&typed, resolved.program.get())?;
         Ok(typed)
     }
     fn checked_program(
@@ -507,6 +520,35 @@ impl CompilerSession {
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         run_with_compiler_stack(move || self.build_inner(request))
             .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
+    }
+    /// Compile one complete, bounded source inventory without ambient file access.
+    pub fn build_source_bundle(
+        &self,
+        request: crate::linker::SourceLinkRequest,
+    ) -> Result<CompileOutput, DiagnosticBundle> {
+        run_with_compiler_stack(move || {
+            let _chain_discriminant = self.enter_chain_discriminant();
+            let name = request.root.source_name.clone();
+            let linked = crate::linker::ModuleBuildGraph::default()
+                .link(request, self.linker_options())
+                .map_err(crate::linker::SourceGraphError::into_diagnostics)?;
+            self.build_typed_program(linked.program, Some(&name))
+        })
+        .map_err(|_| compiler_worker_unavailable_diagnostic(None))?
+    }
+    /// Resolve and type-check an explicit source inventory without emitting an artifact.
+    pub fn check_source_bundle(
+        &self,
+        request: crate::linker::SourceLinkRequest,
+    ) -> Result<(), DiagnosticBundle> {
+        run_with_compiler_stack(move || {
+            let _chain_discriminant = self.enter_chain_discriminant();
+            crate::linker::ModuleBuildGraph::default()
+                .link(request, self.linker_options())
+                .map(|_| ())
+                .map_err(crate::linker::SourceGraphError::into_diagnostics)
+        })
+        .map_err(|_| compiler_worker_unavailable_diagnostic(None))?
     }
     fn build_inner(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
@@ -711,10 +753,26 @@ impl CompilerSession {
             }
             merge_source_files(&mut suite_typed, &mut typed, file.name())?;
             suite_typed.items.append(&mut typed.items);
+            suite_typed.error_messages.append(&mut typed.error_messages);
             suite_typed.error_types = error_types.values().cloned().collect();
             suite_typed
                 .message_entries
                 .append(&mut typed.message_entries);
+        }
+        suite_typed.error_messages.sort_by(|left, right| {
+            (&left.error_type, left.code).cmp(&(&right.error_type, right.code))
+        });
+        suite_typed.error_messages.dedup();
+        if !iroha_data_model::smart_contract::manifest::validate_contract_error_messages(
+            &suite_typed.error_types,
+            &suite_typed.error_messages,
+        ) {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_ERROR_MESSAGE",
+                DiagnosticPhase::Resolve,
+                "standalone tests define conflicting error messages",
+                None,
+            )));
         }
         crate::semantic::validate_linked_program(&suite_typed, self.options.force_zk)
             .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
@@ -760,12 +818,8 @@ impl CompilerSession {
         compiler.compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)
     }
 }
-fn source_range_span(source: &SourceFile, range: crate::source::SourceRange) -> Option<SourceSpan> {
-    (source.id() == range.source).then(|| SourceSpan::from_range(source, range.range))
-}
-fn enforce_call_table_bounds(
+pub(crate) fn enforce_call_table_bounds(
     program: &TypedProgram,
-    source: &SourceFile,
     resolved: &crate::resolved::ResolvedProgram,
 ) -> Result<(), DiagnosticBundle> {
     let limit = crate::regalloc::MAX_ARGUMENT_VALUES;
@@ -782,7 +836,7 @@ fn enforce_call_table_bounds(
             diagnostics.push(Diagnostic::error(
                 "K2007", DiagnosticPhase::Semantic,
                 format!("function `{}` returns more than {limit} flattened words; V1 result tables are bounded to 64 KiB", function.name),
-                function.name_source.and_then(|range| source_range_span(source, range)),
+                function.name_source.and_then(|range| resolved.source_span(range)),
             ));
         }
         let counts = function
@@ -793,7 +847,7 @@ fn enforce_call_table_bounds(
                     || {
                         let primary_span = resolved
                             .parameter_name_source(&function.name, &parameter.name)
-                            .and_then(|range| source_range_span(source, range));
+                            .and_then(|range| resolved.source_span(range));
                         DiagnosticBundle::single(Diagnostic::error(
                             "K2098",
                             DiagnosticPhase::Semantic,
@@ -826,7 +880,7 @@ fn enforce_call_table_bounds(
         let parameter = &function.param_types[crossing_index];
         let primary_span = resolved
             .parameter_name_source(&function.name, &parameter.name)
-            .and_then(|range| source_range_span(source, range));
+            .and_then(|range| resolved.source_span(range));
         let mut diagnostic = Diagnostic::error(
             "K2007",
             DiagnosticPhase::Semantic,
@@ -838,7 +892,7 @@ fn enforce_call_table_bounds(
             primary_span,
         );
         if let Some(range) = function.name_source
-            && let Some(span) = source_range_span(source, range)
+            && let Some(span) = resolved.source_span(range)
         {
             diagnostic.labels.push(DiagnosticLabel {
                 span,
@@ -850,7 +904,11 @@ fn enforce_call_table_bounds(
     if diagnostics.is_empty() {
         Ok(())
     } else {
-        Err(DiagnosticBundle::new(diagnostics))
+        let mut bundle = DiagnosticBundle::new(diagnostics);
+        for source in resolved.source_files() {
+            bundle.capture_source(source);
+        }
+        Err(bundle)
     }
 }
 fn semantic_error_diagnostic(
@@ -1852,9 +1910,9 @@ mod tests {
             ("Pair(1, 2)", "Pair { left: 1, right: 2, }")
         );
         let mixed =
-            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
+            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, first: 2); } }";
         let mixed_error = reject(mixed);
-        let mixed_diagnostic = diagnostic(&mixed_error, "E_NAMED_ARGUMENTS_REQUIRED");
+        let mixed_diagnostic = diagnostic(&mixed_error, "E_DUPLICATE_NAMED_ARGUMENT");
         assert!(mixed_diagnostic.primary_span.is_some());
         let reversed = "seiyaku C { fn f() { target(first: 1, 2); } }";
         let reversed_error = reject(reversed);

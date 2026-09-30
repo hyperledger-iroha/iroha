@@ -36,11 +36,16 @@ use iroha_config::{
 };
 use iroha_core::{
     kura::{BlockIndex, BlockStore, Kura},
-    state::derive_committee_key_id,
+    state::{AllocationBudget, derive_committee_key_id},
     sumeragi::{
+        attestation::NativePastaVerifier,
+        availability_schedule::AvailabilitySchedule,
         certified_chain::CertifiedPrefix,
         crypto::BlsCrypto,
-        lanes::{self, AnchorView, LaneBatch, LaneChainView, evidence::verify_lane_entry},
+        lanes::{
+            self, AnchorView, LaneBatch, LaneChainView, evidence::verify_lane_entry,
+            store::LaneFrameRead,
+        },
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -82,14 +87,13 @@ use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
-use iroha_sumeragi::message::SyncEntry;
+use iroha_sumeragi::types::{Hash32, HeightConfig};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary,
     genesis_participant_committee_key_instructions, init_instruction_registry,
     resolve_release_prebuilt_binary, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
-use norito::codec::DecodeAll;
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
 
@@ -1347,11 +1351,13 @@ struct StoppedEvidence {
 #[derive(Debug, PartialEq, Eq)]
 struct CertifiedBpngLaneEvidence {
     artifacts: Vec<Vec<u8>>,
+    statements: Vec<(Hash32, Hash32)>,
 }
 impl CertifiedBpngLaneEvidence {
     fn absent() -> Self {
         Self {
             artifacts: Vec::new(),
+            statements: Vec::new(),
         }
     }
     fn assert_exact_prefix_of(&self, successor: &Self) -> Result<()> {
@@ -1382,19 +1388,7 @@ fn same_authenticated_prefix(left: &StoppedEvidence, right: &StoppedEvidence) ->
             return Ok(false);
         }
     }
-    for (left, right) in left
-        .certified_bpng_lane
-        .artifacts
-        .iter()
-        .zip(&right.certified_bpng_lane.artifacts)
-    {
-        let left = SyncEntry::decode_all(&mut left.as_slice())?;
-        let right = SyncEntry::decode_all(&mut right.as_slice())?;
-        if left.block != right.block || left.commit_qc.result != right.commit_qc.result {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Ok(left.certified_bpng_lane.statements == right.certified_bpng_lane.statements)
 }
 
 fn assert_same_authenticated_prefix(peers: &[StoppedEvidence]) -> Result<()> {
@@ -1516,6 +1510,24 @@ impl AnchorView for RetainedHistory {
     }
 }
 
+// This schedule is derived only from the independently verified global execution history.
+// The inspected lane frame supplies neither its committee nor its availability parameters.
+struct RetainedLaneSchedule {
+    instance: Hash32,
+    config: HeightConfig,
+    merged_height: u64,
+}
+
+impl AvailabilitySchedule for RetainedLaneSchedule {
+    fn instance(&self) -> Hash32 {
+        self.instance
+    }
+
+    fn height_config(&self, height: u64) -> std::io::Result<Option<HeightConfig>> {
+        Ok((height > 0 && height <= self.merged_height).then(|| self.config.clone()))
+    }
+}
+
 fn inspect_certified_bpng_lane_evidence(
     store_root: &Path,
     network_id: NetworkId,
@@ -1545,8 +1557,22 @@ fn inspect_certified_bpng_lane_evidence(
             "native lane credentials differ from signed genesis"
         );
     }
-    let crypto = BlsCrypto::new();
-    let instance = lanes::lane_instance(&crypto, &network_id, chain_id.as_str(), record);
+    let crypto = Arc::new(BlsCrypto::new());
+    crypto
+        .admit_committee(
+            record
+                .committee
+                .iter()
+                .map(|member| (member.peer.public_key(), member.pop.as_slice())),
+        )
+        .map_err(|(index, error)| eyre!("invalid original lane member {index}: {error}"))?;
+    let instance = lanes::lane_instance(&*crypto, &network_id, chain_id.as_str(), record);
+    let schedule: Arc<dyn AvailabilitySchedule> = Arc::new(RetainedLaneSchedule {
+        instance,
+        config: lanes::lane_height_config(record)?,
+        merged_height: record.merged.height,
+    });
+    let budget = AllocationBudget::new(usize::try_from(MAX_EVIDENCE_BYTES)?);
     let directory = store_root.join("lanes").join(hex::encode(instance.0));
     let mut predecessor = SumeragiLaneFrontier {
         height: 0,
@@ -1555,6 +1581,7 @@ fn inspect_certified_bpng_lane_evidence(
     };
     let mut history = LaneChainView::default();
     let mut artifacts = Vec::new();
+    let mut statements = Vec::new();
     let mut total = 0_u64;
     ensure!(
         record.merged.height <= MAX_RETAINED_HEIGHT,
@@ -1575,11 +1602,18 @@ fn inspect_certified_bpng_lane_evidence(
             "native lane evidence exceeds fixture budget"
         );
         let bytes = fs::read(&path)?;
-        let entry = SyncEntry::decode_all(&mut bytes.as_slice())?;
+        let (body, certificate) = LaneFrameRead::open(
+            &path,
+            height,
+            crypto.clone(),
+            budget.clone(),
+            Arc::clone(&schedule),
+            Arc::new(NativePastaVerifier::new(instance, network_id)),
+        )?
+        .poll()?;
         ensure!(
-            entry.encode() == bytes
-                && entry.commit_qc.signers.count_ones() == BPNG_MIN_QUORUM as usize,
-            "native lane frame is noncanonical or lacks exact three-of-four quorum"
+            certificate.signers.count_ones() == BPNG_MIN_QUORUM as usize,
+            "native lane frame lacks exact three-of-four quorum"
         );
         let result = verify_lane_entry(
             record,
@@ -1588,9 +1622,10 @@ fn inspect_certified_bpng_lane_evidence(
             retained,
             &history,
             &predecessor,
-            &entry,
+            &body,
+            &certificate,
         )?;
-        let batch = LaneBatch::from_payload(&entry.block.payload)?;
+        let batch = LaneBatch::from_payload(body.payload().as_slice())?;
         ensure!(
             batch.transactions.len() == 1,
             "BPNG fixture must certify exactly its one original transaction"
@@ -1619,8 +1654,8 @@ fn inspect_certified_bpng_lane_evidence(
             .find(|merge| merge.lane == record.lane)
             .expect("matched lane");
         ensure!(
-            merge.tip_hash == entry.commit_qc.block_hash.0
-                && merge.tip_result == entry.commit_qc.result.0
+            merge.tip_hash == certificate.block_hash.0
+                && merge.tip_result == certificate.result.0
                 && section.merged_count == 1,
             "global native merge does not bind its exact certified frame"
         );
@@ -1637,20 +1672,24 @@ fn inspect_certified_bpng_lane_evidence(
         }
         predecessor = SumeragiLaneFrontier {
             height,
-            block_hash: entry.commit_qc.block_hash.0,
-            result: entry.commit_qc.result.0,
+            block_hash: certificate.block_hash.0,
+            result: certificate.result.0,
         };
         ensure!(
             fs::read(&path)? == bytes,
             "native lane frame changed during read-only inspection"
         );
         artifacts.push(bytes);
+        statements.push((certificate.block_hash, certificate.result));
     }
     ensure!(
         predecessor == record.merged,
         "native lane retained tip differs from global certified frontier"
     );
-    Ok(CertifiedBpngLaneEvidence { artifacts })
+    Ok(CertifiedBpngLaneEvidence {
+        artifacts,
+        statements,
+    })
 }
 
 fn inspection_fingerprint(blocks_dir: &Path) -> Result<BTreeMap<PathBuf, (u64, Hash)>> {

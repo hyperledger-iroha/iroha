@@ -792,6 +792,74 @@ def test_source_reader_refuses_symlinks_and_escapes(tmp_path: Path) -> None:
         corridor._read_source(repo, "contracts/latin1.sol")
 
 
+def test_large_source_trivia_preserves_exact_compiler_input(tmp_path: Path) -> None:
+    repo = fake_repo(tmp_path / "repo", "//" + "x" * (2 * 1024 * 1024) + "\ncontract SccpTairaXor {}\n")
+    expected = (repo / corridor.SCCP_SOURCE).read_bytes()
+    assert corridor._read_source(repo, corridor.SCCP_SOURCE) == expected
+    value, inventory = corridor.standard_json_input(repo, fake_config(), "evm")
+    payload = corridor.canonical_json_bytes(value)
+    assert len(payload) < corridor.MAX_COMPILER_INPUT_BYTES
+    corridor.validate_native_compiler_input(payload, corridor.EXPECTED_SETTINGS)
+    assert value["sources"][corridor.SCCP_SOURCE]["content"].encode() == expected
+    assert inventory[0]["byte_length"] == len(expected)
+    assert inventory[0]["sha256_hex"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_compiler_input_resource_bound_and_utf8_remain_required() -> None:
+    with pytest.raises(corridor.CorridorError, match="exceeds 16 MiB"):
+        corridor.validate_native_compiler_input(b" " * (corridor.MAX_COMPILER_INPUT_BYTES + 1), corridor.EXPECTED_SETTINGS)
+    value = {"language": "Solidity", "sources": {"Test.sol": {"content": "\ud800"}}, "settings": corridor.EXPECTED_SETTINGS}
+    with pytest.raises(corridor.CorridorError, match="UTF-8"):
+        corridor.validate_native_compiler_input(json.dumps(value).encode(), corridor.EXPECTED_SETTINGS)
+
+
+def test_source_reader_refuses_impossible_total_input_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = fake_repo(tmp_path / "repo")
+    source = repo / corridor.SCCP_SOURCE
+    with source.open("wb") as handle:
+        handle.truncate(corridor.MAX_COMPILER_INPUT_BYTES + 1)
+
+    def unexpected_read(*args: object) -> bytes:
+        pytest.fail("an inode larger than the total compiler envelope must not be read")
+
+    monkeypatch.setattr(corridor.os, "read", unexpected_read)
+    with pytest.raises(corridor.CorridorError, match="bounded size policy"):
+        corridor._read_source(repo, corridor.SCCP_SOURCE)
+
+
+def test_source_map_uses_remaining_aggregate_compiler_input_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = fake_repo(tmp_path / "repo", "//" + "x" * 1000 + "\ncontract SccpTairaXor {}\n")
+    other = "contracts/Other.sol"
+    (repo / other).write_text(SOURCE_HEADER + "//" + "y" * 1000 + "\ncontract Other {}\n")
+    config = fake_config(sources={"evm": (corridor.SCCP_SOURCE, other), "tron": (corridor.SCCP_SOURCE,)})
+    first_size = (repo / corridor.SCCP_SOURCE).stat().st_size
+    second_size = (repo / other).stat().st_size
+    total_budget = first_size + second_size - 1
+    monkeypatch.setattr(corridor, "MAX_COMPILER_INPUT_BYTES", total_budget)
+    read = corridor._read_stable_regular_file
+    admitted_budgets = []
+
+    def record_budget(path: Path, maximum_bytes: int, label: str) -> bytes:
+        admitted_budgets.append(maximum_bytes)
+        return read(path, maximum_bytes, label)
+
+    monkeypatch.setattr(corridor, "_read_stable_regular_file", record_budget)
+    with pytest.raises(corridor.CorridorError, match="bounded size policy"):
+        corridor.standard_json_input(repo, config, "evm")
+    assert admitted_budgets == [total_budget, second_size - 1]
+
+    # Raw bytes alone can fit while the serialized object does not. JSON
+    # overhead still passes through the exact final compiler-input admission.
+    monkeypatch.setattr(corridor, "MAX_COMPILER_INPUT_BYTES", first_size)
+    value, _ = corridor.standard_json_input(repo, fake_config(), "evm")
+    with pytest.raises(corridor.CorridorError, match="exceeds 16 MiB"):
+        corridor.validate_native_compiler_input(corridor.canonical_json_bytes(value), corridor.EXPECTED_SETTINGS)
+
+
 @pytest.mark.parametrize(
     "directive",
     (

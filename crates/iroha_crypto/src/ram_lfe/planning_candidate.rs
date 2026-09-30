@@ -671,7 +671,7 @@ mod tests {
                 plan(&program, bytes, ad).unwrap_err(),
                 PlanError::RequestShape
             );
-            assert!(CLEARED.with_borrow(|events| events.is_empty()));
+            assert!(CLEARED.with_borrow(Vec::is_empty));
         }
         assert!(plan(&program, 1_048_576, 512).is_ok());
         assert!(BLOCKERS.contains(&QualificationBlocker::NoiseTransfers));

@@ -1,6 +1,7 @@
 // BEGIN GENERATED: kotodama-v1-validator-policy
 /** Canonical Kotodama V1 lexical keywords generated from `grammar/v1.lex`. */
 export const KOTODAMA_V1_KEYWORDS = Object.freeze([
+  "as",
   "authorize",
   "break",
   "const",
@@ -8,13 +9,16 @@ export const KOTODAMA_V1_KEYWORDS = Object.freeze([
   "else",
   "enum",
   "error",
+  "export",
   "false",
   "fn",
   "for",
   "hajimari",
   "始まり",
   "if",
+  "import",
   "in",
+  "include",
   "kaizen",
   "改善",
   "kotoage",
@@ -100,6 +104,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "is_err",
   "unwrap_or",
   "unwrap_err_or",
+  "expect",
 ]);
 
 /** Retired numeric spellings reserved only for types and source units. */
@@ -196,6 +201,11 @@ export function isCanonicalKotodamaStructName(value) {
   if (!value.includes("::")) return isCanonicalKotodamaIdentifier(value, { typeDeclaration: true });
   if (value.includes("__kotodama_link_")) return false;
   const parts = value.split("::");
+  if (parts.length === 4 && parts[0] === "local") {
+    return /^[0-9a-f]{64}$/u.test(parts[1]) &&
+      isCanonicalKotodamaIdentifier(parts[2], { typeDeclaration: true }) &&
+      isCanonicalKotodamaIdentifier(parts[3], { typeDeclaration: true });
+  }
   if (parts.length !== 3 || !isCanonicalKotodamaIdentifier(parts[1], { typeDeclaration: true }) ||
       !isCanonicalKotodamaIdentifier(parts[2], { typeDeclaration: true })) return false;
   const packageParts = parts[0].split("@");

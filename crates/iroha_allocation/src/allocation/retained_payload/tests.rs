@@ -30,10 +30,9 @@ fn ledger_refusal_then_retry_keeps_original_backing_and_returns_credit_once() {
         // binding. The Vec and its exact charge remain paired in the new owner.
         let (values, charge) = unsafe { original.into_allocation_parts() };
         ledger.push_reserved(charge);
-        match unsafe { RetainedPayload::try_new(values, ledger, &budget) } {
-            Ok(owner) => owner,
-            Err(_) => panic!("all original charges belong to the same pool"),
-        }
+        unsafe { RetainedPayload::try_new(values, ledger, &budget) }.unwrap_or_else(
+            |(_, _, error)| panic!("all original charges belong to the same pool: {error}"),
+        )
     });
     assert_eq!(owner.get().as_ptr(), pointer);
     assert_eq!(owner.get().as_slice(), &[0x72; 17]);
@@ -73,10 +72,8 @@ fn foreign_ledger_refusal_returns_original_payload_and_ledger_without_refund() {
     assert_eq!(foreign.reserved_bytes(), 0);
     // SAFETY: the same original Vec now has its unchanged charge in a ledger
     // whose own backing belongs to the same pool. No clone/reallocation occurred.
-    let owner = match unsafe { RetainedPayload::try_new(values, corrected, &budget) } {
-        Ok(owner) => owner,
-        Err(_) => panic!("source-corrected ledger"),
-    };
+    let owner = unsafe { RetainedPayload::try_new(values, corrected, &budget) }
+        .unwrap_or_else(|(_, _, error)| panic!("source-corrected ledger: {error}"));
     assert_eq!(owner.get().as_ptr(), pointer);
     drop(owner);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -146,10 +143,8 @@ fn payload_destructor_observes_retained_credit_and_unwind_cannot_refund_it() {
             entered: &entered,
             panic,
         };
-        let owner = match unsafe { RetainedPayload::try_new(payload, ledger, &budget) } {
-            Ok(owner) => owner,
-            Err(_) => panic!("same original pool"),
-        };
+        let owner = unsafe { RetainedPayload::try_new(payload, ledger, &budget) }
+            .unwrap_or_else(|(_, _, error)| panic!("same original pool: {error}"));
         let before = budget.reserved_bytes();
         let result = catch_unwind(AssertUnwindSafe(|| drop(owner)));
         assert_eq!(result.is_err(), panic);
@@ -175,10 +170,8 @@ fn canonical_payload_move_retains_the_same_allocation_and_ledger_through_unwind(
         // SAFETY: this exact original Vec and its charge enter the owner together.
         let (value, charge) = unsafe { original.into_allocation_parts() };
         ledger.push_reserved(charge);
-        let owner = match unsafe { RetainedPayload::try_new(value, ledger, &budget) } {
-            Ok(owner) => owner,
-            Err(_) => panic!("same original pool"),
-        };
+        let owner = unsafe { RetainedPayload::try_new(value, ledger, &budget) }
+            .unwrap_or_else(|(_, _, error)| panic!("same original pool: {error}"));
         let before = budget.reserved_bytes();
         if unwind {
             let error = catch_unwind(AssertUnwindSafe(|| {
@@ -218,10 +211,8 @@ fn retained_payload_source_check_is_exact_and_survives_original_field_movement()
     // no callback, allocation or fallible work separates extraction and binding.
     let (bytes, charge) = unsafe { bytes.into_allocation_parts() };
     ledger.push_reserved(charge);
-    let owner = match unsafe { RetainedPayload::try_new(bytes, ledger, &budget) } {
-        Ok(owner) => owner,
-        Err(_) => panic!("original exact pool"),
-    };
+    let owner = unsafe { RetainedPayload::try_new(bytes, ledger, &budget) }
+        .unwrap_or_else(|(_, _, error)| panic!("original exact pool: {error}"));
     let credit = budget.reserved_bytes();
     let owner = without_allocations(|| {
         assert!(owner.belongs_to(&budget));

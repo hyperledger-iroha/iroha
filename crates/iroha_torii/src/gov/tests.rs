@@ -701,6 +701,7 @@ fn mk_manifest_provenance(
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_messages: None,
         error_types: None,
         provenance: None,
     }

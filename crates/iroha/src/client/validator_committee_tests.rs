@@ -88,6 +88,7 @@ mod validator_committee_capability {
 
     #[tokio::test(flavor = "current_thread")]
     async fn canonical_observation_binds_route_target_and_preserves_executor_progress() {
+        fn require_send(_: impl Send) {}
         let status = status_fixture();
         let fixture = norito_response(StatusCode::OK, &status);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -109,7 +110,6 @@ mod validator_committee_capability {
         builder.torii_request_timeout = Duration::ZERO;
         let client = builder.build().unwrap();
         let nexus = client.nexus();
-        fn require_send(_: impl Send) {}
         require_send(nexus.validator_committee(Some(7)));
         let operation = nexus.validator_committee(Some(7));
         tokio::pin!(operation);

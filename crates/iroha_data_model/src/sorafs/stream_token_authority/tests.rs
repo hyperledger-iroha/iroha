@@ -71,10 +71,10 @@ fn completion() -> StreamTokenCompleteV1 {
 
 #[test]
 fn stream_token_outcome_keeps_inline_copy_and_completed_schema_payload() {
+    const _: () = assert!(core::mem::size_of::<StreamTokenOutcomeV1>() <= 512);
     fn assert_copy<T: Copy>() {}
     assert_copy::<StreamTokenOutcomeV1>();
     assert_copy::<StreamTokenOperationV1>();
-    const _: () = assert!(core::mem::size_of::<StreamTokenOutcomeV1>() <= 512);
 
     let schema = StreamTokenOutcomeV1::schema();
     let iroha_schema::Metadata::Enum(outcomes) = schema

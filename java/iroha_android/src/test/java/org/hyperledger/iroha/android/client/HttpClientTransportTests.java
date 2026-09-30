@@ -4296,9 +4296,12 @@ public final class HttpClientTransportTests {
             canonical.toBuilder().setNonce(9L).build(),
             canonical
                 .toBuilder()
+                .setFeePayment(feePayment(78L))
                 .build(),
             canonical.toBuilder().setAttachments(Collections.emptyList()).build());
     for (final TransactionPayload substituted : rehashedSubstitutions) {
+      assert !Arrays.equals(encodeTransactionPayload(canonical), encodeTransactionPayload(substituted))
+          : "rehashed substitution fixture must change canonical signed payload bytes";
       expectIllegalState(
           () ->
               HttpClientTransport.validateContractCallDraft(
@@ -4897,9 +4900,12 @@ public final class HttpClientTransportTests {
             canonical.toBuilder().setNonce(3L).build(),
             canonical
                 .toBuilder()
+                .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10L))
                 .build(),
             canonical.toBuilder().setAttachments(Collections.emptyList()).build());
     for (final TransactionPayload substituted : rehashedSubstitutions) {
+      assert !Arrays.equals(encodeTransactionPayload(canonical), encodeTransactionPayload(substituted))
+          : "rehashed substitution fixture must change canonical signed payload bytes";
       expectIllegalState(
           () ->
               HttpClientTransport.validateMultisigResponse(

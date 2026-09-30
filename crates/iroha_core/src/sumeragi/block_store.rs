@@ -316,6 +316,9 @@ impl BodyReader for KuraBlockStore {
     }
 }
 impl BlockStore for KuraBlockStore {
+    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+        Self::committed_body(self, height)
+    }
     fn height(&self) -> u64 {
         u64::try_from(self.kura.blocks_count())
             .unwrap_or(u64::MAX)

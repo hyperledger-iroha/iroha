@@ -50,7 +50,7 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
         assert_eq!(segment.base_width_v1(), 1_351);
         assert_eq!(segment.profile_constraint_count_v1(), 2_940);
-        assert_eq!(segment.profile_fixed_width_v1(), 6);
+        assert_eq!(segment.profile_fixed_width_v1(), 7);
         let fixed = segment.profile_fixed_columns_v1().unwrap();
         for row in 0..TRACE_SIZE {
             assert_eq!(

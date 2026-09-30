@@ -1,10 +1,11 @@
 //! Deterministic complete fixtures for non-shipping tests and release evidence.
 use super::{
-    IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
-    PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1,
-    PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
-    derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
-    encrypt_ivm_private_wallet_note_v1, ivm_private_recipient_public_key_v1,
+    IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,
+    IvmPrivateNoteWitnessV1, PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1,
+    PrivateInstructionV1, PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1,
+    derive_note_authority_v1, derive_note_commitment_v1, derive_note_nullifier_v1,
+    derive_private_program_id_v1, encrypt_ivm_private_wallet_note_v1,
+    ivm_private_recipient_public_key_v1,
     relation::{accumulator_leaf_invocation_v1, accumulator_node_invocation_v1},
 };
 use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
@@ -25,6 +26,16 @@ use std::str::FromStr as _;
 pub struct IvmPrivateNoteReleaseFixtureV1 {
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
     pub witness: IvmPrivateNoteWitnessV1,
+}
+impl IvmPrivateNoteReleaseFixtureV1 {
+    /// Check the complete canonical private-IVM relation without constructing a proof.
+    ///
+    /// This fixture always uses the fixed private-IVM profile; its private witness schedule
+    /// and the internal settlement profiles remain owned by the engine.
+    pub fn preflight_relation(&self) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+        super::relation::validate_private_note_relation_v1(&self.statement, &self.witness)
+            .map(|_| ())
+    }
 }
 /// Closed fixture-construction failure. Engine diagnostics remain internal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,6 +371,7 @@ mod tests {
         );
         validate_private_note_relation_v1(&normal.statement, &normal.witness)
             .expect("normal relation");
+        assert_eq!(normal.preflight_relation(), Ok(()));
         assert_eq!(normal.witness.inputs().len(), 1);
         assert_eq!(normal.witness.outputs().len(), 1);
         let mut maximum_rng = StdRng::seed_from_u64(0x49_50_4e_45_02);
@@ -367,12 +379,17 @@ mod tests {
             ivm_private_note_release_fixture_v1(true, &mut maximum_rng).expect("maximum fixture");
         validate_private_note_relation_v1(&maximum.statement, &maximum.witness)
             .expect("maximum relation");
+        assert_eq!(maximum.preflight_relation(), Ok(()));
         assert_eq!(maximum.witness.inputs().len(), 2);
         assert_eq!(maximum.witness.outputs().len(), 2);
         let mut invalid_rng = StdRng::seed_from_u64(0x49_50_4e_45_03);
         let invalid = ivm_private_note_release_invalid_path_fixture_v1(&mut invalid_rng)
             .expect("invalid-path fixture");
         assert!(validate_private_note_relation_v1(&invalid.statement, &invalid.witness).is_err());
+        assert_eq!(
+            invalid.preflight_relation(),
+            Err(IvmPrivateNoteRelationErrorV1::Membership)
+        );
         let pool_id = PrivacyPoolIdV1::new(bytes(0xb1));
         let asset_definition_id = release_asset_definition_id_v1().expect("asset definition");
         let mut network_rng = StdRng::seed_from_u64(0x49_50_4e_45_04);
@@ -384,6 +401,7 @@ mod tests {
         .expect("network fixture");
         validate_private_note_relation_v1(&network.statement, &network.witness)
             .expect("network relation");
+        assert_eq!(network.preflight_relation(), Ok(()));
         assert_eq!(network.statement.pool_id, pool_id);
         assert_eq!(network.statement.asset_definition_id, asset_definition_id);
         assert_eq!(network.statement.root_epoch, 1);

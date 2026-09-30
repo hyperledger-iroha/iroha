@@ -118,8 +118,8 @@ fn committed_transaction(input_index: usize) -> CommittedTransaction {
         .iter()
         .map(TransactionEntrypoint::hash)
         .collect();
-    let output_rows = [0, 1]
-        .map(|index| crate::block::output_test_support::network(index, Ok(Default::default())));
+    let output_rows =
+        [0, 1].map(|index| crate::block::output_test_support::network(index, Ok(Vec::default())));
     let outputs: MerkleTree<crate::block::execution_output::ExecutionOutputV1> =
         output_rows.iter().map(HashOf::new).collect();
     let entrypoint = entrypoints[input_index].clone();

@@ -503,6 +503,85 @@ fn sumeragi_amx_write_proof_matches_the_certified_write_root() {
 }
 
 #[test]
+fn sumeragi_amx_record_proof_construction_requires_the_complete_certified_write_set() {
+    let context = fixture(4);
+    let tx = transaction(&[DS1, DS2], 50, 1).id().unwrap();
+    let record = prepared(tx, DS1, AmxVoteV1::Yes([5; 32]));
+    let writes = vec![
+        (b"unrelated".to_vec(), b"write".to_vec()),
+        write_of(&record),
+    ];
+    let block = certify(instance(DS1), &context, 3, &writes, None, 3);
+    let all = block_writes(&context, 3, &writes);
+    let build = |block, writes: &[(Vec<u8>, Vec<u8>)]| {
+        AmxRecordProofV1::from_writes(
+            block,
+            writes
+                .iter()
+                .map(|(key, value)| (key.as_slice(), value.as_slice())),
+            record.clone(),
+        )
+    };
+
+    let proof = build(block.clone(), &all).unwrap();
+    let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();
+    tracker.verify_record(&proof).unwrap();
+    let encoded = norito::encode_canonical(&proof).unwrap();
+    let restored: AmxRecordProofV1 = norito::decode_canonical(&encoded).unwrap();
+    assert_eq!(restored, proof);
+    tracker.verify_record(&restored).unwrap();
+
+    // Keeping the AMX record while losing either mandatory or ordinary writes must fail
+    // before a relayer retains an unusable proof.
+    assert!(build(block.clone(), &writes).is_err());
+    assert!(build(block.clone(), &[all[0].clone(), all[2].clone()]).is_err());
+    let mut changed = all.clone();
+    changed[1].1 = b"changed".to_vec();
+    assert!(build(block.clone(), &changed).is_err());
+    let mut extra = all.clone();
+    extra.push((b"unexpected".to_vec(), b"write".to_vec()));
+    assert!(build(block.clone(), &extra).is_err());
+    let foreign = certify(instance(DS1), &context, 4, &writes, None, 3);
+    assert!(build(foreign, &all).is_err());
+
+    // Repeated writes are valid when their final values are exactly those certified.
+    let mut repeated = vec![(b"unrelated".to_vec(), b"superseded".to_vec())];
+    repeated.extend(all);
+    assert_eq!(build(block.clone(), &repeated).unwrap(), proof);
+    repeated.push((b"unrelated".to_vec(), b"uncertified".to_vec()));
+    assert!(build(block, &repeated).is_err());
+}
+
+#[test]
+fn sumeragi_amx_record_proof_construction_rejects_invalid_result_preimages() {
+    let context = fixture(4);
+    let tx = transaction(&[DS1, DS2], 50, 1).id().unwrap();
+    let record = prepared(tx, DS1, AmxVoteV1::Yes([5; 32]));
+    let writes = vec![write_of(&record)];
+    let block = certify(instance(DS1), &context, 3, &writes, None, 3);
+    let all = block_writes(&context, 3, &writes);
+    let preimages = [
+        Vec::new(),
+        vec![0; crate::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES + 1],
+        block.result_preimage[..block.result_preimage.len() - 1].to_vec(),
+        certify(instance(DS1), &context, 3, &[], None, 3).result_preimage,
+    ];
+    for result_preimage in preimages {
+        let mut invalid = block.clone();
+        invalid.result_preimage = result_preimage;
+        assert!(
+            AmxRecordProofV1::from_writes(
+                invalid,
+                all.iter()
+                    .map(|(key, value)| (key.as_slice(), value.as_slice())),
+                record.clone(),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn sumeragi_amx_tracker_verifies_records_under_the_tracked_committee_only() {
     let context = fixture(4);
     let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();
@@ -871,7 +950,7 @@ const GLOBAL: [u8; 32] = [0x47; 32];
 
 /// An in-memory dataspace ledger: a leg `[from, to, amount_be64]` moves `amount` from `from` to
 /// `to`; escrow debits `from` into the transaction's escrow.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Ledger {
     balances: std::collections::BTreeMap<u8, u64>,
     escrows: std::collections::BTreeMap<[u8; 32], (u8, u8, u64)>,
@@ -898,30 +977,37 @@ impl Ledger {
 }
 
 impl AmxEscrow for Ledger {
-    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Option<[u8; 32]> {
+    type Error = core::convert::Infallible;
+
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Result<Option<[u8; 32]>, Self::Error> {
         let [from, to, amount @ ..] = leg.payload.as_slice() else {
-            return None;
+            return Ok(None);
         };
-        let amount = u64::from_be_bytes(amount.try_into().ok()?);
-        let balance = self.balances.entry(*from).or_default();
-        if *balance < amount {
-            return None;
+        let Ok(amount) = amount.try_into() else {
+            return Ok(None);
+        };
+        let amount = u64::from_be_bytes(amount);
+        let balance = self.balances.get(from).copied().unwrap_or_default();
+        if balance < amount {
+            return Ok(None);
         }
-        *balance -= amount;
+        self.balances.insert(*from, balance - amount);
         self.escrows.insert(*tx, (*from, *to, amount));
-        Some(Hash::new(&leg.payload).into())
+        Ok(Some(Hash::new(&leg.payload).into()))
     }
 
-    fn apply(&mut self, tx: &[u8; 32]) {
+    fn apply(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
         let (_, to, amount) = self.escrows.remove(tx).expect("an escrow to apply");
         *self.balances.entry(to).or_default() += amount;
         self.applied.push(*tx);
+        Ok(())
     }
 
-    fn release(&mut self, tx: &[u8; 32]) {
+    fn release(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
         let (from, _, amount) = self.escrows.remove(tx).expect("an escrow to release");
         *self.balances.entry(from).or_default() += amount;
         self.released.push(*tx);
+        Ok(())
     }
 }
 
@@ -964,6 +1050,184 @@ fn participant() -> AmxParticipantStateV1 {
         DS1,
         AmxForeignInstanceV1::new(GLOBAL, long_fixture()).unwrap(),
     )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EscrowCall {
+    Prepare,
+    Apply,
+    Release,
+}
+
+struct RefusingEscrow {
+    ledger: Ledger,
+    refused: Option<EscrowCall>,
+    calls: Vec<EscrowCall>,
+}
+
+impl RefusingEscrow {
+    fn called(&mut self, call: EscrowCall) -> Result<(), EscrowCall> {
+        self.calls.push(call);
+        if self.refused == Some(call) {
+            Err(call)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl AmxEscrow for RefusingEscrow {
+    type Error = EscrowCall;
+
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Result<Option<[u8; 32]>, Self::Error> {
+        self.called(EscrowCall::Prepare)?;
+        Ok(self.ledger.escrow(tx, leg).unwrap())
+    }
+
+    fn apply(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
+        self.called(EscrowCall::Apply)?;
+        self.ledger.apply(tx).unwrap();
+        Ok(())
+    }
+
+    fn release(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
+        self.called(EscrowCall::Release)?;
+        self.ledger.release(tx).unwrap();
+        Ok(())
+    }
+}
+
+fn corrupted_signature(proof: &AmxRecordProofV1) -> AmxRecordProofV1 {
+    let mut changed = proof.clone();
+    let mut certificate: Qc = norito::decode_canonical(&changed.block.commit_qc).unwrap();
+    certificate.agg_sig.0[17] ^= 1;
+    changed.block.commit_qc = norito::encode_canonical(&certificate).unwrap();
+    changed
+}
+
+#[test]
+fn sumeragi_amx_participant_resource_refusal_never_votes_no_or_closes_escrow() {
+    for (outcome, operation, settled) in [
+        (
+            AmxOutcomeV1::Commit,
+            EscrowCall::Apply,
+            AmxSettleOutcome::Applied,
+        ),
+        (
+            AmxOutcomeV1::Abort,
+            EscrowCall::Release,
+            AmxSettleOutcome::Released,
+        ),
+    ] {
+        let tx = transfer(10, 31, [7, 8]);
+        let begin = global_proof(2, &AmxRecordV1::Begin(tx.begin().unwrap()));
+        let decision_height = if outcome == AmxOutcomeV1::Abort {
+            11
+        } else {
+            9
+        };
+        let decision = global_proof(decision_height, &decision(&tx, outcome));
+        let mut state = participant();
+        let original = state.clone();
+        let mut escrow = RefusingEscrow {
+            ledger: Ledger::with(&[(1, 20)]),
+            refused: Some(EscrowCall::Prepare),
+            calls: Vec::new(),
+        };
+        let original_ledger = escrow.ledger.clone();
+        assert_eq!(
+            state.prepare(&mut escrow, &tx, &begin),
+            Err(AmxParticipantError::Escrow(EscrowCall::Prepare))
+        );
+        assert_eq!(
+            state, original,
+            "refusal cannot install No or advance global height"
+        );
+        assert_eq!(escrow.ledger, original_ledger);
+
+        escrow.refused = None;
+        let AmxRecordV1::Prepared(prepared) = state.prepare(&mut escrow, &tx, &begin).unwrap()
+        else {
+            panic!("original request must prepare on retry");
+        };
+        assert!(matches!(prepared.vote, AmxVoteV1::Yes(_)));
+        let prepared_state = state.clone();
+        let locked_ledger = escrow.ledger.clone();
+        escrow.refused = Some(operation);
+        let calls = escrow.calls.clone();
+        assert!(matches!(
+            state.settle(&mut escrow, &corrupted_signature(&decision)),
+            Err(AmxParticipantError::Protocol(AmxError::Proof(_)))
+        ));
+        assert_eq!(
+            escrow.calls, calls,
+            "invalid signature cannot invoke escrow"
+        );
+        assert_eq!(state, prepared_state);
+        for _ in 0..2 {
+            assert_eq!(
+                state.settle(&mut escrow, &decision),
+                Err(AmxParticipantError::Escrow(operation))
+            );
+            assert_eq!(
+                state, prepared_state,
+                "failed settlement cannot close or prune the Yes"
+            );
+            assert_eq!(escrow.ledger, locked_ledger);
+        }
+        escrow.refused = None;
+        assert_eq!(state.settle(&mut escrow, &decision).unwrap(), settled);
+        assert_eq!(escrow.ledger.total(), original_ledger.total());
+        assert!(escrow.ledger.escrows.is_empty());
+        assert_eq!(
+            escrow.ledger.applied.len() + escrow.ledger.released.len(),
+            1
+        );
+        let calls = escrow.calls.clone();
+        // A late duplicate can be held after deadline pruning, but never invokes escrow twice.
+        let _ = state.settle(&mut escrow, &decision);
+        assert_eq!(escrow.calls, calls);
+        state.validate().unwrap();
+    }
+}
+
+#[test]
+fn sumeragi_amx_participant_held_or_invalid_proof_never_calls_refusing_escrow() {
+    let tx = transfer(10, 32, [7, 8]);
+    let begin = global_proof(2, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    let abort = global_proof(3, &decision(&tx, AmxOutcomeV1::Abort));
+    let mut state = participant();
+    let mut escrow = RefusingEscrow {
+        ledger: Ledger::with(&[(1, 20)]),
+        refused: Some(EscrowCall::Prepare),
+        calls: Vec::new(),
+    };
+    let original_ledger = escrow.ledger.clone();
+    let original_state = state.clone();
+    assert!(matches!(
+        state.prepare(&mut escrow, &tx, &corrupted_signature(&begin)),
+        Err(AmxParticipantError::Protocol(AmxError::Proof(_)))
+    ));
+    assert!(matches!(
+        state.prepare(&mut escrow, &tx, &abort),
+        Err(AmxParticipantError::Protocol(_))
+    ));
+    assert!(matches!(
+        state.settle(&mut escrow, &begin),
+        Err(AmxParticipantError::Protocol(_))
+    ));
+    assert_eq!(state, original_state);
+    assert_eq!(
+        state.settle(&mut escrow, &abort).unwrap(),
+        AmxSettleOutcome::Held
+    );
+    let AmxRecordV1::Prepared(prepared) = state.prepare(&mut escrow, &tx, &begin).unwrap() else {
+        panic!("held decision must produce Prepared No");
+    };
+    assert_eq!(prepared.vote, AmxVoteV1::No);
+    assert!(escrow.calls.is_empty());
+    assert_eq!(escrow.ledger, original_ledger);
+    state.validate().unwrap();
 }
 
 #[test]

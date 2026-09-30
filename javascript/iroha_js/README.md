@@ -757,6 +757,29 @@ const result = await compileKotodamaProgram(source, {
 });
 ```
 
+Pass `sources` for explicitly named companion files. The compiler resolves `include`
+and `import` relative to their referring file while preserving each file in diagnostics:
+
+```js
+const result = await compileKotodamaProgram(
+  'seiyaku App { include "parts/view.ko"; import "math.ko" as arith; }',
+  {
+    sourceName: "app.ko",
+    sources: [
+      { sourceName: "parts/view.ko", source: "view fn value() -> int { return arith::double(value: 3); }" },
+      { sourceName: "math.ko", source: "module Math { export fn double(int value) -> int { return value * 2; } }" },
+    ],
+  },
+);
+```
+
+Source paths stay inside their source root. Each file is bounded to 1 MiB; a
+complete inventory permits 512 files and 16 MiB. Immutable locked dependencies
+can be supplied with `imports: [{ alias, package }]` and
+`packages: [{ identity, modules, sources, exports, imports }]`; package source
+paths are relative to that package's root. Compilation performs no file or
+network discovery. The same request shape is used by the native and remote adapters.
+
 The browser export has no compiler implementation. It requires an explicit
 canonical Rust compiler-service endpoint:
 

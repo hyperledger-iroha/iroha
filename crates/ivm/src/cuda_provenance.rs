@@ -2,7 +2,7 @@
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{fs, io::Read as _, path::Path};
 
 const MANIFEST_NAME: &str = "provenance.v1";
 const MANIFEST_SIGNATURE_NAME: &str = "provenance.v1.sig";
@@ -10,7 +10,6 @@ const MANIFEST_PUBLIC_KEY_NAME: &str = "provenance.v1.pub";
 const MANIFEST_HEADER: &str = "ivm-cuda-ptx-provenance-v1";
 const GENERATION_DOMAIN: &[u8] = b"ivm-cuda-ptx-generation-v1\0";
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;
-const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_PTX_BYTES: usize = 8 * 1024 * 1024;
 
 /// Bundle bytes that passed signed provenance and exact source/PTX hashing.
@@ -28,19 +27,157 @@ pub(super) struct VerifiedCudaBundle {
     pub target_profile: String,
 }
 
-fn read_regular_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, String> {
+fn same_regular_inode(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    if !before.file_type().is_file()
+        || !after.file_type().is_file()
+        || before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+    {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        before.dev() == after.dev()
+            && before.ino() == after.ino()
+            && before.ctime() == after.ctime()
+            && before.ctime_nsec() == after.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+    target_os = "linux",
+    target_os = "android"
+))]
+fn no_follow_nonblocking_flags() -> i32 {
+    // Match the platform file-admission flags in state_overlay_fs. This module
+    // also belongs to build.rs, so it cannot depend on the runtime overlay owner.
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        0x100 | 0x4
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let no_follow = if cfg!(any(
+            target_arch = "arm",
+            target_arch = "aarch64",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )) {
+            0x8000
+        } else {
+            0x0002_0000
+        };
+        let nonblocking = if cfg!(any(target_arch = "mips", target_arch = "mips64")) {
+            0x80
+        } else if cfg!(any(target_arch = "sparc", target_arch = "sparc64")) {
+            0x4000
+        } else {
+            0x800
+        };
+        no_follow | nonblocking
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+        target_os = "linux",
+        target_os = "android"
+    ))
+))]
+fn open_regular_file(_path: &Path) -> std::io::Result<fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "CUDA provenance requires no-follow nonblocking file admission",
+    ))
+}
+
+#[cfg(any(
+    not(unix),
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+    target_os = "linux",
+    target_os = "android"
+))]
+fn open_regular_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(no_follow_nonblocking_flags());
+    }
+    options.open(path)
+}
+
+fn read_regular_file(path: &Path, maximum: Option<usize>) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
     if !metadata.file_type().is_file() {
         return Err(format!("{} must be a regular file", path.display()));
     }
-    if metadata.len() > maximum as u64 {
+    if maximum.is_some_and(|maximum| metadata.len() > maximum as u64) {
         return Err(format!("{} exceeds its byte limit", path.display()));
     }
-    let bytes =
-        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    if bytes.len() > maximum {
+    let mut file = open_regular_file(path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if !same_regular_inode(&metadata, &opened) {
+        return Err(format!("{} changed before read", path.display()));
+    }
+    let limit = opened
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| format!("{} has an invalid inode size", path.display()))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if maximum.is_some_and(|maximum| bytes.len() > maximum) {
         return Err(format!("{} grew beyond its byte limit", path.display()));
+    }
+    let after = file
+        .metadata()
+        .map_err(|error| format!("cannot recheck {}: {error}", path.display()))?;
+    let after_path = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot recheck {}: {error}", path.display()))?;
+    if bytes.len() as u64 != opened.len()
+        || !same_regular_inode(&opened, &after)
+        || !same_regular_inode(&opened, &after_path)
+    {
+        return Err(format!("{} changed while read", path.display()));
     }
     Ok(bytes)
 }
@@ -102,9 +239,9 @@ fn signed_manifest(cuda_dir: &Path, trusted_key_sha256: &str) -> Result<Vec<u8>,
             "CUDA trusted public-key fingerprint must be a reviewed lowercase SHA-256".into(),
         );
     }
-    let manifest = read_regular_bounded(&cuda_dir.join(MANIFEST_NAME), MAX_MANIFEST_BYTES)?;
-    let public_key = read_regular_bounded(&cuda_dir.join(MANIFEST_PUBLIC_KEY_NAME), 32)?;
-    let signature = read_regular_bounded(&cuda_dir.join(MANIFEST_SIGNATURE_NAME), 64)?;
+    let manifest = read_regular_file(&cuda_dir.join(MANIFEST_NAME), Some(MAX_MANIFEST_BYTES))?;
+    let public_key = read_regular_file(&cuda_dir.join(MANIFEST_PUBLIC_KEY_NAME), Some(32))?;
+    let signature = read_regular_file(&cuda_dir.join(MANIFEST_SIGNATURE_NAME), Some(64))?;
     let public_key: [u8; 32] = public_key
         .try_into()
         .map_err(|_| "CUDA provenance public key must be 32 raw bytes")?;
@@ -181,8 +318,8 @@ pub(super) fn verify_bundle(
     for stem in stems {
         let source_digest = digest_field(&mut lines, &format!("artifact.{stem}.source_sha256"))?;
         let ptx_digest = digest_field(&mut lines, &format!("artifact.{stem}.ptx_sha256"))?;
-        let source = read_regular_bounded(&cuda_dir.join(format!("{stem}.cu")), MAX_SOURCE_BYTES)?;
-        let ptx = read_regular_bounded(&cuda_dir.join(format!("{stem}.ptx")), MAX_PTX_BYTES)?;
+        let source = read_regular_file(&cuda_dir.join(format!("{stem}.cu")), None)?;
+        let ptx = read_regular_file(&cuda_dir.join(format!("{stem}.ptx")), Some(MAX_PTX_BYTES))?;
         if sha256_hex(&source) != source_digest || sha256_hex(&ptx) != ptx_digest {
             return Err(format!(
                 "CUDA provenance source/PTX digest mismatch for {stem}"
@@ -324,6 +461,86 @@ mod tests {
             verified.nvcc_flags,
             "-ptx -std=c++14 -gencode arch=compute_86,code=sm_86"
         );
+    }
+
+    #[test]
+    fn signed_bundle_accepts_large_source_trivia_and_preserves_exact_hashes() {
+        let mut fixture = Fixture::new();
+        let source = format!("//{}\n", "x".repeat(1024 * 1024));
+        let path = fixture.directory.join("vector.cu");
+        fs::write(&path, &source).expect("large source fixture");
+        let original = format!(
+            "artifact.vector.source_sha256={}",
+            sha256_hex(b"// source for vector\n")
+        );
+        assert_eq!(fixture.manifest.matches(&original).count(), 1);
+        fixture.manifest = fixture.manifest.replacen(
+            &original,
+            &format!(
+                "artifact.vector.source_sha256={}",
+                sha256_hex(source.as_bytes())
+            ),
+            1,
+        );
+        fixture.resign();
+        assert_eq!(
+            fixture.verify().expect("large signed source").artifacts,
+            fixture.artifacts
+        );
+        assert_eq!(
+            read_regular_file(&path, None).expect("exact source"),
+            source.as_bytes()
+        );
+        assert!(
+            read_regular_file(&path, Some(64))
+                .unwrap_err()
+                .contains("byte limit")
+        );
+        fs::write(path, format!("{source}// mutation\n")).expect("source mutation");
+        assert!(fixture.verify().unwrap_err().contains("digest mismatch"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_reader_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+        let fixture = Fixture::new();
+        let source = fixture.directory.join("vector.cu");
+        let alias = fixture.directory.join("alias.cu");
+        symlink(source, &alias).expect("source alias fixture");
+        assert!(open_regular_file(&alias).is_err());
+        assert!(
+            read_regular_file(&alias, None)
+                .unwrap_err()
+                .contains("regular file")
+        );
+    }
+
+    #[test]
+    fn source_reader_requires_the_original_regular_inode() {
+        let fixture = Fixture::new();
+        let source = fixture.directory.join("vector.cu");
+        let before = fs::symlink_metadata(&source).expect("source metadata");
+        let opened = open_regular_file(&source).expect("direct source");
+        assert!(same_regular_inode(
+            &before,
+            &opened.metadata().expect("retained inode")
+        ));
+        fs::rename(&source, fixture.directory.join("original.cu")).expect("move source");
+        fs::write(&source, b"// source for vector\n").expect("same-byte replacement");
+        #[cfg(unix)]
+        assert!(!same_regular_inode(
+            &before,
+            &fs::symlink_metadata(&source).expect("replacement metadata")
+        ));
+        let retained = opened.metadata().expect("original retained inode");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            assert_eq!(before.dev(), retained.dev());
+            assert_eq!(before.ino(), retained.ino());
+        }
+        assert_eq!(before.len(), retained.len());
     }
 
     #[test]

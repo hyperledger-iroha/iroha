@@ -74,6 +74,10 @@ pub struct VerifiedMaterial {
 }
 impl VerifiedMaterial {
     /// Finish immutable sharing or return the exact original output for a later resource retry.
+    ///
+    /// # Errors
+    /// Returns the original material if its frame or payload belongs to another pool, or
+    /// the payload cannot acquire its shared owner in the supplied pool.
     #[allow(
         clippy::result_large_err,
         reason = "retain original metadata and charged backing"
@@ -141,7 +145,14 @@ impl VerifiedManifest<'_> {
             return Err(AcquisitionError::Bytes(ByteAdmissionError::ForeignBudget));
         }
         let reconstructed = reconstruct_funded(self.table.shape, received, budget, |index, row| {
-            self.accepts_row(index, row, crypto)
+            if cfg!(sumeragi_mutation = "MS20d") {
+                self.table
+                    .shape
+                    .chunk_range(index)
+                    .is_some_and(|range| range.len() == row.len())
+            } else {
+                self.accepts_row(index, row, crypto)
+            }
         })
         .map_err(AcquisitionError::Codec)?;
         self.table
@@ -190,6 +201,9 @@ pub struct AvailabilitySource {
 }
 impl AvailabilitySource {
     /// Bind one expected identity to its already authenticated complete height authority.
+    ///
+    /// # Errors
+    /// Rejects a height outside the supplied authenticated epoch.
     pub fn new(
         instance: Hash32,
         height: u64,
@@ -227,11 +241,12 @@ impl AvailabilitySource {
         header: &BlockHeader,
         crypto: &dyn Crypto,
     ) -> Result<(), AvailabilityError> {
-        if header.instance != self.instance
-            || header.height != self.height
-            || header.epoch != self.config.epoch.id
-            || header.skipped_leaders.len() > self.config.committee.n()
-            || header.hash(crypto) != self.block_hash
+        if header.skipped_leaders.len() > self.config.committee.n()
+            || (!cfg!(sumeragi_mutation = "MS20b")
+                && (header.instance != self.instance
+                    || header.height != self.height
+                    || header.epoch != self.config.epoch.id
+                    || header.hash(crypto) != self.block_hash))
         {
             return Err(AvailabilityError::Source);
         }
@@ -266,6 +281,10 @@ impl BodyRestoration {
         &self.source
     }
     /// Complete on a worker; success consumes exact original owners, refusal returns this job.
+    ///
+    /// # Errors
+    /// Returns the retained job if original source, geometry, signatures, payload or codeword
+    /// checks fail, funding is foreign, or admission or codec allocation is refused.
     #[allow(
         clippy::result_large_err,
         reason = "retain exact source and original byte owners"
@@ -354,10 +373,9 @@ mod tests {
             crate::bytes::ByteAdmissionError::ForeignBudget
         ));
         drop(reserve);
-        let body = match material.finish(&f.budget) {
-            Ok(body) => body,
-            Err(_) => panic!("same pool retry"),
-        };
+        let body = material
+            .finish(&f.budget)
+            .unwrap_or_else(|(_, error)| panic!("same pool retry: {error}"));
         assert_eq!(body.header(), &f.header);
         assert_eq!(body.payload().as_slice(), f.payload);
         assert_eq!(body.payload().as_slice().as_ptr(), payload_pointer);

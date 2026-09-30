@@ -169,6 +169,10 @@ impl CommitCertificate {
     /// # Errors
     /// Returns all four original buffers unchanged on a source, admission or allocator refusal.
     /// Retain these buffers for retry; do not rerun execution or reconstruct the result preimage.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns all original funded buffers without allocating"
+    )]
     pub fn from_charged_parts(
         consensus_header: ChargedBuffer<u8>,
         commit_qc: ChargedBuffer<u8>,
@@ -191,6 +195,10 @@ impl CommitCertificate {
     ///
     /// # Errors
     /// Returns that owner on every failure, without copying, dropping or resizing any buffer.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns the original funded owner without allocating"
+    )]
     pub fn from_charged_owner(
         parts: ChargedCertificateParts,
         budget: &AllocationBudget,
@@ -223,12 +231,6 @@ impl CommitCertificate {
     /// # Errors
     /// Returns a typed source/admission/allocator refusal. The borrowed source remains intact.
     pub fn admit(&self, budget: &AllocationBudget) -> Result<Self, CertificateAdmissionError> {
-        if matches!(self.storage, Storage::Admitted(_)) {
-            return self
-                .admitted_to(budget)
-                .then(|| self.clone())
-                .ok_or(CertificateAdmissionError::ForeignBudget);
-        }
         fn copy(
             bytes: &[u8],
             budget: &AllocationBudget,
@@ -239,6 +241,12 @@ impl CommitCertificate {
                 .append(bytes)
                 .expect("exact byte capacity was admitted before copying");
             Ok(buffer)
+        }
+        if matches!(self.storage, Storage::Admitted(_)) {
+            return self
+                .admitted_to(budget)
+                .then(|| self.clone())
+                .ok_or(CertificateAdmissionError::ForeignBudget);
         }
         let header = copy(self.consensus_header(), budget)?;
         let qc = copy(self.commit_qc(), budget)?;

@@ -35,7 +35,7 @@ use sorafs_car::{
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     error::Error,
     fmt, fs,
     io::{self, Write},
@@ -517,6 +517,13 @@ pub enum PackageError {
         /// Required kind.
         expected: &'static str,
     },
+    /// A referenced Kotodama file or source-relative path is invalid.
+    InvalidSource {
+        /// Portable referring or referenced file path.
+        path: String,
+        /// Bounded compiler diagnostic or path failure.
+        reason: String,
+    },
     /// A path was not valid portable UTF-8.
     NonPortablePath(String),
     /// Two selected names collide on portable case/Unicode-normalizing filesystems.
@@ -632,6 +639,9 @@ impl fmt::Display for PackageError {
                 "package selector `{}` must be {expected}",
                 path.display()
             ),
+            Self::InvalidSource { path, reason } => {
+                write!(formatter, "invalid Kotodama source `{path}`: {reason}")
+            }
             Self::NonPortablePath(path) => {
                 write!(formatter, "package path `{path}` is not portable UTF-8")
             }
@@ -767,7 +777,7 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
 /// `manifest_toml` is parsed and rendered canonically. `verification_lock` must be the
 /// exact typed graph generated for publication. Its source-tree TOML and provider-facing
 /// Norito representation are both derived from this one value, so they cannot diverge.
-/// Only the library/contracts/tests/readme/license/include selectors in `layout` are visited.
+/// Manifest selectors and their explicit Kotodama include/import closure are visited.
 ///
 /// # Errors
 ///
@@ -860,10 +870,12 @@ fn collect_package_sources(
     for path in &layout.includes {
         collector.collect_selector(path, SelectionShape::Either)?;
     }
+    collector.collect_source_dependencies()?;
     for selection in &layout.external {
         let root = validate_root(&selection.root)?;
         let mut external = Collector::new(root.clone());
         external.collect_selector(&selection.selector, selection.shape)?;
+        external.collect_source_dependencies()?;
         let external_entries = external.visited_entries;
         let external_plan = external.finish()?;
         collector.consume_entries(external_entries)?;
@@ -1273,6 +1285,83 @@ impl Collector {
         }
         let components = canonical_portable_components(path)?;
         self.insert(path.to_owned(), path.to_owned(), components, bytes)
+    }
+    /// Extend positive manifest selections only through explicit source declarations.
+    fn collect_source_dependencies(&mut self) -> Result<(), PackageError> {
+        use kotodama_lang::{
+            ast::SourceDirectiveKind,
+            source::{FrontendBudget, SourceFile, SourceId},
+        };
+
+        let mut pending = VecDeque::new();
+        let mut visited = BTreeSet::new();
+        // Selected directories may contain bare fragments or non-compiling draft files.
+        // Only complete entry units seed the closure; referenced files are parsed below
+        // using the grammar selected by their include/import declaration.
+        for file in self.files.values().filter(|file| {
+            Path::new(&file.path)
+                .extension()
+                .is_some_and(|extension| extension == "ko")
+        }) {
+            let Ok(text) = std::str::from_utf8(&file.bytes) else {
+                continue;
+            };
+            // Resolve filesystem references from the original spelling; archive paths may
+            // already have been normalized to NFC by the portable-path policy.
+            let referrer = self
+                .collision_origins
+                .get(&portable_collision_key(&file.components))
+                .unwrap_or(&file.path);
+            let source = SourceFile::new(SourceId(0), referrer.as_str(), text);
+            if let Ok(program) = kotodama_lang::parser::parse_source(&source, FrontendBudget::v1())
+            {
+                visited.insert((referrer.clone(), false));
+                pending.push_back((referrer.clone(), program.directives));
+            }
+        }
+        while let Some((referrer, directives)) = pending.pop_front() {
+            for directive in directives {
+                let (relative, fragment) = match directive.kind {
+                    SourceDirectiveKind::Include { path } => (path, true),
+                    SourceDirectiveKind::Import { path, .. } => (path, false),
+                };
+                let path = kotodama_lang::linker::resolve_source_path(&referrer, &relative)
+                    .map_err(|error| PackageError::InvalidSource {
+                        path: referrer.clone(),
+                        reason: error.to_string(),
+                    })?;
+                if !visited.insert((path.clone(), fragment)) {
+                    continue;
+                }
+                self.collect_selector(Path::new(&path), SelectionShape::File)?;
+                let canonical = canonical_portable_components(&path)?.join("/");
+                let file =
+                    self.files
+                        .get(&canonical)
+                        .ok_or_else(|| PackageError::InvalidSource {
+                            path: path.clone(),
+                            reason: "source was not retained in the package".into(),
+                        })?;
+                let text = std::str::from_utf8(&file.bytes).map_err(|error| {
+                    PackageError::InvalidSource {
+                        path: path.clone(),
+                        reason: error.to_string(),
+                    }
+                })?;
+                let source = SourceFile::new(SourceId(0), path.as_str(), text);
+                let parsed = if fragment {
+                    kotodama_lang::parser::parse_fragment_source(&source, FrontendBudget::v1())
+                } else {
+                    kotodama_lang::parser::parse_source(&source, FrontendBudget::v1())
+                };
+                let program = parsed.map_err(|diagnostics| PackageError::InvalidSource {
+                    path: path.clone(),
+                    reason: diagnostics.render_human(),
+                })?;
+                pending.push_back((path, program.directives));
+            }
+        }
+        Ok(())
     }
     fn collect_selector(
         &mut self,
@@ -2516,6 +2605,119 @@ version = "1.0.0"
         {
             Err(MusubiPublicationServiceBackendErrorV1::Permanent)
         }
+    }
+    #[test]
+    fn captures_declared_contract_source_closure_without_unrelated_files() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("contracts/parts")).unwrap();
+        fs::create_dir_all(temp.path().join("modules")).unwrap();
+        fs::write(
+            temp.path().join("contracts/app.ko"),
+            r#"seiyaku App {
+            include "parts/state.ko";
+            import "../modules/math.ko" as arithmetic;
+            view fn value() -> int { return arithmetic::twice(total); }
+        }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("contracts/parts/state.ko"),
+            r#"include "../init.ko"; state int total;"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("contracts/init.ko"),
+            "hajimari() { total = 0; }",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("modules/math.ko"),
+            r#"module Math {
+            include "operations.ko";
+        }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("modules/operations.ko"),
+            "export fn twice(int _ value) -> int { return value * 2; }",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("modules/unrelated.ko"),
+            "not even valid source",
+        )
+        .unwrap();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.add_contract("contracts/app.ko");
+        let plan = plan_package(&layout, MANIFEST, &semantic_release().1).unwrap();
+        assert_eq!(
+            plan.files()
+                .iter()
+                .map(PlannedFile::path)
+                .collect::<Vec<_>>(),
+            [
+                "Musubi.lock",
+                "Musubi.toml",
+                "contracts/app.ko",
+                "contracts/init.ko",
+                "contracts/parts/state.ko",
+                "modules/math.ko",
+                "modules/operations.ko",
+            ]
+        );
+    }
+    #[test]
+    fn source_dependencies_resolve_before_portable_unicode_path_normalization() {
+        let temp = tempdir().expect("tempdir");
+        let directory = "cafe\u{301}";
+        fs::create_dir(temp.path().join(directory)).unwrap();
+        fs::write(
+            temp.path().join(directory).join("app.ko"),
+            r#"seiyaku App { include "part.ko"; }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(directory).join("part.ko"),
+            "state int total;",
+        )
+        .unwrap();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.add_contract(format!("{directory}/app.ko"));
+        let plan = plan_package(&layout, MANIFEST, &semantic_release().1).unwrap();
+        assert!(
+            plan.files()
+                .iter()
+                .any(|file| file.path() == "café/part.ko")
+        );
+    }
+    #[test]
+    fn source_dependencies_preserve_package_path_confinement() {
+        let temp = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+        let root = temp.path().join("app.ko");
+        fs::write(&root, r#"seiyaku App { include "../outside.ko"; }"#).unwrap();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.add_contract("app.ko");
+        assert!(matches!(
+            plan_package(&layout, MANIFEST, &semantic_release().1),
+            Err(PackageError::InvalidSource { .. })
+        ));
+        fs::write(outside.path().join("part.ko"), "state int total;").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("part.ko"),
+            temp.path().join("linked.ko"),
+        )
+        .unwrap();
+        fs::write(&root, r#"seiyaku App { include "linked.ko"; }"#).unwrap();
+        assert!(matches!(
+            plan_package(&layout, MANIFEST, &semantic_release().1),
+            Err(PackageError::Symlink(_))
+        ));
+        fs::write(&root, r#"seiyaku App { import "missing.ko" as helper; }"#).unwrap();
+        assert!(matches!(
+            plan_package(&layout, MANIFEST, &semantic_release().1),
+            Err(PackageError::Io { .. })
+        ));
     }
     #[test]
     fn plans_only_positive_files_in_byte_order() {

@@ -4,6 +4,7 @@ fn private_dataspace_peer_configs_use_direct_fee_settlement() {
     for (profile, label, base_port) in [
         (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
         (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),
+        (SoraProfile::PrivateBpng, "bpng", 30_080_u16),
     ] {
         let out_dir = temp.path().join(label);
         let opts = LocalnetOptions {

@@ -1,4 +1,4 @@
-import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
+import { normalizeContractErrorMessagesV1, normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { Buffer } from "buffer";
 import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
 import { assertString } from "./instructionBuilderPrimitives.js";
@@ -117,6 +117,7 @@ export function createContractManifestNormalizer(
         source.error_types ?? source.errorTypes,
         "manifest.errorTypes",
       ),
+      error_messages: normalizeContractErrorMessagesV1(source.error_messages ?? source.errorMessages, source.error_types ?? source.errorTypes, "manifest.errorMessages"),
       kotoba:
         source.kotoba === undefined || source.kotoba === null
           ? null

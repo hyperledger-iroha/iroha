@@ -30,8 +30,8 @@ public final class JsonParserStringTypeTests {
             IdentifierJsonParser.parsePolicyList(
                 bytes(
                     canonical.replace(
-                        "\"policy_id\":\"phone#retail\",",
-                        "\"policy_id\":\"phone#retail\",\"program_id\":7,"))));
+                        "\"program_id\":\"lookup\"",
+                        "\"program_id\":7"))));
     assertRejects(
         "identifier policy list.items[0].note",
         () ->
@@ -141,10 +141,13 @@ public final class JsonParserStringTypeTests {
         + "\"total\":1,"
         + "\"items\":[{"
         + "\"policy_id\":\"phone#retail\","
+        + "\"program_id\":\"lookup\","
         + "\"owner\":\"owner\","
         + "\"active\":true,"
         + "\"normalization\":\"phone_e164\","
         + "\"resolver_public_key\":\""
+        + VALID_PUBLIC_KEY
+        + "\",\"output_opening_public_key\":\""
         + VALID_PUBLIC_KEY
         + "\","
         + "\"backend\":\"bfv-affine-v1\","
@@ -160,6 +163,8 @@ public final class JsonParserStringTypeTests {
         + "\"owner\":\"owner\","
         + "\"active\":true,"
         + "\"resolver_public_key\":\""
+        + VALID_PUBLIC_KEY
+        + "\",\"output_opening_public_key\":\""
         + VALID_PUBLIC_KEY
         + "\","
         + "\"backend\":\"bfv-programmed-v1\","

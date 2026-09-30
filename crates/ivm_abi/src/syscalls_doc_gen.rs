@@ -6,7 +6,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 1, args: "r10=status:u64", ret: "u64=status", gas: "asset:gas/G_exit@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 2, args: "-", ret: "u64=0", gas: "asset:gas/G_abort@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 3, args: "r10=&Json", ret: "u64=0", gas: "asset:gas/G_debug@ivm.core/v2" },
-    crate::syscalls::SyscallDoc { number: 4, args: "r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0", ret: "u64=0", gas: "asset:gas/G_abort@ivm.core/v2 + descriptor bytes" },
+    crate::syscalls::SyscallDoc { number: 4, args: "r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0", ret: "u64=0", gas: "asset:gas/G_abort@ivm.core/v2 + descriptor bytes + selected message UTF-8 bytes" },
     crate::syscalls::SyscallDoc { number: 16, args: "r10=&DomainId", ret: "u64=0", gas: "asset:gas/G_reg_domain@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 17, args: "r10=&DomainId", ret: "u64=0", gas: "asset:gas/G_unreg_domain@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 18, args: "r10=&DomainId, r11=&AccountId(to)", ret: "u64=0", gas: "asset:gas/G_transfer_domain@ivm.core/v2" },

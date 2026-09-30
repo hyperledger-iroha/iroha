@@ -84,7 +84,7 @@ pub fn validate_beacon_pulse_shape(
 /// independently unique. The complete native instance, epoch, authenticated epoch context,
 /// parent consensus hash and parent result are signed without a view number, so
 /// skipping an optional governance slot cannot alter
-/// a later mandatory NPoS pulse.
+/// a later mandatory `NPoS` pulse.
 #[must_use]
 pub fn global_threshold_beacon_pulse_payload_v1(
     pulse: &FinalizedGlobalThresholdBeaconPulseV1,
@@ -120,7 +120,11 @@ pub fn global_threshold_beacon_pulse_id_v1(
         GLOBAL_BEACON_PULSE_ID_DOMAIN_V1.len() + 4 + payload.len() + pulse.signature.len() + 32,
     );
     preimage.extend_from_slice(GLOBAL_BEACON_PULSE_ID_DOMAIN_V1);
-    preimage.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    preimage.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("fixed-size beacon pulse payload")
+            .to_be_bytes(),
+    );
     preimage.extend_from_slice(&payload);
     preimage.extend_from_slice(&pulse.signature);
     preimage.extend_from_slice(&verified_seed);
@@ -129,10 +133,10 @@ pub fn global_threshold_beacon_pulse_id_v1(
 
 const GLOBAL_BEACON_NPOS_SUCCESSOR_SEED_DOMAIN_V1: &[u8] =
     b"iroha.global-threshold-beacon.npos-successor-seed.v1\0";
-/// Derive the NPoS successor seed from one already-verified global beacon pulse.
+/// Derive the `NPoS` successor seed from one already-verified global beacon pulse.
 ///
 /// The dedicated domain prevents a pulse seed consumed by Parliament or another
-/// protocol from being reused as the raw NPoS PRF key. The target boundary and
+/// protocol from being reused as the raw `NPoS` PRF key. The target boundary and
 /// successor epoch are explicit even though the pulse identifier already binds
 /// its signed position; this makes accidental cross-epoch reuse impossible at
 /// the consensus call site.

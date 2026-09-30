@@ -91,9 +91,7 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
         fn wake(self: Arc<Self>) {
             assert!(self.source.state.try_lock().is_ok());
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if !self.panic_in_drop {
-                panic!("first wake callback panicked");
-            }
+            assert!(self.panic_in_drop, "first wake callback panicked");
         }
     }
     impl Drop for FirstWake {
@@ -103,9 +101,7 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
             self.drop_was_unlocked
                 .store(self.source.state.try_lock().is_ok(), Ordering::SeqCst);
             self.drops.fetch_add(1, Ordering::SeqCst);
-            if self.panic_in_drop {
-                panic!("first wake destructor panicked");
-            }
+            assert!(!self.panic_in_drop, "first wake destructor panicked");
         }
     }
 
@@ -539,7 +535,10 @@ fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_pan
                     .poll(&mut Context::from_waker(&waker))
                     .is_pending()
             );
-            let owner = source.poisoning_guard(lock.lock().unwrap_or_else(|p| p.into_inner()));
+            let owner = source.poisoning_guard(
+                lock.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 owner.release_with_observed_poison(drop, || lock.is_poisoned());
             }));
@@ -630,6 +629,10 @@ fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
 #[test]
 fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
     let source = ReleaseNotification::default();
+    #[expect(
+        clippy::mutex_integer,
+        reason = "exercise physical guard custody and original value through transfer"
+    )]
     let physical = Mutex::new(7_u64);
     let mut wait = source.observe().wait_for_release();
     let wake = Arc::new(WakeCount::default());
@@ -663,6 +666,10 @@ fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
 fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
+    #[expect(
+        clippy::mutex_integer,
+        reason = "exercise physical guard custody and original value through transfer"
+    )]
     let physical = Mutex::new(7_u64);
     let mut wait = source.observe().wait_for_release();
     let wake = Arc::new(WakeCount::default());
@@ -819,6 +826,10 @@ fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
 fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake() {
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
+    #[expect(
+        clippy::mutex_integer,
+        reason = "exercise physical guard custody and original value through transfer"
+    )]
     let lock = Mutex::new(17);
     let mut batch = source.deferred_batch();
     let mut foreign_batch = foreign.deferred_batch();
@@ -916,7 +927,10 @@ fn retained_observed_release_preserves_poison_predating_normal_cleanup() {
     );
     let mut batch = source.deferred_batch();
     let observation = source.observe();
-    let guard = source.poisoning_guard(lock.lock().unwrap_or_else(|p| p.into_inner()));
+    let guard = source.poisoning_guard(
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     guard
         .try_release_into_observed(&mut batch, drop, || lock.is_poisoned())
         .unwrap_or_else(|_| panic!("original source"));
@@ -941,7 +955,7 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
     let source = ReleaseNotification::new_charged(Charge(Arc::clone(&refunds)));
     let observation = source.observe();
     let same = observation.clone();
-    let (_, deferred) = source.guard(()).release_deferred(drop);
+    let ((), deferred) = source.guard(()).release_deferred(drop);
     drop(source);
     assert_eq!(refunds.load(Ordering::SeqCst), 0);
     drop(deferred);
@@ -965,7 +979,7 @@ fn deferred_notice_merge_retains_exact_source_and_never_wakes_early() {
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     for _ in 0..3 {
-        let (_, notice) = source
+        let ((), notice) = source
             .guard(physical.lock().unwrap())
             .release_deferred(drop);
         assert!(physical.try_lock().is_ok());
@@ -998,11 +1012,15 @@ fn deferred_notice_merge_preserves_poison_after_rejected_transfer() {
     });
     assert!(physical.is_poisoned());
     let guard = ReleaseGuard {
-        inner: Some(physical.lock().unwrap_or_else(|poison| poison.into_inner())),
+        inner: Some(
+            physical
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ),
         notification: &source,
         poison: PoisonPolicy::Fixed(physical.is_poisoned()),
     };
-    let (_, notice) = guard.release_deferred(drop);
+    let ((), notice) = guard.release_deferred(drop);
     let notice = match notice.try_merge_into(&mut wrong) {
         Err(original) => original,
         Ok(()) => panic!("foreign poison source accepted"),

@@ -1,6 +1,6 @@
 //! Type checking, nominal value resolution, and deterministic effect analysis.
 use super::ast::*;
-use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS};
+use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS, SourceId, SourceRange};
 use indexmap::{IndexMap, IndexSet};
 use iroha_data_model::events::data::prelude::{
     AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
@@ -10,7 +10,7 @@ use iroha_data_model::events::data::prelude::{
     RwaEventSet, TriggerEventFilter, TriggerEventSet,
 };
 use iroha_data_model::smart_contract::manifest::{
-    ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
+    ContractErrorMessage, ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -63,6 +63,8 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = MAX_TOKENS;
+#[cfg(test)]
+mod multifile_tests;
 mod trigger_lowering;
 mod value_traits;
 
@@ -171,7 +173,7 @@ fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
     }
     if matches!(
         name,
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" | "expect"
     ) {
         return Some(CompilerIntrinsicKind::Sum);
     }
@@ -531,6 +533,8 @@ pub struct TypedProgram {
     pub states: Vec<TypedStateDecl>,
     /// Canonical nominal errors advertised by this compilation.
     pub error_types: Vec<ContractErrorTypeDescriptor>,
+    /// Authenticated presentation text, independent of nominal error schemas.
+    pub error_messages: Vec<ContractErrorMessage>,
     pub triggers: Vec<TypedTrigger>,
     pub message_entries: Vec<MessageEntry>,
     /// Stable typed/effect-HIR metadata keyed independently of Rust addresses.
@@ -601,9 +605,10 @@ pub struct SemanticContext {
     external_functions: RefCell<BTreeMap<String, FunctionSignature>>,
     external_types: RefCell<BTreeMap<String, Type>>,
     external_states: RefCell<IndexMap<String, Type>>,
-    resolved_arena: RefCell<Option<Arc<crate::resolved::ResolvedArena>>>,
-    resolved_binding_types: RefCell<BTreeMap<crate::resolved::BindingId, Type>>,
-    typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
+    resolved_arenas: RefCell<BTreeMap<SourceId, Arc<crate::resolved::ResolvedArena>>>,
+    resolved_declaration_sources: RefCell<BTreeMap<String, SourceRange>>,
+    resolved_binding_types: RefCell<BTreeMap<(SourceId, crate::resolved::BindingId), Type>>,
+    typed_hir_nodes: RefCell<BTreeMap<TypedHirNodeId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
     required_list_capacity: RefCell<Option<u8>>,
     resolved_named_types: RefCell<HashMap<String, Type>>,
@@ -659,7 +664,9 @@ impl SemanticContext {
         self.external_functions.swap(&other.external_functions);
         self.external_types.swap(&other.external_types);
         self.external_states.swap(&other.external_states);
-        self.resolved_arena.swap(&other.resolved_arena);
+        self.resolved_arenas.swap(&other.resolved_arenas);
+        self.resolved_declaration_sources
+            .swap(&other.resolved_declaration_sources);
         self.resolved_binding_types
             .swap(&other.resolved_binding_types);
         self.typed_hir_nodes.swap(&other.typed_hir_nodes);
@@ -842,29 +849,87 @@ impl SemanticContext {
         program: &crate::resolved::ResolvedProgram,
         imported_types: &BTreeMap<String, Type>,
     ) -> Result<BTreeMap<String, FunctionSignature>, SemanticFailures> {
+        self.resolve_resolved_function_signatures_with_environment(
+            program,
+            &TestTargetEnvironment {
+                types: imported_types.clone(),
+                ..TestTargetEnvironment::default()
+            },
+        )
+    }
+    pub(crate) fn resolve_resolved_function_signatures_with_environment(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+        environment: &TestTargetEnvironment,
+    ) -> Result<BTreeMap<String, FunctionSignature>, SemanticFailures> {
         self.reset();
-        self.resolved_arena.replace(Some(program.arena()));
-        let result = self.resolve_function_signatures_inline(program.program(), imported_types);
+        self.consts.replace(environment.consts.clone());
+        self.resolved_arenas.replace(
+            program
+                .arenas()
+                .map(|arena| (arena.source(), arena))
+                .collect(),
+        );
+        let result = self.resolve_function_signatures_inline(program.program(), &environment.types);
         let pending = self.take_diagnostic();
-        self.resolved_arena.borrow_mut().take();
+        self.resolved_arenas.borrow_mut().clear();
+        self.resolved_declaration_sources.borrow_mut().clear();
         result.map_err(|error| {
             let mut failures = SemanticFailures::from(error);
             attach_pending_diagnostic(&mut failures, pending);
             failures
         })
     }
-    pub(crate) fn analyze_resolved_with_external_types(
+    /// Evaluate this prepared unit's constants for explicit module exports.
+    pub(crate) fn declared_constants(
         &self,
         program: &crate::resolved::ResolvedProgram,
-        external_functions: &BTreeMap<String, FunctionSignature>,
-        imported_types: &BTreeMap<String, Type>,
-    ) -> Result<TypedProgram, SemanticFailures> {
-        let environment = TestTargetEnvironment {
-            functions: external_functions.clone(),
-            types: imported_types.clone(),
-            ..TestTargetEnvironment::default()
-        };
-        self.analyze_resolved_environment(program, &environment)
+    ) -> Result<BTreeMap<String, TypedExpr>, SemanticFailures> {
+        let declarations = program
+            .program()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Const(declaration) => Some(declaration),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let own_names = declarations
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect::<BTreeSet<_>>();
+        // Signature preparation predeclares local integers for bounded type
+        // expressions. Value initializers still obey declaration-before-use.
+        let initial = self
+            .consts
+            .borrow()
+            .iter()
+            .filter(|(name, _)| !own_names.contains(name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        let previous = self.resolved_arenas.replace(
+            program
+                .arenas()
+                .map(|arena| (arena.source(), arena))
+                .collect(),
+        );
+        let result = evaluate_constant_declarations(self, declarations.iter().copied(), initial);
+        self.resolved_arenas.replace(previous);
+        let pending = self.take_diagnostic();
+        result
+            .map_err(|mut failures| {
+                attach_pending_diagnostic(&mut failures, pending);
+                failures
+            })
+            .map(|values| {
+                let exported = values
+                    .iter()
+                    .filter(|(name, _)| own_names.contains(name.as_str()))
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect();
+                self.consts.replace(values);
+                exported
+            })
     }
     pub(crate) fn analyze_resolved_with_test_target(
         &self,
@@ -928,6 +993,18 @@ impl SemanticContext {
             true,
         )
     }
+    /// Retain editor facts using the complete explicit module environment.
+    pub(crate) fn analyze_editor_with_environment(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+        environment: &TestTargetEnvironment,
+    ) -> (
+        Result<TypedProgram, SemanticFailures>,
+        BTreeMap<crate::resolved::BindingId, Type>,
+        Vec<TypedHirNode>,
+    ) {
+        self.analyze_resolved_environment_with_editor_facts(program, environment, true)
+    }
     fn analyze_resolved_environment_with_editor_facts(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -939,7 +1016,18 @@ impl SemanticContext {
         Vec<TypedHirNode>,
     ) {
         self.reset();
-        self.resolved_arena.replace(Some(program.arena()));
+        self.resolved_arenas.replace(
+            program
+                .arenas()
+                .map(|arena| (arena.source(), arena))
+                .collect(),
+        );
+        self.resolved_declaration_sources.replace(
+            program
+                .symbols()
+                .map(|symbol| (symbol.name.clone(), symbol.source))
+                .collect(),
+        );
         self.external_functions
             .replace(environment.functions.clone());
         self.external_states.replace(environment.states.clone());
@@ -953,33 +1041,33 @@ impl SemanticContext {
         if let Err(failures) = &mut result {
             attach_pending_diagnostic(failures, pending);
         }
-        let arena = program.arena();
+        let primary_source = program.arena().source();
         let bindings = self
             .resolved_binding_types
             .borrow()
             .iter()
-            .filter(|_| retain_editor_facts)
-            .map(|(id, ty)| (*id, ty.clone()))
+            .filter(|((source, _), _)| retain_editor_facts && *source == primary_source)
+            .map(|((_, id), ty)| (*id, ty.clone()))
             .collect();
+        let arenas = self.resolved_arenas.borrow();
         let nodes = self
             .typed_hir_nodes
             .borrow()
             .iter()
             .filter(|_| retain_editor_facts)
-            .filter_map(|(local, ty)| {
-                let node = arena.node(*local)?;
+            .filter_map(|(id, ty)| {
+                let node = arenas.get(&id.source)?.node(id.local)?;
                 Some(TypedHirNode {
-                    id: TypedHirNodeId {
-                        source: arena.source(),
-                        local: *local,
-                    },
+                    id: *id,
                     source: node.source,
                     target: node.target,
                     ty: ty.clone(),
                 })
             })
             .collect();
-        self.resolved_arena.borrow_mut().take();
+        drop(arenas);
+        self.resolved_arenas.borrow_mut().clear();
+        self.resolved_declaration_sources.borrow_mut().clear();
         self.resolved_binding_types.borrow_mut().clear();
         self.typed_hir_nodes.borrow_mut().clear();
         self.required_list_capacity.borrow_mut().take();
@@ -1063,12 +1151,29 @@ impl SemanticContext {
         id: Option<HirId>,
         raw: Option<crate::source::SourceRange>,
     ) -> Option<crate::source::SourceRange> {
-        let arena = self.resolved_arena.borrow();
-        let Some(arena) = arena.as_ref() else {
+        let Ok(Some(arena)) = self.arena_for_source(raw) else {
             return raw;
         };
         id.and_then(|id| arena.node(id))
             .and_then(|node| node.source)
+    }
+    fn arena_for_source(
+        &self,
+        source: Option<SourceRange>,
+    ) -> Result<Option<Arc<crate::resolved::ResolvedArena>>, SemanticError> {
+        let arenas = self.resolved_arenas.borrow();
+        if arenas.is_empty() {
+            return Ok(None);
+        }
+        let arena = match source {
+            Some(source) => arenas.get(&source.source),
+            None if arenas.len() == 1 => arenas.values().next(),
+            None => None,
+        };
+        arena.cloned().map(Some).ok_or_else(|| SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: "resolved node does not identify an authority source arena".into(),
+        })
     }
     fn resolved_node(
         &self,
@@ -1076,8 +1181,7 @@ impl SemanticContext {
         kind: crate::resolved::ResolvedNodeKind,
         source: Option<crate::source::SourceRange>,
     ) -> Result<Option<crate::resolved::ResolvedNode>, SemanticError> {
-        let arena = self.resolved_arena.borrow();
-        let Some(arena) = arena.as_ref() else {
+        let Some(arena) = self.arena_for_source(source)? else {
             return Ok(None);
         };
         let id = id.ok_or_else(|| SemanticError {
@@ -1142,7 +1246,7 @@ impl SemanticContext {
     ) -> Result<Option<(crate::resolved::ResolvedValueTarget, Option<Type>)>, SemanticError> {
         use crate::resolved::{ResolvedTarget, ResolvedValueTarget};
         let Some(target) = self.expression_target(expression)? else {
-            if self.resolved_arena.borrow().is_some() {
+            if !self.resolved_arenas.borrow().is_empty() {
                 return Err(SemanticError {
                     code: "E_INTERNAL_RESOLUTION",
                     message: format!("value `{name}` has no resolver-produced target"),
@@ -1156,8 +1260,9 @@ impl SemanticContext {
                 message: format!("value `{name}` carries a non-value resolver target"),
             });
         };
-        let arena = self.resolved_arena.borrow();
-        let arena = arena.as_ref().expect("resolved target requires arena");
+        let arena = self
+            .arena_for_source(expression.source())?
+            .expect("resolved target requires arena");
         let ty = match target {
             ResolvedValueTarget::Binding(binding) => {
                 let binding = arena.binding(binding).ok_or_else(|| SemanticError {
@@ -1193,7 +1298,8 @@ impl SemanticContext {
                         ),
                     })?;
                 let mut binding_types = self.resolved_binding_types.borrow_mut();
-                if let Some(previous) = binding_types.insert(binding.id, ty.clone())
+                if let Some(previous) =
+                    binding_types.insert((arena.source(), binding.id), ty.clone())
                     && previous != ty
                 {
                     return Err(SemanticError {
@@ -1240,14 +1346,13 @@ impl SemanticContext {
         let ResolvedValueTarget::Binding(binding) = target else {
             return Ok(false);
         };
-        let arena = self.resolved_arena.borrow();
-        let binding = arena
-            .as_ref()
-            .and_then(|arena| arena.binding(binding))
-            .ok_or_else(|| SemanticError {
-                code: "E_INTERNAL_RESOLUTION",
-                message: "List mutator receiver references an unknown lexical binding".into(),
-            })?;
+        let arena = self
+            .arena_for_source(expression.source())?
+            .expect("resolved binding requires arena");
+        let binding = arena.binding(binding).ok_or_else(|| SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: "List mutator receiver references an unknown lexical binding".into(),
+        })?;
         Ok(binding.mutable)
     }
     fn validate_call_target(
@@ -1259,7 +1364,7 @@ impl SemanticContext {
     ) -> Result<(), SemanticError> {
         use crate::resolved::{ResolvedCallTarget, ResolvedSymbolKind, ResolvedTarget};
         let Some(target) = self.expression_target(expression)? else {
-            if self.resolved_arena.borrow().is_some() {
+            if !self.resolved_arenas.borrow().is_empty() {
                 return Err(SemanticError {
                     code: "E_INTERNAL_RESOLUTION",
                     message: format!("call `{source_name}` has no resolver-produced target"),
@@ -1273,8 +1378,9 @@ impl SemanticContext {
                 message: format!("call `{source_name}` carries a non-call resolver target"),
             });
         };
-        let arena = self.resolved_arena.borrow();
-        let arena = arena.as_ref().expect("resolved target requires arena");
+        let arena = self
+            .arena_for_source(expression.source())?
+            .expect("resolved target requires arena");
         match target {
             ResolvedCallTarget::Function(symbol) => {
                 let symbol = arena.symbol(symbol).ok_or_else(|| SemanticError {
@@ -1349,8 +1455,9 @@ impl SemanticContext {
                 message: format!("assignment `{name}` carries a non-assignment resolver target"),
             });
         };
-        let arena = self.resolved_arena.borrow();
-        let arena = arena.as_ref().expect("resolved target requires arena");
+        let arena = self
+            .arena_for_source(node.source)?
+            .expect("resolved target requires arena");
         match target {
             ResolvedValueTarget::Binding(binding) => {
                 let binding = arena.binding(*binding).ok_or_else(|| SemanticError {
@@ -1401,7 +1508,7 @@ impl SemanticContext {
     ) -> Result<(), SemanticError> {
         use crate::resolved::{ResolvedSymbolKind, ResolvedTarget};
         let Some(target) = self.expression_target(expression)? else {
-            if self.resolved_arena.borrow().is_some() {
+            if !self.resolved_arenas.borrow().is_empty() {
                 return Err(SemanticError {
                     code: "E_INTERNAL_RESOLUTION",
                     message: format!("struct literal `{name}` has no resolver-produced target"),
@@ -1411,14 +1518,13 @@ impl SemanticContext {
         };
         match target {
             ResolvedTarget::StructLiteral(symbol) => {
-                let arena = self.resolved_arena.borrow();
-                let symbol = arena
-                    .as_ref()
-                    .and_then(|arena| arena.symbol(symbol))
-                    .ok_or_else(|| SemanticError {
-                        code: "E_INTERNAL_RESOLUTION",
-                        message: "struct literal references an unknown symbol".into(),
-                    })?;
+                let arena = self
+                    .arena_for_source(expression.source())?
+                    .expect("resolved target requires arena");
+                let symbol = arena.symbol(symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "struct literal references an unknown symbol".into(),
+                })?;
                 if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
@@ -1484,14 +1590,13 @@ impl SemanticContext {
                 } else {
                     ResolvedSymbolKind::Struct
                 };
-                let arena = self.resolved_arena.borrow();
-                let symbol = arena
-                    .as_ref()
-                    .and_then(|arena| arena.symbol(*symbol))
-                    .ok_or_else(|| SemanticError {
-                        code: "E_INTERNAL_RESOLUTION",
-                        message: "type target references an unknown struct".into(),
-                    })?;
+                let arena = self
+                    .arena_for_source(node.source)?
+                    .expect("resolved type requires arena");
+                let symbol = arena.symbol(*symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "type target references an unknown struct".into(),
+                })?;
                 if symbol.kind != expected_kind || symbol.name != name {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
@@ -1503,7 +1608,9 @@ impl SemanticContext {
                 }
             }
             ResolvedTypeTarget::ExternalStruct => {
-                if !self.structs.borrow().contains_key(name) {
+                if !self.structs.borrow().contains_key(name)
+                    && !self.error_types.borrow().contains_key(name)
+                {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
                         message: format!(
@@ -1542,7 +1649,14 @@ impl SemanticContext {
             return Ok(());
         };
         let mut typed = self.typed_hir_nodes.borrow_mut();
-        if let Some(previous) = typed.insert(node.id, ty.clone())
+        let arena = self
+            .arena_for_source(expression.source())?
+            .expect("resolved node requires arena");
+        let id = TypedHirNodeId {
+            source: arena.source(),
+            local: node.id,
+        };
+        if let Some(previous) = typed.insert(id, ty.clone())
             && resolve_struct_type(&previous) != resolve_struct_type(ty)
         {
             return Err(SemanticError {
@@ -1637,6 +1751,20 @@ impl SemanticContext {
         self.required_list_capacity.replace(required_capacity);
         result.is_ok()
     }
+    fn declaration_diagnostic(
+        &self,
+        name: &str,
+    ) -> Option<crate::semantic_diagnostics::SemanticDiagnostic> {
+        self.resolved_declaration_sources
+            .borrow()
+            .get(name)
+            .copied()
+            .map(|primary| crate::semantic_diagnostics::SemanticDiagnostic {
+                primary,
+                labels: Vec::new(),
+                fix: None,
+            })
+    }
     fn reset(&self) {
         self.structs.borrow_mut().clear();
         self.states.borrow_mut().clear();
@@ -1656,7 +1784,8 @@ impl SemanticContext {
         self.external_functions.borrow_mut().clear();
         self.external_types.borrow_mut().clear();
         self.external_states.borrow_mut().clear();
-        self.resolved_arena.borrow_mut().take();
+        self.resolved_arenas.borrow_mut().clear();
+        self.resolved_declaration_sources.borrow_mut().clear();
         self.resolved_binding_types.borrow_mut().clear();
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
@@ -2391,7 +2520,7 @@ fn reject_test_surface_without_test_mode(
                         ),
                     },
                     location: Some(function.location),
-                    diagnostic: None,
+                    diagnostic: context.declaration_diagnostic(&function.name),
                 },
             );
         }
@@ -2816,6 +2945,18 @@ fn register_error_types(context: &SemanticContext, program: &Program) -> Result<
         let Item::ErrorEnum(definition) = item else {
             continue;
         };
+        if definition.variants.iter().any(|variant| {
+            variant
+                .message
+                .as_ref()
+                .is_some_and(|message| message.trim().is_empty() || message.len() > 4096)
+        }) {
+            return Err(SemanticError {
+                code: "E_ERROR_MESSAGE",
+                message: "error messages must contain nonblank text and at most 4096 UTF-8 bytes"
+                    .into(),
+            });
+        }
         let mut variants = definition
             .variants
             .iter()
@@ -2904,6 +3045,43 @@ fn predeclare_integer_constants(
     }
     context.consts.replace(values);
     Ok(())
+}
+fn evaluate_constant_declarations<'declaration>(
+    context: &SemanticContext,
+    declarations: impl IntoIterator<Item = &'declaration ConstDecl>,
+    initial: IndexMap<String, TypedExpr>,
+) -> Result<IndexMap<String, TypedExpr>, SemanticFailures> {
+    let mut resolved_consts = initial;
+    for decl in declarations {
+        context.discard_diagnostic();
+        let declared = decl.ty.as_ref().ok_or_else(|| SemanticError {
+            code: "K2003",
+            message: format!("const `{}` requires an explicit type", decl.name),
+        })?;
+        let expected =
+            resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?)
+                .inspect_err(|_| context.capture_diagnostic(context.type_source(declared), None))?;
+
+        let mut value =
+            match analyze_const_expr(context, &decl.value, &resolved_consts, Some(&expected)) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(SemanticFailures {
+                        failures: vec![SemanticFailure {
+                            error,
+                            location: None,
+                            diagnostic: context.take_diagnostic(),
+                        }],
+                    });
+                }
+            };
+        ensure_assignable_and_coerce(&expected, &mut value)?;
+        if is_numeric_type(&value.ty) {
+            value = fold_constant_numeric(&value)?;
+        }
+        resolved_consts.insert(decl.name.clone(), value);
+    }
+    Ok(resolved_consts)
 }
 fn analyze_with_context(
     context: &SemanticContext,
@@ -3067,36 +3245,7 @@ fn analyze_with_context(
             .into());
         }
     }
-    let mut resolved_consts = external_consts;
-    for decl in const_decls {
-        context.discard_diagnostic();
-        let declared = decl.ty.as_ref().ok_or_else(|| SemanticError {
-            code: "K2003",
-            message: format!("const `{}` requires an explicit type", decl.name),
-        })?;
-        let expected =
-            resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?)
-                .inspect_err(|_| context.capture_diagnostic(context.type_source(declared), None))?;
-
-        let mut value =
-            match analyze_const_expr(context, &decl.value, &resolved_consts, Some(&expected)) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Err(SemanticFailures {
-                        failures: vec![SemanticFailure {
-                            error,
-                            location: None,
-                            diagnostic: context.take_diagnostic(),
-                        }],
-                    });
-                }
-            };
-        ensure_assignable_and_coerce(&expected, &mut value)?;
-        if is_numeric_type(&value.ty) {
-            value = fold_constant_numeric(&value)?;
-        }
-        resolved_consts.insert(decl.name, value);
-    }
+    let resolved_consts = evaluate_constant_declarations(context, &const_decls, external_consts)?;
     context.consts.replace(resolved_consts);
     let mut state: IndexMap<String, Type> = IndexMap::new();
     for (name, ty_expr) in state_decls {
@@ -3171,7 +3320,9 @@ fn analyze_with_context(
                     SemanticFailure {
                         error,
                         location: Some(f.location),
-                        diagnostic: context.take_diagnostic(),
+                        diagnostic: context
+                            .take_diagnostic()
+                            .or_else(|| context.declaration_diagnostic(&f.name)),
                     },
                 ),
             },
@@ -3186,7 +3337,7 @@ fn analyze_with_context(
                                 message: format!("duplicate trigger `{}`", trigger.name),
                             },
                             location: Some(trigger.location),
-                            diagnostic: None,
+                            diagnostic: context.declaration_diagnostic(&trigger.name),
                         },
                     );
                     continue;
@@ -3199,7 +3350,7 @@ fn analyze_with_context(
                         SemanticFailure {
                             error,
                             location: Some(trigger.location),
-                            diagnostic: None,
+                            diagnostic: context.declaration_diagnostic(&trigger.name),
                         },
                     ),
                 }
@@ -3233,39 +3384,32 @@ fn analyze_with_context(
             failures: vec![SemanticFailure {
                 error: recursive_function_call_error(&cycle),
                 location,
-                diagnostic: None,
+                diagnostic: cycle
+                    .first()
+                    .and_then(|name| context.declaration_diagnostic(name)),
             }],
         });
     }
     validate_scalar_state_initialization(context, &items, &states)?;
+    let arenas = context.resolved_arenas.borrow();
     let hir_nodes = context
-        .resolved_arena
+        .typed_hir_nodes
         .borrow()
-        .as_ref()
-        .map(|arena| {
-            context
-                .typed_hir_nodes
-                .borrow()
-                .iter()
-                .filter_map(|(local, ty)| {
-                    let node = arena.node(*local)?;
-                    let id = TypedHirNodeId {
-                        source: arena.source(),
-                        local: *local,
-                    };
-                    Some((
-                        id,
-                        TypedHirNode {
-                            id,
-                            source: node.source,
-                            target: node.target,
-                            ty: ty.clone(),
-                        },
-                    ))
-                })
-                .collect()
+        .iter()
+        .filter_map(|(id, ty)| {
+            let node = arenas.get(&id.source)?.node(id.local)?;
+            Some((
+                *id,
+                TypedHirNode {
+                    id: *id,
+                    source: node.source,
+                    target: node.target,
+                    ty: ty.clone(),
+                },
+            ))
         })
-        .unwrap_or_default();
+        .collect();
+    drop(arenas);
     let typed_program = TypedProgram {
         unit: program.unit.clone(),
         items,
@@ -3276,6 +3420,7 @@ fn analyze_with_context(
             .values()
             .map(|descriptor| descriptor.as_ref().clone())
             .collect(),
+        error_messages: declared_error_messages(context, program),
         triggers,
         message_entries: Vec::new(),
         hir_nodes,
@@ -3285,6 +3430,34 @@ fn analyze_with_context(
     crate::secret::validate_program(&typed_program, context.zk_enabled)?;
     enforce_permission_requirements(context, &typed_program.items)?;
     Ok(typed_program)
+}
+
+fn declared_error_messages(
+    context: &SemanticContext,
+    program: &Program,
+) -> Vec<ContractErrorMessage> {
+    let descriptors = context.error_types.borrow();
+    let mut messages = Vec::new();
+    for item in &program.items {
+        let Item::ErrorEnum(definition) = item else {
+            continue;
+        };
+        let Some(descriptor) = descriptors.get(&definition.name) else {
+            continue;
+        };
+        for variant in &definition.variants {
+            if let Some(message) = &variant.message {
+                messages.push(ContractErrorMessage {
+                    error_type: descriptor.identity.clone(),
+                    code: variant.code,
+                    message: message.clone(),
+                });
+            }
+        }
+    }
+    messages
+        .sort_by(|left, right| (&left.error_type, left.code).cmp(&(&right.error_type, right.code)));
+    messages
 }
 const JSON_LITERAL_REQUIRED_MESSAGE: &str =
     "Json::parse requires a direct string literal so native JSON is validated at compile time";
@@ -4323,6 +4496,77 @@ fn bind_tuple_fields_rec(
             bind_tuple_fields_rec(out, vars, &child_name, &element_expr, &resolved_elem_ty);
             bind_struct_fields_rec(out, vars, &child_name, &element_expr, &resolved_elem_ty);
         }
+    }
+}
+/// Rebuild each enclosing product around one changed field, retaining value
+/// semantics instead of mutating storage shared by copies of the original.
+fn rebuild_assigned_product(
+    target: &TypedExpr,
+    replacement: TypedExpr,
+) -> Result<(String, TypedExpr), SemanticError> {
+    match target.kind() {
+        ExprKind::Ident(name) => Ok((name.clone(), replacement)),
+        ExprKind::Member { object, field } => {
+            let fields = match resolve_struct_type(&object.ty) {
+                Type::Struct { name, fields } => {
+                    let fields = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (name, ty))| {
+                            let value = if index.to_string() == *field {
+                                replacement.clone()
+                            } else {
+                                TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: object.clone(),
+                                        field: index.to_string(),
+                                    },
+                                    ty: ty.clone(),
+                                }
+                            };
+                            (name.clone(), value)
+                        })
+                        .collect();
+                    ExprKind::StructLiteral { name, fields }
+                }
+                Type::Tuple(types) => ExprKind::Tuple(
+                    types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            if index.to_string() == *field {
+                                replacement.clone()
+                            } else {
+                                TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: object.clone(),
+                                        field: index.to_string(),
+                                    },
+                                    ty,
+                                }
+                            }
+                        })
+                        .collect(),
+                ),
+                _ => {
+                    return Err(SemanticError {
+                        code: "E_INVALID_ASSIGNMENT_TARGET",
+                        message: "field assignment requires a struct or tuple binding".into(),
+                    });
+                }
+            };
+            rebuild_assigned_product(
+                object,
+                TypedExpr {
+                    expr: fields,
+                    ty: object.ty.clone(),
+                },
+            )
+        }
+        _ => Err(SemanticError {
+            code: "E_INVALID_ASSIGNMENT_TARGET",
+            message: "field assignment must be rooted in a mutable binding".into(),
+        }),
     }
 }
 fn analyze_function(
@@ -5455,12 +5699,83 @@ fn analyze_statement_inner(
                 name: name.clone(),
                 value: expr.clone(),
             });
-            bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+            if !is_state_binding(context, name) {
+                bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                bind_struct_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+            }
             Ok(out)
         }
         Statement::AssignExpr { target, op, value } => {
             // support map indexing and simple variable rebinding
             match target.kind() {
+                Expr::Member { .. } => {
+                    let mut root = target;
+                    while let Expr::Member { object, .. } = root.kind() {
+                        root = object;
+                    }
+                    let Expr::Ident(root_name) = root.kind() else {
+                        return Err(SemanticError {
+                            code: "E_INVALID_ASSIGNMENT_TARGET",
+                            message: "field assignment must be rooted in a mutable binding".into(),
+                        });
+                    };
+                    ensure_mutable_assignment_target(context, root_name, mutable_bindings)?;
+                    let target = analyze_expr(context, target, vars)?;
+                    let mut replacement =
+                        analyze_expr_expected(context, value, vars, Some(&target.ty))?;
+                    if let Some(binary) = assign_op_to_binary(*op) {
+                        let mut left = target.clone();
+                        coerce_contextual_numeric_literals(
+                            binary,
+                            Some(&target.ty),
+                            &mut left,
+                            &mut replacement,
+                        )?;
+                        reject_implicit_int_decimal_mix(&left.ty, &replacement.ty)?;
+                        let ty = arithmetic_result_type(binary, &left.ty, &replacement.ty)
+                            .ok_or_else(|| SemanticError {
+                                code: "K2003",
+                                message: format!(
+                                    "compound operator {op:?} is not defined for {} and {}",
+                                    type_name(&left.ty),
+                                    type_name(&replacement.ty)
+                                ),
+                            })?;
+                        replacement = TypedExpr {
+                            expr: ExprKind::Binary {
+                                op: binary,
+                                left: Box::new(left),
+                                right: Box::new(replacement),
+                            },
+                            ty,
+                        };
+                    }
+                    ensure_assignable_and_coerce(&target.ty, &mut replacement)?;
+                    if is_state_binding(context, root_name) {
+                        crate::secret::reject_secret_state_value(&replacement)?;
+                    }
+                    let capture = context.fresh_aggregate_capture();
+                    let captured = TypedExpr {
+                        expr: ExprKind::Ident(capture.clone()),
+                        ty: replacement.ty.clone(),
+                    };
+                    let (name, rebuilt) = rebuild_assigned_product(&target, captured)?;
+                    let mut out = vec![
+                        TypedStatement::Let {
+                            name: capture,
+                            value: replacement,
+                        },
+                        TypedStatement::Let {
+                            name: name.clone(),
+                            value: rebuilt.clone(),
+                        },
+                    ];
+                    if !is_state_binding(context, &name) {
+                        bind_tuple_fields_rec(&mut out, vars, &name, &rebuilt, &rebuilt.ty);
+                        bind_struct_fields_rec(&mut out, vars, &name, &rebuilt, &rebuilt.ty);
+                    }
+                    Ok(out)
+                }
                 Expr::Index { target: map, index } => {
                     let map_t = analyze_expr(context, map, vars)?;
                     let mut key_t = analyze_expr(context, index, vars)?;
@@ -5567,7 +5882,10 @@ fn analyze_statement_inner(
                             name: name.clone(),
                             value: expr.clone(),
                         });
-                        bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                        if !is_state_binding(context, name) {
+                            bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                            bind_struct_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                        }
                         return Ok(out);
                     }
                     let bin_op = assign_op_to_binary(*op).expect("compound op maps to binary op");
@@ -5621,7 +5939,8 @@ fn analyze_statement_inner(
                 }
                 _ => Err(SemanticError {
                     code: "E_INVALID_ASSIGNMENT_TARGET",
-                    message: "assignment target must be a variable or map index".into(),
+                    message: "assignment target must be a variable, product field, or map index"
+                        .into(),
                 }),
             }
         }
@@ -9954,6 +10273,17 @@ fn analyze_expr_expected_inner(
                 )?;
             } else if let Some(signature) = context.function_params.borrow().get(&name).cloned() {
                 let receiver_count = usize::from(*implicit_receiver);
+                if argument_names
+                    .as_ref()
+                    .is_some_and(|names| names.len() != args.len().saturating_sub(receiver_count))
+                {
+                    return Err(SemanticError {
+                        code: "E_MALFORMED_CALL",
+                        message: format!(
+                            "call `{source_name}` has inconsistent source argument metadata"
+                        ),
+                    });
+                }
                 let user_signature = signature.get(receiver_count..).unwrap_or_default();
                 let parameter_names = user_signature
                     .iter()
@@ -9964,15 +10294,35 @@ fn analyze_expr_expected_inner(
                     .iter()
                     .take_while(|parameter| parameter.call_mode == ParameterCallMode::Positional)
                     .count();
+                // Ordinary function parameters accept either a positional value or
+                // their declared label. Normalize only unlabeled non-`_` arguments
+                // before using the same duplicate, arity and evaluation-order checks.
+                let first_named = argument_names
+                    .as_ref()
+                    .and_then(|names| names.iter().position(Option::is_some))
+                    .unwrap_or(usize::MAX);
+                let optional_labels = (0..args.len().saturating_sub(receiver_count))
+                    .map(|index| {
+                        argument_names
+                            .as_ref()
+                            .and_then(|names| names[index].clone())
+                            .or_else(|| {
+                                (index >= positional_prefix && index < first_named)
+                                    .then(|| parameter_names.get(index).cloned())
+                                    .flatten()
+                            })
+                    })
+                    .collect::<Vec<_>>();
                 argument_plan = reorder_call_arguments(
                     &source_name,
                     args,
-                    argument_names.as_deref(),
+                    Some(&optional_labels),
                     *implicit_receiver,
                     &parameter_names,
                     &required,
                     positional_prefix,
                 )?;
+                argument_plan.is_named = first_named != usize::MAX;
             } else if argument_names.is_some() {
                 let intrinsic_names: &[&str] = match name.as_str() {
                     "option::some"
@@ -9985,6 +10335,7 @@ fn analyze_expr_expected_inner(
                     | "decimal::from_quantity" => &["value"],
                     "result::err" => &["error"],
                     "unwrap_or" | "unwrap_err_or" => &["default"],
+                    "expect" => &["error"],
                     _ => &[],
                 };
                 if !intrinsic_names.is_empty() {
@@ -10294,6 +10645,18 @@ fn analyze_sum_type_call(
             }
             call("unwrap_err_or", args, *error_ty)
         }
+        "expect" => {
+            if args.len() != 2 {
+                return Some(error("Option.expect expects one nominal error argument"));
+            }
+            let Type::Option(value_ty) = resolve_struct_type(&args[0].ty) else {
+                return Some(error("Option.expect receiver must be Option<T>"));
+            };
+            if !matches!(resolve_struct_type(&args[1].ty), Type::ErrorEnum(_)) {
+                return Some(error("Option.expect requires a nominal error enum value"));
+            }
+            call("expect", args, *value_ty)
+        }
         _ => return None,
     })
 }
@@ -10358,6 +10721,9 @@ fn analyze_const_expr_inner(
             expr: ExprKind::Bytes(value.clone()),
             ty: Type::Bytes,
         }),
+        Expr::Ident(name) if context.error_codes.borrow().contains_key(name) => {
+            analyze_expr_expected(context, expr, &mut HashMap::new(), expected)
+        }
         Expr::Ident(name) => {
             if let Some((target, _)) = context.validate_value_target(expr, name, &HashMap::new())?
                 && !matches!(
@@ -10410,7 +10776,8 @@ fn analyze_const_expr_inner(
         } if Builtin::from_source_name(name).is_some_and(|builtin| {
             matches!(
                 builtin,
-                Builtin::Isqrt
+                Builtin::PointerConstructor(_)
+                    | Builtin::Isqrt
                     | Builtin::Abs
                     | Builtin::Min
                     | Builtin::Max
@@ -10442,14 +10809,37 @@ fn analyze_const_expr_inner(
                     context,
                     &plan.ordered[*index],
                     consts,
-                    Some(&Type::Int),
+                    if matches!(builtin, Builtin::PointerConstructor(_)) {
+                        Some(&Type::String)
+                    } else {
+                        Some(&Type::Int)
+                    },
                 )?);
             }
-            let arguments = arguments
+            let arguments: Vec<TypedExpr> = arguments
                 .into_iter()
                 .map(|argument| argument.expect("call plan covers every argument"))
                 .collect();
-            analyze_fixed_builtin_call(builtin, arguments)
+            if builtin == Builtin::PointerConstructor(PointerConstructor::AccountId)
+                && arguments.first().is_some_and(|argument| {
+                    matches!(argument.kind(), ExprKind::String(value)
+                        if value.contains('@')
+                            && iroha_data_model::account::AccountId::parse_encoded(value).is_err())
+                })
+            {
+                return Err(sem_err(
+                    "E_CONST_INITIALIZER",
+                    "const account identifiers cannot resolve live aliases; store the alias as bytes and resolve it explicitly".into(),
+                ));
+            }
+            if matches!(builtin, Builtin::PointerConstructor(_)) {
+                canonicalize_builtin_result(
+                    builtin,
+                    analyze_surface_builtin_call(context, builtin, arguments, expected),
+                )
+            } else {
+                analyze_fixed_builtin_call(builtin, arguments)
+            }
         }
         Expr::Binary { op, left, right }
             if matches!(
@@ -10493,8 +10883,9 @@ fn analyze_const_expr_inner(
         }
         _ => Err(SemanticError {
             code: "E_CONST_INITIALIZER",
-            message: "const initializers must be literal values or previously declared constants"
-                .into(),
+            message:
+                "const initializers require constant values or canonical typed literal constructors"
+                    .into(),
         }),
     }
 }
@@ -12904,6 +13295,7 @@ mod tests {
             items,
             states: Vec::new(),
             error_types: Vec::new(),
+            error_messages: Vec::new(),
             triggers: Vec::new(),
             message_entries: Vec::new(),
             hir_nodes: BTreeMap::new(),
@@ -13256,6 +13648,7 @@ mod tests {
             "is_err",
             "unwrap_or",
             "unwrap_err_or",
+            "expect",
         ];
         for name in registered {
             assert!(
@@ -14098,7 +14491,7 @@ mod tests {
         assert_eq!(evaluation_order, &[1, 0]);
     }
     #[test]
-    fn named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments() {
+    fn named_user_calls_reject_unknown_and_missing_arguments() {
         for (source, code) in [
             (
                 "fn target(int first, string second) {} fn main() { target(first: 1, third: \"three\"); }",
@@ -14107,10 +14500,6 @@ mod tests {
             (
                 "fn target(int first, string second) {} fn main() { target(first: 1); }",
                 "E_MISSING_NAMED_ARGUMENT",
-            ),
-            (
-                "fn target(int left, int right) {} fn main() { target(1, 2); }",
-                "E_NAMED_ARGUMENTS_REQUIRED",
             ),
         ] {
             let error = analyze_error(source);
@@ -14192,9 +14581,9 @@ mod tests {
     }
     analyze_error_code_cases! {
         declared_call_labels_are_independent_of_effects:
-        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "K2004";
         effectful = "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
-        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key); }" => "E_MISSING_NAMED_ARGUMENT";
     }
     analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "state StateMap<int, int> values; fn lookup(int key) -> int { return values.get_or(default: 0, key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
     #[test]
@@ -15063,7 +15452,7 @@ mod tests {
             );
         }
     }
-    analyze_reject_contains_tests! { field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "assignment target must be"; }
+    analyze_reject_contains_tests! { immutable_field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "cannot assign to immutable binding"; }
     analyze_ok_tests! { info_accepts_int: "fn f() { debug::info(42); }" => "parse info", "info should accept int"; }
     #[test]
     fn view_entrypoints_reject_observable_debug_logging() {

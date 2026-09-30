@@ -48,6 +48,7 @@ fn contract_with_cycle_policy(body: &[u32], max_cycles: u64, mode: u8) -> Prepar
         },
         access_set_hints: None,
         kotoba: Vec::new(),
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -1007,5 +1008,5 @@ fn replace_auxiliary_sources(row: &mut [F], word: u32, left: u64, right: u64) {
         )
     };
     row[BIT_COUNT..MULTIPLY].copy_from_slice(&workspace);
-    row[MULTIPLY..].copy_from_slice(&multiply::witness(left, right, &workspace, active));
+    row[MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(left, right, &workspace, active));
 }

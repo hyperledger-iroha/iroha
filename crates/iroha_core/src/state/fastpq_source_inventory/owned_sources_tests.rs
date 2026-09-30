@@ -25,7 +25,7 @@ use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
-        BlockHeader, SignedBlock,
+        BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder,
         execution_output::{
             ExecutionOutputV1, PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
@@ -108,7 +108,8 @@ fn fixture_with_effects(
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
         fees.per_gas_unit_fee = Quantity::zero();
-        fees.fee_asset_id = asset.to_string();
+        // Nexus admission retains the canonical XOR identity even when its fee
+        // is zero. The independently signed PipelineGas charge uses this asset.
         fees.fee_sink_account_id = BOB_ID.to_string();
         state.pipeline.gas.tech_account_id = BOB_ID.to_string();
         state.pipeline.gas.accepted_assets = vec![asset.canonical_address()];
@@ -267,7 +268,7 @@ fn fixture_with_effects(
             .inputs(view.world())
             .execution_route(&accepted, header.height().get())
             .expect("fixture input has its exact committed native route");
-        contexts.push(iroha_data_model::block::ExternalExecutionContext::new(
+        contexts.push(ExternalExecutionContext::new(
             accepted.hash_as_entrypoint(),
             native.lane_id,
             native.dataspace_id,
@@ -275,9 +276,9 @@ fn fixture_with_effects(
         drop(view);
         builder.push_transaction(signed);
     }
-    builder.set_execution_context(Some(
-        iroha_data_model::block::BlockExecutionContextBundle::new(contexts),
-    ));
+    // Freeze each original input's committed route before signing the carrier
+    // and opening its recorder; execution and sealing cannot invent routing.
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
     (
         state,
         builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),
@@ -443,6 +444,15 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
     assert_eq!(release.to_balance_after, Quantity::from(1_000_000_011_u64));
     let asset = release.asset_definition.clone();
     execute(&mut block, &source);
+    let outputs = block.retained_execution_outputs_for_test().unwrap();
+    let ExecutionOutputV1::Network(success) = &outputs[0] else {
+        panic!("Network output")
+    };
+    assert!(success.result.is_ok(), "{:?}", success.result);
+    let ExecutionOutputV1::Network(rejected) = &outputs[1] else {
+        panic!("Network output")
+    };
+    assert!(rejected.result.is_err());
     assert_eq!(
         block
             .world

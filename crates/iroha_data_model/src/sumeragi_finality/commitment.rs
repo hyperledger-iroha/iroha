@@ -320,14 +320,13 @@ impl ExecutionResultCommitment {
                 "pulse belongs to another network, height or anchor".into(),
             ));
         }
-        if let BeaconEpochBindingV1::Installed(binding) = current.authorization.beacon {
-            if pulse.session_id != binding.session_id
-                || pulse.transcript_hash != binding.transcript_hash
-            {
-                return Err(CommitmentError::Beacon(
-                    "pulse differs from authenticated epoch session".into(),
-                ));
-            }
+        if let BeaconEpochBindingV1::Installed(binding) = current.authorization.beacon
+            && (pulse.session_id != binding.session_id
+                || pulse.transcript_hash != binding.transcript_hash)
+        {
+            return Err(CommitmentError::Beacon(
+                "pulse differs from authenticated epoch session".into(),
+            ));
         }
         Ok(())
     }

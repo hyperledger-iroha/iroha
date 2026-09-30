@@ -42,6 +42,11 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
             Some(SoraProfile::PrivateCbuae),
             SumeragiConsensusMode::Npos,
         ),
+        (
+            "bpng",
+            Some(SoraProfile::PrivateBpng),
+            SumeragiConsensusMode::Npos,
+        ),
     ];
     let mut generated_paths = std::collections::BTreeSet::new();
     for (label, sora_profile, consensus_mode) in profiles {

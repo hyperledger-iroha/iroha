@@ -2,9 +2,10 @@
 use super::{
     DiscoveredSuite, DiscoveredTestModule, KotoTestModuleGraphV1, KotoTestRunErrorV1,
     KotoTestRunPhaseV1, KotoTestRunReportV1, KotoTestRunRequestV1, MAX_LOGICAL_SOURCE_PATH_BYTES,
-    MAX_MODULE_GRAPH_SOURCE_BYTES, Path, PathBuf, SourceModuleUnit, SourceUnitKind, finalize_suite,
-    parser, run_discovered_suite_structured, validate_standalone_test_items,
-    validate_structured_request, validate_structured_source, validate_structured_source_request,
+    MAX_MODULE_GRAPH_SOURCE_BYTES, Path, PathBuf, SourceModuleUnit, SourceUnitKind,
+    finalize_suite_with_sources, parser, run_discovered_suite_structured,
+    validate_standalone_test_items, validate_structured_request, validate_structured_source,
+    validate_structured_source_request,
 };
 /// Run an authenticated test source with its explicitly supplied contract target, if indirect.
 ///
@@ -23,7 +24,7 @@ pub fn run_tests_structured_source_set_with_modules_v1(
 ) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
     validate_structured_request(request)?;
     validate_structured_source_request(request, root)?;
-    let suite = discover_declared_suite_from_source_set(root, target)
+    let suite = discover_declared_suite_from_source_set(root, target, &modules.sources)
         .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, Some(modules))
 }
@@ -93,12 +94,22 @@ pub fn discover_declared_test_names_source_set_v1(
     root: &SourceModuleUnit,
     target: Option<&SourceModuleUnit>,
 ) -> Result<Vec<String>, String> {
-    let suite = discover_declared_suite_from_source_set(root, target)?;
+    let suite = discover_declared_suite_from_source_set(root, target, &[])?;
+    Ok(suite.tests.into_iter().map(|test| test.name).collect())
+}
+/// Discover tests using the same explicit companion inventory supplied for compilation.
+pub fn discover_declared_test_names_source_set_with_sources_v1(
+    root: &SourceModuleUnit,
+    target: Option<&SourceModuleUnit>,
+    sources: &[SourceModuleUnit],
+) -> Result<Vec<String>, String> {
+    let suite = discover_declared_suite_from_source_set(root, target, sources)?;
     Ok(suite.tests.into_iter().map(|test| test.name).collect())
 }
 pub(super) fn discover_declared_suite_from_source_set(
     root: &SourceModuleUnit,
     target: Option<&SourceModuleUnit>,
+    sources: &[SourceModuleUnit],
 ) -> Result<DiscoveredSuite, String> {
     if root
         .source
@@ -120,11 +131,13 @@ pub(super) fn discover_declared_suite_from_source_set(
                 root.source_name
             ));
         }
-        return finalize_suite(
+        return finalize_suite_with_sources(
             PathBuf::from(&root.source_name),
             root.source.clone(),
             program,
             Vec::new(),
+            sources.to_vec(),
+            None,
         );
     };
     let target = target.ok_or_else(|| format!("{} is an indirect koto_test module and requires its explicitly supplied target `{expected}`", root.source_name))?;
@@ -144,7 +157,7 @@ pub(super) fn discover_declared_suite_from_source_set(
             target.source_name
         ));
     }
-    finalize_suite(
+    finalize_suite_with_sources(
         PathBuf::from(&target.source_name),
         target.source.clone(),
         target_program,
@@ -153,5 +166,7 @@ pub(super) fn discover_declared_suite_from_source_set(
             source: root.source.clone(),
             program,
         }],
+        sources.to_vec(),
+        None,
     )
 }

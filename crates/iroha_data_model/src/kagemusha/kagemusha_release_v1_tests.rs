@@ -140,7 +140,7 @@ fn reseal_profile_qualification(receipt: &mut KagemushaInternalValidationReceipt
 fn streaming_authority_policy_digest_preserves_canonical_frame_identity() {
     let keys = authority_keys();
     for signer_count in 1..=keys.len() {
-        let policy = authority_policy(&keys[..signer_count], signer_count as u16);
+        let policy = authority_policy(&keys[..signer_count], u16::try_from(signer_count).unwrap());
         let frame = norito::encode_canonical(&policy).expect("canonical policy frame");
         assert_eq!(norito::canonical_frame_len(&policy).unwrap(), frame.len());
         assert_eq!(
@@ -169,12 +169,14 @@ fn authority_policy_validation_counts_the_complete_canonical_frame() {
 
     // Every admitted public key has a bounded payload and at most 32 signers
     // are permitted. Keep a conservative framing allowance below the policy cap.
-    assert!(
-        KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1
-            * (iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1_024)
-            + 4_096
-            < KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1
-    );
+    const {
+        assert!(
+            KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1
+                * (iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1_024)
+                + 4_096
+                < KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1
+        );
+    }
 }
 
 #[test]
@@ -388,13 +390,14 @@ fn signed_experimental_purpose_binds_one_testnet_asset_and_reserve() {
 
 #[test]
 fn experimental_receipt_rejects_production_only_evidence() {
+    type ReceiptMutation = (&'static str, fn(&mut KagemushaInternalValidationReceiptV1));
     let mut baseline = receipt(&artifacts());
     reduce_to_experimental_receipt(&mut baseline);
     baseline
         .validate_experimental()
         .expect("zero production-only evidence is accepted");
 
-    let mutations: &[(&str, fn(&mut KagemushaInternalValidationReceiptV1))] = &[
+    let mutations: &[ReceiptMutation] = &[
         ("security review digest", |r| {
             r.security_review_report.sha256 = [1; 32]
         }),

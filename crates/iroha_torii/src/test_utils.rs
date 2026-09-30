@@ -209,6 +209,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

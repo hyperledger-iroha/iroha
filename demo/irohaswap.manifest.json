@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "IrohaSwap",
-  "code_hash": "hash:B8355AAC7C771C20AB964D3AA6B0BBB61252C435DDC3F9732CB6BEE04210C825#CF8E",
-  "abi_hash": "hash:4DE60141043F6E9990D9A36EC5049D1FA2400792A72889604A4B2B6F7C6AA0F9#130B",
+  "code_hash": "hash:44D57461680C4B40B561D7B7AE14C54B0AACBF9604497961E41FBC6D391CDE4F#56F2",
+  "abi_hash": "hash:ECB75640994009BC31B3CA23F40AA5FF07550841285F24613E2C497A6A1E5733#96CD",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -632,6 +632,7 @@
       ]
     }
   ],
+  "error_messages": null,
   "kotoba": null,
   "provenance": null
 }

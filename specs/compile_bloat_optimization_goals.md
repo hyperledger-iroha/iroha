@@ -5,13 +5,13 @@ and runtime performance. Migrate consumers directly: first release does not
 require public compatibility aliases. Sumeragi remains owned by the user's
 separate work; inspect current SCCP state before touching adjacent code.
 
-| Goal | Status | Completion evidence |
+| Goal | Status | Completion criteria |
 | --- | --- | --- |
 | O1: Finish compiler and Core ZK ownership | In progress | IVM's normal graph excludes the compiler; compiler/toolchain/VM and proof tests pass; source guards and external imports use their actual owners. |
 | O2: Extract state-free privacy verification | In progress | Separate privacy crate, original proof/wire fixtures and all tests preserved; Core retains state authority; native/Python/JS consumers drop the validator execution graph. |
 | O3: Extract state-free timed-OVN verification | In progress | Public evidence, casting archive and TLE verification have a separate owner; authenticated constructors, state reads and signers stay in Core; bridge tests preserve authorization and replay checks. |
 | O4: Isolate executable build metadata | In progress | Thin daemon/CLI packages supply compiled identity to build-script-free libraries; executable names/features remain coherent; metadata-only changes leave libraries fresh. |
-| O5: Remove production parsing of large test bodies | In progress | Four cohesive P2P/compiler/model test modules moved without dropping tests or fixtures; affected source guards pass; moved Rust harness validation remains in progress. |
+| O5: Remove production parsing of large test bodies | Complete | Four cohesive P2P/compiler/model test modules moved without dropping tests or fixtures; source guards and each preserved runtime harness pass, including the transparent model assertions. |
 | O6: Complete codec and merged-source validation | In progress | Norito/IVM-only, feature, dependency and target guards pass; focused tests, merged workspace check and applicable lint/test gates remain; actual exit codes and unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | Warm same-package check timings compared with the September 27 baseline; source/toolchain and competing build load recorded. Optional further extraction/router work requires measured benefit. |
 

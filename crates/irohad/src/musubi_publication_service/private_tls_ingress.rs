@@ -38,7 +38,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener as AsyncTcpListener,
-    sync::{Notify, Semaphore, mpsc},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc},
     task::JoinSet,
 };
 use tokio_rustls::{TlsAcceptor, rustls::ServerConfig};
@@ -291,7 +291,12 @@ impl MusubiPublicationPrivateTlsRunnerV1 {
                     // The outer supervisor may time out its bounded wait, but cannot free that
                     // owner while the blocking call remains active.
                     active_dispatches.wait_for_drain().await;
-                    return Ok(());
+                    // Every physical failure is queued before its active lease is released.
+                    // Requested shutdown must not erase a failure observed during that drain.
+                    return match fatal_rx.try_recv() {
+                        Ok(error) => Err(error),
+                        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => Ok(()),
+                    };
                 }
                 Some(error) = fatal_rx.recv() => return Err(error),
                 Some(result) = connections.join_next(), if !connections.is_empty() => {
@@ -313,7 +318,6 @@ impl MusubiPublicationPrivateTlsRunnerV1 {
                     let fatal_tx = fatal_tx.clone();
                     let shutdown = shutdown.clone();
                     connections.spawn(async move {
-                        let _permit = permit;
                         serve_connection(
                             stream,
                             acceptor,
@@ -322,6 +326,7 @@ impl MusubiPublicationPrivateTlsRunnerV1 {
                             mount_prefix,
                             fatal_tx,
                             shutdown,
+                            Arc::new(permit),
                         )
                         .await;
                     });
@@ -339,6 +344,7 @@ async fn serve_connection(
     mount_prefix: String,
     fatal_tx: mpsc::UnboundedSender<MusubiPublicationPrivateIngressErrorV1>,
     shutdown: ShutdownSignal,
+    permit: Arc<OwnedSemaphorePermit>,
 ) {
     let Ok(Ok(stream)) = tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await
     else {
@@ -349,6 +355,7 @@ async fn serve_connection(
         let active_dispatches = Arc::clone(&active_dispatches);
         let mount_prefix = mount_prefix.clone();
         let fatal_tx = fatal_tx.clone();
+        let permit = Arc::clone(&permit);
         async move {
             Ok::<_, Infallible>(
                 handle_http(
@@ -357,6 +364,7 @@ async fn serve_connection(
                     active_dispatches,
                     &mount_prefix,
                     fatal_tx,
+                    permit,
                 )
                 .await,
             )
@@ -382,6 +390,7 @@ async fn handle_http(
     active_dispatches: Arc<ActiveDispatchesV1>,
     mount_prefix: &str,
     fatal_tx: mpsc::UnboundedSender<MusubiPublicationPrivateIngressErrorV1>,
+    permit: Arc<OwnedSemaphorePermit>,
 ) -> Response<Full<Bytes>> {
     let (parts, body) = request.into_parts();
     if parts.uri.query().is_some() {
@@ -496,7 +505,7 @@ async fn handle_http(
         seed_ingress_metadata: seed_metadata.map(str::to_owned),
         body,
     };
-    dispatch_recoverably(dispatch, owned, active_dispatches.lease(), fatal_tx).await
+    dispatch_recoverably(dispatch, owned, active_dispatches.lease(), fatal_tx, permit).await
 }
 
 async fn dispatch_recoverably(
@@ -504,24 +513,28 @@ async fn dispatch_recoverably(
     owned: OwnedHttpRequestV1,
     lease: ActiveDispatchLeaseV1,
     fatal_tx: mpsc::UnboundedSender<MusubiPublicationPrivateIngressErrorV1>,
+    permit: Arc<OwnedSemaphorePermit>,
 ) -> Response<Full<Bytes>> {
     let handled = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
             let _lease = lease;
-            dispatch.handle(owned)
+            // A cancelled HTTP waiter must neither free physical admission nor hide a
+            // terminal provider failure. Both owners survive until this call completes.
+            let _permit = permit;
+            let handled = iroha_panic_hook::catch_unwind_suppressed(|| dispatch.handle(owned))
+                .unwrap_or(Err(MusubiPublicationPrivateIngressErrorV1::Unqualified));
+            if let Err(error) = &handled {
+                let _ = fatal_tx.send(*error);
+            }
+            // Drained means the last physical owner has been released, including its service.
+            drop(dispatch);
+            handled
         }),
     )
     .await;
     match handled {
         Ok(Ok(response)) => service_response(response),
-        Ok(Err(error)) => {
-            let _ = fatal_tx.send(error);
-            unavailable_response()
-        }
-        Err(_) => {
-            let _ = fatal_tx.send(MusubiPublicationPrivateIngressErrorV1::Unqualified);
-            unavailable_response()
-        }
+        Ok(Err(_)) | Err(_) => unavailable_response(),
     }
 }
 
@@ -690,6 +703,7 @@ mod tests {
         }
 
         let active = Arc::new(ActiveDispatchesV1::default());
+        let capacity = Arc::new(Semaphore::new(1));
         let (fatal_tx, mut fatal_rx) = mpsc::unbounded_channel();
         let response = dispatch_recoverably(
             Arc::new(PanickingDispatchV1),
@@ -703,6 +717,7 @@ mod tests {
             },
             active.lease(),
             fatal_tx,
+            Arc::new(capacity.clone().try_acquire_owned().unwrap()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -712,6 +727,115 @@ mod tests {
         );
         active.wait_for_drain().await;
         assert_eq!(active.count.load(Ordering::SeqCst), 0);
+        assert_eq!(capacity.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_http_waiter_retains_physical_capacity_and_reports_failures() {
+        struct DelayedDispatchV1 {
+            entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            outcome: u8,
+        }
+        impl PrivateDispatchV1 for DelayedDispatchV1 {
+            fn handle(
+                &self,
+                request: OwnedHttpRequestV1,
+            ) -> Result<
+                MusubiPublicationPrivateHttpResponseV1,
+                MusubiPublicationPrivateIngressErrorV1,
+            > {
+                assert!(iroha_panic_hook::is_suppressed());
+                assert_eq!(request.body, b"body");
+                self.entered
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .send(())
+                    .unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                match self.outcome {
+                    0 => Ok(MusubiPublicationPrivateHttpResponseV1 {
+                        status: 200,
+                        content_type: MUSUBI_PUBLICATION_NORITO_MEDIA_TYPE_V1,
+                        body: Vec::new(),
+                    }),
+                    1 => Err(MusubiPublicationPrivateIngressErrorV1::Unavailable),
+                    _ => panic!("delayed physical dispatch failure"),
+                }
+            }
+        }
+
+        for outcome in 0..3 {
+            let active = Arc::new(ActiveDispatchesV1::default());
+            let capacity = Arc::new(Semaphore::new(1));
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let dispatch = Arc::new(DelayedDispatchV1 {
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+                outcome,
+            });
+            let weak_dispatch = Arc::downgrade(&dispatch);
+            let (fatal_tx, mut fatal_rx) = mpsc::unbounded_channel();
+            let mut response = Box::pin(dispatch_recoverably(
+                dispatch,
+                OwnedHttpRequestV1 {
+                    method: "POST".to_owned(),
+                    path: "/v1/musubi/publication/storage-coordinate".to_owned(),
+                    content_type: MUSUBI_PUBLICATION_NORITO_MEDIA_TYPE_V1.to_owned(),
+                    authorization: Some("test-auth".to_owned()),
+                    seed_ingress_metadata: None,
+                    body: b"body".to_vec(),
+                },
+                active.lease(),
+                fatal_tx,
+                Arc::new(capacity.clone().try_acquire_owned().unwrap()),
+            ));
+            tokio::select! {
+                _ = &mut response => panic!("physical dispatch must wait for release"),
+                entered = entered_rx => entered.expect("original physical worker entered"),
+            }
+            // Model the HTTP task disappearing after it handed off its original body.
+            drop(response);
+            assert!(weak_dispatch.upgrade().is_some());
+            assert_eq!(active.count.load(Ordering::Acquire), 1);
+            assert_eq!(capacity.available_permits(), 0);
+            assert!(capacity.clone().try_acquire_owned().is_err());
+            assert!(matches!(
+                fatal_rx.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+
+            release_tx.send(()).unwrap();
+            let expected = match outcome {
+                0 => None,
+                1 => Some(MusubiPublicationPrivateIngressErrorV1::Unavailable),
+                _ => Some(MusubiPublicationPrivateIngressErrorV1::Unqualified),
+            };
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), fatal_rx.recv())
+                    .await
+                    .unwrap(),
+                expected,
+                "the physical owner reports failure even after cancellation"
+            );
+            if expected.is_some() {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(5), fatal_rx.recv())
+                        .await
+                        .unwrap(),
+                    None,
+                    "a physical failure is reported exactly once"
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(5), active.wait_for_drain())
+                .await
+                .unwrap();
+            assert_eq!(capacity.available_permits(), 1);
+            assert!(weak_dispatch.upgrade().is_none());
+        }
     }
 
     async fn send_tls_request(
@@ -906,6 +1030,7 @@ mod tests {
         struct BlockingDispatchV1 {
             entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
             release: Mutex<mpsc::Receiver<()>>,
+            outcome: u8,
         }
         impl PrivateDispatchV1 for BlockingDispatchV1 {
             fn handle(
@@ -927,73 +1052,86 @@ mod tests {
                     .expect("test lock")
                     .recv()
                     .expect("release dispatch");
-                Ok(MusubiPublicationPrivateHttpResponseV1 {
-                    status: 200,
-                    content_type: MUSUBI_PUBLICATION_NORITO_MEDIA_TYPE_V1,
-                    body: Vec::new(),
-                })
+                match self.outcome {
+                    0 => Ok(MusubiPublicationPrivateHttpResponseV1 {
+                        status: 200,
+                        content_type: MUSUBI_PUBLICATION_NORITO_MEDIA_TYPE_V1,
+                        body: Vec::new(),
+                    }),
+                    1 => Err(MusubiPublicationPrivateIngressErrorV1::Unavailable),
+                    _ => panic!("physical dispatch failed while shutdown drained"),
+                }
             }
         }
 
-        let (server, client) = tls_identity();
-        let builder = MusubiPublicationPrivateTlsIngressBuilderV1::new(settings(), server)
-            .expect("prebind private TLS listener");
-        let address = builder.local_addr().expect("bound private address");
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let dispatch = Arc::new(BlockingDispatchV1 {
-            entered: Mutex::new(Some(entered_tx)),
-            release: Mutex::new(release_rx),
-        });
-        let weak_dispatch = Arc::downgrade(&dispatch);
-        let runner = MusubiPublicationPrivateTlsRunnerV1 {
-            settings: builder.settings,
-            listener: builder.listener,
-            tls: builder.tls,
-            dispatch: dispatch.clone(),
-            active_dispatches: Arc::new(ActiveDispatchesV1::default()),
-        };
-        let shutdown = ShutdownSignal::new();
-        let mut task = tokio::spawn(Box::new(runner).run(shutdown.clone()));
-        let route = "/private/v1/musubi/publication/storage-coordinate";
-        let request = format!(
-            "POST {route} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-norito\r\n{MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1}: test-auth\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        let request_task =
-            tokio::spawn(
-                async move { send_tls_request(address, client, request.as_bytes()).await },
+        for outcome in 0..3 {
+            let (server, client) = tls_identity();
+            let builder = MusubiPublicationPrivateTlsIngressBuilderV1::new(settings(), server)
+                .expect("prebind private TLS listener");
+            let address = builder.local_addr().expect("bound private address");
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let dispatch = Arc::new(BlockingDispatchV1 {
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+                outcome,
+            });
+            let weak_dispatch = Arc::downgrade(&dispatch);
+            let runner = MusubiPublicationPrivateTlsRunnerV1 {
+                settings: builder.settings,
+                listener: builder.listener,
+                tls: builder.tls,
+                dispatch: dispatch.clone(),
+                active_dispatches: Arc::new(ActiveDispatchesV1::default()),
+            };
+            let shutdown = ShutdownSignal::new();
+            let mut task = tokio::spawn(Box::new(runner).run(shutdown.clone()));
+            let route = "/private/v1/musubi/publication/storage-coordinate";
+            let request = format!(
+                "POST {route} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-norito\r\n{MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1}: test-auth\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
-        tokio::time::timeout(Duration::from_secs(5), entered_rx)
-            .await
-            .expect("dispatch starts")
-            .expect("dispatch signal");
-        drop(dispatch);
-        shutdown.send();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut task)
+            let request_task =
+                tokio::spawn(
+                    async move { send_tls_request(address, client, request.as_bytes()).await },
+                );
+            tokio::time::timeout(Duration::from_secs(5), entered_rx)
                 .await
-                .is_err(),
-            "shutdown must wait for the blocking service call"
-        );
-        assert!(
-            weak_dispatch.upgrade().is_some(),
-            "custody owner remains live"
-        );
-        release_tx.send(()).expect("release dispatch");
-        assert!(
-            tokio::time::timeout(Duration::from_secs(5), task)
+                .expect("dispatch starts")
+                .expect("dispatch signal");
+            drop(dispatch);
+            shutdown.send();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), &mut task)
+                    .await
+                    .is_err(),
+                "shutdown must wait for the blocking service call"
+            );
+            assert!(
+                weak_dispatch.upgrade().is_some(),
+                "custody owner remains live"
+            );
+            release_tx.send(()).expect("release dispatch");
+            let expected = match outcome {
+                0 => Ok(()),
+                1 => Err(MusubiPublicationPrivateIngressErrorV1::Unavailable),
+                _ => Err(MusubiPublicationPrivateIngressErrorV1::Unqualified),
+            };
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), task)
+                    .await
+                    .expect("drained shutdown")
+                    .expect("runner task"),
+                expected,
+                "shutdown retains the original physical outcome"
+            );
+            tokio::time::timeout(Duration::from_secs(5), request_task)
                 .await
-                .expect("drained shutdown")
-                .expect("runner task")
-                .is_ok()
-        );
-        tokio::time::timeout(Duration::from_secs(5), request_task)
-            .await
-            .expect("cancelled private request returns")
-            .expect("private request task");
-        assert!(
-            weak_dispatch.upgrade().is_none(),
-            "custody owner is reclaimed"
-        );
+                .expect("cancelled private request returns")
+                .expect("private request task");
+            assert!(
+                weak_dispatch.upgrade().is_none(),
+                "custody owner is reclaimed"
+            );
+        }
     }
 }

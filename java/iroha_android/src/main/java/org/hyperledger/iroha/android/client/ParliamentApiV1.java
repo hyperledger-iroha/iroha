@@ -81,20 +81,6 @@ public final class ParliamentApiV1 {
   public static final String AUTOMATIC_OUTCOME_DIGEST_DOMAIN =
       "iroha.governance.parliament.automatic_execution_outcome.digest.v1";
 
-  /** Exact first-release proposal kinds admitted by the generic attempt-draft boundary. */
-  public static final List<String> PROPOSAL_KINDS =
-      listOf(
-          "DeployContract",
-          "RuntimeUpgrade",
-          "SccpRouteGovernance",
-          "ValidationFeePolicy",
-          "ValidationFeePayoutLifecycle",
-          "MusubiRegistryGovernance",
-          "SorafsProviderGovernance",
-          "ContractLifecycleGovernance",
-          "ContractEmergencyHold",
-          "GlobalDataTriggerPermissionGovernance");
-
   /** Exact first-release actions admitted by contract-lifecycle governance proposals. */
   public static final List<String> CONTRACT_LIFECYCLE_ACTIONS =
       listOf(
@@ -345,22 +331,6 @@ public final class ParliamentApiV1 {
   private static final Set<String> NO_RESULT_TAGS = noResultTags();
 
   private ParliamentApiV1() {}
-
-  /** One recursively validated closed first-release proposal wire value. */
-  public static final class Proposal {
-    private final Map<String, Object> wire;
-    public final String kind;
-
-    private Proposal(final Map<String, Object> wire) {
-      this.wire = wire;
-      this.kind = (String) wire.get("kind");
-    }
-
-    /** Parses and recursively validates one canonical proposal JSON value. */
-    public static Proposal fromJson(final byte[] bytes) {
-      return new Proposal(ParliamentProposalValidatorV1.parse(bytes));
-    }
-  }
 
   /** Stable Norito/JSON/event mapping for one public lifecycle transition. */
   public static final class TransitionLayout {
@@ -908,11 +878,6 @@ public final class ParliamentApiV1 {
     return timedOvnCastingProofRequestNorito(BigInteger.valueOf(trustedCheckpointHeight));
   }
 
-  /** Admits the response through the canonical Kotlin Norito framing owner. */
-  public static org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofResponseV1
-      parseTimedOvnCastingProofResponse(final byte[] bytes) {
-    return org.hyperledger.iroha.sdk.client.ParliamentApiV1.parseTimedOvnCastingProofResponse(bytes);
-  }
 
   static BigInteger requireTimedOvnCastingCheckpointHeight(final BigInteger value) {
     if (value == null || value.signum() <= 0 || value.bitLength() > 64) {
@@ -934,18 +899,6 @@ public final class ParliamentApiV1 {
         "{ballot_attempt_id}", canonicalId(ballotAttemptId));
   }
 
-  /** Build the exact V1 attempt-draft JSON envelope. */
-  public static byte[] attemptDraftRequestJson(
-      final Proposal proposal, final long attemptSequence) {
-    if (attemptSequence < 0 || attemptSequence > MAX_GOVERNANCE_ATTEMPT_RETRIES) {
-      throw new IllegalArgumentException("attempt_sequence must be between 0 and 16");
-    }
-    final Map<String, Object> request = new LinkedHashMap<>();
-    request.put("version", VERSION);
-    request.put("proposal", proposal.wire);
-    request.put("attempt_sequence", attemptSequence);
-    return encode(request);
-  }
 
   /** Build the exact V1 lifecycle-transition draft JSON envelope. */
   public static byte[] transitionDraftRequestJson(

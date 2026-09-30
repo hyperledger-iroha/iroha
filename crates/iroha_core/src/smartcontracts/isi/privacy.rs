@@ -5978,9 +5978,7 @@ mod tests {
             },
             ivm_private_note::private_note_statement_fixture_v1,
             p256::SecretScalarV1,
-            pq_masp::relation::{
-                derive_pq_masp_note_commitment_v1, test_fixtures::valid_fixture as pq_masp_fixture,
-            },
+            pq_masp::relation::test_fixtures::valid_fixture as pq_masp_fixture,
         },
         privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1},
         privacy_verifier::{
@@ -7295,9 +7293,9 @@ mod tests {
         );
         assert_atomic_rejection(&effect(successor.root()), &transaction);
         let (pq_statement, pq_witness) = pq_masp_fixture();
-        let pq_input_commitment =
-            derive_pq_masp_note_commitment_v1(&pq_statement, pq_witness.inputs()[0].note())
-                .expect("canonical PQ-MASP input commitment");
+        let pq_input_commitment = pq_witness.inputs()[0]
+            .commitment_v1(&pq_statement)
+            .expect("canonical PQ-MASP input commitment");
         let pq_snapshot = PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1 {
                 pool_id: pq_statement.pool_id,

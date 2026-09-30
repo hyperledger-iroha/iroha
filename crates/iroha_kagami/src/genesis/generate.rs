@@ -820,7 +820,7 @@ mod consensus_manifest_tests {
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
             .and_then(|template| {
                 template.materialize(
-                    parameters,
+                    &parameters,
                     Some(if nexus {
                         AssetDefinitionId::derive_from_components(
                             DomainId::parse_fully_qualified("mainnet-fixture.universal")

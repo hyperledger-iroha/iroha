@@ -6,9 +6,9 @@
 //! durable journal seal crosses explicit proof and hardware-guard verifier hooks; the supplied
 //! reject-all implementations make an unintegrated deployment fail closed.
 
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 mod bootstrap_checkpoint;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 pub use bootstrap_checkpoint::{
     KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
 };
@@ -26,7 +26,9 @@ pub use response_evidence_archive::{
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod authenticated_core_owner;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
-pub use authenticated_core_owner::KagemushaAuthenticatedCoreOwnerV1;
+pub use authenticated_core_owner::{
+    KagemushaAuthenticatedBootstrapStageV1, KagemushaAuthenticatedCoreOwnerV1,
+};
 mod candidate_lifecycle;
 mod commitments;
 use commitments::*;
@@ -60,7 +62,6 @@ mod receive_fold;
 mod receive_fold_operation;
 mod recovery_metadata;
 mod redemption_release;
-#[cfg(test)]
 pub use recovery_metadata::KagemushaRecoveryCheckpointCandidateV1;
 #[cfg(test)]
 pub use recovery_metadata::KagemushaRecoveryCheckpointPublicationV1;
@@ -244,7 +245,6 @@ impl<S> KagemushaStateAuthenticatedHistoryV1<S>
 where
     S: KagemushaAuthenticatedHistoryStoreV1,
 {
-    #[cfg(test)]
     /// Open a store only after both complete committed trees validate.
     pub(crate) fn open(store: S) -> Result<Self, KagemushaHistoryStoreErrorV1> {
         validate_committed_history_v1(&store)?;
@@ -268,7 +268,6 @@ where
         Ok(Self { store })
     }
 
-    #[cfg(test)]
     /// Return both independently selected authoritative roots.
     pub(crate) fn committed_roots(&self) -> KagemushaHistoryRootsV1 {
         self.store.committed_roots()
@@ -411,7 +410,6 @@ pub const KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1: usize = 65_536;
 pub const KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1: usize = 256;
 
 const SNAPSHOT_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:snapshot-commitment\0";
-#[cfg(test)]
 const BOOTSTRAP_STATEMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:bootstrap-statement\0";
 const MINT_CREDIT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
 const CREDIT_ENVELOPE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:peer-credit-envelope\0";
@@ -1679,14 +1677,12 @@ pub struct BootstrapStatementV1 {
 }
 
 impl BootstrapStatementV1 {
-    #[cfg(test)]
     /// Return the exact statement digest that the bootstrap proof must authorize.
     pub fn proof_statement_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         canonical_sha256_digest(BOOTSTRAP_STATEMENT_DOMAIN, self)
     }
 }
 
-#[cfg(test)]
 /// Complete locally derived bootstrap instance awaiting recursive and hardware authorization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootstrapPreviewV1 {
@@ -2183,13 +2179,12 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
-    #[cfg(test)]
     /// Preview the unique zero-balance bootstrap state and exact authorization statement.
     ///
     /// A nonzero initial next-key reference is a candidate KeyMint ratchet head.
     /// Staging it remains fail-closed until its attestation is folded into the
     /// governed paired bootstrap proof.
-    pub fn preview_bootstrap(
+    pub(crate) fn preview_bootstrap(
         proof_release: KagemushaStateProofReleaseV1,
         state_context: KagemushaStateContextV1,
         lane: KagemushaLaneIdV1,
@@ -2298,7 +2293,7 @@ where
         )
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     /// Stage a zero-balance lane after proof and hardware registration verification.
     /// The returned opaque owner cannot perform wallet operations before checkpoint publication.
     #[cfg(unix)]
@@ -2341,23 +2336,13 @@ where
             state_nonce_commitment,
             trusted_commit_time_ms,
         )?;
-        validate_guard_bytes(&authorization.guard_bundle)?;
-        let public_inputs =
-            bootstrap_state_public_inputs(proof_release.artifacts, &preview, &authorization.proof)?;
-        verify_kagemusha_state_proof_v1(
+        authenticate_bootstrap_authorization(
+            &proof_release,
+            &preview,
+            &authorization,
             &recursive_verifier,
-            proof_release.artifacts,
-            &public_inputs,
-            &authorization.proof,
-        )
-        .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?;
-        guard_verifier
-            .verify_bootstrap(
-                &preview.statement,
-                &preview.normalized_guard_statement,
-                &authorization.guard_bundle,
-            )
-            .map_err(KagemushaStateErrorV1::GuardRejected)?;
+            &guard_verifier,
+        )?;
         KagemushaBootstrapJournalStageV1::new(
             preview.state,
             proof_release,
@@ -4732,7 +4717,38 @@ fn required_pending_credit_prefix(
     Err(KagemushaStateErrorV1::InsufficientBalance)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(unix)]
+fn authenticate_bootstrap_authorization<R, G>(
+    proof_release: &KagemushaStateProofReleaseV1,
+    preview: &BootstrapPreviewV1,
+    authorization: &BootstrapAuthorizationV1,
+    recursive_verifier: &R,
+    guard_verifier: &G,
+) -> Result<(), KagemushaStateErrorV1>
+where
+    R: KagemushaRecursiveVerifierV1,
+    G: KagemushaGuardBundleVerifierV1,
+{
+    validate_guard_bytes(&authorization.guard_bundle)?;
+    let public_inputs =
+        bootstrap_state_public_inputs(proof_release.artifacts, preview, &authorization.proof)?;
+    verify_kagemusha_state_proof_v1(
+        recursive_verifier,
+        proof_release.artifacts,
+        &public_inputs,
+        &authorization.proof,
+    )
+    .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?;
+    guard_verifier
+        .verify_bootstrap(
+            &preview.statement,
+            &preview.normalized_guard_statement,
+            &authorization.guard_bundle,
+        )
+        .map_err(KagemushaStateErrorV1::GuardRejected)
+}
+
+#[cfg(unix)]
 fn bootstrap_state_public_inputs(
     artifacts: KagemushaRecursionArtifactsV1,
     preview: &BootstrapPreviewV1,

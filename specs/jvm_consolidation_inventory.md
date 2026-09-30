@@ -75,6 +75,15 @@ JVM, JNI, Android or publication qualification. Frozen patch, original failures,
 source seals and runtime reports are retained under ignored
 `target/architecture-redesign/norito-identity-cutover/multisig-custom-json-correction-v1/`.
 
+## Canonical Ed25519 admission
+
+`K crypto/Ed25519PublicKeyAdmission.kt` owns canonical point decoding, identity
+refusal and prime-order subgroup admission. Its bounded cache retains only
+immutable public points after the complete check; cache membership does not
+authenticate signatures or account ownership. Java production consumers and
+retained Java refusal/mutation tests import this owner directly. The duplicate
+Java class and its forwarding alias are removed.
+
 ## Capabilities and invariants still needing migration
 
 Signer, verified Nearby and immutable Nexus migrations have focused and full JVM
@@ -375,25 +384,23 @@ fields, and the canonical attempt-read route. The tests use JDK 8 APIs under
 the Kotlin `core-jvm` compile guard. This is an initial Java-source consumer
 slice, not retirement of the duplicate implementation or its test evidence.
 
-The duplicate Java `ParliamentApiV1` and `ParliamentProposalValidatorV1`
-remain coupled to the Java `HttpClientTransport` Parliament methods. The Java
-Android timed-OVN wallet and casting trust anchor also use Java API nested
-proof models. Before deleting those production classes, migrate the remaining
-16 Java API tests and four Java transport tests to Java-source tests of the
-Kotlin API and transport, preserving their assertions. Migrate the nine Java
-Android wallet tests to Java-source consumers of the Kotlin `client-android`
-wallet, and remove the Java transport/wallet callers in the same candidate.
-The Kotlin-owned mirror suites cover 17 API, four transport, and 11 Android
-wallet cases, but they do not replace Java-source compilation evidence. No
-Java compatibility facade or fallback validator belongs in the first release.
+At that September 24 checkpoint, the duplicate Java `ParliamentApiV1` and
+`ParliamentProposalValidatorV1` were coupled to Java transport and wallet callers.
+The September 30 migration below removes the duplicate proposal validator,
+proposal model, paging value types and trust anchor, and compiles the affected
+Java-source consumers against their Kotlin owners. The remaining Java transport,
+wallet backend and non-proposal API implementation surface still requires
+capability retirement with assertion preservation. Kotlin mirror tests alone
+cannot replace Java-source compilation evidence; no compatibility facade or
+fallback validator belongs in the first release.
 
 ## Complete-checkpoint Java paging ownership (2026-09-30)
 
 The Java Android wallet accepts Kotlin's canonical
 `ParliamentTimedOvnCastingTrustAnchorV1` and returns Kotlin's complete public-record
 and page-verification owners. The duplicate Java trust anchor and diagnostic-only
-paging value types are removed. Java response framing delegates to the canonical
-Kotlin parser. `ParliamentTimedOvnCastingProofPagerV1` owns the pure paging loop for
+paging value types are removed. Java transport and consumer tests invoke the canonical Kotlin response parser
+directly; no Java forwarding parser is retained. `ParliamentTimedOvnCastingProofPagerV1` owns the pure paging loop for
 both transport consumers: complete signed checkpoints survive promotion and
 persistence, every next page waits for durable persistence, and the existing page,
 height and checkpoint limits remain mandatory. Each transport retains exact
@@ -405,3 +412,27 @@ assert defensive copies and persistence ordering. These managed controls test
 API ownership and byte preservation; current native and device qualification is
 recorded separately. Exact preceding source and assertion preimages are retained
 in the unit-repair evidence lane after concurrent removal of repository history.
+
+Java attempt-draft requests invoke Kotlin's `ParliamentApiV1` directly with its
+`Proposal`, closed thirteen-kind inventory and recursive proposal validator; the
+Java forwarding request builder and proposal-kind constant are removed. The duplicate Java
+proposal model and validator are removed. Java consumer tests retain the existing
+nested-payload rejection controls and add the current verifier-policy and signed
+verifier-release fixtures. The twentieth Musubi shared instruction fixture uses
+the canonical Kotlin `AdvanceMusubiPinOutboxV1` owner in Java-source assertions
+for every concrete and dynamic frame; it introduces no additional Java codec.
+
+The Java-only `ClaimIdentifierWirePayloadEncoder` is removed. Its Java-source
+consumer suite now exercises the canonical Kotlin encoder and receipt models,
+including all five existing frame/parity/refusal cases. The canonical structural
+decoder exposes defensive receipt-byte copies; signature and policy verification
+remain separate. Consumers assert the mandatory absent phone-retail-canonicality
+field and reject a phone-retail claim without its signed evidence rather than
+emitting an incomplete receipt layout.
+
+OMAPI discovery transfers an available channel/service owner only when its
+caller-facing completion succeeds. Cancellation between discovery completion
+and delivery disposes the undelivered owner exactly once. Managed regression
+controls cover that completion order, successful delivery, pending cancellation,
+original failure propagation and the existing single-reader/capability/timeout
+refusals; they do not qualify native or physical-device execution.

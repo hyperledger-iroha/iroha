@@ -57,7 +57,7 @@ pub(super) fn manifest(body: &AvailableBody) -> PayloadManifest {
 
 pub(super) fn result_of(block: &AvailableBody) -> Hash32 {
     let mut input = block.header().parent_result.0.to_vec();
-    input.extend_from_slice(&block.payload().as_slice());
+    input.extend_from_slice(block.payload().as_slice());
     Hash32(sha256(&input))
 }
 
@@ -504,7 +504,7 @@ impl H {
                     instance: I,
                     height: body.header().height,
                     block_hash: self.bh(body),
-                    index: index as u32,
+                    index: u32::try_from(index).unwrap(),
                     bytes: RowBytes::from_untrusted(
                         encoded.codeword()[shape.chunk_range(index).unwrap()].to_vec(),
                     )
@@ -743,7 +743,7 @@ impl H {
     }
 
     /// `block` with the attestation flag set (§3.7): its Commit votes need attestations.
-    pub fn flagged(&self, block: AvailableBody) -> AvailableBody {
+    pub fn flagged(&self, block: &AvailableBody) -> AvailableBody {
         let mut header = block.header().clone();
         header.attest = true;
         self.author(header, block.payload().as_slice())

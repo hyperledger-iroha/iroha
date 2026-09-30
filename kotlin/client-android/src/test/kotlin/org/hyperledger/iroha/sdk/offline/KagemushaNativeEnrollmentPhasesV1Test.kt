@@ -93,7 +93,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertEquals("native preparation verifier substituted issuer nonce", failure.message)
         assertEquals(1, endpoint.closeCalls)
         val dispatched = endpoint.calls
-        assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) }
+        repeat(2) { assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) } }
         assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
         assertEquals(dispatched, endpoint.calls)
         assertEquals(1, endpoint.closeCalls)
@@ -341,7 +341,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var changedSelectionField: Int? = null
         var rejectSelectionRead = false
         private var challengeId = ByteArray(32) { 7 }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long): Int { closeCalls++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {

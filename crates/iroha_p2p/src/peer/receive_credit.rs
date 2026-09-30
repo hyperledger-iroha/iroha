@@ -350,7 +350,7 @@ impl BoundSource {
                 _partition: Arc::clone(&self.partition),
                 _credit: credit,
                 _count: count,
-                _class_bytes: class_bytes,
+                class_bytes,
                 _source: source,
                 _private: private,
                 _dispatch: dispatch,
@@ -369,7 +369,14 @@ pub(super) struct GrantRetention {
     _partition: Arc<SourcePartition>,
     _credit: AuthenticatedSourceCreditGuard,
     _count: SharedByteLease,
-    _class_bytes: Option<SharedByteLease>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "class custody is released only when the retained grant drops"
+        )
+    )]
+    class_bytes: Option<SharedByteLease>,
     _source: SharedByteLease,
     _private: Option<SharedByteLease>,
     _dispatch: SharedByteLease,

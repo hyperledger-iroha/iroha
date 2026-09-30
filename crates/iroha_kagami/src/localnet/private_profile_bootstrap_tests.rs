@@ -20,6 +20,12 @@ fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
             dataspace_id: LOCALNET_CBUAE_ALIAS_DATASPACE_ID,
             domains: &[],
         },
+        Case {
+            profile: SoraProfile::PrivateBpng,
+            alias: "bpng",
+            dataspace_id: LOCALNET_BPNG_DATASPACE_ID,
+            domains: BPNG_BOOTSTRAP_DOMAINS,
+        },
     ] {
         let seed = format!("private-profile-sns-bootstrap-{}", case.alias);
         let opts = LocalnetOptions {
@@ -439,6 +445,7 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
     for (profile, alias, base_api_port, base_p2p_port) in [
         (SoraProfile::PrivateSbp, "sbp", 39_080, 43_337),
         (SoraProfile::PrivateCbuae, "cbuae", 49_080, 53_337),
+        (SoraProfile::PrivateBpng, "bpng", 29_080, 33_337),
     ] {
         let temp = tempfile::tempdir().expect("create private-profile signing directory");
         let opts = LocalnetOptions {
@@ -500,9 +507,60 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
         }
         let signed = fs::read(opts.out_dir.join("genesis.signed.nrt"))
             .expect("read staged and signed private genesis");
-        assert!(
-            !signed.is_empty(),
-            "{alias} staged genesis signer must emit a framed block"
-        );
+        let decoded = decode_framed_signed_block(&signed)
+            .expect("private genesis must be a canonical framed signed block");
+        let expected_hash: NetworkId =
+            fs::read_to_string(opts.out_dir.join(GENESIS_EXPECTED_HASH_FILE))
+                .expect("read exact private genesis hash")
+                .trim_end_matches('\n')
+                .parse()
+                .expect("private genesis hash must be a checked NetworkId");
+        assert_eq!(decoded.hash(), expected_hash.into_genesis_hash());
+        for peer_index in 0..opts.peers.get() {
+            let path = opts.out_dir.join(format!("peer{peer_index}.toml"));
+            let config = actual::Root::from_toml_source(
+                TomlSource::from_file(&path).expect("read private peer config"),
+            )
+            .expect("private peer config must pass native validation");
+            assert_eq!(config.genesis.expected_hash, decoded.hash());
+            assert_eq!(config.common.chain.to_string(), DEFAULT_CHAIN_ID);
+        }
     }
+}
+
+#[test]
+fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
+    let temp = tempfile::tempdir().expect("create BPNG output parent");
+    let mut opts = LocalnetOptions {
+        sora_profile: Some(SoraProfile::PrivateBpng),
+        perf_profile: None,
+        peers: NonZeroU16::new(4).expect("non-zero"),
+        seed: None,
+        bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+        public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+        base_api_port: 29_080,
+        base_p2p_port: 33_337,
+        out_dir: temp.path().join("bpng"),
+        extra_accounts: 0,
+        assets: Vec::new(),
+        block_cadence_ms: None,
+        consensus_mode: SumeragiConsensusMode::Npos,
+    };
+    let error = generate_localnet_inner(
+        &opts,
+        &mut BufWriter::new(Vec::new()),
+        Some(PUBLIC_TAIRA_CHAIN_ID),
+    )
+    .expect_err("a local BPNG preset must not become public Taira allocation");
+    assert!(error.to_string().contains("Nexus Sora profile"));
+    assert!(!opts.out_dir.exists());
+    opts.consensus_mode = SumeragiConsensusMode::Permissioned;
+    let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+        .expect_err("BPNG requires the native NPoS global merge ledger");
+    assert!(
+        error
+            .to_string()
+            .contains("require `--consensus-mode npos`")
+    );
+    assert!(!opts.out_dir.exists());
 }

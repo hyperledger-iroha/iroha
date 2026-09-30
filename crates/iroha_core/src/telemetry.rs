@@ -6248,7 +6248,6 @@ mod tests {
     use super::StreamingTelemetry;
     use super::*;
     use crate::{
-        block::{BlockBuilder, CommittedBlock, NewBlock},
         governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         pipeline::access::AccessSetSource,

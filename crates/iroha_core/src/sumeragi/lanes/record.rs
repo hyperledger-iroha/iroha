@@ -180,6 +180,11 @@ impl PreparedLaneWrite {
     pub(in crate::sumeragi) fn commit_qc(&self) -> &Qc {
         &self.commit_qc
     }
+    /// Move the exact decoded/restored owners without cloning header, schedule or QC metadata.
+    pub(in crate::sumeragi) fn into_parts(self) -> (AvailableBody, Qc) {
+        (self.body, self.commit_qc)
+    }
+
     /// Store-side identity check before durable publication; Core owns certificate verification.
     pub(in crate::sumeragi) fn check_context(
         &self,

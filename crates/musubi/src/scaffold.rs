@@ -327,7 +327,7 @@ fn render_package_library(exports: &[Name]) -> Result<String, Diagnostic> {
         source.push_str(
             "    // TODO: Replace this no-op function with the intended function or type.\n",
         );
-        source.push_str("    fn ");
+        source.push_str("    export fn ");
         source.push_str(name);
         source.push_str("() {}\n");
     }

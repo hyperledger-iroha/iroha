@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "SmokeTransfer",
-  "code_hash": "hash:A7EC3E1BB115D955F720DF0369411AD3D0C0BFA63D760CFA91ED9A7AA2DCDF7B#211D",
-  "abi_hash": "hash:4DE60141043F6E9990D9A36EC5049D1FA2400792A72889604A4B2B6F7C6AA0F9#130B",
+  "code_hash": "hash:6A3EE980E59DE830BE2F4E46DF7ADCB70762907156B260ADE730FF8710DA17A7#D3D8",
+  "abi_hash": "hash:ECB75640994009BC31B3CA23F40AA5FF07550841285F24613E2C497A6A1E5733#96CD",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -121,6 +121,7 @@
       ]
     }
   ],
+  "error_messages": null,
   "kotoba": null,
   "provenance": null
 }

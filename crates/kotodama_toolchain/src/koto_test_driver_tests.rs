@@ -93,6 +93,8 @@ fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
     let target_source = "seiyaku FixtureDemo { fn helper() {} #[test] fn smoke() {} }";
     let target_program = parser::parse(target_source).expect("parse fixture test target");
     let suite = DiscoveredSuite {
+        sources: Vec::new(),
+        source_root: None,
         target_path: PathBuf::from("/tmp/fixture_demo.ko"),
         target_source: target_source.to_owned(),
         target_program,
@@ -269,6 +271,8 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
     let target_source = "seiyaku ZkTest { hajimari() {} #[test] fn smoke() {} }";
     let target_program = parser::parse(target_source).expect("parse ZK test target");
     let suite = DiscoveredSuite {
+        sources: Vec::new(),
+        source_root: None,
         target_path: PathBuf::from("/tmp/zk_test.ko"),
         target_source: target_source.to_owned(),
         target_program,
@@ -464,15 +468,17 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
     );
     let dependency = "std/math@1.0.0".to_owned();
     let modules = KotoTestModuleGraphV1 {
+        sources: Vec::new(),
         imports: vec![ImportBinding {
             alias: "calc".to_owned(),
             package: dependency.clone(),
         }],
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: dependency,
             modules: vec![SourceModuleUnit {
                 source_name: "src/lib.ko".to_owned(),
-                source: "module Math { fn value() -> int { return 7; } }".to_owned(),
+                source: "module Math { export fn value() -> int { return 7; } }".to_owned(),
             }],
             exports: BTreeSet::from(["value".to_owned()]),
             imports: Vec::new(),
@@ -536,15 +542,17 @@ fn structured_standalone_sources_execute_private_target_and_exact_package() {
     let target = SourceModuleUnit { source_name: "contracts/app.ko".to_owned(), source: "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() -> int { return reward(); } }".to_owned() };
     let test = SourceModuleUnit { source_name: "tests/unit.ko".to_owned(), source: r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn exact_reward() { test::assert(reward() == 7); test::assert(calc::value() == 7); } }"#.to_owned() };
     let modules = KotoTestModuleGraphV1 {
+        sources: Vec::new(),
         imports: vec![ImportBinding {
             alias: "calc".to_owned(),
             package: "demo/math@1.0.0".to_owned(),
         }],
         packages: vec![SourcePackageUnit {
+            sources: Vec::new(),
             identity: "demo/math@1.0.0".to_owned(),
             modules: vec![SourceModuleUnit {
                 source_name: "tests/unit.ko".to_owned(),
-                source: "module Math { fn value() -> int { return 7; } }".to_owned(),
+                source: "module Math { export fn value() -> int { return 7; } }".to_owned(),
             }],
             exports: BTreeSet::from(["value".to_owned()]),
             imports: Vec::new(),
@@ -1414,6 +1422,8 @@ fn standalone_test_source_parser_rejects_public_functions() {
 #[test]
 fn finalize_suite_rejects_program_without_tests() {
     let program = Program {
+        directives: Vec::new(),
+        exports: Vec::new(),
         unit: kotodama_lang::ast::SourceUnit {
             kind: kotodama_lang::ast::SourceUnitKind::Module,
             name: "EmptyTests".to_string(),
@@ -1449,6 +1459,8 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         .expect("fixture sentinel newline");
     let program = parser::parse(source).expect("parse program");
     let suite = DiscoveredSuite {
+        sources: Vec::new(),
+        source_root: None,
         target_path: PathBuf::from("/tmp/demo.ko"),
         target_source: source.to_owned(),
         target_program: program,
@@ -2442,6 +2454,8 @@ fn coverage_helper_functions_handle_internal_and_boundary_cases() {
 #[test]
 fn collect_tests_rejects_duplicate_test_names() {
     let program = Program {
+        directives: Vec::new(),
+        exports: Vec::new(),
         unit: kotodama_lang::ast::SourceUnit {
             kind: kotodama_lang::ast::SourceUnitKind::Module,
             name: "DuplicateTests".to_string(),
@@ -2629,4 +2643,58 @@ fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
         drop(vm);
         assert_eq!(budget.reserved_bytes(), 0);
     }
+}
+
+#[test]
+fn multifile_suite_discovers_and_executes_included_tests_with_local_modules() {
+    let temp = TestTempDir::new();
+    let root = temp.write(
+        "src/app.ko",
+        "seiyaku App { include \"parts/tests.ko\"; import \"math.ko\" as arith; }",
+    );
+    temp.write(
+        "src/parts/tests.ko",
+        "#[test] fn included() { test::assert(arith::value() == 7); }",
+    );
+    temp.write(
+        "src/math.ko",
+        "module Math { export fn value() -> int { return 7; } }",
+    );
+    temp.write("src/unrelated.ko", "this file is deliberately invalid");
+    let suite = discover_suite(&root).expect("discover declared closure");
+    assert_eq!(
+        suite
+            .tests
+            .iter()
+            .map(|test| test.name.as_str())
+            .collect::<Vec<_>>(),
+        ["included"]
+    );
+    assert_eq!(suite.sources.len(), 2);
+    let report = run_tests_structured_v1(&KotoTestRunRequestV1::new(&root, 753))
+        .expect("execute included tests");
+    assert!(report.is_success());
+}
+#[test]
+fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file() {
+    let root = SourceModuleUnit {
+        source_name: "tests/app.ko".into(),
+        source: "seiyaku App { include \"body.ko\"; }".into(),
+    };
+    let modules = KotoTestModuleGraphV1 {
+        sources: vec![SourceModuleUnit {
+            source_name: "tests/body.ko".into(),
+            source: "#[test] fn included() { test::assert(true); }".into(),
+        }],
+        imports: Vec::new(),
+        packages: Vec::new(),
+    };
+    let report = run_tests_structured_source_with_modules_v1(
+        &KotoTestRunRequestV1::new(&root.source_name, 753),
+        &root,
+        &modules,
+    )
+    .expect("immutable included test");
+    assert!(report.is_success());
+    assert_eq!(report.cases.len(), 1);
 }

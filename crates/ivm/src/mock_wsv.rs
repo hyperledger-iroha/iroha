@@ -5227,6 +5227,7 @@ mod tests_null_decode {
                     value: Box::new(crate::metadata::EmbeddedStateType::Bytes),
                 },
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
         };
         let mut artifact = crate::metadata::ProgramMetadata::default().encode();

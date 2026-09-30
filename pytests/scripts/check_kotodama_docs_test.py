@@ -372,6 +372,66 @@ seiyaku Hidden {}
         self.assertEqual(calls[2][0][1:2], ["check"])
         self.assertEqual(calls[2][1], "module Shared {}\n")
 
+    def test_bundle_compiles_under_one_root_and_requires_every_companion(self) -> None:
+        source = (
+            "// file: app.ko\n"
+            'seiyaku A { include "./parts/helper.ko"; }\n'
+            "// file: parts/helper.ko\n"
+            "fn answer() -> int { 42 }\n"
+        )
+        fences = DOCS.extract_source_fences(
+            Path("bundle.md"), f"```kotodama bundle zk\n{source}```\n"
+        )
+        self.assertTrue(fences[0].bundle)
+        self.assertTrue(fences[0].zk)
+        calls = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            source_root = Path(command[command.index("--source-root") + 1])
+            self.assertEqual(Path(command[-1]), source_root / "app.ko")
+            self.assertEqual(command[1], "build")
+            self.assertIn("--zk", command)
+            companion = source_root / "parts/helper.ko"
+            present = companion.exists()
+            if present:
+                self.assertEqual(companion.read_text(), "fn answer() -> int { 42 }\n")
+            calls.append(present)
+            return subprocess.CompletedProcess(command, 0 if present else 1, "", "")
+
+        with mock.patch.object(DOCS.subprocess, "run", side_effect=run):
+            DOCS.compile_source_fences(fences, Path("/bin/koto"), self.root, 5)
+        self.assertEqual(calls, [True, False])
+
+    def test_bundle_rejects_hidden_unused_companions_and_failed_compiler_probes(self) -> None:
+        source = "// file: app.ko\nseiyaku A {}\n// file: hidden.ko\ninvalid source\n"
+        fence = DOCS.SourceFence(Path("bundle.md"), 1, 2, source, False, True)
+        for missing_result, message in (
+            (subprocess.CompletedProcess([], 0, "", ""), "outside the compiled"),
+            (OSError("compiler unavailable"), "failed to verify bundle"),
+            (subprocess.TimeoutExpired("koto", 5), "failed to verify bundle"),
+        ):
+            with self.subTest(message=message), mock.patch.object(
+                DOCS.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess([], 0, "", ""), missing_result,
+                ],
+            ), self.assertRaisesRegex(DOCS.DocumentationCheckError, message):
+                DOCS.compile_source_fences([fence], Path("/bin/koto"), self.root, 5)
+
+    def test_bundle_rejects_escaping_duplicate_empty_and_unmarked_sources(self) -> None:
+        invalid = (
+            "// file: ../escape.ko\nseiyaku A {}\n",
+            "// file: /absolute.ko\nseiyaku A {}\n",
+            "// file: nested/../escape.ko\nseiyaku A {}\n",
+            "// file: nested//app.ko\nseiyaku A {}\n",
+            "// file: C:\\app.ko\nseiyaku A {}\n",
+            "// file: app.ko\nseiyaku A {}\n// file: app.ko\nmodule B {}\n",
+            "// file: app.ko\n",
+            "seiyaku Unmarked {}\n// file: app.ko\nseiyaku A {}\n",
+        )
+        for source in invalid:
+            with self.subTest(source=source), self.assertRaises(DOCS.DocumentationCheckError):
+                DOCS.extract_source_fences(Path("bundle.md"), f"```ko bundle\n{source}```\n")
+
     def test_compiler_deduplicates_identical_sources_by_execution_mode(self) -> None:
         fences = (
             DOCS.SourceFence(Path("one.md"), 1, 2, "seiyaku A {}\n", False),

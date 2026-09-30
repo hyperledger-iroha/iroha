@@ -23,7 +23,7 @@ fn explicit_field_payload<T: SerializePayload>(value: &T) -> Vec<u8> {
     bytes
 }
 
-fn assert_string_payload<T>(value: T, expected: &str)
+fn assert_string_payload<T>(value: &T, expected: &str)
 where
     T: SerializePayload
         + for<'de> DeserializePayload<'de>
@@ -40,7 +40,7 @@ where
         // Encode selects the fixed bare V1 layout regardless of this ambient field layout.
         assert_eq!(value.encode(), canonical);
         assert_eq!(value.encode(), expected.to_owned().encode());
-        let bytes = explicit_field_payload(&value);
+        let bytes = explicit_field_payload(value);
         assert_eq!(bytes, explicit_field_payload(&expected.to_owned()));
         // These short scalar spellings have either an explicit u64 or one-byte compact length.
         let mut exact = if flags == 0 {
@@ -61,7 +61,7 @@ where
         trailing.push(0);
         assert!(decode_field_canonical::<T>(&trailing).is_err());
     }
-    let json = norito::json::to_json(&value).unwrap();
+    let json = norito::json::to_json(value).unwrap();
     assert_eq!(json, norito::json::to_json(&expected).unwrap());
     let decoded = norito::json::from_json::<T>(&json).unwrap();
     assert_eq!(decoded.to_string(), expected);
@@ -81,15 +81,15 @@ where
 
 #[test]
 fn kura_init_mode_retains_its_string_payload() {
-    assert_string_payload(InitMode::Strict, "strict");
-    assert_string_payload(InitMode::Fast, "fast");
+    assert_string_payload(&InitMode::Strict, "strict");
+    assert_string_payload(&InitMode::Fast, "fast");
     assert_invalid_string::<InitMode>("unknown");
 }
 
 #[test]
 fn kura_fsync_mode_retains_its_string_payload() {
-    assert_string_payload(FsyncMode::Always, "always");
-    assert_string_payload(FsyncMode::Batched, "batched");
+    assert_string_payload(&FsyncMode::Always, "always");
+    assert_string_payload(&FsyncMode::Batched, "batched");
     for invalid in ["off", "on", "unknown"] {
         assert_invalid_string::<FsyncMode>(invalid);
     }
@@ -103,7 +103,7 @@ fn logger_format_retains_its_string_payload() {
         (Format::Pretty, "pretty"),
         (Format::Json, "json"),
     ] {
-        assert_string_payload(value, text);
+        assert_string_payload(&value, text);
     }
     assert_invalid_string::<Format>("unknown");
 }
@@ -111,7 +111,7 @@ fn logger_format_retains_its_string_payload() {
 #[test]
 fn logger_directives_retain_their_string_payload() {
     for text in ["", "info", "iroha_core=trace,axum=warn"] {
-        assert_string_payload(text.parse::<Directives>().unwrap(), text);
+        assert_string_payload(&text.parse::<Directives>().unwrap(), text);
     }
     let invalid = "iroha_core=unknown_level";
     assert!(invalid.parse::<Directives>().is_err());
@@ -125,7 +125,7 @@ fn snapshot_mode_retains_its_string_payload() {
         (Mode::Readonly, "readonly"),
         (Mode::Disabled, "disabled"),
     ] {
-        assert_string_payload(value, text);
+        assert_string_payload(&value, text);
     }
     assert_invalid_string::<Mode>("unknown");
 }

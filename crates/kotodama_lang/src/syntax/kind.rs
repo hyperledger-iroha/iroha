@@ -8,6 +8,10 @@ pub enum SyntaxKind {
     SourceUnit,
     /// Source-unit item list.
     ItemList,
+    /// Bare source declaration inclusion.
+    IncludeItem,
+    /// Namespaced local-module import.
+    ImportItem,
     /// Function or lifecycle declaration.
     FunctionItem,
     /// Structure declaration.
@@ -142,6 +146,14 @@ pub enum SyntaxKind {
     KwSeiyaku,
     /// `module`.
     KwModule,
+    /// `include`.
+    KwInclude,
+    /// `import`.
+    KwImport,
+    /// `as`.
+    KwAs,
+    /// `export`.
+    KwExport,
     /// `kotoage` or `言挙げ`.
     KwKotoage,
     /// `hajimari` or `始まり`.
@@ -251,6 +263,9 @@ impl SyntaxKind {
                 | Self::KwConst
                 | Self::KwState
                 | Self::KwTrigger
+                | Self::KwInclude
+                | Self::KwImport
+                | Self::KwExport
                 | Self::Hash
         )
     }

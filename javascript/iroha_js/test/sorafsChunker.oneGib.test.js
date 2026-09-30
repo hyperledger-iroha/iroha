@@ -13,7 +13,7 @@ test(
   () => {
     const result = spawnSync(
       "cargo",
-      ["run", "--quiet", "-p", "sorafs_chunker", "--bin", "sorafs_chunk_digest"],
+      ["run", "--locked", "--quiet", "-p", "sorafs_chunker", "--features", "dev-tools", "--bin", "sorafs_chunk_digest"],
       {
         cwd: repoRoot,
         encoding: "utf8",

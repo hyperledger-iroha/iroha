@@ -1094,7 +1094,7 @@ CLIENT_STAGES += (("strict scoped pipeline and alias client responses", (
 )), )
 
 TORII_UNIT_STAGES += (("complete typed pipeline and alias HTTP errors", (
-    'tests_runtime_handlers::pipeline_status_global_read_skips_non_terminal_local_cache',
+    'tests_runtime_handlers::pipeline_status_global_read_evicts_stale_queued_cache',
     'torii_routed_read_tests::pipeline_status_fanout_requires_exact_scoped_absence',
     'openapi::tests::pipeline_status_openapi_exposes_only_the_exact_first_release_scope',
     'mcp::tests::canonical_paths_and_status::applied_wait_status_poll_accepts_only_exact_200_or_404',

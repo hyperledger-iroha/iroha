@@ -6588,10 +6588,7 @@ pub(crate) mod valid {
         use iroha_data_model::{
             Registrable,
             block::error::BlockRejectionReason as Reason,
-            consensus::{
-                ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-                NposConsensusEffects,
-            },
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
             da::{
                 commitment::{
                     DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass,
@@ -6600,11 +6597,8 @@ pub(crate) mod valid {
                 types::{BlobDigest, StorageTicketId},
             },
             isi::{InstructionBox, Log, error::Mismatch},
-            nexus::{
-                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog,
-                DataSpaceMetadata, LaneCatalog, LaneConfig,
-            },
-            parameter::{Parameter, Parameters, system::SumeragiNposParameters},
+            nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, LaneCatalog, LaneConfig},
+            parameter::Parameter,
             prelude::{Account, Domain, Register},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
@@ -6618,10 +6612,7 @@ pub(crate) mod valid {
                 SoraStateMutationOperationV1,
             },
             sorafs::pin_registry::ManifestDigest,
-            transaction::{
-                Executable, SignedTransaction, TransactionBuilder, error::TransactionLimitError,
-            },
-            trigger::DataTriggerSequence,
+            transaction::{SignedTransaction, TransactionBuilder, error::TransactionLimitError},
         };
         use iroha_logger::Level;
         use iroha_model_base::domain::DomainId;
@@ -6632,7 +6623,7 @@ pub(crate) mod valid {
         use iroha_primitives::time::TimeSource;
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
-        use mv::cell::Cell;
+
         use mv::storage::StorageReadOnly;
         use nonzero_ext::nonzero;
         use std::{
@@ -8951,7 +8942,6 @@ pub(crate) mod tests {
     use super::*;
     use crate::{
         block::event::map_sig_err_to_reason,
-        governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::{Execute, isi::triggers::set::SetReadOnly},
@@ -8959,7 +8949,7 @@ pub(crate) mod tests {
         tx::AcceptedTransaction,
     };
     use core::time::Duration;
-    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, bls_normal_aggregate_signatures};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
@@ -10260,7 +10250,7 @@ seiyaku DynamicTarget {
 
         let chain_id = ChainId::from("non-external-sequential-fallback");
         let (authority, keypair) = gen_account_in("wonderland");
-        let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
         let time_trigger_id: iroha_data_model::trigger::TriggerId =
             "non_external_sequential_heartbeat"
                 .parse()
@@ -10595,7 +10585,7 @@ seiyaku DynamicTarget {
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
-        let mut state = configured_component_state(world, chain_id, nexus);
+        let state = configured_component_state(world, chain_id, nexus);
         {
             let mut genesis = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let mut transaction = genesis.transaction();

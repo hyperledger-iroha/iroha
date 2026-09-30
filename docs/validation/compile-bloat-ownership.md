@@ -23,7 +23,7 @@ non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
 source TODO records the remaining direct-owner migration.
 
 Scoped continuation runs passed the IVM/surface/toolchain library suites,
-timed-OVN owner tests, P2P and moved compiler tests, and the source/fixture and
+timed-OVN owner tests, P2P and moved compiler/model tests, and the source/fixture and
 dependency-boundary guards. These results belong to their recorded source
 snapshots. Concurrent consensus/schema changes and the final CLI manifest
 refinement require current-source checks; earlier passes do not qualify a

@@ -30,6 +30,7 @@ pub const DYNAMIC_ACCESS_HINT_KEY_TYPES_V1: &[&str] = &[
 pub const DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1: &[&str] = &["page", "take"];
 /// Exact keywords and compiler-reserved state declaration names.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
+    "as",
     "authorize",
     "break",
     "const",
@@ -37,12 +38,15 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "else",
     "enum",
     "error",
+    "export",
     "false",
     "fn",
     "for",
     "hajimari",
     "if",
+    "import",
     "in",
+    "include",
     "kaizen",
     "kotoage",
     "let",
@@ -116,6 +120,7 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "expect",
 ];
 /// Exact compiler-owned prefixes forbidden for state declarations.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodama_link_"];

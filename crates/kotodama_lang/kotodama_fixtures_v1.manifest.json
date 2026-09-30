@@ -4254,7 +4254,7 @@
         "named_struct_fields_retain_source_evaluation_order",
         "struct_literals_reject_unknown_missing_and_positional_fields",
         "named_user_call_arguments_are_reordered_to_parameter_order",
-        "named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments",
+        "named_user_calls_reject_unknown_and_missing_arguments",
         "named_argument_plans_reject_optional_holes_without_compacting_abi_slots",
         "declared_call_labels_are_independent_of_effects",
         "named_method_arguments_do_not_mix_with_the_receiver",
@@ -4331,7 +4331,7 @@
         "bytes_literal_types_as_bytes",
         "state_map_key_type_is_validated",
         "durable_state_map_key_domain_matches_generated_policy",
-        "field_assignment_is_rejected",
+        "immutable_field_assignment_is_rejected",
         "info_accepts_int",
         "view_entrypoints_reject_observable_debug_logging",
         "vector_length_control_is_not_a_source_builtin",
@@ -4433,13 +4433,13 @@
         "explicit_positional_prefix_ignores_repeated_types",
         "explicit_struct_discards_do_not_bind_or_shadow_underscore",
         "mixed_source_call_evaluates_in_source_order",
-        "explicit_call_modes_reject_the_other_source_spelling",
+        "positional_only_call_modes_reject_names",
         "named_struct_bindings_select_fields_and_capture_initializer_once",
         "named_struct_patterns_check_completeness_and_nominality",
         "result_obligations_follow_named_argument_source_order_on_propagation",
         "interspersed_unit_parameters_match_public_and_internal_word_layouts"
       ],
-      "test_names_sha256": "fa22fdaa22f88ef9f2834a4fe3a65dfc23003ae4882d328a5b5e89c913dabe9c"
+      "test_names_sha256": "4022954afdd316074cf915534c4c95267ede883a4e08adcd7debd1d31ec15a19"
     },
     {
       "external_fixtures": [],
@@ -4559,5 +4559,5 @@
       "test_names_sha256": "1b35e9ea05f0d5134738d066f94d499d980beab890dc37fc66364142eae07ccd"
     }
   ],
-  "test_inventory_sha256": "4e8cd25648eedc72452efb2b2fb4413bbe743ef01475a1a3b7610935494094fc"
+  "test_inventory_sha256": "1b171e8c58cbabba4521bb48852ede3209d1dc5b45479ef37f71a1bf9760c302"
 }

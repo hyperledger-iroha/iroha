@@ -686,6 +686,7 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     let transaction = TransactionEntrypoint::External(tx.clone());
     let routing_plan =
         RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let sender = app.local_peer_id.clone().expect("native fixture validator");
     let receiver_response = super::execute_incoming_torii_proxy_request(
         &app,
         ToriiProxyRequestV1 {
@@ -694,13 +695,13 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
             deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 3,
-            visited_peer_ids: Vec::new(),
+            visited_peer_ids: vec![sender.clone()],
             request: ToriiProxyRequestKindV1::SubmitTransaction {
                 transaction,
                 expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
             },
         },
-        None,
+        Some(sender),
     )
     .await;
     assert_eq!(receiver_response.status(), StatusCode::UNPROCESSABLE_ENTITY);

@@ -30,8 +30,7 @@ use kotodama_lang::{
 };
 use kotodama_toolchain::koto_test_driver::{
     KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
-    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
-    run_tests_structured_source_set_with_modules_v1,
+    declared_test_target_source_v1, run_tests_structured_source_set_with_modules_v1,
 };
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -310,6 +309,7 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     let mut matched_filter = options.filter.is_none();
     for (member, root) in members.into_iter().zip(roots) {
         let module_graph = KotoTestModuleGraphV1 {
+            sources: Vec::new(),
             imports: test_root_imports(member, root, &local_identities)?,
             packages: packages.clone(),
         };
@@ -332,9 +332,20 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
                     &mut contract_sources,
                     &mut source_budget,
                 )?;
+                let mut module_graph = module_graph.clone();
+                let mut entries = vec![source.unit.clone()];
+                if let Some(contract) = &contract {
+                    entries.push(contract.clone());
+                }
+                module_graph.sources = kotodama_lang::driver::load_source_companions(
+                    &entries,
+                    &member.package_root,
+                    &BTreeMap::new(),
+                )
+                .map_err(|error| WorkspaceTestErrorV1::Runner(error.to_string()))?;
                 if let Some(filter) = options.filter.as_deref() {
                     let names =
-                        discover_declared_test_names_source_set_v1(&source.unit, contract.as_ref())
+                        kotodama_toolchain::koto_test_driver::discover_declared_test_names_source_set_with_sources_v1(&source.unit, contract.as_ref(), &module_graph.sources)
                             .map_err(WorkspaceTestErrorV1::Runner)?;
                     let matches = names.iter().any(|name| {
                         if options.exact {
@@ -595,9 +606,30 @@ fn local_source_package(
     let Some(library) = member.manifest.library.as_ref() else {
         return Ok(None);
     };
-    let modules =
+    let mut units =
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
             .map_err(|error| WorkspaceTestErrorV1::ExternalModules(error.to_string()))?;
+    for source in &mut units {
+        if library.source_dir.as_str() != "." {
+            source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
+        }
+    }
+    let (modules, mut sources) = crate::compiler::partition_library_sources(units)
+        .map_err(|error| WorkspaceTestErrorV1::ExternalModules(error.to_string()))?;
+    for source in kotodama_lang::driver::load_source_companions(
+        &modules,
+        &member.package_root,
+        &BTreeMap::new(),
+    )
+    .map_err(|error| WorkspaceTestErrorV1::ExternalModules(error.to_string()))?
+    {
+        if !sources
+            .iter()
+            .any(|known| known.source_name == source.source_name)
+        {
+            sources.push(source);
+        }
+    }
     if modules.is_empty() {
         return Err(WorkspaceTestErrorV1::ExternalModules(format!(
             "local package `{}` has no declared Kotodama library sources",
@@ -621,6 +653,7 @@ fn local_source_package(
             .then_with(|| left.package.cmp(&right.package))
     });
     Ok(Some(SourcePackageUnit {
+        sources,
         identity: local_package(&member.package.selector, &member.package.version),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
@@ -701,18 +734,32 @@ fn cached_source_package(
             node.release
         )));
     }
-    let modules = cached
+    let inventory = cached
         .kotodama_sources
         .into_iter()
-        .filter_map(|source| {
-            relative_library_source(&source.path, &library.source_dir).map(|source_name| {
-                SourceModuleUnit {
-                    source_name,
-                    source: source.source,
-                }
-            })
+        .map(|source| SourceModuleUnit {
+            source_name: source.path,
+            source: source.source,
         })
         .collect::<Vec<_>>();
+    let (modules, _) = crate::compiler::partition_library_sources(
+        inventory
+            .iter()
+            .filter(|source| {
+                relative_library_source(&source.source_name, &library.source_dir).is_some()
+            })
+            .cloned()
+            .collect(),
+    )
+    .map_err(|error| WorkspaceTestErrorV1::Cache(error.to_string()))?;
+    let sources = inventory
+        .into_iter()
+        .filter(|source| {
+            !modules
+                .iter()
+                .any(|module| module.source_name == source.source_name)
+        })
+        .collect();
     if modules.is_empty() {
         return Err(WorkspaceTestErrorV1::Cache(format!(
             "cached release `{}` has no declared library sources",
@@ -720,6 +767,7 @@ fn cached_source_package(
         )));
     }
     Ok(SourcePackageUnit {
+        sources,
         identity: registry_release(&node.release),
         modules,
         exports,
@@ -931,6 +979,7 @@ fn declared_test_sources(
             &mut budget,
             &mut sources,
         )?;
+        sources.retain(|source| crate::compiler::is_named_source_unit(&source.unit));
     } else {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test target `{}` is a symlink, reparse point, hardlink, or special file",
@@ -1404,6 +1453,7 @@ path = "tests/unit.ko"
         imports: Vec<ImportBinding>,
     ) -> SourcePackageUnit {
         SourcePackageUnit {
+            sources: Vec::new(),
             identity: registry_release(release),
             modules: vec![SourceModuleUnit {
                 source_name: "src/lib.ko".to_owned(),
@@ -1701,13 +1751,13 @@ default-members = ["app"]
             MusubiReleaseIdV1::new(leaf.clone(), "1.0.0".parse().expect("leaf version"));
         let leaf_unit = source_package(
             &leaf_release,
-            "module Leaf { fn truth() -> bool { return true; } }",
+            "module Leaf { export fn truth() -> bool { return true; } }",
             &["truth"],
             Vec::new(),
         );
         let dep_unit = source_package(
             &dep_release,
-            "module Dep { fn truth() -> bool { return leaf::truth(); } }",
+            "module Dep { export fn truth() -> bool { return leaf::truth(); } }",
             &["truth"],
             vec![ImportBinding {
                 alias: "leaf".to_owned(),
@@ -1782,7 +1832,7 @@ core = { package = "test/core", version = "^1.0.0" }
         );
         write(
             &temp.path().join("helper/src/lib.ko"),
-            "module Helper { fn truth() -> bool { return core::truth(); } }",
+            "module Helper { export fn truth() -> bool { return core::truth(); } }",
         );
         write(
             &temp.path().join("unrelated/Musubi.toml"),
@@ -1820,13 +1870,13 @@ core = { package = "test/core", version = "^1.0.0" }
         };
         let core_unit = source_package(
             &core_release,
-            "module Core { fn truth() -> bool { return true; } }",
+            "module Core { export fn truth() -> bool { return true; } }",
             &["truth"],
             Vec::new(),
         );
         let unused_unit = source_package(
             &unused_release,
-            "module Unused { fn truth() -> bool { return false; } }",
+            "module Unused { export fn truth() -> bool { return false; } }",
             &["truth"],
             Vec::new(),
         );
@@ -1874,7 +1924,7 @@ core = { package = "test/core", version = "^1.0.0" }
         let release = MusubiReleaseIdV1::new(package_id.clone(), "1.0.0".parse().expect("version"));
         let package = source_package(
             &release,
-            "module Dep { fn value() -> int { return 1; } }",
+            "module Dep { export fn value() -> int { return 1; } }",
             &["value"],
             Vec::new(),
         );

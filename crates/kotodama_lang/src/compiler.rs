@@ -786,6 +786,45 @@ fn emit_store64(
 fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
     frame_prefix.saturating_add(offset) as i64
 }
+/// Reuse a scratch base across consecutive words in a stack-resident ABI table.
+/// The caller reserves `register` until the table transfer is complete. A window
+/// spans all 32 aligned offsets representable by the signed byte immediate.
+struct StackTableWindow {
+    register: u8,
+    anchor: Option<i64>,
+}
+impl StackTableWindow {
+    fn new(register: u8) -> Self {
+        Self {
+            register,
+            anchor: None,
+        }
+    }
+
+    fn address(
+        &mut self,
+        code: &mut Vec<u8>,
+        fixups: &LiteralFixups,
+        offset: usize,
+    ) -> Result<(u8, i64), String> {
+        let offset = i64::try_from(offset).map_err(|_| "stack table offset overflow")?;
+        let sp = regalloc::SP_REG as u8;
+        if let Some(anchor) = self.anchor {
+            let relative = offset - anchor;
+            if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&relative) {
+                return Ok((self.register, relative));
+            }
+        } else if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&offset) {
+            return Ok((sp, offset));
+        }
+        let anchor = offset
+            .checked_sub(i64::from(WIDE_IMM_MIN))
+            .ok_or("stack table window overflow")?;
+        emit_bounded_add(code, fixups, self.register, sp, anchor, LITERAL_SHIFT_REG)?;
+        self.anchor = Some(anchor);
+        Ok((self.register, i64::from(WIDE_IMM_MIN)))
+    }
+}
 fn encode_nop() -> u32 {
     encode_addi(0, 0, 0).expect("ADDI x0, x0, 0 must always encode")
 }
@@ -3110,12 +3149,22 @@ impl Compiler {
         &self,
         path: P,
     ) -> Result<Vec<u8>, String> {
-        let path_str = path.as_ref().display().to_string();
-        let src = crate::source::read_source_file(&path).map_err(|e| {
-            i18n::translate(self.lang, Message::ReadFile(&path_str, &e.to_string()))
-        })?;
-        self.compile_source_output(&src, Some(&path_str))
-            .map(|output| output.artifact)
+        let path = path.as_ref();
+        let root = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let loaded =
+            crate::driver::load_source_project(path, root, &std::collections::BTreeMap::new())
+                .map_err(|error| error.to_string())?;
+        let source_name = loaded.graph.root.source_name.clone();
+        crate::driver::BuildDriver::new(
+            crate::session::CompilerSession::new(self.opts.clone()),
+            COMPILER_FINGERPRINT,
+        )
+        .compile_project(loaded.graph, &source_name)
+        .map(|output| output.artifact)
+        .map_err(|error| error.to_string())
     }
     /// Compile a KOTODAMA source string into IVM bytecode.
     pub fn compile_source(&self, src: &str) -> Result<Vec<u8>, String> {
@@ -6009,6 +6058,7 @@ impl Compiler {
                                 .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
                             // Consume every argument before staging descriptor registers. Table
                             // scratch is disjoint from spills and is reused for each loop call.
+                            let mut argument_window = StackTableWindow::new(scratchd);
                             for (index, value) in args.iter().enumerate() {
                                 let source = if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *value)).copied()
@@ -6024,12 +6074,17 @@ impl Compiler {
                                 } else {
                                     src_reg(value, scratch1, &mut code)?
                                 };
+                                let (table_base, table_offset) = argument_window.address(
+                                    &mut code,
+                                    &fixups,
+                                    frame.outgoing_argument_base + index * 8,
+                                )?;
                                 emit_store64(
                                     &mut code,
                                     &fixups,
-                                    sp,
+                                    table_base,
                                     source,
-                                    (frame.outgoing_argument_base + index * 8) as i64,
+                                    table_offset,
                                     scratch2,
                                 )?;
                             }
@@ -6076,15 +6131,21 @@ impl Compiler {
                                     "call to `{callee}` has an inconsistent result table"
                                 ));
                             }
+                            let mut result_window = StackTableWindow::new(scratch1);
                             for (index, destination) in destinations.iter().enumerate() {
                                 let (rd, spilled, imm) = dst_reg(destination);
+                                let (table_base, table_offset) = result_window.address(
+                                    &mut code,
+                                    &fixups,
+                                    frame.outgoing_result_base + index * 8,
+                                )?;
                                 emit_load64(
                                     &mut code,
                                     &fixups,
                                     rd,
-                                    sp,
-                                    (frame.outgoing_result_base + index * 8) as i64,
-                                    Some(scratch1),
+                                    table_base,
+                                    table_offset,
+                                    Some(scratch2),
                                 )?;
                                 spill_back(destination, rd, spilled, imm, &mut code)?;
                             }
@@ -6828,6 +6889,7 @@ impl Compiler {
                                 return Err("durable aggregate state scratch frame is undersized"
                                     .to_string());
                             }
+                            let mut state_window = StackTableWindow::new(scratch1);
                             for (index, word) in words.iter().enumerate() {
                                 let source = if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *word)).copied()
@@ -6852,13 +6914,15 @@ impl Compiler {
                                     .ok_or_else(|| {
                                         "durable aggregate state table offset overflow".to_string()
                                     })?;
+                                let (table_base, table_offset) =
+                                    state_window.address(&mut code, &fixups, offset)?;
                                 emit_store64(
                                     &mut code,
                                     &fixups,
-                                    sp,
+                                    table_base,
                                     source,
-                                    offset as i64,
-                                    scratch1,
+                                    table_offset,
+                                    scratchd,
                                 )?;
                             }
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *schema)).copied()
@@ -8615,6 +8679,7 @@ impl Compiler {
             kotoba: message_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
             error_types: typed.error_types.clone(),
+            error_messages: typed.error_messages.clone(),
             states: state_descriptors,
         };
         // Compute the indexed literal table and patch LDLIT/LDI64 words.
@@ -8858,6 +8923,8 @@ impl Compiler {
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_types: (!contract_interface.error_types.is_empty())
                 .then_some(contract_interface.error_types.clone()),
+            error_messages: (!contract_interface.error_messages.is_empty())
+                .then_some(contract_interface.error_messages.clone()),
             kotoba: (!contract_interface.kotoba.is_empty())
                 .then_some(contract_interface.kotoba.clone()),
             provenance: None,

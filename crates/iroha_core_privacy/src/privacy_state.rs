@@ -3527,6 +3527,9 @@ impl PrivacyProofManagedPoolSnapshotV1 {
             verified_batches: BTreeMap::new(),
         }
     }
+    /// Construct a canonical private-IVM origin snapshot for component tests.
+    ///
+    /// The bootstrap must validate and select the private-IVM protocol.
     #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn canonical_private_note_bootstrap_for_test(
@@ -3537,6 +3540,9 @@ impl PrivacyProofManagedPoolSnapshotV1 {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         )
     }
+    /// Construct a canonical PQ-MASP origin snapshot for component tests.
+    ///
+    /// The bootstrap must validate and select the PQ-MASP protocol.
     #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn canonical_pq_masp_bootstrap_for_test(
@@ -12556,6 +12562,104 @@ mod tests {
             "first-release durable records reject unknown legacy fields"
         );
     }
+    #[test]
+    fn canonical_note_bootstrap_fixtures_match_persisted_origin_and_frontier() {
+        type Constructor =
+            fn(PrivacyProofManagedPoolBootstrapV1) -> PrivacyProofManagedPoolSnapshotV1;
+        let constructors: [(PrivacyProtocolIdV1, Constructor); 2] = [
+            (
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyProofManagedPoolSnapshotV1::canonical_private_note_bootstrap_for_test,
+            ),
+            (
+                PrivacyProtocolIdV1::PqMaspStarkV1,
+                PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test,
+            ),
+        ];
+        for (protocol_id, construct) in constructors {
+            let mut persisted = proof_managed_note_persisted_fixture(protocol_id);
+            let expected = persisted.load().expect("validated persisted origin");
+            let snapshot = construct(persisted.bootstrap.clone());
+            assert_eq!(snapshot.namespace(), expected.namespace());
+            assert_eq!(snapshot.root_role(), expected.root_role());
+            assert_eq!(snapshot.bootstrap(), expected.bootstrap());
+            assert_eq!(snapshot.bootstrap_digest(), expected.bootstrap_digest());
+            assert_eq!(snapshot.initial_root(), expected.initial_root());
+            assert_eq!(snapshot.current_root(), expected.current_root());
+            assert_eq!(snapshot.current_epoch(), 1);
+            assert_eq!(snapshot.output_count(), 2);
+            assert_eq!(snapshot.bootstrap_admitted_at_height(), 1);
+            assert_eq!(snapshot.accumulator_state(), expected.accumulator_state());
+            assert_eq!(snapshot.retention_anchor(), None);
+            assert_eq!(
+                snapshot.retained_current_root(),
+                Some((1, expected.current_root()))
+            );
+            let outputs = [PrivacyCommitmentV1::new(nonzero(0xCC))];
+            let successor = snapshot
+                .derive_note_successor(&outputs)
+                .expect("fixture frontier accepts the canonical append");
+            persisted.advance(&outputs);
+            let recovered = persisted.load().expect("validated persisted successor");
+            assert_eq!(successor.epoch(), recovered.current_epoch());
+            assert_eq!(successor.root(), recovered.current_root());
+            assert_eq!(Some(&successor), recovered.accumulator_state());
+        }
+    }
+
+    #[test]
+    fn canonical_note_bootstrap_fixtures_reject_cross_protocol_and_invalid_origins() {
+        let private_ivm = proof_managed_persisted_fixture().bootstrap;
+        let pq_masp = pq_masp_persisted_fixture().bootstrap;
+        assert!(
+            std::panic::catch_unwind(|| {
+                PrivacyProofManagedPoolSnapshotV1::canonical_private_note_bootstrap_for_test(
+                    pq_masp.clone(),
+                )
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
+                    private_ivm.clone(),
+                )
+            })
+            .is_err()
+        );
+        let mut invalid_private_ivm = private_ivm;
+        let PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(bootstrap) =
+            &mut invalid_private_ivm
+        else {
+            panic!("private-IVM fixture must retain its protocol");
+        };
+        bootstrap.initial_note_commitments.clear();
+        assert!(invalid_private_ivm.validate().is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                PrivacyProofManagedPoolSnapshotV1::canonical_private_note_bootstrap_for_test(
+                    invalid_private_ivm,
+                )
+            })
+            .is_err()
+        );
+        let mut invalid_pq_masp = pq_masp;
+        let PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(bootstrap) = &mut invalid_pq_masp
+        else {
+            panic!("PQ-MASP fixture must retain its protocol");
+        };
+        bootstrap.initial_note_commitments.clear();
+        assert!(invalid_pq_masp.validate().is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
+                    invalid_pq_masp,
+                )
+            })
+            .is_err()
+        );
+    }
+
     #[test]
     fn proof_managed_note_frontier_is_durable_bounded_and_self_authenticating() {
         let asset_definition_id = AssetDefinitionId::derive_from_components(

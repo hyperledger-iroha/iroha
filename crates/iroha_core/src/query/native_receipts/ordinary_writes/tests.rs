@@ -435,6 +435,7 @@ fn nonempty_lane_graph_is_borrowed_from_the_original_charged_frame() {
         .collect::<Vec<_>>();
     committee.sort();
     original.lanes = SumeragiLaneState {
+        custody: Vec::new(),
         lanes: vec![SumeragiLaneRecord {
             da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(1),

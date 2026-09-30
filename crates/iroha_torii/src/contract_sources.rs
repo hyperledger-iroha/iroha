@@ -37,7 +37,7 @@ const VERIFIED_SOURCE_LANGUAGE_KOTODAMA: &str = "kotodama";
 const FIXED_HEX_COMPONENT_BYTES_V1: usize = 32;
 const FIXED_HEX_COMPONENT_CHARS_V1: usize = FIXED_HEX_COMPONENT_BYTES_V1 * 2;
 const VERIFIED_SOURCE_JSON_MAX_ESCAPE_BYTES_PER_INPUT_BYTE_V1: usize = 6;
-const VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1: usize = 1024;
+const VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1: usize = 1024 * 1024;
 /// First-release HTTP envelope ceiling for a verified-source submission.
 ///
 /// This derives from Kotodama's canonical source and logical-path limits and admits the worst-case
@@ -45,8 +45,8 @@ const VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1: usize = 1024;
 /// without reducing the language's V1 source surface.
 pub(crate) const VERIFIED_SOURCE_SUBMISSION_MAX_HTTP_BODY_BYTES_V1: usize =
     VERIFIED_SOURCE_JSON_MAX_ESCAPE_BYTES_PER_INPUT_BYTE_V1
-        * (VERIFIED_SOURCE_TEXT_MAX_BYTES_V1
-            + VERIFIED_SOURCE_NAME_MAX_BYTES_V1
+        * (kotodama_lang::linker::MAX_MODULE_GRAPH_SOURCE_BYTES
+            + VERIFIED_SOURCE_NAME_MAX_BYTES_V1 * kotodama_lang::linker::MAX_MODULE_GRAPH_SOURCES
             + VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1)
         + VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1;
 const VERIFIED_SOURCE_TEXT_MAX_BYTES_V1: usize = kotodama_lang::source::MAX_SOURCE_BYTES;
@@ -213,6 +213,15 @@ pub struct ContractCodeViewDto {
     pub warnings: Vec<String>,
     pub rendered_source_kind: String,
     pub rendered_source_text: String,
+    /// Companion files belonging to the verified root, with original file identities.
+    #[norito(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<ContractSourceFileDto>,
+    /// Exact root import bindings of the verified source bundle.
+    #[norito(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_imports: Vec<ContractSourceImportDto>,
+    /// Complete locked dependency packages needed to reproduce the artifact.
+    #[norito(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_packages: Vec<ContractSourcePackageDto>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
@@ -232,6 +241,79 @@ pub struct SubmitVerifiedContractSourceDto {
     #[norito(default)]
     pub source_name: Option<String>,
     pub source_text: String,
+    /// Explicit companion files; compilation never reads server-local files.
+    #[norito(default)]
+    pub sources: Vec<ContractSourceFileDto>,
+    /// Exact root import bindings; no package resolution occurs on the server.
+    #[norito(default)]
+    pub imports: Vec<ContractSourceImportDto>,
+    /// Complete locked dependency packages including their original files.
+    #[norito(default)]
+    pub packages: Vec<ContractSourcePackageDto>,
+}
+/// One original file in a submitted Kotodama source set.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceFileDto")]
+pub struct ContractSourceFileDto {
+    /// Portable path relative to the submitted source-set root.
+    pub source_name: String,
+    /// Complete bounded UTF-8 file contents.
+    pub source_text: String,
+}
+/// One exact package import binding in a verified source bundle.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourceImportDto")]
+pub struct ContractSourceImportDto {
+    /// Source-visible package alias.
+    pub alias: String,
+    /// Exact locked package identity.
+    pub package: String,
+}
+/// An immutable locked package supplied with a verified source request.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractSourcePackageDto")]
+pub struct ContractSourcePackageDto {
+    /// Exact locked identity, including revision when applicable.
+    pub identity: String,
+    /// Explicit module entry files.
+    pub modules: Vec<ContractSourceFileDto>,
+    /// Companion files reached through module include/import declarations.
+    #[norito(default)]
+    pub sources: Vec<ContractSourceFileDto>,
+    /// Explicit exported symbol names.
+    pub exports: Vec<String>,
+    /// Exact transitive import bindings.
+    pub imports: Vec<ContractSourceImportDto>,
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::contract_sources::ContractVerifiedSourceJobResponseDto")]
@@ -278,6 +360,9 @@ struct StoredVerifiedSourceRecord {
     #[norito(default)]
     source_name: Option<String>,
     source_text: String,
+    sources: Vec<ContractSourceFileDto>,
+    imports: Vec<ContractSourceImportDto>,
+    packages: Vec<ContractSourcePackageDto>,
     submitted_at: String,
     #[norito(default)]
     manifest_id_hex: Option<String>,
@@ -1392,6 +1477,14 @@ fn validate_verified_source_record_schema(
     if record.language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA
         || record.source_text.trim().is_empty()
         || record.source_text.len() > VERIFIED_SOURCE_TEXT_MAX_BYTES_V1
+        || source_bundle_bound_error(
+            record.source_name.as_deref(),
+            &record.source_text,
+            &record.sources,
+            &record.imports,
+            &record.packages,
+        )
+        .is_some()
         || record.source_name.as_ref().is_some_and(|name| {
             name.is_empty()
                 || name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1
@@ -1420,14 +1513,16 @@ fn validate_verified_source_record(
     expected_code_hash: &str,
 ) -> Result<(), Error> {
     validate_verified_source_record_schema(record, expected_code_hash)?;
-    let compiled = kotodama_lang::session::CompilerSession::default()
-        .build(kotodama_lang::session::CompileRequest {
-            source: &record.source_text,
-            source_name: record.source_name.as_deref(),
-        })
-        .map_err(|_| {
-            storage_error("stored verified-source record no longer compiles under Kotodama V1")
-        })?;
+    let compiled = compile_verified_source(
+        record.source_name.as_deref(),
+        &record.source_text,
+        &record.sources,
+        &record.imports,
+        &record.packages,
+    )
+    .map_err(|_| {
+        storage_error("stored verified-source record no longer compiles under Kotodama V1")
+    })?;
     let actual_hash = canonical_code_hash(&compiled.artifact)?;
     if hash_hex(&actual_hash) != expected_code_hash {
         return Err(storage_error(
@@ -2064,6 +2159,18 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         warnings: input.warnings,
         rendered_source_kind,
         rendered_source_text,
+        source_files: verified_source_record
+            .as_ref()
+            .map(|record| record.sources.clone())
+            .unwrap_or_default(),
+        source_imports: verified_source_record
+            .as_ref()
+            .map(|record| record.imports.clone())
+            .unwrap_or_default(),
+        source_packages: verified_source_record
+            .as_ref()
+            .map(|record| record.packages.clone())
+            .unwrap_or_default(),
         verified_source_ref,
     })
 }
@@ -2156,7 +2263,182 @@ fn verified_source_request_bound_error(
     if request.source_text.len() > VERIFIED_SOURCE_TEXT_MAX_BYTES_V1 {
         return Some("source_text exceeds the Kotodama V1 1048576-byte maximum");
     }
+    source_bundle_bound_error(
+        request.source_name.as_deref(),
+        &request.source_text,
+        &request.sources,
+        &request.imports,
+        &request.packages,
+    )
+}
+fn source_bundle_bound_error(
+    source_name: Option<&str>,
+    source_text: &str,
+    sources: &[ContractSourceFileDto],
+    imports: &[ContractSourceImportDto],
+    packages: &[ContractSourcePackageDto],
+) -> Option<&'static str> {
+    let count = packages
+        .iter()
+        .fold(1usize.saturating_add(sources.len()), |count, package| {
+            count
+                .saturating_add(package.modules.len())
+                .saturating_add(package.sources.len())
+        });
+    if count > kotodama_lang::linker::MAX_MODULE_GRAPH_SOURCES
+        || packages.len() > kotodama_lang::linker::MAX_MODULE_GRAPH_SOURCES
+    {
+        return Some("source set exceeds the 512-file maximum");
+    }
+    if (!sources.is_empty() || !imports.is_empty() || !packages.is_empty()) && source_name.is_none()
+    {
+        return Some("source_name is required when companion sources are supplied");
+    }
+    let mut bytes = source_text.len();
+    for source in sources.iter().chain(
+        packages
+            .iter()
+            .flat_map(|package| package.modules.iter().chain(&package.sources)),
+    ) {
+        if source.source_name.is_empty()
+            || source.source_name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1
+            || source.source_name.chars().any(char::is_control)
+        {
+            return Some("companion source_name must be a bounded nonempty logical path");
+        }
+        if source.source_text.len() > VERIFIED_SOURCE_TEXT_MAX_BYTES_V1 {
+            return Some("companion source_text exceeds the 1048576-byte maximum");
+        }
+        bytes = bytes.saturating_add(source.source_text.len());
+    }
+    for package in packages {
+        if package
+            .exports
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != package.exports.len()
+        {
+            return Some("locked package contains duplicate exports");
+        }
+    }
+    if bytes > kotodama_lang::linker::MAX_MODULE_GRAPH_SOURCE_BYTES {
+        return Some("source set exceeds the 16777216-byte maximum");
+    }
     None
+}
+fn verified_source_link_request(
+    name: &str,
+    source_text: &str,
+    sources: &[ContractSourceFileDto],
+    imports: &[ContractSourceImportDto],
+    packages: &[ContractSourcePackageDto],
+) -> kotodama_lang::linker::SourceLinkRequest {
+    kotodama_lang::linker::SourceLinkRequest {
+        root: kotodama_lang::linker::SourceModuleUnit {
+            source_name: name.into(),
+            source: source_text.into(),
+        },
+        sources: sources
+            .iter()
+            .map(|source| kotodama_lang::linker::SourceModuleUnit {
+                source_name: source.source_name.clone(),
+                source: source.source_text.clone(),
+            })
+            .collect(),
+        imports: imports
+            .iter()
+            .map(|binding| kotodama_lang::linker::ImportBinding {
+                alias: binding.alias.clone(),
+                package: binding.package.clone(),
+            })
+            .collect(),
+        packages: packages
+            .iter()
+            .map(|package| kotodama_lang::linker::SourcePackageUnit {
+                identity: package.identity.clone(),
+                modules: package
+                    .modules
+                    .iter()
+                    .map(|source| kotodama_lang::linker::SourceModuleUnit {
+                        source_name: source.source_name.clone(),
+                        source: source.source_text.clone(),
+                    })
+                    .collect(),
+                sources: package
+                    .sources
+                    .iter()
+                    .map(|source| kotodama_lang::linker::SourceModuleUnit {
+                        source_name: source.source_name.clone(),
+                        source: source.source_text.clone(),
+                    })
+                    .collect(),
+                exports: package.exports.iter().cloned().collect(),
+                imports: package
+                    .imports
+                    .iter()
+                    .map(|binding| kotodama_lang::linker::ImportBinding {
+                        alias: binding.alias.clone(),
+                        package: binding.package.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+fn source_file_dto(source: kotodama_lang::linker::SourceModuleUnit) -> ContractSourceFileDto {
+    ContractSourceFileDto {
+        source_name: source.source_name,
+        source_text: source.source,
+    }
+}
+fn source_import_dto(binding: kotodama_lang::linker::ImportBinding) -> ContractSourceImportDto {
+    ContractSourceImportDto {
+        alias: binding.alias,
+        package: binding.package,
+    }
+}
+fn source_package_dto(
+    package: kotodama_lang::linker::SourcePackageUnit,
+) -> ContractSourcePackageDto {
+    ContractSourcePackageDto {
+        identity: package.identity,
+        modules: package.modules.into_iter().map(source_file_dto).collect(),
+        sources: package.sources.into_iter().map(source_file_dto).collect(),
+        exports: package.exports.into_iter().collect(),
+        imports: package.imports.into_iter().map(source_import_dto).collect(),
+    }
+}
+fn compile_verified_source(
+    source_name: Option<&str>,
+    source_text: &str,
+    sources: &[ContractSourceFileDto],
+    imports: &[ContractSourceImportDto],
+    packages: &[ContractSourcePackageDto],
+) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
+    let session = kotodama_lang::session::CompilerSession::default();
+    if sources.is_empty() && imports.is_empty() && packages.is_empty() {
+        return session.build(kotodama_lang::session::CompileRequest {
+            source: source_text,
+            source_name,
+        });
+    }
+    let name = source_name.unwrap_or("main.ko");
+    let graph = verified_source_link_request(name, source_text, sources, imports, packages);
+    kotodama_lang::driver::BuildDriver::new(session, "verified-source")
+        .compile_project(graph, name)
+        .map_err(|error| {
+            error.into_diagnostics().unwrap_or_else(|error| {
+                kotodama_lang::diagnostic::DiagnosticBundle::single(
+                    kotodama_lang::diagnostic::Diagnostic::error(
+                        "K0000",
+                        kotodama_lang::diagnostic::DiagnosticPhase::Resolve,
+                        error.to_string(),
+                        None,
+                    ),
+                )
+            })
+        })
 }
 struct BoundedDiagnosticText {
     text: String,
@@ -2363,8 +2645,32 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let source_name = request.source_name;
+    let mut source_name = request.source_name;
     let source_text = request.source_text;
+    let mut sources = request.sources;
+    sources.sort_by(|left, right| left.source_name.cmp(&right.source_name));
+    let mut imports = request.imports;
+    imports.sort_by(|left, right| {
+        left.alias
+            .cmp(&right.alias)
+            .then_with(|| left.package.cmp(&right.package))
+    });
+    let mut packages = request.packages;
+    packages.sort_by(|left, right| left.identity.cmp(&right.identity));
+    for package in &mut packages {
+        package
+            .modules
+            .sort_by(|left, right| left.source_name.cmp(&right.source_name));
+        package
+            .sources
+            .sort_by(|left, right| left.source_name.cmp(&right.source_name));
+        package.exports.sort();
+        package.imports.sort_by(|left, right| {
+            left.alias
+                .cmp(&right.alias)
+                .then_with(|| left.package.cmp(&right.package))
+        });
+    }
     if source_text.trim().is_empty() {
         let response = ContractVerifiedSourceJobResponseDto {
             job_id,
@@ -2379,12 +2685,39 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let compile_result = kotodama_lang::session::CompilerSession::default().build(
-        kotodama_lang::session::CompileRequest {
-            source: &source_text,
-            source_name: source_name.as_deref(),
-        },
-    );
+    let canonical_error = if sources.is_empty() && imports.is_empty() && packages.is_empty() {
+        None
+    } else {
+        let graph = verified_source_link_request(
+            source_name
+                .as_deref()
+                .expect("source bundle requires root name"),
+            &source_text,
+            &sources,
+            &imports,
+            &packages,
+        );
+        match kotodama_lang::linker::ModuleBuildGraph::canonical_source_bundle(graph) {
+            Ok(graph) => {
+                source_name = Some(graph.root.source_name);
+                sources = graph.sources.into_iter().map(source_file_dto).collect();
+                imports = graph.imports.into_iter().map(source_import_dto).collect();
+                packages = graph.packages.into_iter().map(source_package_dto).collect();
+                None
+            }
+            Err(error) => Some(error.into_diagnostics()),
+        }
+    };
+    let compile_result = match canonical_error {
+        Some(error) => Err(error),
+        None => compile_verified_source(
+            source_name.as_deref(),
+            &source_text,
+            &sources,
+            &imports,
+            &packages,
+        ),
+    };
     let response = match compile_result {
         Ok(output) => {
             let kotodama_lang::session::CompileOutput {
@@ -2420,7 +2753,12 @@ pub fn handle_post_verified_source_job(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(existing) = load_verified_source_record(&code_hash_hex)? {
-                    if existing.source_text == source_text {
+                    if existing.source_text == source_text
+                        && existing.source_name == source_name
+                        && existing.sources == sources
+                        && existing.imports == imports
+                        && existing.packages == packages
+                    {
                         ContractVerifiedSourceJobResponseDto {
                             job_id,
                             code_hash: code_hash_hex.clone(),
@@ -2461,6 +2799,9 @@ pub fn handle_post_verified_source_job(
                         language,
                         source_name: source_name.clone(),
                         source_text,
+                        sources,
+                        imports,
+                        packages,
                         submitted_at: submitted_at.clone(),
                         manifest_id_hex: verified_source_ref
                             .as_ref()
@@ -2549,6 +2890,9 @@ mod tests {
             kotodama_lang::linker::MAX_LOGICAL_SOURCE_PATH_BYTES
         );
         let mut request = SubmitVerifiedContractSourceDto {
+            sources: Vec::new(),
+            imports: Vec::new(),
+            packages: Vec::new(),
             language: "k".repeat(VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1),
             source_name: Some("n".repeat(VERIFIED_SOURCE_NAME_MAX_BYTES_V1)),
             source_text: "s".repeat(VERIFIED_SOURCE_TEXT_MAX_BYTES_V1),
@@ -2581,6 +2925,114 @@ mod tests {
         assert_eq!(
             verified_source_request_bound_error(&request),
             Some("source_name must not contain control characters")
+        );
+    }
+    #[test]
+    fn verified_source_bundle_recompiles_local_and_locked_package_closures() {
+        let root = "seiyaku App { include \"parts/view.ko\"; import \"local.ko\" as local; }";
+        let sources = vec![
+            ContractSourceFileDto {
+                source_name: "parts/view.ko".into(),
+                source_text: "view fn value() -> int { return local::value() + calc::value(); }"
+                    .into(),
+            },
+            ContractSourceFileDto {
+                source_name: "local.ko".into(),
+                source_text: "module Local { export fn value() -> int { return 3; } }".into(),
+            },
+        ];
+        let imports = vec![ContractSourceImportDto {
+            alias: "calc".into(),
+            package: "std/math@1".into(),
+        }];
+        let mut packages = vec![ContractSourcePackageDto {
+            identity: "std/math@1".into(),
+            modules: vec![ContractSourceFileDto {
+                source_name: "src/math.ko".into(),
+                source_text: "module Math { include \"body.ko\"; }".into(),
+            }],
+            sources: vec![ContractSourceFileDto {
+                source_name: "src/body.ko".into(),
+                source_text: "export fn value() -> int { return 4; }".into(),
+            }],
+            exports: vec!["value".into()],
+            imports: Vec::new(),
+        }];
+        let original = compile_verified_source(Some("app.ko"), root, &sources, &imports, &packages)
+            .expect("complete immutable graph");
+        let repeat = compile_verified_source(Some("app.ko"), root, &sources, &imports, &packages)
+            .expect("reproducible graph");
+        assert_eq!(original.artifact, repeat.artifact);
+        assert!(
+            original
+                .report
+                .render_source_map_json()
+                .expect("source map")
+                .contains("parts/view.ko")
+        );
+        let verified =
+            ivm::verify_contract_artifact(&original.artifact).expect("verified artifact");
+        let code_hash = hash_hex(&canonical_code_hash(&original.artifact).expect("code hash"));
+        let mut record = StoredVerifiedSourceRecord {
+            version: VERIFIED_SOURCE_VERSION,
+            code_hash: code_hash.clone(),
+            abi_hash: Some(hash_hex(&verified.abi_hash)),
+            compiler_fingerprint: verified.manifest.compiler_fingerprint,
+            language: "kotodama".into(),
+            source_name: Some("app.ko".into()),
+            source_text: root.into(),
+            sources: sources.clone(),
+            imports: imports.clone(),
+            packages: packages.clone(),
+            submitted_at: now_rfc3339(),
+            manifest_id_hex: None,
+            payload_digest_hex: None,
+            content_length: None,
+        };
+        validate_verified_source_record(&record, &code_hash)
+            .expect("full stored closure revalidates");
+        record.packages[0].sources[0].source_text =
+            "export fn value() -> int { return 100; }".into();
+        assert!(
+            validate_verified_source_record(&record, &code_hash).is_err(),
+            "tampered companion must fail record hash validation"
+        );
+        let encoded = norito::json::to_json(&record).expect("serialize complete record");
+        let mut value: norito::json::Value = norito::json::from_str(&encoded).expect("record JSON");
+        value
+            .as_object_mut()
+            .expect("record object")
+            .remove("sources");
+        assert!(
+            norito::json::from_value::<StoredVerifiedSourceRecord>(value).is_err(),
+            "retired persisted record shape must not decode"
+        );
+        packages[0].sources[0].source_text = "export fn value() -> int { return 5; }".into();
+        let changed = compile_verified_source(Some("app.ko"), root, &sources, &imports, &packages)
+            .expect("changed graph");
+        assert_ne!(original.artifact, changed.artifact);
+        packages[0].sources.clear();
+        assert!(
+            compile_verified_source(Some("app.ko"), root, &sources, &imports, &packages).is_err()
+        );
+    }
+    #[test]
+    fn verified_source_bundle_bounds_include_package_companions() {
+        let package = ContractSourcePackageDto {
+            identity: "math@1".into(),
+            modules: Vec::new(),
+            sources: (0..512)
+                .map(|index| ContractSourceFileDto {
+                    source_name: format!("{index}.ko"),
+                    source_text: String::new(),
+                })
+                .collect(),
+            imports: Vec::new(),
+            exports: Vec::new(),
+        };
+        assert_eq!(
+            source_bundle_bound_error(Some("app.ko"), "seiyaku App {}", &[], &[], &[package]),
+            Some("source set exceeds the 512-file maximum")
         );
     }
     #[test]
@@ -2637,6 +3089,9 @@ mod tests {
     }
     fn persisted_json_size_fixture() -> StoredVerifiedSourceRecord {
         StoredVerifiedSourceRecord {
+            sources: Vec::new(),
+            imports: Vec::new(),
+            packages: Vec::new(),
             version: VERIFIED_SOURCE_VERSION,
             code_hash: "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1),
             abi_hash: Some("\"\\\n界".to_owned()),
@@ -2660,6 +3115,9 @@ mod tests {
         let verified = ivm::verify_contract_artifact(&compiled.artifact)
             .expect("verify source record fixture");
         StoredVerifiedSourceRecord {
+            sources: Vec::new(),
+            imports: Vec::new(),
+            packages: Vec::new(),
             version: VERIFIED_SOURCE_VERSION,
             code_hash: hash_hex(
                 &canonical_code_hash(&compiled.artifact).expect("hash source record fixture"),
@@ -3050,6 +3508,7 @@ mod tests {
             access_set_hints: None,
             entrypoints: Some(vec![typed]),
             states: None,
+            error_messages: None,
             error_types: None,
             kotoba: None,
             provenance: None,
@@ -3219,6 +3678,9 @@ mod tests {
         );
         let code_hash_hex = hash_hex(&code_hash);
         let record = StoredVerifiedSourceRecord {
+            sources: Vec::new(),
+            imports: Vec::new(),
+            packages: Vec::new(),
             version: VERIFIED_SOURCE_VERSION,
             code_hash: code_hash_hex.clone(),
             abi_hash: Some(hash_hex(&verified.abi_hash)),
@@ -3294,6 +3756,9 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
                 .build(),
         );
         let request = SubmitVerifiedContractSourceDto {
+            sources: Vec::new(),
+            imports: Vec::new(),
+            packages: Vec::new(),
             language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
             source_name: Some("demo.ko".to_owned()),
             source_text: source.to_owned(),
@@ -3322,6 +3787,9 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             code_hash.clone(),
             SubmitVerifiedContractSourceDto {
+                sources: Vec::new(),
+                imports: Vec::new(),
+                packages: Vec::new(),
                 language: "Kotodama".to_owned(),
                 source_name: None,
                 source_text: "seiyaku Demo {}".to_owned(),
@@ -3354,6 +3822,9 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             code_hash_hex,
             SubmitVerifiedContractSourceDto {
+                sources: Vec::new(),
+                imports: Vec::new(),
+                packages: Vec::new(),
                 language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
                 source_name: Some("demo.ko".to_owned()),
                 source_text: source.to_owned(),
@@ -3380,6 +3851,9 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             wrong_hash.clone(),
             SubmitVerifiedContractSourceDto {
+                sources: Vec::new(),
+                imports: Vec::new(),
+                packages: Vec::new(),
                 language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
                 source_name: None,
                 source_text: source.to_owned(),

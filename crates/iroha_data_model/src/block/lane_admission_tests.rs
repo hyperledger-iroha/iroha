@@ -203,7 +203,7 @@ fn lane_admission_context_rejects_each_identity_geometry_and_order_mutation() {
             MAX_LANE_CONSENSUS_VALIDATORS + 1,
             leg.validator_set[0].clone(),
         );
-        leg.validator_count = (MAX_LANE_CONSENSUS_VALIDATORS + 1) as u16;
+        leg.validator_count = u16::try_from(MAX_LANE_CONSENSUS_VALIDATORS + 1).unwrap();
     });
     mutation!("duplicate roster with matching hash", v, {
         let leg = &mut v.route_incarnations[0];
@@ -239,7 +239,7 @@ fn lane_admission_native_participant_bounds_and_duplicate_controls() {
             .map(|index| {
                 RouteLeg::new(
                     RoutingDecision::new(
-                        LaneId::new(index as u32 + 10),
+                        LaneId::new(u32::try_from(index).unwrap() + 10),
                         DataSpaceId::new(index as u64 + 20),
                     ),
                     RouteLegRole::Participant,

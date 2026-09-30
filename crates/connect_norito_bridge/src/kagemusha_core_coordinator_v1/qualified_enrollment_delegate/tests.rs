@@ -180,6 +180,78 @@ fn delegate_rejects_replaced_ticket_before_requesting_context() {
 }
 
 #[test]
+fn native_preparation_verification_precedes_attestation_and_rejects_original_substitution() {
+    let (journal, selection) = selected_journal();
+    let provider = Arc::new(ContextProvider {
+        // Preparation is checked before the platform action: no raw evidence is required yet.
+        mode: ContextMode::AlteredPlatformEvidence,
+        calls: AtomicUsize::new(0),
+    });
+    let delegate = KagemushaKernelEnrollmentDelegateV1::new(provider);
+    let original =
+        super::super::initial_enrollment::tests::journal_challenge_fields(&selection)[2].clone();
+    let live = || {
+        journal
+            .retain_live(
+                selection.clone(),
+                super::super::initial_enrollment::tests::journal_pins(),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        delegate
+            .verify_app_preparation(7, live(), &original)
+            .unwrap(),
+        original[49..81]
+    );
+    for index in [1, 17, 49, 81, 113, 145, 177, 209] {
+        let mut changed = original.clone();
+        changed[index] ^= 1;
+        assert_eq!(
+            delegate.verify_app_preparation(7, live(), &changed),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+    }
+    assert_eq!(
+        delegate.verify_app_preparation(0, live(), &original),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+}
+
+#[test]
+fn native_challenge_cannot_use_unsigned_qualification_or_a_different_original_reply() {
+    let (journal, selection) = selected_journal();
+    let provider = Arc::new(ContextProvider {
+        mode: ContextMode::Valid,
+        calls: AtomicUsize::new(0),
+    });
+    let delegate = KagemushaKernelEnrollmentDelegateV1::new(provider.clone());
+    let live = || {
+        journal
+            .retain_live(
+                selection.clone(),
+                super::super::initial_enrollment::tests::journal_pins(),
+            )
+            .unwrap()
+    };
+    let request = challenge_request(&selection);
+    assert!(matches!(
+        delegate.accept_challenge(7, live(), &request, None),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    ));
+    let verified =
+        super::super::pre_enrollment_qualification::tests::verified_for_selection(&selection);
+    let mut fields = super::super::initial_enrollment::tests::journal_challenge_fields(&selection);
+    fields[4][0] ^= 1;
+    let changed = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+    assert!(matches!(
+        delegate.accept_challenge(7, live(), &changed, Some(&verified)),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    ));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn delegate_rejects_independently_provisioned_context_substitution() {
     for mode in [
         ContextMode::WrongOwnerLane,

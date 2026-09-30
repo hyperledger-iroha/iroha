@@ -8,7 +8,7 @@ struct Queued {
     header: Header,
     plaintext: Vec<u8>,
     ownership: OutboundPostOwnership,
-    _bytes: SharedByteLease,
+    bytes: SharedByteLease,
     requested: bool,
     granted: bool,
 }
@@ -324,19 +324,19 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
             header,
             plaintext,
             ownership,
-            _bytes: bytes,
+            bytes,
             requested: false,
             granted: false,
         });
         Ok(())
     }
     fn schedule(&mut self) -> Result<(), Error> {
-        if self.writing.is_some() {
-            return Ok(());
-        }
         // Weighted fixed ranks include bounded Ping/Pong. Control chatter cannot
         // exclude an eligible application rank on an honest completing stream.
         const RANKS: usize = Class::SCHEDULE.len() * 3 + 2;
+        if self.writing.is_some() {
+            return Ok(());
+        }
         for offset in 0..RANKS {
             let rank = (self.cursor + offset) % RANKS;
             let i = if rank < Class::SCHEDULE.len() * 3 {
@@ -376,7 +376,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
                             post.header.with_kind(Kind::Data),
                             &post.plaintext,
                             Some(post.ownership),
-                            Some(post._bytes),
+                            Some(post.bytes),
                         )?
                     }
                     _ => {
@@ -484,7 +484,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         self.schedule()?;
         tokio::select! {
             record = self.reading.advance::<E>(&mut *self.read, &mut self.ledger, &self.binding) => {
-                match record? { Some(record) => self.receive(record), None => Ok(None) }
+                record?.map_or_else(|| Ok(None), |record| self.receive(record))
             }
             done = async {
                 match &mut self.writing { Some(w) => w.advance(&mut *self.write).await, None => std::future::pending().await }
@@ -559,7 +559,7 @@ async fn malformed_tag_fences_reader_without_delivery_or_unspent_grant_reuse() {
         record::seal(&cipher, &grant.with_kind(Kind::Data), &plaintext).unwrap();
     *ciphertext.last_mut().unwrap() ^= 1;
     let send = async {
-        raw.write_all(&(header.len() as u32).to_be_bytes())
+        raw.write_all(&u32::try_from(header.len()).unwrap().to_be_bytes())
             .await
             .unwrap();
         raw.write_all(&header).await.unwrap();
@@ -647,7 +647,7 @@ async fn authenticated_health_burst_keeps_original_limit_and_cannot_refresh_idle
         for sequence in 1..=3 {
             let (header, ciphertext) =
                 record::seal(&cipher, &Header::ping(incoming, sequence).unwrap(), &[]).unwrap();
-            raw.write_all(&(header.len() as u32).to_be_bytes())
+            raw.write_all(&u32::try_from(header.len()).unwrap().to_be_bytes())
                 .await
                 .unwrap();
             raw.write_all(&header).await.unwrap();

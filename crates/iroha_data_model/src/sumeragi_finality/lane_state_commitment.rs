@@ -48,7 +48,34 @@ impl SumeragiLaneStateCommitment {
         carrier_height: u64,
         state: &SumeragiLaneState,
     ) -> Result<Self, norito::Error> {
-        if carrier_height == 0
+        if state.custody.len() > crate::sumeragi_lanes::MAX_LANE_CUSTODY_OBLIGATIONS
+            || state
+                .custody
+                .windows(2)
+                .any(|pair| pair[0].incarnation >= pair[1].incarnation)
+            || state.custody.iter().any(|obligation| {
+                obligation.validate().is_err()
+                    || obligation.created_at > carrier_height
+                    || obligation
+                        .retired_at
+                        .is_some_and(|height| height > carrier_height)
+                    || state
+                        .lanes
+                        .iter()
+                        .find(|lane| lane.incarnation == obligation.incarnation)
+                        .map_or_else(
+                            || obligation.retired_at.is_none(),
+                            |lane| {
+                                obligation.retired_at.is_some()
+                                    || lane.lane != obligation.lane
+                                    || lane.created_at != obligation.created_at
+                                    || lane.merged != obligation.merged
+                                    || u32::try_from(lane.committee.len()).ok()
+                                        != Some(obligation.signer_count)
+                            },
+                        )
+            })
+            || carrier_height == 0
             || state
                 .lanes
                 .windows(2)
@@ -132,6 +159,7 @@ impl SumeragiLaneStateCommitment {
 
 // A view of the existing payload, with the original wire type's exact alignment. This is
 // only a streaming equality projection: it implements no decoder or alternate wire format.
+#[repr(C)]
 struct StatePayload<'a> {
     bytes: &'a [u8],
     _alignment: [SumeragiLaneState; 0],
@@ -140,7 +168,7 @@ const _: () =
     assert!(std::mem::align_of::<StatePayload<'_>>() == std::mem::align_of::<SumeragiLaneState>());
 impl norito::core::SerializePayload for StatePayload<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        // The sole canonical SumeragiLaneState payload always emits its four compact field
+        // The sole canonical SumeragiLaneState payload always emits its six compact field
         // lengths. Propagate that known layout usage while forwarding the original bytes.
         norito::core::note_compact_len_emitted();
         std::io::Write::write_all(writer, self.bytes)?;
@@ -179,6 +207,49 @@ mod tests {
             b"lane state fixture",
         )))
     }
+    #[test]
+    fn custody_commitment_binds_policy_and_requires_exact_live_incarnation() {
+        use crate::sumeragi_lanes::{SumeragiLaneCustody, SumeragiLaneCustodySigners};
+        let mut value = state(1);
+        value.custody.push(SumeragiLaneCustody {
+            lane: value.lanes[0].lane,
+            incarnation: value.lanes[0].incarnation,
+            instance: [4; 32],
+            created_at: 1,
+            merged: value.lanes[0].merged,
+            signer_count: 4,
+            signers: SumeragiLaneCustodySigners::default(),
+            evidence_horizon: 7,
+            slashing_delay: 3,
+            retired_at: None,
+        });
+        let original = SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap();
+        let frontier = value.custody[0].merged;
+        for field in 0..3 {
+            match field {
+                0 => value.custody[0].merged.height += 1,
+                1 => value.custody[0].merged.block_hash[0] ^= 1,
+                _ => value.custody[0].merged.result[0] ^= 1,
+            }
+            assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+            value.custody[0].merged = frontier;
+        }
+        value.custody[0].evidence_horizon += 1;
+        assert_ne!(
+            original,
+            SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap()
+        );
+        value.custody[0].lane = LaneId::new(2);
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+        value.custody[0].lane = LaneId::new(1);
+        value.custody[0].retired_at = Some(2);
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+        value.lanes.clear();
+        SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap();
+        value.custody[0].retired_at = None;
+        assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+    }
+
     fn state(count: u32) -> SumeragiLaneState {
         let mut committee = (1..=4)
             .map(|seed| {
@@ -191,13 +262,14 @@ mod tests {
             .collect::<Vec<_>>();
         committee.sort();
         SumeragiLaneState {
+            custody: Vec::new(),
             lanes: (1..=count)
                 .map(|lane| SumeragiLaneRecord {
                     da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                     lane: LaneId::new(lane),
                     dataspace: DataSpaceId::new(1),
-                    incarnation: [lane as u8; 32],
-                    params: Default::default(),
+                    incarnation: [u8::try_from(lane).unwrap(); 32],
+                    params: crate::parameter::system::SumeragiParameters::default(),
                     committee: committee.clone(),
                     created_at: 1,
                     active_from: 3,
@@ -404,7 +476,7 @@ mod tests {
         future.samples[0].height = 2;
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &future).is_err());
         let mut duplicate = state(0);
-        duplicate.samples.push(duplicate.samples[0].clone());
+        duplicate.samples.push(duplicate.samples[0]);
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &duplicate).is_err());
     }
 }

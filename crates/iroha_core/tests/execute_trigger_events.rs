@@ -2,9 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
-    query::store::LiveQueryStore,
     smartcontracts::triggers::{
         set::{ExecutableRef, SetReadOnly},
         specialized::LoadedActionTrait,
@@ -12,11 +9,10 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 fn build_state_and_ids() -> (CertifiedTestChain, NetworkId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);

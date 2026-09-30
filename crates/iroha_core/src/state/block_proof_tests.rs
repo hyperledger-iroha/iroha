@@ -3,21 +3,11 @@ use crate::kura::tests::CommittedNetworkProofFixture;
 use iroha_crypto::MerkleTree as CanonMerkleTree;
 use iroha_data_model::{
     block::{
-        BlockPayload, BlockResult, BlockSignature, builder::BlockBuilder as ModelBlockBuilder,
+        BlockPayload, BlockResult, BlockSignature,
         execution_output::*, proofs::TrustedBlockProofAnchor,
     },
-    events::{
-        time::{Schedule, TimeEvent, TimeInterval},
-        trigger_completed::TriggerCompletedOutcome,
-    },
-    transaction::{
-        FeePaymentIntent,
-        signed::{
-            ExecutionStep, SealedTransactionReveal, TransactionBuilder, TransactionEntrypoint,
-            TransactionResult,
-        },
-    },
-    trigger::{DataTriggerStep, TriggerId},
+    events::time::Schedule,
+    transaction::signed::TransactionEntrypoint,
 };
 use nonzero_ext::nonzero;
 use norito::codec::DecodeAll as _;

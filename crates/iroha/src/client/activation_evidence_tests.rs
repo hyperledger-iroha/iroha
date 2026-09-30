@@ -173,7 +173,7 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
             wire
         );
         for wrong_length in [false, true] {
-            let mut wrong = expected.clone();
+            let mut wrong = expected;
             if wrong_length {
                 wrong.executed_block_wire_len += 1;
             } else {

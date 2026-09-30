@@ -59,6 +59,14 @@ pub enum TokenKind {
     Seiyaku,
     /// Library source-unit keyword (`module`).
     Module,
+    /// Bare declaration inclusion keyword.
+    Include,
+    /// Namespaced local-module import keyword.
+    Import,
+    /// Explicit import-alias keyword.
+    As,
+    /// Explicit module declaration visibility.
+    Export,
     /// Public transaction entrypoint modifier (`kotoage` or `言挙げ`).
     Kotoage,
     /// Seiyaku lifecycle declaration (`hajimari` or `始まり`).
@@ -317,6 +325,10 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::KwIn => TokenKind::In,
         SyntaxKind::KwSeiyaku => TokenKind::Seiyaku,
         SyntaxKind::KwModule => TokenKind::Module,
+        SyntaxKind::KwInclude => TokenKind::Include,
+        SyntaxKind::KwImport => TokenKind::Import,
+        SyntaxKind::KwAs => TokenKind::As,
+        SyntaxKind::KwExport => TokenKind::Export,
         SyntaxKind::KwKotoage => TokenKind::Kotoage,
         SyntaxKind::KwHajimari => TokenKind::Hajimari,
         SyntaxKind::KwKaizen => TokenKind::Kaizen,
@@ -365,6 +377,8 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::Root
         | SyntaxKind::SourceUnit
         | SyntaxKind::ItemList
+        | SyntaxKind::IncludeItem
+        | SyntaxKind::ImportItem
         | SyntaxKind::FunctionItem
         | SyntaxKind::StructItem
         | SyntaxKind::ErrorEnumItem

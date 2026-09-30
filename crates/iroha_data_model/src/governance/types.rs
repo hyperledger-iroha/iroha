@@ -3637,9 +3637,9 @@ impl ProposalKind {
             | Self::ValidationFeePolicy(_)
             | Self::ValidationFeePayoutLifecycle(_)
             | Self::GlobalDataTriggerPermissionGovernance(_)
-            | Self::SorafsProviderGovernance(_) => None,
-            Self::KagemushaVerifierPolicyInstall(_) => None,
-            Self::KagemushaVerifierReleaseActivate(_) => None,
+            | Self::SorafsProviderGovernance(_)
+            | Self::KagemushaVerifierPolicyInstall(_)
+            | Self::KagemushaVerifierReleaseActivate(_) => None,
             Self::KagemushaVerifierReleaseInstall(proposal) => {
                 proposal.first_release_exact_json_u64_invariant_error(maximum)
             }
@@ -3798,13 +3798,13 @@ impl ProposalKind {
                 GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
             }
             Self::KagemushaVerifierPolicyInstall(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id.clone())
+                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
             }
             Self::KagemushaVerifierReleaseInstall(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id.clone())
+                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
             }
             Self::KagemushaVerifierReleaseActivate(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id.clone())
+                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
             }
         };
         Ok(crate::governance_fingerprint::fingerprint(

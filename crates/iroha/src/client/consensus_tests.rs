@@ -421,6 +421,7 @@ fn assert_operator_signature(request: &TransportRequest, network: &NetworkId, ke
 
 #[tokio::test(flavor = "current_thread")]
 async fn diagnostics_is_async_and_bound_to_the_explicit_operator() {
+    fn require_send(_: impl Send) {}
     let fixture = response();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let completed = Arc::new(AtomicUsize::new(0));
@@ -455,7 +456,6 @@ async fn diagnostics_is_async_and_bound_to_the_explicit_operator() {
     let key = checked_random_keypair();
     let operator = client.operator_client(key.clone()).unwrap();
     let capability = operator.consensus();
-    fn require_send(_: impl Send) {}
     require_send(capability.diagnostics());
     let operation = capability.diagnostics();
     tokio::pin!(operation);

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     crypto::{SigSlot, SimSigner, aggregate, parse_preimage},
-    driver::{block_exec, decode_txs, encode_tx, reference_exec},
+    driver::{decode_txs, encode_tx, reference_exec},
     host::BacklogBound,
     scenario::Perf,
     world::{Inst, World},
@@ -30,7 +30,7 @@ use crate::{
 /// A committed block of the reference chain.
 #[derive(Clone, Debug)]
 pub struct RefBlock {
-    /// AvailableBody hash.
+    /// `AvailableBody` hash.
     pub bh: Hash32,
     /// Certified result.
     pub result: Hash32,
@@ -72,6 +72,8 @@ pub struct RepObs {
     pub max_t_retx: Millis,
     /// Highest start level reported (§9.2 adaptation, F15).
     pub max_start_level: u32,
+    /// Highest start level before the scenario's heal boundary (F36's deliberate crash).
+    pub max_start_level_before_heal: u32,
     /// [`Perf::LeaderTurns`]: the replica's uncommitted height and its bound.
     pub turn: Option<Turn>,
 }
@@ -587,9 +589,16 @@ impl World {
             }
             self.oracle.reps[r].checked_cqc = Some(q.clone());
         }
+        if status.start_level > self.oracle.reps[r].max_start_level {
+            self.trace(r, format!("start level increased: {status:?}"));
+        }
         let obs = &mut self.oracle.reps[r];
         obs.max_t_retx = obs.max_t_retx.max(status.t_retx);
         obs.max_start_level = obs.max_start_level.max(status.start_level);
+        if self.now < self.heal_at {
+            obs.max_start_level_before_heal =
+                obs.max_start_level_before_heal.max(status.start_level);
+        }
         if status.committed_height > obs.committed {
             // `t̂` of the committed height's view 0: its start level is within one of the level
             // the node entered the next height with (§9.2), so the next level up bounds it.
@@ -1025,7 +1034,7 @@ impl World {
         let honest_proposer = proposer_key
             .and_then(|k| self.key_owner.get(&k).copied())
             .is_some_and(|m| !self.machines[m].byz);
-        for (id, _) in decode_txs(&block.payload().as_slice()) {
+        for (id, _) in decode_txs(block.payload().as_slice()) {
             if let Some(entry) = self.txs[inst].get_mut(&id)
                 && entry.2.is_none()
             {
@@ -1096,7 +1105,7 @@ impl World {
         if block.header().instance != instance.id {
             return Err("foreign instance".to_owned());
         }
-        match block_exec(&parent_result, block, &instance.config(h).epoch) {
+        match self.app_exec(inst, &parent_result, block) {
             ExecOutcome::Valid(expected) if expected == qc.result => {}
             other => return Err(format!("result {:?} but reference {other:?}", qc.result)),
         }
@@ -1507,6 +1516,7 @@ impl World {
     /// End-of-run checks: progress, P1 p99, P2/P4 frequencies, P5, O-TXP, O-CQ, O-MEM of the
     /// body stores.
     pub fn finish(&mut self) {
+        self.amx_finish();
         let honest = self.honest();
         for &r in &honest {
             if self.failure.is_some() {

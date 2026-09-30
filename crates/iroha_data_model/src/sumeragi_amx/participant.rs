@@ -35,15 +35,40 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// The dataspace executor's side of AMX: escrow, apply and release a leg's effects.
 ///
 /// Implementations are deterministic functions of the dataspace's committed state and must be
-/// atomic per call: `escrow` either locks everything the leg touches or changes nothing.
+/// atomic per call: every error leaves its ledger and original retained owners unchanged.
+/// Local resource refusal is an error, never a protocol `No` vote or successful settlement.
 pub trait AmxEscrow {
+    /// The host's typed failure, retaining resource refusal separately from invalid input.
+    type Error;
+
     /// Escrow (lock) the state `leg` of transaction `tx` touches and return the hash of the
     /// escrowed effects, or `None` if the leg cannot be escrowed (the vote is `No`).
-    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Option<[u8; 32]>;
+    ///
+    /// # Errors
+    /// A local host failure leaves the ledger unchanged and must not become a `No` vote.
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Result<Option<[u8; 32]>, Self::Error>;
     /// Apply the escrowed effects of `tx`: the global chain committed it.
-    fn apply(&mut self, tx: &[u8; 32]);
+    ///
+    /// # Errors
+    /// A local host failure preserves the original escrow for the same decision to retry.
+    fn apply(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error>;
     /// Release the escrow of `tx`, restoring the touched state: the global chain aborted it.
-    fn release(&mut self, tx: &[u8; 32]);
+    ///
+    /// # Errors
+    /// A local host failure preserves the original escrow for the same decision to retry.
+    fn release(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error>;
+}
+
+/// A rejected AMX proof/transition or an unchanged escrow operation to retry at the host.
+/// This runtime error is not a wire value and does not change the AMX record layout.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AmxParticipantError<E> {
+    /// The protocol input or participant state rejected the requested transition.
+    #[error(transparent)]
+    Protocol(#[from] AmxError),
+    /// The host refused without changing escrow or participant state.
+    #[error("AMX escrow operation failed: {0}")]
+    Escrow(E),
 }
 
 /// A prepared transaction: its deadline, this participant's vote and, once settled, the global
@@ -202,18 +227,18 @@ impl AmxParticipantStateV1 {
     /// # Errors
     /// The proof is not a verified `Begin` of this transaction naming this participant, the
     /// transaction was already prepared (a second inclusion), its deadline is behind a verified
-    /// global block, or the state is full.
-    pub fn prepare(
+    /// global block, the state is full, or the host refused escrow without changing state.
+    pub fn prepare<E: AmxEscrow>(
         &mut self,
-        escrow: &mut impl AmxEscrow,
+        escrow: &mut E,
         transaction: &AmxTransactionV1,
         begin: &AmxRecordProofV1,
-    ) -> Result<AmxRecordV1, AmxError> {
+    ) -> Result<AmxRecordV1, AmxParticipantError<E::Error>> {
         let AmxRecordV1::Begin(record) = &begin.record else {
-            return Err(AmxError::Record("a Prepare needs a Begin proof"));
+            return Err(AmxError::Record("a Prepare needs a Begin proof").into());
         };
         if !record.matches(transaction) {
-            return Err(AmxError::Record("the Begin is not this transaction's"));
+            return Err(AmxError::Record("the Begin is not this transaction's").into());
         }
         let leg = transaction
             .leg(self.dataspace)
@@ -223,27 +248,30 @@ impl AmxParticipantStateV1 {
             .prepared
             .binary_search_by(|entry| entry.tx.cmp(&record.tx))
         else {
-            return Err(rejected("the transaction was already prepared"));
+            return Err(rejected("the transaction was already prepared").into());
         };
         let global_height = self.global_height.max(verified.height);
         if record.deadline < global_height {
-            return Err(rejected("the transaction is past its deadline"));
+            return Err(rejected("the transaction is past its deadline").into());
         }
         if self.prepared.len() >= MAX_AMX_PENDING {
-            return Err(rejected("too many prepared transactions"));
+            return Err(rejected("too many prepared transactions").into());
         }
         let held = self
             .held
             .binary_search_by(|held| held.decision.tx.cmp(&record.tx))
-            .ok()
-            .map(|slot| self.held.remove(slot));
+            .ok();
         let vote = if held.is_some() {
             AmxVoteV1::No
         } else {
             escrow
                 .escrow(&record.tx, leg)
+                .map_err(AmxParticipantError::Escrow)?
                 .map_or(AmxVoteV1::No, AmxVoteV1::Yes)
         };
+        let held = held.map(|slot| self.held.remove(slot));
+        // TODO(S6): native participant installation must prepay this bounded state's graph
+        // before calling the escrow host; ordinary Vec allocation is not original-pool custody.
         self.prepared.insert(
             index,
             AmxPreparedEntryV1 {
@@ -266,14 +294,15 @@ impl AmxParticipantStateV1 {
     ///
     /// # Errors
     /// The proof is not a verified `Decision`, the transaction is already settled or its
-    /// decision already held, or the held decisions are full.
-    pub fn settle(
+    /// decision already held, the held decisions are full, or the host refused settlement.
+    /// A host error keeps the original prepared entry and verified-height cursor unchanged.
+    pub fn settle<E: AmxEscrow>(
         &mut self,
-        escrow: &mut impl AmxEscrow,
+        escrow: &mut E,
         decision: &AmxRecordProofV1,
-    ) -> Result<AmxSettleOutcome, AmxError> {
+    ) -> Result<AmxSettleOutcome, AmxParticipantError<E::Error>> {
         let AmxRecordV1::Decision(record) = &decision.record else {
-            return Err(AmxError::Record("a settlement needs a Decision proof"));
+            return Err(AmxError::Record("a settlement needs a Decision proof").into());
         };
         let verified = self.global.verify_record(decision)?;
         let outcome = match self
@@ -288,28 +317,33 @@ impl AmxParticipantStateV1 {
     }
 
     /// Settle the prepared entry at `index` with `decision`: apply or release a `Yes` escrow.
-    fn settle_prepared(
+    fn settle_prepared<E: AmxEscrow>(
         &mut self,
-        escrow: &mut impl AmxEscrow,
+        escrow: &mut E,
         index: usize,
         decision: &AmxDecisionV1,
-    ) -> Result<AmxSettleOutcome, AmxError> {
+    ) -> Result<AmxSettleOutcome, AmxParticipantError<E::Error>> {
         let entry = &mut self.prepared[index];
         if entry.settled.is_some() {
-            return Err(rejected("the transaction was already settled"));
+            return Err(rejected("the transaction was already settled").into());
         }
-        entry.settled = Some(decision.outcome);
-        Ok(match (entry.vote, decision.outcome) {
+        let outcome = match (entry.vote, decision.outcome) {
             (AmxVoteV1::Yes(_), AmxOutcomeV1::Commit) => {
-                escrow.apply(&decision.tx);
+                escrow
+                    .apply(&decision.tx)
+                    .map_err(AmxParticipantError::Escrow)?;
                 AmxSettleOutcome::Applied
             }
             (AmxVoteV1::Yes(_), AmxOutcomeV1::Abort) => {
-                escrow.release(&decision.tx);
+                escrow
+                    .release(&decision.tx)
+                    .map_err(AmxParticipantError::Escrow)?;
                 AmxSettleOutcome::Released
             }
             (AmxVoteV1::No, _) => AmxSettleOutcome::Closed,
-        })
+        };
+        entry.settled = Some(decision.outcome);
+        Ok(outcome)
     }
 
     /// Hold the decision of a transaction not prepared here, recorded at global `height`.

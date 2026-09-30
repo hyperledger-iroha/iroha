@@ -871,12 +871,12 @@ mod tests {
         );
         let mut trailing_pair = instruction_box_pair.clone();
         trailing_pair.push(0);
-        let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+        let guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
         assert!(
             InstructionBox::decode_from_slice(&trailing_pair).is_err(),
             "trailing InstructionBox pair byte must be rejected"
         );
-        drop(_guard);
+        drop(guard);
         assert_legacy_instruction_payload_rejected(
             std::any::type_name::<UpdatePlainConviction>(),
             &CastPlainBallot {

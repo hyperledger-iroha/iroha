@@ -805,7 +805,6 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
 
 #[test]
 fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
-    use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
     use iroha_data_model::{isi::Grant, transaction::IvmBytecode};
     use ivm::error::ExecutionDeferral;
     let state = fixture(65_536, None);

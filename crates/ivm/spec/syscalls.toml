@@ -20,7 +20,7 @@ gas = "G_debug"
 number = "0x04"
 args = "r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0"
 ret = "u64=0"
-gas = "G_abort + descriptor bytes"
+gas = "G_abort + descriptor bytes + selected message UTF-8 bytes"
 
 [[syscall]]
 number = "0x10"

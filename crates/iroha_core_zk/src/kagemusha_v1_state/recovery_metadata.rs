@@ -229,7 +229,6 @@ impl KagemushaAcceptedCredentialFloorV1 {
             .map_err(|_| KagemushaStateErrorV1::InvalidHardwareProfile)
     }
 
-    #[cfg(test)]
     pub(super) fn validate_current(
         &self,
         state: &KagemushaStateV1,
@@ -298,7 +297,6 @@ impl KagemushaRecoveryCheckpointIdentityV1 {
         snapshot_commitment: [0; 32],
     };
 
-    #[cfg(test)]
     fn from_anchor(anchor: &DurabilityAnchorStatementV1) -> Self {
         Self {
             revision: anchor.metadata_revision,
@@ -365,7 +363,6 @@ pub struct KagemushaRecoveryMetadataV1 {
 }
 
 impl KagemushaRecoveryMetadataV1 {
-    #[cfg(test)]
     pub(super) fn initial(
         state: &KagemushaStateV1,
         release: &KagemushaStateProofReleaseV1,
@@ -461,7 +458,6 @@ pub struct KagemushaRecoveryCheckpointStatementV1 {
     pub successor: DurabilityAnchorStatementV1,
 }
 
-#[cfg(test)]
 /// Opaque proposal derived from one exact current machine. Preparing it changes no state.
 #[derive(Clone)]
 pub struct KagemushaRecoveryCheckpointCandidateV1 {
@@ -470,7 +466,6 @@ pub struct KagemushaRecoveryCheckpointCandidateV1 {
     pub(super) statement: KagemushaRecoveryCheckpointStatementV1,
 }
 
-#[cfg(test)]
 impl KagemushaRecoveryCheckpointCandidateV1 {
     /// Exact material the native owner must persist before requesting hardware CAS.
     #[must_use]
@@ -710,7 +705,6 @@ where
     }
 
     // Only the two opaque publication owners invoke this after exclusive ownership transfer.
-    #[cfg(test)]
     pub(super) fn install_recovery_checkpoint(
         &mut self,
         candidate: &KagemushaRecoveryCheckpointCandidateV1,

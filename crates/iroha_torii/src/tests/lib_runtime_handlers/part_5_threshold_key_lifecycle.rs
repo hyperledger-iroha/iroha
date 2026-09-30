@@ -83,7 +83,7 @@ fn lifecycle_ordinary_transaction(
 async fn lifecycle_submit(app: &SharedAppState, transaction: SignedTransaction) -> Response {
     super::submit_signed_transaction_for_ingress(app.clone(), HeaderMap::new(), None, transaction)
         .await
-        .expect("public lifecycle submission returns a classified response")
+        .unwrap_or_else(IntoResponse::into_response)
 }
 
 #[tokio::test]

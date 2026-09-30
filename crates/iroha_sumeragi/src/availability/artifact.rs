@@ -1,6 +1,6 @@
 //! Canonical original-funded availability evidence and signature checks.
 //!
-//! The outer codec is the existing semantic Norito ByteSequence. Its inner signed-content
+//! The outer codec is the existing semantic Norito `ByteSequence`. Its inner signed-content
 //! table is count || ordered row hashes || manifest signature || ordered row signatures.
 //! Indices and exact lengths derive from the signed layout and are bound by each signature.
 mod author;
@@ -8,7 +8,7 @@ pub use author::{AuthoredBody, AuthoringError, PayloadAuthoring};
 mod acquisition;
 pub use acquisition::{AcquisitionError, PayloadAcquisition};
 mod custody;
-use super::{MAX_DA_CHUNK_COUNT, MAX_DA_PAYLOAD_SIZE_BYTES};
+use super::{MAX_DA_CHUNK_COUNT, MAX_DA_PAYLOAD_SIZE};
 use crate::{
     bytes::{ByteDomain, ByteSequence, SharedBytes, SharedDomain},
     crypto::Crypto,
@@ -46,7 +46,7 @@ impl ByteDomain for PayloadDomain {
     const FRAME: &'static str = "iroha_sumeragi::availability::PayloadBytes";
 }
 impl SharedDomain for PayloadDomain {
-    const MAX: usize = MAX_DA_PAYLOAD_SIZE_BYTES as usize;
+    const MAX: usize = MAX_DA_PAYLOAD_SIZE;
 }
 /// One immutable original-funded application payload, separate from availability evidence.
 pub type PayloadBytes = ByteSequence<SharedBytes<PayloadDomain>>;
@@ -171,6 +171,10 @@ fn statement(
 /// This makes no payload/table concatenation copy and never equates table possession with custody.
 /// Header hashing still uses the bounded existing header preimage allocation.
 /// The caller also applies the existing proposal/header and historical-finality predicates.
+///
+/// # Errors
+/// Rejects foreign funding, mismatched historical authority, invalid geometry or framing,
+/// and any content digest or original author signature mismatch.
 pub fn verify_manifest<'a>(
     instance: Hash32,
     config: &'a HeightConfig,
@@ -193,6 +197,10 @@ pub fn verify_manifest<'a>(
 /// This grants only evidence authenticity, never native ownership or received/durable custody.
 /// All instance, epoch, author, geometry, digest and original-signature checks are shared with
 /// native admission. Header hashing retains its existing bounded metadata allocation.
+///
+/// # Errors
+/// Rejects mismatched historical authority, invalid geometry or framing, and any content
+/// digest or original author signature mismatch.
 pub fn verify_availability<'a>(
     instance: Hash32,
     config: &HeightConfig,
@@ -242,7 +250,11 @@ pub fn verify_availability<'a>(
         let (bytes, used) = statement(
             header,
             block_hash,
-            Some((index as u32, length as u32, hash)),
+            Some((
+                u32::try_from(index).expect("protocol-bounded row index"),
+                u32::try_from(length).expect("protocol-bounded row length"),
+                hash,
+            )),
         );
         if !crypto.verify(author, &bytes[..used], &signature) {
             return Err(AvailabilityError::Signature);
@@ -277,9 +289,9 @@ impl VerifiedAvailability<'_> {
         self.shape
             .chunk_range(index)
             .is_some_and(|range| range.len() == row.len())
-            && self
-                .authorization(index)
-                .is_some_and(|(hash, _)| row_digest(crypto, row) == hash)
+            && self.authorization(index).is_some_and(|(hash, _)| {
+                cfg!(sumeragi_mutation = "MS20") || row_digest(crypto, row) == hash
+            })
     }
     /// Exact public geometry, after signed layout and protocol-cap validation. The caller owns
     /// `shape.encoded_bytes()` bytes and `shape.workspace_words()` u16 scratch elements.
@@ -290,6 +302,10 @@ impl VerifiedAvailability<'_> {
     /// creates the single canonical codeword with terminal zero padding and checks EVERY row
     /// commitment. No payload/table copy, allocation pool or custody capability is created.
     /// Scratch contents on failure are not authenticated output.
+    ///
+    /// # Errors
+    /// Rejects an incorrect payload length or digest, incorrectly sized scratch, codec
+    /// failure, or a reconstructed row that differs from its signed commitment.
     pub fn verify_payload(
         &self,
         payload: &[u8],
@@ -305,7 +321,8 @@ impl VerifiedAvailability<'_> {
     }
     fn check_payload(&self, payload: &[u8], crypto: &dyn Crypto) -> Result<(), AvailabilityError> {
         if payload.len() != self.shape.payload_bytes()
-            || crate::preimage::payload_hash(crypto, payload) != self.header.payload_hash
+            || (!cfg!(sumeragi_mutation = "MS20c")
+                && crate::preimage::payload_hash(crypto, payload) != self.header.payload_hash)
         {
             return Err(AvailabilityError::Digest);
         }
@@ -321,7 +338,9 @@ impl VerifiedAvailability<'_> {
         }
         for index in 0..self.shape.chunk_count() {
             let range = self.shape.chunk_range(index).expect("bounded index");
-            if !self.accepts_row(index, &codeword[range], crypto) {
+            if !cfg!(sumeragi_mutation = "MS20e")
+                && !self.accepts_row(index, &codeword[range], crypto)
+            {
                 return Err(AvailabilityError::Digest);
             }
         }
@@ -375,7 +394,7 @@ mod tests {
     ) -> AvailabilityFrame {
         let n = shape.chunk_count();
         assert_eq!(hashes.len(), n);
-        let mut bytes = (n as u32).to_be_bytes().to_vec();
+        let mut bytes = u32::try_from(n).unwrap().to_be_bytes().to_vec();
         for hash in hashes {
             bytes.extend_from_slice(hash.as_bytes());
         }
@@ -384,16 +403,17 @@ mod tests {
         let (preimage, used) = statement(header, bh, None);
         bytes.extend_from_slice(&keys.signer(header.proposer).sign(&preimage[..used]).0);
         for (index, hash) in hashes.iter().enumerate() {
-            let mut row = (
-                index as u32,
-                shape.chunk_range(index).unwrap().len() as u32,
-                *hash,
-            );
-            if let Some((selected, declared_index, declared_length)) = wrong_row
+            let row = if let Some((selected, declared_index, declared_length)) = wrong_row
                 && selected == index
             {
-                row = (declared_index, declared_length, *hash);
-            }
+                (declared_index, declared_length, *hash)
+            } else {
+                (
+                    u32::try_from(index).unwrap(),
+                    u32::try_from(shape.chunk_range(index).unwrap().len()).unwrap(),
+                    *hash,
+                )
+            };
             let (preimage, used) = statement(header, bh, Some(row));
             bytes.extend_from_slice(&keys.signer(header.proposer).sign(&preimage[..used]).0);
         }
@@ -430,7 +450,7 @@ mod tests {
                 parent_result: Hash32([3; 32]),
                 payload_hash: crate::preimage::payload_hash(&keys.crypto, &payload),
                 availability_digest: Hash32::ZERO,
-                payload_len: payload.len() as u32,
+                payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer: 2,
                 skipped_leaders: vec![keys.key(0)],
                 control_witness: ControlWitness::empty(),
@@ -542,6 +562,74 @@ mod tests {
         assert!(!manifest.accepts_row(6, &[1, 2], &f.keys.crypto));
         assert!(!manifest.accepts_row(0, &f.encoded.codeword()[..7], &f.keys.crypto));
         assert!(!manifest.accepts_row(0, &[0; 8], &f.keys.crypto));
+    }
+
+    #[test]
+    fn acquisition_rejects_corrupt_actual_row_before_counting_custody() {
+        use crate::message::{PayloadChunk, PayloadManifest};
+
+        let f = Fixture::new();
+        let mut acquisition = PayloadAcquisition::new(
+            source(&f),
+            PayloadManifest {
+                header: f.header.clone(),
+                availability: f.frame.clone(),
+            },
+        );
+        acquisition.prepare(&f.budget, &f.keys.crypto).unwrap();
+        let shape = f.encoded.shape();
+        let original = &f.encoded.codeword()[shape.chunk_range(0).unwrap()];
+        for (index, bytes) in [
+            (0, {
+                let mut bytes = original.to_vec();
+                bytes[0] ^= 1;
+                bytes
+            }),
+            (0, original[..original.len() - 1].to_vec()),
+            (
+                u32::try_from(shape.chunk_count()).unwrap(),
+                original.to_vec(),
+            ),
+        ] {
+            let chunk = PayloadChunk {
+                instance: INSTANCE,
+                height: f.header.height,
+                block_hash: f.header.hash(&f.keys.crypto),
+                index,
+                bytes: RowBytes::from_untrusted(bytes).unwrap(),
+            };
+            let pointer = chunk.bytes.as_slice().as_ptr();
+            let reserved = f.budget.reserved_bytes();
+            let (returned, error) = acquisition
+                .push(chunk, &f.budget, &f.keys.crypto)
+                .expect_err("a corrupt, wrong-length or out-of-range row is not custody");
+            assert!(matches!(
+                error,
+                AcquisitionError::Row(AvailabilityError::Digest)
+            ));
+            assert!(
+                !error.rejects_manifest(),
+                "an unsigned bad relay is not a leader fault"
+            );
+            assert_eq!(acquisition.received_rows(), 0);
+            assert_eq!(returned.bytes.as_slice().as_ptr(), pointer);
+            assert!(!returned.bytes.admitted_to(&f.budget));
+            assert_eq!(f.budget.reserved_bytes(), reserved);
+        }
+        let chunk = PayloadChunk {
+            instance: INSTANCE,
+            height: f.header.height,
+            block_hash: f.header.hash(&f.keys.crypto),
+            index: 0,
+            bytes: RowBytes::from_untrusted(original.to_vec()).unwrap(),
+        };
+        assert!(
+            acquisition
+                .push(chunk.clone(), &f.budget, &f.keys.crypto)
+                .unwrap()
+        );
+        assert!(!acquisition.push(chunk, &f.budget, &f.keys.crypto).unwrap());
+        assert_eq!(acquisition.received_rows(), 1);
     }
 
     #[test]
@@ -867,16 +955,15 @@ mod tests {
         let payload = original_payload(&f);
         let pointer = payload.as_slice().as_ptr();
         let request = PayloadAuthoring::new(f.header.clone(), payload);
-        let output = match request.complete(
-            INSTANCE,
-            &f.config,
-            &f.budget,
-            &f.keys.crypto,
-            f.keys.signer(f.header.proposer),
-        ) {
-            Ok(value) => value,
-            Err(_) => panic!("actual original author worker"),
-        };
+        let output = request
+            .complete(
+                INSTANCE,
+                &f.config,
+                &f.budget,
+                &f.keys.crypto,
+                f.keys.signer(f.header.proposer),
+            )
+            .unwrap_or_else(|(_, error)| panic!("actual original author worker: {error:?}"));
         assert_eq!(output.body.availability(), &f.frame);
         assert_eq!(output.body.payload().as_slice().as_ptr(), pointer);
         assert_eq!(output.body.header(), &f.header);
@@ -914,11 +1001,9 @@ mod tests {
         );
         assert_eq!(f.budget.reserved_bytes(), 1 << 20);
         drop(reserved);
-        let output = match request.complete(INSTANCE, &f.config, &f.budget, &f.keys.crypto, &signer)
-        {
-            Ok(value) => value,
-            Err(_) => panic!("retry with retained phase owners"),
-        };
+        let output = request
+            .complete(INSTANCE, &f.config, &f.budget, &f.keys.crypto, &signer)
+            .unwrap_or_else(|(_, error)| panic!("retry with retained phase owners: {error:?}"));
         assert_eq!(
             signer.calls.load(std::sync::atomic::Ordering::Relaxed),
             f.encoded.shape().chunk_count() + 1,

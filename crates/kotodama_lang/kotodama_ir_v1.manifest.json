@@ -253,6 +253,7 @@
     "\"constant `{value}` is outside the signed 64-bit range required by this host boundary\"",
     "\"constant `{value}` is outside the unsigned 64-bit range required by this host boundary\"",
     "\"constructed a positional call\"",
+    "\"copy block\"",
     "\"decimal literal reached lowering with non-decimal type {}\"",
     "\"direct builtin {} has no syscall in the canonical registry\"",
     "\"durable map value should decode\"",
@@ -264,6 +265,7 @@
     "\"entrypoint value `{value_name}` exceeds ABI v1 type depth, node, or word limits\"",
     "\"entrypoint value `{value_name}` tuple arity exceeds u16\"",
     "\"entrypoint value `{value_name}` uses unsupported public type {:?}\"",
+    "\"expect\"",
     "\"expect_any_reject_as\"",
     "\"expect_reject_as actor must be a literal string\"",
     "\"expect_reject_as entrypoint must be a literal string\"",
@@ -302,6 +304,7 @@
     "\"internal error: invalid propagation return layout\"",
     "\"internal error: invalid sum layout\"",
     "\"internal error: invalid sum tag\"",
+    "\"internal error: loop product word count mismatch\"",
     "\"internal error: malformed decimal-to-int intrinsic\"",
     "\"internal error: missing ABI word {index} for parameter `{}`\"",
     "\"internal error: missing lowered parameter `{}`\"",
@@ -368,7 +371,9 @@
     "\"state parameter arguments must reference a durable state handle\"",
     "\"take\"",
     "\"test helpers use their dedicated lowering paths\"",
+    "\"typed Option.expect receiver\"",
     "\"typed member `{field}` has no Kotodama V1 lowering for `{}`\"",
+    "\"typed nominal Option.expect error\"",
     "\"typed nominal error\"",
     "\"undefined variable {name}\"",
     "\"unsupported typed private-input payload: {other:?}\"",
@@ -384,6 +389,7 @@
     "\"wide numeric comparison has a nominal ABI kind\"",
     "\"wide numeric map key has a nominal ABI kind\"",
     "\"wide numeric unary operand has a nominal ABI kind\"",
+    "\"{name}#\"",
     "\"{}{base_name}\""
   ],
   "main_tests": [
@@ -929,12 +935,12 @@
     {
       "name": "emit_data_ref",
       "sha256": "f6d2d2b879ad391ab1d3117e710f6764880b74d03a50917e83a502f079fd4d7b",
-      "calls": 9
+      "calls": 10
     },
     {
       "name": "emit_copy",
       "sha256": "a5109c1511321132db077541cee39330079718fe053cab00c4b1a7ad8abc8db4",
-      "calls": 29
+      "calls": 31
     },
     {
       "name": "emit_binary",
@@ -954,7 +960,7 @@
     {
       "name": "emit_unary",
       "sha256": "3be46bec54bbdc6efe920bc7cc1eb785064f9520e541da8e791c81c455b76b9d",
-      "calls": 5
+      "calls": 6
     },
     {
       "name": "emit_load64_imm",
@@ -1519,6 +1525,16 @@
       "emit_copy(ctx,slot,temp)"
     ],
     [
+      "copy_env_to_loop_phi",
+      "emit_copy",
+      "emit_copy(ctx,captured,*src)"
+    ],
+    [
+      "copy_env_to_loop_phi",
+      "emit_copy",
+      "emit_copy(ctx,dest,src)"
+    ],
+    [
       "lower_expression_block",
       "seal_unreachable_continuation",
       "seal_unreachable_continuation(ctx)"
@@ -1834,6 +1850,16 @@
       "emit_unary(ctx,UnaryOp::Not,tag)"
     ],
     [
+      "lower_option_expect",
+      "emit_data_ref",
+      "emit_data_ref(ctx,DataRefKind::NoritoBytes,format!(\"0x{}\",hex::encode(encoded)),)"
+    ],
+    [
+      "lower_option_expect",
+      "emit_unary",
+      "emit_unary(ctx,UnaryOp::Not,tag)"
+    ],
+    [
       "lower_present_or_inactive_state_value",
       "emit_copy",
       "emit_copy(ctx,result,some)"
@@ -1890,7 +1916,7 @@
   ],
   "take2_routing_sha256": "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14",
   "source": {
-    "bytes": 395326,
-    "sha256": "f3bf5a56cb530abc65f5ded0e8d48e57b2dbd0423693db42922df13ad7001d2b"
+    "bytes": 401259,
+    "sha256": "89ffb75ad4f5f85fc3f87b12750ce03d83b373d80d7259181acfc261a57653a7"
   }
 }

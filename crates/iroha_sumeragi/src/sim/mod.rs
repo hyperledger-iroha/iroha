@@ -31,15 +31,15 @@
 //! - [`records`]: the fake key store with its installation log and the record-store id of the
 //!   §7.4 record-provenance rules (initial records only at installation events, never over an
 //!   existing file; a rolled-back or replaced store makes every key imported).
-//! - [`scenarios`]: F1–F36 of §13.3 as seeded scenarios ([`scenarios::ALL`]). F31 covers the
-//!   independent finality of two instances only; the toy AMX application (O-AMX) is an
-//!   application-layer concern outside the core and is not modelled.
+//! - [`scenarios`]: seeded fault scenarios ([`scenarios::ALL`]). F31 runs independent
+//!   instances with the toy two-phase settlement application and O-AMX over certified results.
 //!
 //! Seeds: `SUMERAGI_SIM_SEEDS` (count per scenario), `SUMERAGI_SIM_SEED_BASE` (first seed) or
 //! `SUMERAGI_SIM_SEED` (exactly one seed, to reproduce a failure). Diagnostics:
 //! `SUMERAGI_SIM_TRACE` (every handled event), `SUMERAGI_SIM_GAPS` (largest commit gaps of a
 //! P1 run).
 
+pub mod amx;
 pub mod byz;
 pub mod crypto;
 pub mod driver;

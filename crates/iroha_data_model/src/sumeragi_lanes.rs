@@ -6,6 +6,12 @@
 //! place world state changes. The lane set, its autoscale history ([`SumeragiLaneState`]) and the
 //! governed policy ([`SumeragiLanePolicy`]) are committed global-chain state.
 
+mod custody;
+pub use custody::{
+    MAX_LANE_CUSTODY_OBLIGATIONS, MAX_LANE_CUSTODY_SIGNERS, SumeragiLaneCustody,
+    SumeragiLaneCustodySigners, SumeragiLaneSignerCustody, SumeragiLaneStakeBinding,
+};
+
 use iroha_model_base::{
     peer::PeerId,
     topology::{DataSpaceId, LaneId},
@@ -280,6 +286,8 @@ pub struct SumeragiLaneSample {
 pub struct SumeragiLaneState {
     /// Lane records, lanes ascending; retired lanes are removed.
     pub lanes: Vec<SumeragiLaneRecord>,
+    /// Original signer custody, sorted by incarnation and retained through delayed penalties.
+    pub custody: Vec<SumeragiLaneCustody>,
     /// Recent load samples, oldest first.
     pub samples: Vec<SumeragiLaneSample>,
     /// Global height of the last autoscale transition (`0`: none yet).

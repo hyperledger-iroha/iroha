@@ -10,7 +10,9 @@ use eyre::{Result, WrapErr as _, eyre};
 use hex::{decode, encode};
 use iroha_crypto::{HybridPublicKey, HybridSuite};
 use kotodama_lang::{
-    driver::{BuildDriver, PublishLayout, PublishMode, SourceBuildRequest},
+    driver::{
+        BuildDriver, LinkedSourceBuildRequest, PublishLayout, PublishMode, SourceBuildRequest,
+    },
     session::CompilerSession,
 };
 use norito::json::{Map, Value};
@@ -114,6 +116,9 @@ pub struct CompileArgs {
     /// Kotodama source path, or `-` to read source from stdin.
     #[arg(long, value_name = "PATH")]
     pub source: PathBuf,
+    /// Boundary for relative includes and imports; defaults to the source file's directory.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub source_root: Option<PathBuf>,
     /// Output path for the IVM `.to` artifact.
     #[arg(long, value_name = "PATH")]
     pub bytecode_out: PathBuf,
@@ -172,15 +177,57 @@ impl CompileArgs {
         }
         let driver = BuildDriver::for_current_executable(CompilerSession::default())
             .map_err(|error| eyre!(error))?;
-        let output = driver
-            .build_source(SourceBuildRequest {
+        let output = if self.source != Path::new("-") {
+            let physical = self.source.canonicalize()?;
+            let default_root = self
+                .source
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .canonicalize()?;
+            let root = self.source_root.as_deref().unwrap_or(&default_root);
+            let loaded = kotodama_lang::driver::load_source_project(
+                &physical,
+                root,
+                &std::collections::BTreeMap::new(),
+            )
+            .map_err(|error| eyre!(error))?;
+            for input in loaded.source_paths.values() {
+                for output in [&self.bytecode_out, &layout.manifest] {
+                    if input == &output_identity(output)? {
+                        return Err(eyre!(
+                            "compiler output must not replace a Kotodama source file"
+                        ));
+                    }
+                }
+                if let Some(summary) = &self.json_out {
+                    if input == &output_identity(summary)? {
+                        return Err(eyre!(
+                            "JSON summary must not replace a Kotodama source file"
+                        ));
+                    }
+                }
+            }
+            driver.build_project(LinkedSourceBuildRequest {
+                source_name: loaded.graph.root.source_name.clone(),
+                graph: loaded.graph,
+                profile: "sorafs".into(),
+                layout,
+                mode: PublishMode::Write,
+            })
+        } else {
+            if self.source_root.is_some() {
+                return Err(eyre!("--source-root requires a file input"));
+            }
+            driver.build_source(SourceBuildRequest {
                 source,
                 source_name,
                 profile: "sorafs".to_owned(),
                 layout,
                 mode: PublishMode::Write,
             })
-            .map_err(|error| eyre!(error))?;
+        }
+        .map_err(|error| eyre!(error))?;
         let abi_version = ivm::ProgramMetadata::parse(&output.artifact)
             .wrap_err("compiler produced an invalid IVM artifact")?
             .metadata
@@ -781,6 +828,7 @@ mod tests {
         let source = temp.path().join("contract.ko");
         fs::write(&source, SOURCE).expect("source");
         let args = CompileArgs {
+            source_root: None,
             source: source.clone(),
             bytecode_out: temp.path().join("contract.to"),
             json_out: Some(temp.path().join("summary.json")),
@@ -822,6 +870,7 @@ mod tests {
     fn compile_stdin_reports_its_origin_and_rejects_invalid_source_without_artifacts() {
         let temp = TempDir::new().expect("temp dir");
         let args = CompileArgs {
+            source_root: None,
             source: "-".into(),
             bytecode_out: temp.path().join("contract.to"),
             json_out: None,
@@ -854,6 +903,7 @@ mod tests {
         let bytecode_out = temp.path().join("contract.to");
         for name in ["contract.ko", "contract.to", "contract.manifest.json"] {
             let args = CompileArgs {
+                source_root: None,
                 source: source.clone(),
                 bytecode_out: bytecode_out.clone(),
                 json_out: Some(temp.path().join(name)),
@@ -879,6 +929,7 @@ mod tests {
             let source = temp.path().join(source_name);
             fs::write(&source, SOURCE).expect("source");
             let args = CompileArgs {
+                source_root: None,
                 source: source.clone(),
                 bytecode_out: temp.path().join("contract.to"),
                 json_out: None,
@@ -908,6 +959,7 @@ mod tests {
         let source = physical.join("contract.to");
         fs::write(&source, SOURCE).expect("source");
         let args = CompileArgs {
+            source_root: None,
             source: source.clone(),
             bytecode_out: alias.join("contract.to"),
             json_out: None,

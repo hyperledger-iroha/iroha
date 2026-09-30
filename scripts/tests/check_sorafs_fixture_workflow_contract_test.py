@@ -13,6 +13,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPO_ROOT / ".github" / "workflows"
 
+CORE_VERIFIER_OWNER_WORKFLOWS = (
+    "mobile_sdk_artifacts.yml",
+    "sorafs-cli-release.yml",
+    "sorafs-orchestrator-sdk.yml",
+    "sorafs-fixtures-nightly.yml",
+)
+CORE_VERIFIER_OWNER_TRIGGER_PATHS = {
+    "crates/iroha_core_privacy/**",
+    "crates/iroha_core_timed_ovn/**",
+}
+
 NATIVE_ESCROW_TRIGGER_PATHS = {
     "crates/connect_norito_bridge/**",
     "crates/iroha_core/src/smartcontracts/isi/mod.rs",
@@ -261,6 +272,56 @@ def workflow_filter_covers(path: str, filters: set[str]) -> bool:
             if path == prefix or path.startswith(f"{prefix}/"):
                 return True
     return False
+
+
+def core_verifier_owner_trigger_errors(source: str) -> list[str]:
+    """Require extracted verifier paths in each event already filtered on Core."""
+
+    errors = []
+    for match in re.finditer(
+        r"(?m)^  (?P<event>pull_request|push):\n"
+        r"(?P<body>(?:^    [^\n]*\n)*)",
+        source,
+    ):
+        paths = set(re.findall(r'^      - "([^"\n]+)"$', match["body"], re.M))
+        if "crates/iroha_core/**" in paths:
+            missing = sorted(CORE_VERIFIER_OWNER_TRIGGER_PATHS - paths)
+            if missing:
+                errors.append(f"{match['event']} omits verifier owner triggers: {missing}")
+    return errors
+
+
+@pytest.mark.parametrize("workflow_name", CORE_VERIFIER_OWNER_WORKFLOWS)
+def test_core_verifier_owners_trigger_existing_core_workflows(workflow_name: str) -> None:
+    """Owner-only changes retain the qualification previously selected by Core."""
+
+    assert "crates/iroha_core/**" in pull_request_paths(workflow_name)
+    source = read(f".github/workflows/{workflow_name}")
+    assert not core_verifier_owner_trigger_errors(source)
+
+
+@pytest.mark.parametrize("event", ("pull_request", "push"))
+@pytest.mark.parametrize("owner", sorted(CORE_VERIFIER_OWNER_TRIGGER_PATHS))
+def test_core_verifier_owner_triggers_reject_missing_owner_per_event(
+    event: str, owner: str,
+) -> None:
+    """An unrelated event's complete paths cannot hide a missing owner trigger."""
+
+    paths = "".join(
+        f'      - "{path}"\n'
+        for path in sorted(CORE_VERIFIER_OWNER_TRIGGER_PATHS | {"crates/iroha_core/**"})
+    )
+    source = "on:\n" + "".join(
+        f"  {name}:\n    paths:\n{paths}"
+        for name in ("pull_request", "push")
+    )
+    assert not core_verifier_owner_trigger_errors(source)
+    original = f"  {event}:\n    paths:\n{paths}"
+    missing = original.replace(f'      - "{owner}"\n', "", 1)
+    mutated = source.replace(original, missing, 1)
+    assert core_verifier_owner_trigger_errors(mutated) == [
+        f"{event} omits verifier owner triggers: {[owner]}"
+    ]
 
 
 @pytest.mark.parametrize(

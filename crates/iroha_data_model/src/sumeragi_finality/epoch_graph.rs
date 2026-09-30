@@ -37,6 +37,10 @@ pub struct ScheduledConfig {
 }
 impl ScheduledConfig {
     /// Check complete context and exact containment before building a generic core config.
+    ///
+    /// # Errors
+    /// Rejects malformed epoch authority, a height outside that epoch, invalid parameters
+    /// or committee keys, or a configuration exceeding the transport bounds.
     pub fn height_config(&self) -> Result<HeightConfig, ScheduleError> {
         self.epoch.validate().map_err(ScheduleError::Epoch)?;
         if self.height < self.epoch.authorization.first_height
@@ -66,6 +70,9 @@ impl ScheduledConfig {
 }
 
 /// Exact signed epoch identity passed to generic core signatures and safety records.
+///
+/// # Errors
+/// Rejects invalid epoch authority or failure to derive its canonical context or authority identity.
 pub fn core_epoch(context: &ValidatorEpochContextV1) -> Result<EpochConfig, ScheduleError> {
     context.validate().map_err(ScheduleError::Epoch)?;
     Ok(EpochConfig {
@@ -100,6 +107,10 @@ pub fn core_epoch(context: &ValidatorEpochContextV1) -> Result<EpochConfig, Sche
 )]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::ScheduledSlot")]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "canonical slots retain inline geometry in prepaid flat storage"
+)]
 pub enum ScheduledSlot {
     /// Configuration authorized by signed genesis or the incumbent-certified boundary.
     Ready(ScheduledConfig),
@@ -204,6 +215,9 @@ impl ScheduledSlot {
         }
     }
     /// Map only an authorized slot to signing authority; a pending slot remains explicit.
+    ///
+    /// # Errors
+    /// Rejects a slot inconsistent with the current epoch, or invalid ready-slot configuration.
     pub fn to_core(&self, current: &ValidatorEpochContextV1) -> Result<ConfigSlot, ScheduleError> {
         self.validate_against(current)?;
         match self {
@@ -276,7 +290,7 @@ pub struct ScheduleOutcome {
     pub height: u64,
     /// Exact incumbent context governing the block, including its complete signing generation.
     pub current: ValidatorEpochContextV1,
-    /// Mandatory exactly at an NPoS boundary; carries next authorization and E+2 preparation.
+    /// Mandatory exactly at an `NPoS` boundary; carries next authorization and E+2 preparation.
     pub boundary: Option<ValidatorEpochBoundaryV1>,
     /// Height h+1, ready only when already authorized or installed by this exact boundary.
     pub next: ScheduledSlot,
@@ -310,6 +324,10 @@ impl ScheduleOutcome {
         Ok(())
     }
     /// Validate all canonical context, slot, boundary-presence and height relationships.
+    ///
+    /// # Errors
+    /// Rejects invalid epoch context, nonconsecutive heights, absent or invented boundaries,
+    /// or successor slots inconsistent with the authenticated current or successor epoch.
     pub fn validate(&self) -> Result<(), ScheduleError> {
         self.current.validate().map_err(ScheduleError::Epoch)?;
         let current = &self.current.authorization;
@@ -355,6 +373,9 @@ impl ScheduleOutcome {
         Ok(())
     }
     /// Generic core event released only after this original boundary's successful publication.
+    ///
+    /// # Errors
+    /// Rejects an invalid schedule result or unavailable or malformed successor configuration.
     pub fn applied_config(&self) -> Result<AppliedConfig, ScheduleError> {
         self.validate()?;
         if self.boundary.is_some() {
@@ -405,6 +426,9 @@ impl ConsensusSchedule {
         }
     }
     /// Adopt and validate a complete canonical slot window.
+    ///
+    /// # Errors
+    /// Rejects a window that is neither empty nor three consecutive correctly authorized slots.
     pub fn from_owned_entries(entries: Vec<ScheduledSlot>) -> Result<Self, ScheduleError> {
         let result = Self { entries };
         result.validate()?;
@@ -423,6 +447,9 @@ impl ConsensusSchedule {
         self.entries.iter().find(|entry| entry.height() == height)
     }
     /// Obtain an already authenticated configuration, refusing a pending boundary.
+    ///
+    /// # Errors
+    /// Rejects absent heights and heights awaiting their certified predecessor boundary.
     pub fn ready(&self, height: u64) -> Result<&ScheduledConfig, ScheduleError> {
         match self.get(height) {
             Some(ScheduledSlot::Ready(config)) => Ok(config),
@@ -505,6 +532,10 @@ impl ConsensusSchedule {
         Ok(())
     }
     /// Build the first window from independently authenticated signed genesis authority.
+    ///
+    /// # Errors
+    /// Rejects invalid authority or parameters, an epoch not beginning at height one and epoch
+    /// zero, or successor slots outside the signed genesis epoch.
     pub fn from_genesis(
         epoch: ValidatorEpochContextV1,
         params: ChainParamsRecord,
@@ -516,21 +547,33 @@ impl ConsensusSchedule {
             ));
         }
         params.validate().map_err(ScheduleError::Params)?;
-        let entries = (1..=3)
-            .map(|height| {
-                ScheduledSlot::Ready(ScheduledConfig {
-                    height,
-                    epoch: epoch.clone(),
-                    params,
-                })
-            })
-            .collect();
+        let entries = vec![
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: 1,
+                epoch: epoch.clone(),
+                params,
+            }),
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: 2,
+                epoch: epoch.clone(),
+                params,
+            }),
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: 3,
+                epoch,
+                params,
+            }),
+        ];
         let result = Self { entries };
         result.validate()?;
         Ok(result)
     }
     /// Check a genesis result against a separately reconstructed signed genesis context.
     /// The caller must compare the resulting context with that independent root before trust.
+    ///
+    /// # Errors
+    /// Rejects malformed or non-genesis outcomes and successor slots that differ from the
+    /// independently reconstructed genesis schedule.
     pub fn from_genesis_outcome(outcome: &ScheduleOutcome) -> Result<Self, ScheduleError> {
         outcome.validate()?;
         if outcome.height != 1
@@ -558,6 +601,10 @@ impl ConsensusSchedule {
     /// Advance one genuinely certified result. At B only, its boundary replaces the B+1
     /// authority barrier; already fixed B+1 parameters remain unchanged. Ordinary authority
     /// cannot change through candidacy or decoded result data outside this certified graph.
+    ///
+    /// # Errors
+    /// Rejects malformed schedules or outcomes, nonconsecutive height, changed incumbent or
+    /// lag-two parameters, or a boundary that does not replace its exact pending slot.
     pub fn advanced(&self, outcome: &ScheduleOutcome) -> Result<Self, ScheduleError> {
         self.validate()?;
         outcome.validate()?;
@@ -604,6 +651,9 @@ impl ConsensusSchedule {
         Ok(result)
     }
     /// Restore the actual ready/pending slots without guessing post-boundary authority.
+    ///
+    /// # Errors
+    /// Rejects malformed or empty schedules and invalid ready or pending configurations.
     pub fn init_configs(
         &self,
         genesis_height: u64,

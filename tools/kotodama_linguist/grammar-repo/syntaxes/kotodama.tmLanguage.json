@@ -336,7 +336,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "(?<![\\p{L}\\p{N}_])(?:authorize|break|const|continue|else|enum|error|false|fn|for|hajimari|始まり|if|in|kaizen|改善|kotoage|言挙げ|let|match|module|return|seiyaku|誓約|state|struct|trigger|true|var|view)(?![\\p{L}\\p{N}_])",
+          "match": "(?<![\\p{L}\\p{N}_])(?:as|authorize|break|const|continue|else|enum|error|export|false|fn|for|hajimari|始まり|if|import|in|include|kaizen|改善|kotoage|言挙げ|let|match|module|return|seiyaku|誓約|state|struct|trigger|true|var|view)(?![\\p{L}\\p{N}_])",
           "name": "keyword.control.kotodama"
         }
       ]

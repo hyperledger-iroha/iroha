@@ -30,6 +30,7 @@ grammar rather than in this rendered copy or an editor grammar.
 <!-- BEGIN GENERATED: kotodama-v1-keywords -->
 | Spelling | Token |
 | --- | --- |
+| `as` | `As` |
 | `authorize` | `Authorize` |
 | `break` | `Break` |
 | `const` | `Const` |
@@ -37,13 +38,16 @@ grammar rather than in this rendered copy or an editor grammar.
 | `else` | `Else` |
 | `enum` | `Enum` |
 | `error` | `Error` |
+| `export` | `Export` |
 | `false` | `False` |
 | `fn` | `Fn` |
 | `for` | `For` |
 | `hajimari` | `Hajimari` |
 | `始まり` | `Hajimari` |
 | `if` | `If` |
+| `import` | `Import` |
 | `in` | `In` |
+| `include` | `Include` |
 | `kaizen` | `Kaizen` |
 | `改善` | `Kaizen` |
 | `kotoage` | `Kotoage` |
@@ -156,13 +160,49 @@ A deployable file contains exactly one named `seiyaku`/`誓約`. A reusable file
 
 ```ebnf
 source          = seiyaku | module ;
+fragment        = (seiyaku-item | exported-item)* ;
 seiyaku         = seiyaku-keyword identifier "{" seiyaku-item* "}" ;
 seiyaku-keyword = "seiyaku" | "誓約" ;
 module          = "module" identifier "{" module-item* "}" ;
 
 seiyaku-item    = struct | error-enum | constant | state | function | kotoage
-                | view | hajimari | kaizen | trigger ;
-module-item     = struct | error-enum | constant | function ;
+                | view | hajimari | kaizen | trigger | include | import ;
+module-item     = exported-item | include | import ;
+exported-item   = "export"? (struct | error-enum | constant | function) ;
+include         = "include" string-literal ";" ;
+import          = "import" string-literal "as" identifier ";" ;
+```
+
+A source unit may include bare declaration fragments with `include "./state.ko";`.
+Includes expand declarations at the directive position and share the owning
+contract or module's functions, types, constants and state. Each fragment has one
+owner. Include cycles and duplicate declarations are errors. A fragment has no
+`seiyaku` or `module` wrapper and is parsed only through an explicit include or
+fragment-formatting operation. Fragment declarations must be valid for the owner;
+module fragments cannot introduce contract state or entrypoints.
+
+`import "./math.ko" as arithmetic;` imports a named local module. Only declarations
+marked `export` are accessible through `arithmetic::name`; functions remain ordinary
+private functions for runtime-entrypoint purposes. Types, error enums and constants
+can also be exported. A published package additionally requires each externally
+visible declaration in its manifest export allowlist. Local import cycles fail.
+Paths resolve relative to the declaring file within the supplied source root;
+absolute paths and escaping that root are rejected. The compiler consumes the
+explicit source bundle and preserves every file's native source ranges.
+
+For example, these three files form one contract source bundle:
+
+```kotodama bundle
+// file: app.ko
+seiyaku App {
+    include "./helpers.ko";
+    import "./math.ko" as arithmetic;
+    view fn answer() -> int { twice(arithmetic::SCALE) }
+}
+// file: helpers.ko
+fn twice(int _ value) -> int { value + value }
+// file: math.ko
+module Math { export const int SCALE = 21; }
 ```
 
 Seiyaku identity is the declared name; the compiler must preserve it through CST, AST, HIR, diagnostics, interfaces, and documentation. Modules are linked at typed HIR. Textual AST rewriting and wildcard imports are not part of V1.
@@ -185,7 +225,8 @@ field           = type identifier ;
 error-enum      = "error" "enum" identifier "{"
                   error-variant (("," | ";") error-variant)* ("," | ";")?
                   "}" ;
-error-variant   = identifier "=" integer-literal ;
+error-variant   = error-message? identifier "=" integer-literal ;
+error-message   = "#[" "message" "(" string-literal ")" "]" ;
 
 constant        = "const" type identifier "=" expression ";" ;
 state           = "state" type identifier ";" ;
@@ -221,11 +262,21 @@ data-matcher    = identifier (identifier | string-literal) ";" ;
 pipeline-filter = "pipeline" ("transaction" | "block") "approved"? ;
 ```
 
+An optional `#[message("Permission required")]` before an error variant provides
+static presentation text. The decoded string must contain 1 through 4096 UTF-8
+bytes and at least one non-whitespace character. Duplicate message attributes,
+computed expressions and attributes on the enum itself are rejected. Messages
+are included in contract metadata and editor hover/completion; they do not alter
+the enum's numeric codes or nominal identity.
+
+
 Every parameter, field, constant, and state declaration has an explicit type.
-Parameters are named at calls by default. `int _ value` declares a positional-only
-parameter; positional parameters form a contiguous prefix of the signature.
-For example, `fn clamp(int _ value, int minimum, int maximum)` is called as
-`clamp(7, minimum: 0, maximum: 10)`.
+Ordinary function parameters accept positional values or their declared names.
+`int _ value` declares a positional-only parameter; these parameters form a
+contiguous prefix of the signature. For example,
+`fn clamp(int _ value, int minimum, int maximum)` accepts both `clamp(7, 0, 10)`
+and `clamp(7, minimum: 0, maximum: 10)`. Builtins retain their explicit registry
+call policies, including required names for ledger operations.
 Declaration types always precede names; the retired `name: Type` form is a
 syntax error with a type-first diagnostic. Every error variant has an explicit,
 non-zero `u32` code, and names and codes are unique within the
@@ -347,7 +398,21 @@ pointer or numeric zero as a request to re-read JSON trigger arguments.
 
 ## Bindings and assignment
 
-`let` creates an immutable local. `var` creates a mutable local. Assigning to a `let`, parameter, constant, or immutable field is an error. Redeclaring or shadowing a name in an enclosing scope is an error.
+`let` creates an immutable local. `var` creates a mutable local. Struct and tuple
+fields inherit their root binding's mutability: `record.lifecycle = ACTIVE`,
+`record.details.nonce += 1`, and `pair.0 = value` update a mutable value. The
+compiler rebuilds the enclosing products, so copies retain their previous
+values; changing a record read from a `StateMap` requires an explicit
+`map[key] = record` to persist it. Assigning through a `let`, parameter, or
+constant is an error, as is assigning a field of a temporary expression.
+Redeclaring or shadowing a name in an enclosing scope is an error.
+
+The compiler eliminates projections of known products in SSA before register
+allocation, preserving evaluation order while removing intermediate record
+reconstructions. Branches and loops carry the product's leaf words so updates
+and copies retain value semantics. Calls and state encoding keep the same ABI
+and reuse address bases for consecutive stack-table words; these optimizations
+require no changes to contract source.
 
 ```ebnf
 binding         = ("let" | "var") (type identifier | binding-pattern)
@@ -358,6 +423,8 @@ struct-pattern  = type-name "{" (pattern-field ("," pattern-field)*)?
                   (","? "..")? ","? "}" ;
 pattern-field   = identifier (":" identifier)? ;
 assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
+place           = identifier ("." (identifier | integer-literal))*
+                | identifier "[" expression "]" ;
 ```
 
 Every local binding is initialized at its declaration. Positional destructuring
@@ -491,8 +558,15 @@ The same integer constant evaluator handles generic capacities such as
 `List<int, PAGE_SIZE * 2>` and `StatePage<int, int, PAGE_SIZE>`, numeric
 `range(PAGE_SIZE * 2)`, and `items.take(PAGE_SIZE)`. Integer constants are
 available to type annotations independently of the annotation's source order;
-constant declarations may reference earlier constants. Runtime variables cannot
-determine a capacity or loop limit.
+constant declarations may reference earlier constants. Constants also accept
+nominal error variants and canonical typed literal constructors over constant
+strings, such as
+`const Name ADMIN_KEY = Name::parse("admin");` and
+`const VaultError MISSING = VaultError::Missing;`. These values are expanded
+through the same typed literal and error paths as their inline forms. Live
+account aliases are not constant account identifiers: store an alias as bytes
+and resolve it explicitly when needed. Runtime variables cannot determine a
+capacity or loop limit.
 
 Each scan follows canonical state-key order and examines at most 64 candidate
 positions, stopping once it finds `N` live entries. Tombstones count toward
@@ -525,7 +599,7 @@ comparison      = additive (("==" | "!=" | "<" | "<=" | ">" | ">=") additive)* ;
 additive        = multiplicative (("+" | "-") multiplicative)* ;
 multiplicative  = unary (("*" | "/" | "%") unary)* ;
 unary           = ("!" | "-") unary | postfix ;
-postfix         = primary (("." identifier) | ("[" expression "]")
+postfix         = primary (("." (identifier | integer-literal)) | ("[" expression "]")
                 | call-arguments | "?")* ;
 primary         = integer-literal | exact-decimal-literal
                 | string-literal | bytes-literal
@@ -582,10 +656,11 @@ error type returned by the enclosing function; V1 performs no implicit error
 conversion. The retired lowercase placeholder constructors are syntax errors
 with active-only fix-its.
 
-Calls accept the declared positional prefix followed by named arguments.
-Named arguments may appear in any order; argument expressions always evaluate
-left to right in source order. A positional argument after a named argument,
-a name for a positional-only parameter, or a missing declared name is an error.
+Ordinary function calls accept a positional prefix followed by optional named
+arguments. Named arguments may appear in any order; argument expressions always
+evaluate left to right in source order. A positional argument after a named
+argument, a name for a positional-only parameter, a duplicate argument, or a
+missing required argument is an error.
 Keywords are contextual argument labels immediately before `:`, so canonical
 builtins can use labels such as `trigger:`. This does not make keywords valid
 local binding names. Call labels depend only on the signature and are included in package interface
@@ -804,7 +879,12 @@ successful `hajimari`/`始まり` path before it can be observed. `StateMap` is
 host-backed and does not require allocation in `hajimari`.
 
 `StateMap.get` returns `Option<V>`; absence is not represented by a zero, empty
-string, or implicit default. Rvalue indexing such as `map[key]` and compound
+string, or implicit default. `map.get(key).expect(Error::Missing)` extracts a
+present value and rejects absence with the exact nominal error. It evaluates
+the receiver and error once in source order, and aborts before reading the
+absent payload. `value.unwrap_or(default)` explicitly supplies an eager fallback;
+`value.is_some()` and `value.is_none()` inspect presence. Rvalue indexing such
+as `map[key]` and compound
 indexed assignment such as `map[key] += value` are errors because both would
 read a possibly absent value without handling `Option<V>`. Simple
 `map[key] = value` remains the canonical per-key write form. The flat spelling
@@ -832,6 +912,24 @@ complete paths are capped at 16 KiB, and iteration pages are canonical
 passing a `Name` directly to `state::get`, `set`, `delete`, `keys`, `has`,
 `len`, or `count` is a type error.
 
+Record updates keep the absence check and durable write explicit:
+
+```kotodama
+seiyaku Notebook {
+    error enum NoteError { Missing = 1 }
+    struct Note { int nonce, bytes commitment }
+    state StateMap<Name, Note> Notes;
+    const NoteError MISSING = NoteError::Missing;
+
+    kotoage fn revise(Name id, bytes commitment) authorize("Revise") {
+        var note = Notes.get(id).expect(MISSING);
+        note.nonce += 1;
+        note.commitment = commitment;
+        Notes[id] = note;
+    }
+}
+```
+
 Compiler-derived access metadata is advisory until independently verified from bytecode. Unknown, dynamic, incomplete, or transitively unresolved access forces conservative scheduler serialization.
 
 ## Errors and requirements
@@ -844,7 +942,8 @@ link order never determines identity. Exported errors and structs resolve throug
 the locked module graph. The signed interface includes the complete descriptors.
 
 `require(condition, error)` takes both arguments positionally and aborts with
-that exact nominal error value. Rejections preserve the error identity, variant
+that exact nominal error value. `Option.expect(error)` uses the same rejection
+identity and returns the contained value without a placeholder or sentinel. Rejections preserve the error identity, variant
 schema hash and code, as well as the originating contract and symbolic variant,
 through nested calls and rollback. A wrong identity, schema or undeclared code
 rejects. Free-form failure strings are not part of the release contract.
@@ -1075,7 +1174,7 @@ The compiler-owned `EditorSnapshot` retains source/package identities, resolved
 symbols and lexical bindings, exact argument-label ranges, typed expression
 facts, and canonical callable signatures. LSP completion filters by source,
 scope, explicit import/export graph, and receiver type. Argument templates use
-the declaration's explicit positional prefix and named suffix. Hover and
+the declaration's positional-only prefix and optional named parameters. Hover and
 signature help expose types and effect/permission metadata; definition,
 references, and rename use resolved identities. Rename rechecks the complete
 source and export graph and verifies that every reference retains its resolver
@@ -1158,8 +1257,19 @@ interpreted as version ranges. Exported structs carry
 is at most 1024 ASCII bytes, and both declaration components must be canonical
 unreserved source type names. Aliases never enter this identity. Qualified
 identities containing the compiler-private `__kotodama_link_` substring are
-invalid. Local structs keep their declared name. Schema hashes bind the exact
-name and field schema, so changing a locked package identity changes the schema.
+invalid. Contract-owned structs keep their declared name, including declarations
+in fragments. Root-local module structs carry
+`local::<64 lowercase hexadecimal digits>::SourceUnit::Struct`. The digest binds
+the root contract owner and the canonical project-relative module path, excluding
+absolute paths, consumer aliases and source contents. Compute it with `Hash::new`
+over the domain bytes `iroha:kotodama:local-module:v1\0`, followed by the UTF-8
+fields `root`, the root seiyaku name, and the canonical relative module path;
+each field has a preceding unsigned 64-bit little-endian byte length. Encode the
+32-byte digest as lowercase hexadecimal. The same owner prefix applies to local
+module error enums. Package-owned local modules
+retain their package identity even when reached through a path import. Schema
+hashes bind the exact name and field schema, so changing a locked package identity
+changes the schema.
 
 Diagnostic spans keep package identity separate from the logical source path,
 so two locked packages may both own `src/lib.ko` without ambiguous JSON, SARIF,

@@ -418,10 +418,7 @@ impl SenderHardwareAuthorizationV1 {
 pub fn hardware_authorization_key_reference_v1(
     public_key: &KagemushaDevicePublicKeyV1,
 ) -> [u8; 32] {
-    digest_bytes(
-        HARDWARE_AUTHORIZATION_KEY_REFERENCE_DOMAIN_V1,
-        public_key.as_sec1_bytes(),
-    )
+    iroha_data_model::kagemusha::kagemusha_core_authorization_key_reference_v1(public_key)
 }
 
 fn validate_hardware_authorization_statement(

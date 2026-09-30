@@ -102,6 +102,12 @@ fn raw_admission_fixture_honors_declared_fixed_scalar_layout() {
 
 #[test]
 fn admission_class_indices_and_ordinary_topics_are_total() {
+    struct Ordinary(Topic);
+    impl ClassifyTopic for Ordinary {
+        fn topic(&self) -> Topic {
+            self.0
+        }
+    }
     for (index, class) in A::ALL.into_iter().enumerate() {
         assert_eq!(class.index(), index);
     }
@@ -120,12 +126,6 @@ fn admission_class_indices_and_ordinary_topics_are_total() {
         (Topic::Connect, A::Low),
         (Topic::Other, A::Low),
     ];
-    struct Ordinary(Topic);
-    impl ClassifyTopic for Ordinary {
-        fn topic(&self) -> Topic {
-            self.0
-        }
-    }
     for (topic, expected) in topics {
         assert_eq!(A::ordinary_for_topic(topic), expected);
         assert_eq!(Ordinary(topic).admission_class(), expected);

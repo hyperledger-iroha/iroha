@@ -32,7 +32,7 @@ impl CheckpointDecision {
             result: value.result.0,
             committee_digest: value.committee_digest,
             schedule: value.schedule.clone(),
-            beacon: value.beacon.clone(),
+            beacon: value.beacon,
             executed_hash: value.executed_hash,
             executed_len: value.executed_len,
         }
@@ -44,7 +44,7 @@ impl CheckpointDecision {
             result: Hash32(self.result),
             committee_digest: self.committee_digest,
             schedule: self.schedule.clone(),
-            beacon: self.beacon.clone(),
+            beacon: self.beacon,
             executed_hash: self.executed_hash,
             executed_len: self.executed_len,
         }

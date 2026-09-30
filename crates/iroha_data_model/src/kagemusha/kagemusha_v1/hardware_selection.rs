@@ -1185,16 +1185,21 @@ mod tests {
                 .is_err()
         );
 
-        let (app_profile, app_credential, app_expected, app_policy, app_evidence) =
+        let (app_profile, app_credential, expected_app_binding, app_policy, app_evidence) =
             app_attest_fixture();
-        let signer = KagemushaFixtureSignerV1::from_repeated_byte(18);
+        let fixture_key = KagemushaFixtureSignerV1::from_repeated_byte(18);
         let direct_app_signature = KagemushaSignedHardwareTransitionSelectionV1 {
             subject: app_evidence.subject,
-            signature: signer.sign(&app_evidence.subject.canonical_signing_bytes().unwrap()),
+            signature: fixture_key.sign(&app_evidence.subject.canonical_signing_bytes().unwrap()),
         };
         assert!(
             direct_app_signature
-                .verify_against(&app_credential, &app_profile, &app_policy, app_expected)
+                .verify_against(
+                    &app_credential,
+                    &app_profile,
+                    &app_policy,
+                    expected_app_binding
+                )
                 .is_err()
         );
     }
@@ -1220,7 +1225,7 @@ mod tests {
         for index in (0..32).rev() {
             let difference =
                 i16::from(P256_ORDER[index]) - i16::from(high_raw[32 + index]) - borrow;
-            high_raw[32 + index] = (difference & 0xff) as u8;
+            high_raw[32 + index] = u8::try_from(difference & 0xff).unwrap();
             borrow = i16::from(difference < 0);
         }
         assert_eq!(borrow, 0);

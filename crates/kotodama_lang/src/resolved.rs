@@ -294,6 +294,10 @@ pub struct ResolvedProgram {
     types: Vec<ResolvedTypeUse>,
     calls: Vec<ResolvedCall>,
     arena: Arc<ResolvedArena>,
+    /// Independently resolved include files sharing this unit's declarations.
+    included: Vec<ResolvedProgram>,
+    /// Native root view before include assembly.
+    original: Option<Box<ResolvedProgram>>,
 }
 impl ResolvedProgram {
     /// Return the source AST after fail-closed resolution.
@@ -314,6 +318,59 @@ impl ResolvedProgram {
     pub(crate) fn arena(&self) -> Arc<ResolvedArena> {
         Arc::clone(&self.arena)
     }
+    /// Original per-file resolver arenas of this complete source unit.
+    pub(crate) fn arenas(&self) -> impl Iterator<Item = Arc<ResolvedArena>> {
+        std::iter::once(Arc::clone(&self.arena))
+            .chain(self.included.iter().map(|file| Arc::clone(&file.arena)))
+    }
+    /// Original immutable files of this complete source unit.
+    pub(crate) fn source_files(&self) -> impl Iterator<Item = &SourceFile> {
+        std::iter::once(&self.source_file).chain(self.included.iter().map(|file| &file.source_file))
+    }
+    /// Per-file resolver authorities, retaining each original fact and binding arena.
+    pub(crate) fn source_programs(&self) -> impl Iterator<Item = &ResolvedProgram> {
+        std::iter::once(self.original.as_deref().unwrap_or(self)).chain(self.included.iter())
+    }
+    /// Original per-file program, without declarations assembled from other files.
+    pub(crate) fn source_program(
+        &self,
+        source: crate::source::SourceId,
+    ) -> Option<&ResolvedProgram> {
+        self.source_programs()
+            .find(|file| file.source_file.id() == source)
+    }
+    /// Assemble resolved declarations without rewriting source text or local HIR identities.
+    pub(crate) fn with_included_sources(
+        mut self,
+        included: Vec<ResolvedProgram>,
+        order: &[(crate::source::SourceId, usize)],
+    ) -> Self {
+        self.original = Some(Box::new(self.clone()));
+        let originals = std::iter::once(&self)
+            .chain(included.iter())
+            .map(|file| (file.source_file.id(), &file.program))
+            .collect::<BTreeMap<_, _>>();
+        self.program.items = order
+            .iter()
+            .map(|(source, index)| originals[source].items[*index].clone())
+            .collect();
+        for file in &included {
+            self.program
+                .exports
+                .extend(file.program.exports.iter().cloned());
+            self.program
+                .directives
+                .extend(file.program.directives.iter().cloned());
+            self.program
+                .fixtures
+                .extend(file.program.fixtures.iter().cloned());
+            self.symbols.extend(file.symbols.iter().cloned());
+            self.types.extend(file.types.iter().cloned());
+            self.calls.extend(file.calls.iter().cloned());
+        }
+        self.included = included;
+        self
+    }
     /// Return resolved declarations.
     pub fn symbols(&self) -> impl ExactSizeIterator<Item = &ResolvedSymbol> {
         self.symbols.iter()
@@ -332,8 +389,9 @@ impl ResolvedProgram {
     }
     /// Convert one resolver-owned source range into the canonical diagnostic span.
     pub(crate) fn source_span(&self, range: SourceRange) -> Option<SourceSpan> {
-        (range.source == self.source_file.id())
-            .then(|| SourceSpan::from_range(&self.source_file, range.range))
+        self.source_files()
+            .find(|file| file.id() == range.source)
+            .map(|file| SourceSpan::from_range(file, range.range))
     }
     /// Return stable parameter/local bindings in resolver allocation order.
     pub fn bindings(&self) -> impl ExactSizeIterator<Item = &ResolvedBinding> {
@@ -345,13 +403,19 @@ impl ResolvedProgram {
         function_name: &str,
         parameter_name: &str,
     ) -> Option<SourceRange> {
-        let owner = self
+        let file = std::iter::once(self).chain(&self.included).find(|file| {
+            file.facts
+                .declarations
+                .iter()
+                .any(|fact| fact.kind == DeclarationKind::Function && fact.name == function_name)
+        })?;
+        let owner = file
             .facts
             .declarations
             .iter()
             .find(|fact| fact.kind == DeclarationKind::Function && fact.name == function_name)?
             .node;
-        self.facts
+        file.facts
             .declarations
             .iter()
             .find(|fact| {
@@ -359,7 +423,7 @@ impl ResolvedProgram {
                     && fact.owner == Some(owner)
                     && fact.name == parameter_name
             })
-            .and_then(|fact| self.facts.source_map.source_range(fact.name_node))
+            .and_then(|fact| file.facts.source_map.source_range(fact.name_node))
     }
     /// Return the exact lifecycle-name range for the source `hajimari` declaration.
     pub(crate) fn hajimari_name_source(&self) -> Option<SourceRange> {
@@ -369,11 +433,15 @@ impl ResolvedProgram {
             };
             (function.modifiers.kind == FunctionKind::Hajimari).then_some(&function.name)
         })?;
-        self.facts
-            .declarations
-            .iter()
-            .find(|fact| fact.kind == DeclarationKind::Function && &fact.name == name)
-            .and_then(|fact| self.facts.source_map.source_range(fact.name_node))
+        std::iter::once(self)
+            .chain(&self.included)
+            .find_map(|file| {
+                file.facts
+                    .declarations
+                    .iter()
+                    .find(|fact| fact.kind == DeclarationKind::Function && &fact.name == name)
+                    .and_then(|fact| file.facts.source_map.source_range(fact.name_node))
+            })
     }
     /// Return the exact `state` keyword range of the first scalar state declaration.
     pub(crate) fn first_scalar_state_keyword_source(&self) -> Option<SourceRange> {
@@ -387,15 +455,21 @@ impl ResolvedProgram {
             ))
             .then_some(&state.name)
         })?;
-        let declaration = self
+        let file = std::iter::once(self).chain(&self.included).find(|file| {
+            file.facts
+                .declarations
+                .iter()
+                .any(|fact| fact.kind == DeclarationKind::State && &fact.name == name)
+        })?;
+        let declaration = file
             .facts
             .declarations
             .iter()
             .find(|fact| fact.kind == DeclarationKind::State && &fact.name == name)?;
-        let declaration = self.facts.source_map.source_range(declaration.node)?;
+        let declaration = file.facts.source_map.source_range(declaration.node)?;
         let keyword_end = declaration.range.start.checked_add(5)?;
         let keyword = TextRange::new(declaration.range.start, keyword_end);
-        (keyword.end <= declaration.range.end && self.source_file.slice(keyword) == Some("state"))
+        (keyword.end <= declaration.range.end && file.source_file.slice(keyword) == Some("state"))
             .then_some(SourceRange::new(declaration.source, keyword))
     }
     pub(crate) fn into_program(self) -> Program {
@@ -404,6 +478,9 @@ impl ResolvedProgram {
         program
     }
     pub(crate) fn attach_sources(&self, typed: &mut crate::semantic::TypedProgram) {
+        for file in &self.included {
+            file.attach_sources(typed);
+        }
         typed
             .source_files
             .insert(self.source_map().source(), self.source_file.clone());
@@ -427,12 +504,15 @@ impl ResolvedProgram {
             function.name_source = Some(name_range);
         }
         for state in &mut typed.states {
-            state.source = self
+            if let Some(source) = self
                 .facts
                 .declarations
                 .iter()
                 .find(|fact| fact.kind == DeclarationKind::State && fact.name == state.name)
-                .and_then(|fact| self.facts.source_map.source_range(fact.node));
+                .and_then(|fact| self.facts.source_map.source_range(fact.node))
+            {
+                state.source = Some(source);
+            }
         }
     }
     pub(crate) fn span_for_location(
@@ -2183,6 +2263,8 @@ fn resolve_with_imports_and_externals_inner(
             types,
             calls,
             arena: Arc::new(arena),
+            included: Vec::new(),
+            original: None,
         })
     } else {
         Err(DiagnosticBundle::new(diagnostics))

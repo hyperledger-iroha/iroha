@@ -20,7 +20,7 @@ use super::{
 pub struct ChargedBuffer<T> {
     values: Vec<T>,
     capacity: usize,
-    _charge: AllocationCharge,
+    charge: AllocationCharge,
 }
 
 /// Local admission or allocator failure before backing storage is constructed.
@@ -248,13 +248,13 @@ impl<T> ChargedBuffer<T> {
         Ok(Self {
             values,
             capacity,
-            _charge: charge,
+            charge,
         })
     }
 
     /// Whether this backing allocation retains a charge from the exact original pool.
     pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
-        self._charge.belongs_to(budget)
+        self.charge.belongs_to(budget)
     }
 
     /// Transfer the exact Vec allocation and its original charge to a canonical owner.
@@ -277,9 +277,9 @@ impl<T> ChargedBuffer<T> {
         let Self {
             values,
             capacity: _,
-            _charge,
+            charge,
         } = self;
-        (values, _charge)
+        (values, charge)
     }
 
     /// Borrow the uninitialized tail of this exact fixed backing allocation.
@@ -341,6 +341,9 @@ impl<T> ChargedBuffer<T> {
     /// includes zero-sized elements, whose `Vec` has an effectively unlimited
     /// physical capacity. Nested storage owned by the element is not covered by
     /// this buffer's backing charge.
+    ///
+    /// # Errors
+    /// Returns the original element when the admitted logical capacity is full.
     pub fn try_push(&mut self, value: T) -> Result<(), T> {
         if self.values.len() >= self.capacity {
             return Err(value);

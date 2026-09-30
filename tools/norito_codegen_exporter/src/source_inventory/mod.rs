@@ -17,8 +17,6 @@ use syn::{
     punctuated::Punctuated, spanned::Spanned as _, visit::Visit,
 };
 
-const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
-
 /// Physical source inventory; this never asserts expanded codec closure.
 #[derive(JsonSerialize)]
 pub struct Inventory {
@@ -1246,8 +1244,8 @@ pub fn inventory(root: &Path, selections: &[PathBuf]) -> Result<Inventory> {
     for path in &paths {
         let full = root.join(path);
         let metadata = fs::symlink_metadata(&full)?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            bail!("source must be a bounded regular file: {}", path.display());
+        if !metadata.is_file() {
+            bail!("source must be a regular file: {}", path.display());
         }
         let bytes = fs::read(&full)?;
         let source = std::str::from_utf8(&bytes).context("Rust source must be UTF-8")?;

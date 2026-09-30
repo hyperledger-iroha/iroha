@@ -7,6 +7,33 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class NominalContractManifestTests
 {
     [Fact]
+    public void StaticErrorMessagesBindDeclaredVariants()
+    {
+        var value = ManifestNode();
+        var identity = value["error_types"]![0]!["identity"]!.GetValue<string>();
+        var entry = new JsonObject { ["error_type"] = identity, ["code"] = 1, ["message"] = "残高が不足しています" };
+        value["error_messages"] = new JsonArray(entry);
+        var manifest = value.Deserialize<ToriiContractManifest>()!;
+        Assert.Equal("残高が不足しています", manifest.ErrorMessages!.Single().Message);
+        Assert.NotNull(JsonSerializer.Deserialize<ToriiContractManifest>(JsonSerializer.Serialize(manifest)));
+        foreach (var text in new[] { " \n explanation \t", "\u001c", "😀" })
+        {
+            entry["message"] = text;
+            Assert.Equal(text, value.Deserialize<ToriiContractManifest>()!.ErrorMessages!.Single().Message);
+        }
+        entry["message"] = "\u0085\u00a0";
+        Assert.Throws<JsonException>(() => value.Deserialize<ToriiContractManifest>());
+        var malformed = manifest with { ErrorMessages = new[] { manifest.ErrorMessages!.Single() with { Message = "\ud800" } } };
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(malformed));
+        entry["message"] = "Valid message";
+        entry["code"] = 999;
+        Assert.Throws<JsonException>(() => value.Deserialize<ToriiContractManifest>());
+        entry["code"] = 1;
+        entry["message"] = new string('é', 2049);
+        Assert.Throws<JsonException>(() => value.Deserialize<ToriiContractManifest>());
+    }
+
+    [Fact]
     public void DurableEmptyProductsPreserveNominalNamesAndExactGrammar()
     {
         static ToriiContractManifest Decode(string typeName)

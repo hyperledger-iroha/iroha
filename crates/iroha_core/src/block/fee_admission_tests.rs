@@ -50,8 +50,6 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -59,18 +57,12 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -178,8 +170,6 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         [Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32))],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -187,18 +177,12 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -319,8 +303,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -328,18 +310,12 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -487,8 +463,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -496,7 +470,7 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
     let trigger_id: TriggerId = "fee_transfer_trigger_guard".parse().unwrap();
     let trigger = Trigger::new(
@@ -980,8 +954,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -989,18 +961,12 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -1130,8 +1096,6 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -1139,18 +1103,12 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -1272,8 +1230,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -1281,18 +1237,12 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -1464,8 +1414,6 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -1473,18 +1421,12 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -1645,8 +1587,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     params.transaction = params.transaction.with_ingress_enforcement(false, true);
     world.parameters = mv::cell::Cell::new(params);
     world.tx_sequences.insert(payer_id.clone(), 5);
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -1654,18 +1594,12 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");
@@ -1939,8 +1873,6 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
         ],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -1948,7 +1880,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -2139,7 +2071,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.fees.fee_asset_id = asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
-    let mut state = configured_component_state(world, chain_id.clone(), nexus);
+    let state = configured_component_state(world, chain_id.clone(), nexus);
     {
         let mut world = state.world.block();
         world
@@ -2154,12 +2086,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let latest_signed = state.view().latest_block().expect("original genesis");

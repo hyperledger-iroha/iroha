@@ -14,10 +14,13 @@ use crate::{
     sumeragi::finality::build_proof,
 };
 use iroha_data_model::{
-    block::consensus::ExecWitness,
+    block::{consensus::ExecWitness, decode_versioned_signed_block},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationFinalityV1, KagemushaOperationKindV1,
         KagemushaReserveReceiptWitnessV1, KagemushaTopUpMembershipWitnessV1,
+    },
+    sumeragi_amx::{
+        AmxCertifiedBlockV1, AmxRecordKind, AmxRecordProofV1, AmxRecordV1, amx_record_witness_key,
     },
     sumeragi_finality::{NativeLaneStateProof, SumeragiFinalityProof},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -86,6 +89,64 @@ fn original_source(
         witness,
         casting_bindings: projection.casting_bindings,
     })
+}
+
+/// Prove one AMX record from its original persisted native execution.
+///
+/// An absent record returns `None` only after the complete archived write set and its carrier
+/// have been authenticated. Missing or corrupt history never becomes record absence, and
+/// current World values cannot replace records pruned after the AMX deadline. The caller's
+/// immutable State view pins the history cut throughout construction.
+///
+/// Archive input and decoded ordinary writes use the original execution pool. As for the
+/// other native receipt readers, portable proof graphs and downstream tree scratch still
+/// require complete resource qualification; this API does not grant monetary authority.
+///
+/// # Errors
+/// Uncertified height, missing or corrupt native history, original-pool refusal, inconsistent
+/// archive identity/root, or a malformed record.
+pub fn amx_record_proof(
+    view: &impl StateReadOnly,
+    height: u64,
+    kind: AmxRecordKind,
+    transaction: [u8; 32],
+) -> Result<Option<AmxRecordProofV1>, String> {
+    let source = original_source(view, height)?;
+    let key = amx_record_witness_key(kind, transaction);
+    let Some(written) = source
+        .witness
+        .get()
+        .writes
+        .iter()
+        .rev()
+        .find(|write| write.key == key)
+    else {
+        return Ok(None);
+    };
+    let record = AmxRecordV1::from_witness(&written.key, &written.value)
+        .map_err(|error| error.to_string())?;
+    // Decode the exact portable carrier already authenticated by original_source, never a
+    // second Kura read which could substitute certificate bytes after source verification.
+    let block = norito::core::with_decode_limits_scope(
+        norito::canonical_decode_limits(source.finality.block_wire.len()),
+        || decode_versioned_signed_block(&source.finality.block_wire),
+    )
+    .map_err(|error| error.to_string())?;
+    let certificate = block
+        .commit_certificate()
+        .ok_or("authenticated AMX carrier has no native certificate")?;
+    AmxRecordProofV1::from_writes(
+        AmxCertifiedBlockV1::from_certificate(certificate),
+        source
+            .witness
+            .get()
+            .writes
+            .iter()
+            .map(|write| (write.key.as_slice(), write.value.as_slice())),
+        record,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
 }
 
 /// Derive the exact fee policy opening from a certified historical execution.

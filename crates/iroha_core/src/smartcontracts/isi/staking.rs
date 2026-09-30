@@ -974,10 +974,16 @@ fn ensure_frozen_validator_binding_preserved(
     else {
         return Ok(());
     };
-    if has_global_committee_obligation(state_transaction, existing)
-        && (replacement.peer_id != existing.peer_id
-            || replacement.activation_height != existing.activation_height
-            || replacement.deactivation_height != existing.deactivation_height)
+    let immutable_binding_changed = replacement.peer_id != existing.peer_id
+        || replacement.activation_height != existing.activation_height;
+    if (has_global_committee_obligation(state_transaction, existing)
+        && (immutable_binding_changed
+            || replacement.deactivation_height != existing.deactivation_height))
+        || (crate::sumeragi::lanes::custody::retains_registration(
+            &state_transaction.world,
+            existing,
+            state_transaction.block_height(),
+        ) && immutable_binding_changed)
     {
         return Err(Error::InvariantViolation(
             format!("{operation} cannot revoke a current or frozen validator binding").into(),
@@ -1431,6 +1437,15 @@ fn register_public_lane_validator(
             state_transaction.block_height(),
             "register_public_lane_validator",
         )?;
+        if crate::sumeragi::lanes::custody::retains_registration(
+            &state_transaction.world,
+            existing,
+            state_transaction.block_height(),
+        ) {
+            return Err(Error::InvariantViolation(
+                "original lane custody must expire before validator re-registration".into(),
+            ));
+        }
         if !existing.total_stake.is_zero()
             || !existing.self_stake.is_zero()
             || state_transaction.world.public_lane_stake_shares.iter().any(
@@ -2210,7 +2225,13 @@ impl Execute for FinalizePublicLaneUnbond {
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &validator_record)?;
-        if has_global_committee_obligation(state_transaction, &validator_record) {
+        if has_global_committee_obligation(state_transaction, &validator_record)
+            || crate::sumeragi::lanes::custody::retains_registration(
+                &state_transaction.world,
+                &validator_record,
+                state_transaction.block_height(),
+            )
+        {
             return Err(Error::InvariantViolation(
                 "unbond withdrawal requires authenticated release of current and frozen committee obligations".into(),
             ));
@@ -2450,6 +2471,11 @@ fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction
                         "validator pruning",
                     )
                     .is_ok()
+                    && !crate::sumeragi::lanes::custody::retains_registration(
+                        &state_transaction.world,
+                        record,
+                        state_transaction.block_height(),
+                    )
                     && record.total_stake.is_zero()
                     && record.self_stake.is_zero()
                     && !state_transaction.world.public_lane_stake_shares.iter().any(
@@ -2568,6 +2594,11 @@ fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) {
                     .deactivation_height
                     .is_some_and(|end| end <= state_transaction.block_height())
                 && !has_global_committee_obligation(state_transaction, record)
+                && !crate::sumeragi::lanes::custody::retains_registration(
+                    &state_transaction.world,
+                    record,
+                    state_transaction.block_height(),
+                )
                 && matches!(
                     record.status,
                     PublicLaneValidatorStatus::Exiting(releases_at) if releases_at <= now_ms
@@ -7029,6 +7060,83 @@ mod tests {
         set_fixture_xor_identity(&mut finalize_tx, &asset_def_id);
         finalize_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         finalize_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
+        // Native lane obligations retain the same escrow after this unbond's global
+        // tenure window has ended. Refusal must preserve the exact financial position.
+        {
+            use iroha_data_model::sumeragi_lanes::{
+                SumeragiLaneCustody, SumeragiLaneSignerCustody, SumeragiLaneStakeBinding,
+            };
+            let validator_key = (LaneId::new(7), validator.clone());
+            let share_key = (LaneId::new(7), validator.clone(), delegator.clone());
+            let before_share = finalize_tx
+                .world
+                .public_lane_stake_shares
+                .get(&share_key)
+                .unwrap()
+                .clone();
+            let before_custody = finalize_tx
+                .world
+                .public_lane_stake_custody
+                .get(&validator_key)
+                .unwrap()
+                .clone();
+            let original = finalize_tx
+                .world
+                .public_lane_validators
+                .get(&validator_key)
+                .unwrap();
+            let binding =
+                SumeragiLaneStakeBinding::from_record(original, &before_custody.0).unwrap();
+            let creation = original.activation_height.max(1);
+            for retired_at in [None, Some(7)] {
+                finalize_tx.world.sumeragi_lanes.get_mut().custody = vec![SumeragiLaneCustody {
+                    lane: LaneId::new(17),
+                    incarnation: [17; 32],
+                    instance: [18; 32],
+                    created_at: creation,
+                    merged: iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier::default(),
+                    signer_count: 1,
+                    signers: vec![SumeragiLaneSignerCustody { signer: 0, binding }]
+                        .try_into()
+                        .unwrap(),
+                    evidence_horizon: 1,
+                    slashing_delay: 1,
+                    retired_at,
+                }];
+                let error = FinalizePublicLaneUnbond {
+                    monetary_plan: fixture_unbond_plan(
+                        &finalize_tx,
+                        LaneId::new(7),
+                        &validator,
+                        &delegator,
+                        Hash::new("req"),
+                    ),
+                    lane_id: LaneId::new(7),
+                    validator: validator.clone(),
+                    staker: delegator.clone(),
+                    request_id: Hash::new("req"),
+                }
+                .execute(&delegator, &mut finalize_tx)
+                .expect_err("original lane liability must retain custody");
+                assert!(
+                    matches!(error, Error::InvariantViolation(ref message) if message.contains("committee obligations"))
+                );
+                assert_eq!(
+                    finalize_tx.world.public_lane_stake_shares.get(&share_key),
+                    Some(&before_share)
+                );
+                assert_eq!(
+                    finalize_tx
+                        .world
+                        .public_lane_stake_custody
+                        .get(&validator_key),
+                    Some(&before_custody)
+                );
+            }
+            // Restore the original global-only fixture and retain its exact height-eight
+            // withdrawal boundary and all balance assertions below.
+            finalize_tx.world.sumeragi_lanes.get_mut().custody.clear();
+        }
         FinalizePublicLaneUnbond {
             monetary_plan: fixture_unbond_plan(
                 &finalize_tx,

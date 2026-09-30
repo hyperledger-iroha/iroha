@@ -33,6 +33,10 @@ name = "iroha_core_zk_group"
 path = "tests/grouped.rs"
 required-features = ["zk-tests"]
 
+[[test]]
+name = "kagemusha_recovery_storage"
+path = "tests/kagemusha_recovery_storage.rs"
+
 [features]
 # Mirrors iroha_core's default proof surface for standalone crate tests and the
 # release harness. Dependents disable defaults (workspace entry) and receive

@@ -194,7 +194,7 @@ fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results()
             .unwrap();
             let mut rows = changed.witness_rows(&forged).unwrap();
             rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&prefixes);
-            rows[0][MULTIPLY..].copy_from_slice(&multiply::witness(value, 0, &prefixes, false));
+            rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(value, 0, &prefixes, false));
             rows[0][RESULT] = F(false_count);
             assert!(rejects(&changed, &rows));
         }

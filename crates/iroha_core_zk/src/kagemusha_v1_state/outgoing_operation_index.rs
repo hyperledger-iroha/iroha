@@ -480,7 +480,9 @@ pub struct KagemushaOutgoingOperationRecordV1 {
 }
 
 impl KagemushaOutgoingOperationRecordV1 {
-    fn validate(&self) -> KagemushaOutgoingOperationIndexResultV1<()> {
+    /// Validate the retained index invariants before recovery or journal retirement.
+    /// External receipt and current hardware authority remain the caller's responsibility.
+    pub(super) fn validate(&self) -> KagemushaOutgoingOperationIndexResultV1<()> {
         self.context.validate_shape()?;
         if [
             self.operation_id,
@@ -557,17 +559,6 @@ impl KagemushaOutgoingOperationRecordV1 {
             return Err(KagemushaOutgoingOperationIndexErrorV1::SnapshotIntegrity);
         }
         Ok(())
-    }
-
-    /// Recheck the authenticated record before an operation-specific terminal release.
-    ///
-    /// The payment and redemption release modules must validate their own external receipt, but
-    /// neither may bypass the retained operation-index invariants first established during
-    /// snapshot recovery.
-    pub(super) fn validate_terminal_release_state(
-        &self,
-    ) -> KagemushaOutgoingOperationIndexResultV1<()> {
-        self.validate()
     }
 
     pub(super) fn validate_against_prepared(
@@ -1305,6 +1296,27 @@ mod tests {
         super::frame_identity_tests::check("KagemushaOutgoingOperationRecordV1", record);
         let bytes = canonical_bytes(record).unwrap();
         assert_eq!(canonical_len(record).unwrap(), bytes.len() as u64);
+    }
+
+    #[test]
+    fn retained_terminal_record_validation_rejects_incomplete_or_underfunded_tombstones() {
+        let index = released_redemption_index();
+        let record = index.records.values().next().unwrap();
+        record.validate().unwrap();
+        for change in 0..5 {
+            let mut invalid = record.clone();
+            match change {
+                0 => invalid.terminal_receipt_digest = None,
+                1 => invalid.terminal_receipt_digest = Some([0; 32]),
+                2 => invalid.commit_certificate_digest = None,
+                3 => invalid.phase = KagemushaOutgoingOperationPhaseV1::Installed,
+                _ => invalid.reserved_record_bytes = canonical_len(record).unwrap() - 1,
+            }
+            assert_eq!(
+                invalid.validate(),
+                Err(KagemushaOutgoingOperationIndexErrorV1::SnapshotIntegrity)
+            );
+        }
     }
 
     #[test]

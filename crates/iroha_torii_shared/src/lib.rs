@@ -33,6 +33,8 @@ pub mod da;
 pub mod governance_proposal_api;
 /// Public Torii DTOs for the KAGEMUSHA lifecycle.
 pub mod kagemusha_api;
+/// Native complete World snapshots and original KAGEMUSHA authority values.
+pub mod kagemusha_state;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.

@@ -15,7 +15,7 @@ import org.hyperledger.iroha.android.client.IdentifierNormalization;
 import org.hyperledger.iroha.android.client.IdentifierPolicySummary;
 import org.hyperledger.iroha.android.client.RamLfeJsonParser;
 import org.hyperledger.iroha.android.client.RamLfeProgramPolicySummary;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.SignatureAdmission;
@@ -338,12 +338,12 @@ public final class AccountAddressTests {
 
   private static byte[] identifierPolicyJsonWithOutputValue(
       final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyJson) {
-    return ("{\"items\":[{\"policy_id\":\"key-admission#fixture\",\"owner\":\"owner\","
+    return ("{\"items\":[{\"policy_id\":\"key-admission#fixture\",\"program_id\":\"key_admission_fixture\",\"owner\":\"owner\","
             + "\"active\":true,\"normalization\":\"exact\",\"resolver_public_key\":\""
             + resolverPublicKeyLiteral
             + "\",\"output_opening_public_key\":"
             + outputOpeningPublicKeyJson
-            + ",\"backend\":\"signed\"}]}")
+            + ",\"backend\":\"hkdf-sha3-512-prf-v1\"}]}")
         .getBytes(StandardCharsets.UTF_8);
   }
 
@@ -364,7 +364,7 @@ public final class AccountAddressTests {
             + resolverPublicKeyLiteral
             + "\",\"output_opening_public_key\":"
             + outputOpeningPublicKeyJson
-            + ",\"backend\":\"signed\",\"verification_mode\":\"signed\"}]}")
+            + ",\"backend\":\"hkdf-sha3-512-prf-v1\",\"verification_mode\":\"signed\"}]}")
         .getBytes(StandardCharsets.UTF_8);
   }
 
@@ -377,13 +377,9 @@ public final class AccountAddressTests {
                     + VALID_ED25519_PUBLIC_KEY_LITERAL
                     + "\"",
                 "");
-    final IdentifierPolicySummary identifierPolicy =
-        IdentifierJsonParser.parsePolicyList(
-                identifierWithoutOutput.getBytes(StandardCharsets.UTF_8))
-            .items()
-            .get(0);
-    assert VALID_ED25519_PUBLIC_KEY_LITERAL.equals(identifierPolicy.outputOpeningPublicKey())
-        : "missing identifier output-opening key must inherit the resolver key";
+    expectInvalidOutputOpeningPolicyJson(
+        "missing identifier output-opening key",
+        () -> IdentifierJsonParser.parsePolicyList(identifierWithoutOutput.getBytes(StandardCharsets.UTF_8)));
 
     final String ramLfeWithoutOutput =
         new String(ramLfePolicyJson(VALID_ED25519_PUBLIC_KEY_LITERAL), StandardCharsets.UTF_8)
@@ -392,12 +388,9 @@ public final class AccountAddressTests {
                     + VALID_ED25519_PUBLIC_KEY_LITERAL
                     + "\"",
                 "");
-    final RamLfeProgramPolicySummary ramLfePolicy =
-        RamLfeJsonParser.parsePolicyList(ramLfeWithoutOutput.getBytes(StandardCharsets.UTF_8))
-            .items()
-            .get(0);
-    assert VALID_ED25519_PUBLIC_KEY_LITERAL.equals(ramLfePolicy.outputOpeningPublicKey())
-        : "missing RAM-LFE output-opening key must inherit the resolver key";
+    expectInvalidOutputOpeningPolicyJson(
+        "missing RAM-LFE output-opening key",
+        () -> RamLfeJsonParser.parsePolicyList(ramLfeWithoutOutput.getBytes(StandardCharsets.UTF_8)));
 
     for (final String invalidJsonValue : new String[] {"null", "true"}) {
       expectInvalidOutputOpeningPolicyJson(

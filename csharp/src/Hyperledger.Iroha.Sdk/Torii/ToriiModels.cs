@@ -6695,6 +6695,31 @@ public sealed record class ToriiContractCodeView
             nameof(RenderedSourceText));
     }
 
+    private ToriiContractSourceFile[] sourceFiles = Array.Empty<ToriiContractSourceFile>();
+    private ToriiContractSourceImport[] sourceImports = Array.Empty<ToriiContractSourceImport>();
+    private ToriiContractSourcePackage[] sourcePackages = Array.Empty<ToriiContractSourcePackage>();
+
+    [JsonPropertyName("source_files")]
+    public IReadOnlyList<ToriiContractSourceFile> SourceFiles
+    {
+        get => ToriiListSnapshots.CopyRequired(sourceFiles);
+        init => sourceFiles = ToriiListSnapshots.CopyNonNullItems(value, nameof(SourceFiles)) ?? Array.Empty<ToriiContractSourceFile>();
+    }
+
+    [JsonPropertyName("source_imports")]
+    public IReadOnlyList<ToriiContractSourceImport> SourceImports
+    {
+        get => ToriiListSnapshots.CopyRequired(sourceImports);
+        init => sourceImports = ToriiListSnapshots.CopyNonNullItems(value, nameof(SourceImports)) ?? Array.Empty<ToriiContractSourceImport>();
+    }
+
+    [JsonPropertyName("source_packages")]
+    public IReadOnlyList<ToriiContractSourcePackage> SourcePackages
+    {
+        get => ToriiListSnapshots.CopyRequired(sourcePackages);
+        init => sourcePackages = ToriiListSnapshots.CopyNonNullItems(value, nameof(SourcePackages)) ?? Array.Empty<ToriiContractSourcePackage>();
+    }
+
     [JsonPropertyName("verified_source_ref")]
     public ToriiContractVerifiedSourceReference? VerifiedSourceReference { get; init; }
 }
@@ -7177,6 +7202,90 @@ public sealed record class ToriiContractVerifiedSourceSubmission
     [JsonPropertyName("source_name")]
     public string? SourceName { get; init; }
 
+    [JsonPropertyName("source_text")]
+    public string SourceText { get; init; } = string.Empty;
+
+    private ToriiContractSourceFile[] sources = Array.Empty<ToriiContractSourceFile>();
+    private ToriiContractSourceImport[] imports = Array.Empty<ToriiContractSourceImport>();
+    private ToriiContractSourcePackage[] packages = Array.Empty<ToriiContractSourcePackage>();
+
+    [JsonPropertyName("sources")]
+    public IReadOnlyList<ToriiContractSourceFile> Sources
+    {
+        get => ToriiListSnapshots.CopyRequired(sources);
+        init => sources = ToriiListSnapshots.CopyNonNullItems(value, nameof(Sources)) ?? Array.Empty<ToriiContractSourceFile>();
+    }
+
+    [JsonPropertyName("imports")]
+    public IReadOnlyList<ToriiContractSourceImport> Imports
+    {
+        get => ToriiListSnapshots.CopyRequired(imports);
+        init => imports = ToriiListSnapshots.CopyNonNullItems(value, nameof(Imports)) ?? Array.Empty<ToriiContractSourceImport>();
+    }
+
+    [JsonPropertyName("packages")]
+    public IReadOnlyList<ToriiContractSourcePackage> Packages
+    {
+        get => ToriiListSnapshots.CopyRequired(packages);
+        init => packages = ToriiListSnapshots.CopyNonNullItems(value, nameof(Packages)) ?? Array.Empty<ToriiContractSourcePackage>();
+    }
+}
+
+public sealed record class ToriiContractSourceImport
+{
+    [JsonPropertyName("alias")]
+    public required string Alias { get; init; }
+
+    [JsonPropertyName("package")]
+    public required string Package { get; init; }
+}
+
+public sealed record class ToriiContractSourcePackage
+{
+    private ToriiContractSourceFile[] modules = Array.Empty<ToriiContractSourceFile>();
+    private ToriiContractSourceFile[] sources = Array.Empty<ToriiContractSourceFile>();
+    private ToriiContractSourceImport[] imports = Array.Empty<ToriiContractSourceImport>();
+    private string[] exports = Array.Empty<string>();
+
+    [JsonPropertyName("identity")]
+    public required string Identity { get; init; }
+
+    [JsonPropertyName("modules")]
+    public required IReadOnlyList<ToriiContractSourceFile> Modules
+    {
+        get => ToriiListSnapshots.CopyRequired(modules);
+        init => modules = ToriiListSnapshots.CopyNonNullItems(value, nameof(Modules)) ?? Array.Empty<ToriiContractSourceFile>();
+    }
+
+    [JsonPropertyName("sources")]
+    public IReadOnlyList<ToriiContractSourceFile> Sources
+    {
+        get => ToriiListSnapshots.CopyRequired(sources);
+        init => sources = ToriiListSnapshots.CopyNonNullItems(value, nameof(Sources)) ?? Array.Empty<ToriiContractSourceFile>();
+    }
+
+    [JsonPropertyName("exports")]
+    public required IReadOnlyList<string> Exports
+    {
+        get => ToriiListSnapshots.CopyRequired(exports);
+        init => exports = ToriiListSnapshots.CopyNonNullItems(value, nameof(Exports)) ?? Array.Empty<string>();
+    }
+
+    [JsonPropertyName("imports")]
+    public required IReadOnlyList<ToriiContractSourceImport> Imports
+    {
+        get => ToriiListSnapshots.CopyRequired(imports);
+        init => imports = ToriiListSnapshots.CopyNonNullItems(value, nameof(Imports)) ?? Array.Empty<ToriiContractSourceImport>();
+    }
+}
+
+public sealed record class ToriiContractSourceFile
+{
+    [JsonRequired]
+    [JsonPropertyName("source_name")]
+    public string SourceName { get; init; } = string.Empty;
+
+    [JsonRequired]
     [JsonPropertyName("source_text")]
     public string SourceText { get; init; } = string.Empty;
 }

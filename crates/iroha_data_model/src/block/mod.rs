@@ -178,6 +178,14 @@ impl norito::NoritoSchema for SignedBlockOutputCandidate<'_> {
         <SignedBlock as norito::NoritoSchema>::frame_name()
     }
 }
+/// Original proposal and merge inputs retained unchanged after a rejected lane merge.
+pub type MergeEntrypointsRejection = (
+    SignedBlock,
+    Vec<TransactionEntrypoint>,
+    Vec<ExternalExecutionContext>,
+    &'static str,
+);
+
 impl SignedBlock {
     /// Create new block with a given signature
     ///
@@ -448,7 +456,6 @@ impl SignedBlock {
     ///
     /// Entrypoints appended from merged lane blocks (`specs/sumeragi_lanes.md` §4.3) are execution
     /// inputs, not proposal content: they are removed and the header roots recomputed.
-    #[must_use]
     /// # Errors
     /// Rejects an impossible merged suffix, malformed context alignment, encoding error,
     /// or an original proposal larger than the active archive limit.
@@ -485,19 +492,15 @@ impl SignedBlock {
     /// The block is not a resultless proposal with a lane merge section and no merged
     /// entrypoints yet, or `contexts` does not align with `merged`. Rejection returns
     /// the original proposal, merged inputs, contexts, and reason without mutation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns the original proposal and input owners without allocating"
+    )]
     pub fn with_merged_entrypoints(
         mut self,
         merged: Vec<TransactionEntrypoint>,
         contexts: Vec<ExternalExecutionContext>,
-    ) -> Result<
-        Self,
-        (
-            Self,
-            Vec<TransactionEntrypoint>,
-            Vec<ExternalExecutionContext>,
-            &'static str,
-        ),
-    > {
+    ) -> Result<Self, MergeEntrypointsRejection> {
         // All protocol validation precedes mutation. A rejected merge returns the
         // same proposal and both original input vectors, without cloning a graph.
         let check = (|| {
@@ -627,16 +630,6 @@ impl SignedBlock {
     /// # Errors
     /// Returns canonical encoding or archive-limit errors. A differing frame returns false.
     pub fn matches_resultless_proposal_wire(&self, wire: &[u8]) -> Result<bool, NoritoFrameError> {
-        if !self.is_resultless_proposal() || wire.first() != Some(&self.version()) {
-            return Ok(false);
-        }
-        self.checked_raw_resultless_payload_len()?;
-        let proposal = SignedBlockOutputCandidate {
-            signatures: OutputFieldRef(&self.signatures),
-            payload: OutputFieldRef(&self.payload),
-            result: None,
-            commit_certificate: None,
-        };
         struct Compare<'a> {
             expected: &'a [u8],
             position: usize,
@@ -656,6 +649,16 @@ impl SignedBlock {
                 Ok(())
             }
         }
+        if !self.is_resultless_proposal() || wire.first() != Some(&self.version()) {
+            return Ok(false);
+        }
+        self.checked_raw_resultless_payload_len()?;
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+            commit_certificate: None,
+        };
         let mut compare = Compare {
             expected: &wire[1..],
             position: 0,
@@ -668,7 +671,6 @@ impl SignedBlock {
     ///
     /// This restores the original proposal prefix and signatures without cloning any
     /// nested transaction or consensus evidence allocation.
-    #[must_use]
     /// # Errors
     /// Rejects the same malformed suffix, encoding and archive-limit conditions as
     /// [`Self::canonical_resultless_proposal`] before mutating the source graph.
@@ -1702,6 +1704,24 @@ fn decode_framed_versioned_signed_block_inner(
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
+    struct CanonicalSource<'a> {
+        remaining: &'a [u8],
+    }
+    impl std::io::Write for CanonicalSource<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let Some(prefix) = self.remaining.get(..bytes.len()) else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            if prefix != bytes {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            self.remaining = &self.remaining[bytes.len()..];
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     if !SignedBlock::supported_versions().contains(&version) {
         return Err(VersionError::UnsupportedVersion(Box::new(
             UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
@@ -1727,24 +1747,6 @@ fn decode_framed_versioned_signed_block_inner(
     // Authenticate the exact canonical bytes in place. Re-encoding into another payload
     // and full frame would allocate two unaccounted source-sized buffers during bounded
     // journal decoding. The canonical writer already counts/checks flags, length and CRC.
-    struct CanonicalSource<'a> {
-        remaining: &'a [u8],
-    }
-    impl std::io::Write for CanonicalSource<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let Some(prefix) = self.remaining.get(..bytes.len()) else {
-                return Err(std::io::ErrorKind::InvalidData.into());
-            };
-            if prefix != bytes {
-                return Err(std::io::ErrorKind::InvalidData.into());
-            }
-            self.remaining = &self.remaining[bytes.len()..];
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     let mut canonical = CanonicalSource {
         remaining: raw_for_error,
     };

@@ -63,14 +63,14 @@ def test_gateway_handbook_withdraws_instead_of_using_certificate_fallback() -> N
     assert "audited runtime ACME adapter and controller boundary" in handbook
 
 
-def test_guard_uses_shared_identity_and_bounded_read_contract() -> None:
+def test_guard_uses_shared_identity_and_stable_read_contract() -> None:
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "from sorafs_evidence_json import read_evidence_bytes" in source
     assert "inspect_evidence_directory" in source
     assert "inspect_evidence_file" in source
     assert "resolve_evidence_path" in source
-    assert "MAX_CONTRACT_SOURCE_BYTES" in source
+    assert "read_evidence_bytes(path, max(1, path.stat().st_size))" in source
     assert ".read_text(" not in source
     assert "args.root.resolve()" not in source
 
@@ -215,19 +215,15 @@ def test_guard_rejects_symlinked_contract_source(tmp_path: Path) -> None:
     )
 
 
-def test_guard_rejects_oversized_contract_source(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_guard_accepts_large_rust_and_documentation_trivia(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     copy_contract_fixture(root)
-    monkeypatch.setattr(MODULE, "MAX_CONTRACT_SOURCE_BYTES", 32)
-
-    assert (
-        "crates/iroha_torii/src/sorafs/gateway/controller.rs:"
-        "unreadable-or-oversized-source"
-        in MODULE.check_contract(root)
-    )
+    source = root / "crates/iroha_torii/src/sorafs/gateway/controller.rs"
+    documentation = root / "specs/sorafs_gateway_tls_automation.md"
+    trivia = "x" * (8 * 1024 * 1024)
+    source.write_text(source.read_text() + "\n//" + trivia + "\n")
+    documentation.write_text(documentation.read_text() + "\n<!--" + trivia + "-->\n")
+    assert MODULE.check_contract(root) == []
 
 
 def test_guard_rejects_symlinked_repository_root(tmp_path: Path) -> None:

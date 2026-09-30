@@ -13,6 +13,115 @@ struct Schedule {
     instance: Hash32,
     config: HeightConfig,
 }
+
+#[test]
+fn read_only_frame_inspection_authenticates_without_acquiring_store_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let crypto: SharedCrypto = Arc::new(crypto);
+    let store = open(
+        dir.path(),
+        &source,
+        Arc::clone(&crypto),
+        &budget,
+        Arc::new(NoFaults),
+    );
+    store.append(&body, &qc).unwrap();
+    let path = store.dir.join(frame_name(1));
+    let original = fs::read(&path).unwrap();
+    let mut read = LaneFrameRead::open(
+        &path,
+        1,
+        Arc::clone(&crypto),
+        budget.clone(),
+        schedule(&source),
+        Arc::new(NoAttestation),
+    )
+    .unwrap();
+    let (restored, certificate) = read.poll().unwrap();
+    assert_eq!(restored, body);
+    assert_eq!(certificate, qc);
+    assert!(restored.admitted_to(&budget));
+    assert!(read.poll().is_err());
+    assert_eq!(store.height(), 1);
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn read_only_frame_inspection_retains_original_funding_across_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let crypto: SharedCrypto = Arc::new(crypto);
+    let store = open(
+        dir.path(),
+        &source,
+        Arc::clone(&crypto),
+        &budget,
+        Arc::new(NoFaults),
+    );
+    store.append(&body, &qc).unwrap();
+    let path = store.dir.join(frame_name(1));
+    let length = usize::try_from(fs::metadata(&path).unwrap().len()).unwrap();
+    drop(store);
+    drop(body);
+    drop(qc);
+    assert_eq!(budget.reserved_bytes(), 0);
+    budget.set_limit_bytes(length);
+    let mut read = LaneFrameRead::open(
+        &path,
+        1,
+        crypto,
+        budget.clone(),
+        schedule(&source),
+        Arc::new(NoAttestation),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(budget.reserved_bytes(), length);
+    }
+    budget.set_limit_bytes(1 << 25);
+    let (body, certificate) = read.poll().unwrap();
+    assert!(body.admitted_to(&budget));
+    assert_eq!(body.source(), &source);
+    assert_eq!(certificate.block_hash, source.block_hash());
+    drop(body);
+    drop(certificate);
+    drop(read);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn read_only_frame_inspection_rejects_wrong_height_and_historical_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let crypto: SharedCrypto = Arc::new(crypto);
+    let store = open(
+        dir.path(),
+        &source,
+        Arc::clone(&crypto),
+        &budget,
+        Arc::new(NoFaults),
+    );
+    store.append(&body, &qc).unwrap();
+    let path = store.dir.join(frame_name(1));
+    for (height, instance) in [(2, source.instance()), (1, Hash32([9; 32]))] {
+        let schedule = Arc::new(Schedule {
+            instance,
+            config: source.config().clone(),
+        });
+        let mut read = LaneFrameRead::open(
+            &path,
+            height,
+            Arc::clone(&crypto),
+            budget.clone(),
+            schedule,
+            Arc::new(NoAttestation),
+        )
+        .unwrap();
+        assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+}
 impl AvailabilitySchedule for Schedule {
     fn instance(&self) -> Hash32 {
         self.instance
@@ -659,4 +768,113 @@ fn append_rejects_body_from_another_committee_even_with_a_valid_store_commit_qc(
     );
     assert_eq!(store.height(), 0);
     assert!(!store.dir.join(frame_name(1)).exists());
+}
+
+#[test]
+fn committed_body_moves_the_exact_completed_read_without_metadata_clone_or_readmission() {
+    let directory = tempfile::tempdir().unwrap();
+    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let store = open(
+        directory.path(),
+        &source,
+        Arc::new(crypto),
+        &budget,
+        Arc::new(NoFaults),
+    );
+    store.append(&body, &qc).unwrap();
+    drop(body);
+    drop(qc);
+    assert_eq!(budget.reserved_bytes(), 0);
+    let (payload, epoch) = {
+        let mut state = store.state.lock();
+        let prepared = store.read_prepared(&mut state, 1).unwrap();
+        (
+            prepared.body().payload().as_slice().as_ptr(),
+            std::ptr::from_ref(&*prepared.body().source().config().epoch),
+        )
+    };
+    let retained = budget.reserved_bytes();
+    assert!(retained > 0);
+    budget.set_limit_bytes(0);
+    let (body, qc) = store.committed_body(1).unwrap().unwrap();
+    assert_eq!(body.payload().as_slice().as_ptr(), payload);
+    assert_eq!(std::ptr::from_ref(&*body.source().config().epoch), epoch);
+    assert!(body.admitted_to(&budget));
+    assert!(store.state.lock().read.is_none());
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(body);
+    drop(qc);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn cancelled_lane_read_finishes_original_custody_before_a_different_height() {
+    for invalid_certificate in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, first_qc, source, budget, crypto) = fixture(1025, None);
+        let crypto: SharedCrypto = Arc::new(crypto);
+        let store = open(
+            dir.path(),
+            &source,
+            Arc::clone(&crypto),
+            &budget,
+            Arc::new(NoFaults),
+        );
+        let (second, second_qc) = at_height(
+            &first,
+            &first_qc,
+            &source,
+            &budget,
+            &*crypto,
+            2,
+            source.block_hash(),
+        );
+        let second_hash = second_qc.block_hash;
+        store.append(&first, &first_qc).unwrap();
+        store.append(&second, &second_qc).unwrap();
+        let path = store.dir.join(frame_name(1));
+        if invalid_certificate {
+            let mut forged = first_qc.clone();
+            forged.result = Hash32([0xEE; 32]);
+            let mut frame = PreparedLaneWrite::new(first.clone(), forged);
+            fs::write(&path, frame.prepare(&budget).unwrap()).unwrap();
+        }
+        drop((first, first_qc, second, second_qc));
+        assert_eq!(budget.reserved_bytes(), 0);
+        let raw = usize::try_from(fs::metadata(path).unwrap().len()).unwrap();
+        budget.set_limit_bytes(raw);
+        assert_eq!(
+            store.committed_body(1).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(budget.reserved_bytes(), raw);
+        // The worker can cancel height one while this store still owns its refused read.
+        // New metadata and payload requests must preserve that owner until it completes.
+        assert_eq!(
+            store.entry(2).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);
+        assert_eq!(budget.reserved_bytes(), raw);
+        budget.set_limit_bytes(1 << 25);
+        if invalid_certificate {
+            assert_eq!(
+                store.committed_body(2).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);
+        } else {
+            let (body, certificate) = store.committed_body(2).unwrap().unwrap();
+            assert_eq!(body.source().height(), 2);
+            assert_eq!(certificate.block_hash, second_hash);
+            assert!(body.admitted_to(&budget));
+            assert!(store.state.lock().read.is_none());
+            drop((body, certificate));
+            assert_eq!(budget.reserved_bytes(), 0);
+            let first_again = store.entry(1).unwrap().unwrap();
+            assert_eq!(first_again.commit_qc.block_hash, source.block_hash());
+            drop(first_again);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+    }
 }

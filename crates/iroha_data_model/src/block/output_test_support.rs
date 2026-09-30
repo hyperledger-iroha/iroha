@@ -24,7 +24,7 @@ pub fn network(index: u32, result: impl Into<TransactionResult>) -> ExecutionOut
     })
 }
 pub fn time(
-    header: BlockHeader,
+    header: &BlockHeader,
     index: u32,
     id: TriggerId,
     instructions: ExecutionStep,
@@ -62,10 +62,10 @@ pub fn install_network(
     block.set_execution_outputs(
         outputs,
         0,
-        Default::default(),
+        std::collections::BTreeMap::default(),
         vec![],
-        Default::default(),
-        Default::default(),
+        crate::nexus::AxtPolicySnapshot::default(),
+        std::collections::BTreeSet::default(),
         &limits(),
     )
 }
@@ -117,17 +117,17 @@ pub fn install(
     block.set_execution_outputs(
         outputs,
         fragments,
-        Default::default(),
+        std::collections::BTreeMap::default(),
         vec![],
-        Default::default(),
-        Default::default(),
+        crate::nexus::AxtPolicySnapshot::default(),
+        std::collections::BTreeSet::default(),
         &limits(),
     )
 }
 
 pub fn simple_time(block: &SignedBlock, schedule_index: u32) -> ExecutionOutputV1 {
     time(
-        block.header(),
+        &block.header(),
         schedule_index,
         "output_timer".parse().unwrap(),
         ExecutionStep(Vec::new().into()),

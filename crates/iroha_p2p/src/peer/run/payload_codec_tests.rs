@@ -5,7 +5,7 @@ use crate::payload_codec_tests::{allocation_limit, prefix};
 
 #[test]
 fn message_payload_prefix_preserves_boundaries_in_every_layout() {
-    for message in [Message::Data(0x12345678_u32), Message::Ping, Message::Pong] {
+    for message in [Message::Data(0x1234_5678_u32), Message::Ping, Message::Pong] {
         prefix(&message);
         prefix(&Some(message.clone()));
         prefix(&vec![message.clone(), message]);

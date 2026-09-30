@@ -930,6 +930,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

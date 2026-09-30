@@ -53,6 +53,10 @@ impl PayloadAuthoring {
     }
     /// Complete encoding and original signatures, or return this exact request and its completed
     /// phase allocations. The host runs this outside `Core::handle`; no lazy async work is hidden.
+    ///
+    /// # Errors
+    /// Returns the retained request if its source, signer, payload or funding is invalid,
+    /// or encoding, table allocation or signature verification fails.
     #[allow(
         clippy::result_large_err,
         reason = "return original job owners on every refusal"
@@ -131,7 +135,11 @@ impl PayloadAuthoring {
                 ChargedBuffer::new(4 + SIGNATURE_LEN + count * (32 + SIGNATURE_LEN), budget)
                     .map_err(|e| AuthoringError::Bytes(ByteAdmissionError::Buffer(e)))?;
             bytes
-                .append(&(count as u32).to_be_bytes())
+                .append(
+                    &u32::try_from(count)
+                        .expect("protocol-bounded row count")
+                        .to_be_bytes(),
+                )
                 .expect("exact table backing");
             for index in 0..count {
                 let range = shape.chunk_range(index).expect("bounded row index");
@@ -151,9 +159,17 @@ impl PayloadAuthoring {
                         .try_into()
                         .expect("exact table hash"),
                 );
-                let length = shape.chunk_range(index).expect("bounded index").len() as u32;
-                let (message, used) =
-                    statement(&self.header, bh, Some((index as u32, length, hash)));
+                let length = u32::try_from(shape.chunk_range(index).expect("bounded index").len())
+                    .expect("protocol-bounded row length");
+                let (message, used) = statement(
+                    &self.header,
+                    bh,
+                    Some((
+                        u32::try_from(index).expect("protocol-bounded row index"),
+                        length,
+                        hash,
+                    )),
+                );
                 bytes
                     .append(&signer.sign(&message[..used]).0)
                     .expect("exact table backing");

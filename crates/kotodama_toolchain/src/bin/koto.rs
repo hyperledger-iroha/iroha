@@ -11,8 +11,8 @@ use kotodama_lang::{
     driver::{
         BuildDriver, BuildError, BuildStatus, LinkedSourceBuildRequest, LoadedSourceProject,
         ProjectSourceKey, PublishLayout, PublishMode, atomic_write_if_changed,
-        discover_source_link_request, load_source_project_manifest, logical_source_name,
-        project_root_for_source, read_source_file,
+        discover_source_link_request, load_source_project, load_source_project_manifest,
+        logical_source_name, project_root_for_source, read_source_file,
     },
     formatter::format_source,
     linker::SourceModuleUnit,
@@ -42,17 +42,18 @@ Kotodama V1 toolchain
 
 Usage:
   koto check [--format human|json|sarif] [--chain-discriminant <1..65535>] [--zk]
-             [--project <kotodama.project.json>] <source.ko>...
+             [--project <kotodama.project.json> | --source-root <path>] <source.ko>...
   koto build [--format human|json|sarif] [--profile <name>] [--target-dir <path>] [--out <file.to>]
              [--manifest-out <file.json>] [--max-cycles <count>]
              [--chain-discriminant <1..65535>] [--zk] [--verify]
-             [--project <kotodama.project.json>] <source.ko>...
+             [--project <kotodama.project.json> | --source-root <path>] <source.ko>...
   koto test [run|coverage|profile|list] [--chain-discriminant <1..65535>] [--zk]
-            <options> <source.ko>
+            [--project <kotodama.project.json> | --source-root <path>] <options> <source.ko>
   koto fmt [--check] <source.ko>...
-  koto doc [--format markdown|json] [--zk] <source.ko>
+  koto doc [--format markdown|json] [--zk]
+           [--project <kotodama.project.json> | --source-root <path>] <source.ko>
   koto explain <diagnostic-code>
-  koto lsp [--zk] [--project <kotodama.project.json>]
+  koto lsp [--zk] [--project <kotodama.project.json> | --source-root <path>]
 ";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KotoCommand {
@@ -193,7 +194,38 @@ fn run(mut args: Vec<String>) -> Result<(), KotoError> {
         ))),
     }
 }
-fn check(args: Vec<String>) -> Result<(), String> {
+fn extract_source_root(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
+    let mut root = None;
+    while let Some(index) = args.iter().position(|arg| arg == "--source-root") {
+        if root.is_some() {
+            return Err("--source-root may be supplied only once".into());
+        }
+        if index + 1 >= args.len() || args[index + 1].starts_with('-') {
+            return Err("--source-root requires a directory".into());
+        }
+        args.remove(index);
+        root = Some(PathBuf::from(args.remove(index)));
+    }
+    if root.is_some() && args.iter().any(|arg| arg == "--project") {
+        return Err("--source-root cannot be combined with --project".into());
+    }
+    Ok(root)
+}
+fn source_root_for_input(input: &Path, explicit: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(root) = explicit {
+        return root
+            .canonicalize()
+            .map_err(|error| format!("resolve source root: {error}"));
+    }
+    input
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .map_err(|error| format!("resolve source root: {error}"))
+}
+fn check(mut args: Vec<String>) -> Result<(), String> {
+    let source_root = extract_source_root(&mut args)?;
     let CheckOptions {
         format,
         zk_enabled,
@@ -209,7 +241,7 @@ fn check(args: Vec<String>) -> Result<(), String> {
     let driver = BuildDriver::new(session, "koto-check");
     let (checked, diagnostics) = match project {
         Some(manifest) => check_locked_project(&driver, &manifest),
-        None => check_project_paths(&driver, inputs),
+        None => check_project_paths_with_root(&driver, inputs, source_root.as_deref()),
     };
     if format == DiagnosticFormat::Human {
         for path in checked {
@@ -249,8 +281,23 @@ fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>,
             return (Vec::new(), diagnostics);
         }
     };
+    check_loaded_project(driver, loaded)
+}
+fn check_loaded_project(
+    driver: &BuildDriver,
+    loaded: LoadedSourceProject,
+) -> (Vec<PathBuf>, DiagnosticBundle) {
     let source_paths = loaded.source_paths;
-    match driver.check_project(loaded.graph) {
+    let checked_graph = if kotodama_lang::parser::parse(&loaded.graph.root.source)
+        .is_ok_and(|program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Module)
+        && loaded.graph.imports.is_empty()
+        && loaded.graph.packages.is_empty()
+    {
+        driver.check_module_sources(loaded.graph.root, loaded.graph.sources)
+    } else {
+        driver.check_project(loaded.graph)
+    };
+    match checked_graph {
         Ok(warnings) => {
             let checked = source_paths
                 .values()
@@ -293,10 +340,42 @@ fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>,
         }
     }
 }
+#[cfg(test)]
 fn check_project_paths(
     driver: &BuildDriver,
     inputs: Vec<PathBuf>,
 ) -> (Vec<PathBuf>, DiagnosticBundle) {
+    check_project_paths_with_root(driver, inputs, None)
+}
+fn check_project_paths_with_root(
+    driver: &BuildDriver,
+    inputs: Vec<PathBuf>,
+    explicit_root: Option<&Path>,
+) -> (Vec<PathBuf>, DiagnosticBundle) {
+    if let [input] = inputs.as_slice() {
+        let loaded = source_root_for_input(input, explicit_root)
+            .map_err(|error| BuildError::InvalidPath {
+                path: input.clone(),
+                message: error,
+            })
+            .and_then(|root| load_source_project(input, &root, &BTreeMap::new()));
+        match loaded {
+            Ok(loaded) => {
+                return check_loaded_project(driver, loaded);
+            }
+            Err(error) => {
+                let diagnostics = error.into_diagnostics().unwrap_or_else(|error| {
+                    DiagnosticBundle::single(Diagnostic::error(
+                        "K0000",
+                        DiagnosticPhase::Resolve,
+                        error.to_string(),
+                        None,
+                    ))
+                });
+                return (Vec::new(), diagnostics);
+            }
+        }
+    }
     let preferred_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut checked = Vec::new();
     let mut diagnostics = Vec::new();
@@ -422,7 +501,8 @@ fn check_paths(
     }
     (checked, DiagnosticBundle::new(diagnostics))
 }
-fn build(args: Vec<String>) -> Result<(), KotoError> {
+fn build(mut args: Vec<String>) -> Result<(), KotoError> {
+    let source_root = extract_source_root(&mut args)?;
     let mut diagnostic_format = DiagnosticFormat::Human;
     let mut profile = String::from("dev");
     let mut target_dir = PathBuf::from("target/kotodama");
@@ -550,8 +630,6 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
     let session = CompilerSession::new(compiler_options);
     let driver = BuildDriver::for_current_executable(session).map_err(|error| error.to_string())?;
     let manifest_stdout = explicit_manifest_output.as_deref() == Some(Path::new("-"));
-    let preferred_root = std::env::current_dir()
-        .map_err(|error| format!("locate Kotodama project root: {error}"))?;
     let projects = if let Some(manifest) = project_manifest.as_ref() {
         let loaded = load_source_project_manifest(manifest)
             .map_err(|error| build_error(diagnostic_format, error))?;
@@ -570,8 +648,7 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
                 .and_then(|stem| stem.to_str())
                 .ok_or_else(|| format!("{} has no UTF-8 file stem", input.display()))?
                 .to_owned();
-            let project_root = project_root_for_source(input, &preferred_root)
-                .map_err(|error| error.to_string())?;
+            let project_root = source_root_for_input(input, source_root.as_deref())?;
             let graph = discover_source_link_request(input, &project_root, Vec::new(), Vec::new())
                 .map_err(|error| error.to_string())?;
             let source_name = graph.root.source_name.clone();
@@ -679,7 +756,17 @@ fn format_source_text(source: &str, source_name: Option<&str>) -> Result<String,
     let file = SourceFile::new(SourceId(0), source_name.unwrap_or("<source>"), source);
     format_source(&file, FrontendBudget::v1()).map_err(|diagnostics| diagnostics.render_human())
 }
-fn document(args: Vec<String>) -> Result<(), String> {
+fn document(mut args: Vec<String>) -> Result<(), String> {
+    let source_root = extract_source_root(&mut args)?;
+    let project_manifest = if let Some(index) = args.iter().position(|arg| arg == "--project") {
+        args.remove(index);
+        if index >= args.len() {
+            return Err("--project requires a value".into());
+        }
+        Some(PathBuf::from(args.remove(index)))
+    } else {
+        None
+    };
     let mut format = "markdown";
     let mut zk_enabled = false;
     let mut input = None;
@@ -706,17 +793,23 @@ fn document(args: Vec<String>) -> Result<(), String> {
         }
         index += 1;
     }
-    let path = input.ok_or_else(|| "doc expects exactly one .ko source".to_owned())?;
+    if project_manifest.is_some() && input.is_some() {
+        return Err("--project cannot be combined with a source path".into());
+    }
     let session = CompilerSession::new(CompilerOptions {
         force_zk: zk_enabled,
         ..CompilerOptions::default()
     });
-    let preferred_root = std::env::current_dir()
-        .map_err(|error| format!("locate Kotodama project root: {error}"))?;
-    let project_root =
-        project_root_for_source(&path, &preferred_root).map_err(|error| error.to_string())?;
-    let graph = discover_source_link_request(&path, &project_root, Vec::new(), Vec::new())
-        .map_err(|error| error.to_string())?;
+    let graph = if let Some(manifest) = project_manifest {
+        load_source_project_manifest(&manifest)
+            .map_err(|error| error.to_string())?
+            .graph
+    } else {
+        let path = input.ok_or_else(|| "doc expects a .ko source or --project".to_owned())?;
+        let project_root = source_root_for_input(&path, source_root.as_deref())?;
+        discover_source_link_request(&path, &project_root, Vec::new(), Vec::new())
+            .map_err(|error| error.to_string())?
+    };
     let source_name = graph.root.source_name.clone();
     let analysis = kotodama_lang::editor::EditorSnapshot::project(&graph, zk_enabled);
     let source_id = analysis
@@ -726,7 +819,7 @@ fn document(args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| {
             "documentation source is absent from the explicit project graph".to_owned()
         })?;
-    let source_signatures = analysis.declaration_signatures(source_id);
+    let source_signatures = analysis.unit_declaration_signatures(source_id);
     let driver = BuildDriver::new(session, "koto-doc");
     let output = driver
         .compile_project(graph, &source_name)
@@ -1075,7 +1168,8 @@ fn lint_diagnostic(warning: kotodama_lang::lint::LintWarning, path: &Path) -> Di
         kotodama_lang::i18n::detect_language(),
     )
 }
-fn language_server(args: Vec<String>) -> Result<(), String> {
+fn language_server(mut args: Vec<String>) -> Result<(), String> {
+    let source_root = extract_source_root(&mut args)?;
     let (zk_enabled, project_manifest) = parse_lsp_options(args)?;
     let project = project_manifest
         .as_deref()
@@ -1095,6 +1189,7 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
         project_manifest.as_deref(),
         project,
         zk_enabled,
+        source_root.as_deref(),
     );
     inbox.close();
     result
@@ -1106,6 +1201,7 @@ fn language_server_dispatch(
     project_manifest: Option<&Path>,
     mut project: Option<LoadedSourceProject>,
     zk_enabled: bool,
+    source_root: Option<&Path>,
 ) -> Result<(), String> {
     let mut documents = HashMap::<String, String>::new();
     let mut versions = HashMap::<String, i64>::new();
@@ -1175,6 +1271,9 @@ fn language_server_dispatch(
                     } else {
                         versions.remove(uri);
                     }
+                    if project_manifest.is_none() && source_root.is_some() {
+                        project = lsp_local_source_project_with_root(&documents, None, source_root);
+                    }
                     if inbox.is_current(&pending) {
                         next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
                             &mut output,
@@ -1224,6 +1323,9 @@ fn language_server_dispatch(
                     } else {
                         versions.remove(uri);
                     }
+                    if project_manifest.is_none() && source_root.is_some() {
+                        project = lsp_local_source_project_with_root(&documents, None, source_root);
+                    }
                     if inbox.is_current(&pending) {
                         next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
                             &mut output,
@@ -1244,6 +1346,9 @@ fn language_server_dispatch(
                     documents.remove(uri);
                     versions.remove(uri);
                     editor_cache.clear();
+                    if project_manifest.is_none() && source_root.is_some() {
+                        project = lsp_local_source_project_with_root(&documents, None, source_root);
+                    }
                     if inbox.is_current(&pending) {
                         next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
                             &mut output,
@@ -1301,6 +1406,9 @@ fn language_server_dispatch(
                             )?;
                         }
                     }
+                }
+                if project_manifest.is_none() && source_root.is_some() {
+                    project = lsp_local_source_project_with_root(&documents, None, source_root);
                 }
                 if inbox.is_current(&pending) {
                     next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
@@ -1646,14 +1754,19 @@ fn collect_lsp_workspace_diagnostics(
     documents: &HashMap<String, String>,
     project: Option<&LoadedSourceProject>,
 ) -> HashMap<String, DiagnosticBundle> {
+    let local_project = project
+        .is_none()
+        .then(|| lsp_local_source_project(documents, None))
+        .flatten();
+    let project = project.or(local_project.as_ref());
     let Some(project) = project else {
         return collect_lsp_project_diagnostics(driver, documents);
     };
-    let Some((graph, source_uris, project_documents, _)) =
-        lsp_project_with_open_overlays(project, documents)
-    else {
-        return collect_lsp_project_diagnostics(driver, documents);
-    };
+    let (graph, source_uris, project_documents, _) =
+        match lsp_project_with_open_overlays(project, documents) {
+            Ok(overlaid) => overlaid,
+            Err(error) => return lsp_source_loading_diagnostics(error, project, documents),
+        };
     let mut grouped = documents
         .keys()
         .cloned()
@@ -1727,6 +1840,141 @@ fn collect_lsp_workspace_diagnostics(
         .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
         .collect()
 }
+fn lsp_source_loading_diagnostics(
+    error: BuildError,
+    project: &LoadedSourceProject,
+    documents: &HashMap<String, String>,
+) -> HashMap<String, DiagnosticBundle> {
+    let bundle = error.into_diagnostics().unwrap_or_else(|error| {
+        DiagnosticBundle::single(Diagnostic::error(
+            "E_SOURCE_NOT_FOUND",
+            DiagnosticPhase::Resolve,
+            error.to_string(),
+            None,
+        ))
+    });
+    let root_key = ProjectSourceKey {
+        package_identity: None,
+        source_name: project.graph.root.source_name.clone(),
+    };
+    let root_path = project.source_paths.get(&root_key);
+    let source_root = project
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.path().parent().map(Path::to_path_buf))
+        .or_else(|| {
+            let mut path = root_path?.clone();
+            for _ in project.graph.root.source_name.split('/') {
+                path.pop();
+            }
+            Some(path)
+        });
+    let mut source_uris = project
+        .source_paths
+        .iter()
+        .filter_map(|(key, path)| lsp_path_file_uri(path).map(|uri| (key.clone(), uri)))
+        .collect::<BTreeMap<_, _>>();
+    for diagnostic in &bundle.diagnostics {
+        for span in diagnostic
+            .primary_span
+            .iter()
+            .chain(diagnostic.labels.iter().map(|label| &label.span))
+        {
+            if let (Some(root), Some(name)) = (&source_root, &span.source) {
+                let path = root.join(name);
+                if let Some(uri) = lsp_path_file_uri(&path) {
+                    source_uris
+                        .entry(ProjectSourceKey {
+                            package_identity: span.package_identity.clone(),
+                            source_name: name.clone(),
+                        })
+                        .or_insert(uri);
+                }
+            }
+        }
+    }
+    let fallback = root_path.and_then(|path| lsp_path_file_uri(path));
+    let mut grouped = documents
+        .keys()
+        .map(|uri| (uri.clone(), Vec::new()))
+        .collect::<HashMap<_, _>>();
+    for mut diagnostic in bundle.diagnostics {
+        remap_lsp_locked_project_diagnostic(&mut diagnostic, &source_uris);
+        if let Some(uri) = diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source.clone())
+            .or_else(|| fallback.clone())
+        {
+            grouped.entry(uri).or_default().push(diagnostic);
+        }
+    }
+    grouped
+        .into_iter()
+        .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
+        .collect()
+}
+fn lsp_local_source_project(
+    documents: &HashMap<String, String>,
+    requested_uri: Option<&str>,
+) -> Option<LoadedSourceProject> {
+    lsp_local_source_project_with_root(documents, requested_uri, None)
+}
+fn lsp_local_source_project_with_root(
+    documents: &HashMap<String, String>,
+    requested_uri: Option<&str>,
+    source_root: Option<&Path>,
+) -> Option<LoadedSourceProject> {
+    let overlays = documents
+        .iter()
+        .filter_map(|(uri, source)| lsp_file_uri_path(uri).map(|path| (path, source.clone())))
+        .collect::<BTreeMap<_, _>>();
+    let requested = requested_uri.and_then(lsp_file_uri_path);
+    let mut ordered = overlays.iter().collect::<Vec<_>>();
+    ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (path, source) in ordered {
+        if !kotodama_lang::parser::parse(source)
+            .is_ok_and(|program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Seiyaku)
+        {
+            continue;
+        }
+        let Some(root) = source_root.or_else(|| path.parent()) else {
+            continue;
+        };
+        // Retain the root even while its declared closure is incomplete. Overlay loading below
+        // reports the exact dependency error instead of reclassifying this contract as loose.
+        let project = load_source_project(path, root, &overlays).unwrap_or_else(|_| {
+            let source_name = logical_source_name(path, root)
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            LoadedSourceProject {
+                graph: kotodama_lang::linker::SourceLinkRequest {
+                    root: SourceModuleUnit {
+                        source_name: source_name.clone(),
+                        source: source.clone(),
+                    },
+                    sources: Vec::new(),
+                    imports: Vec::new(),
+                    packages: Vec::new(),
+                },
+                source_paths: BTreeMap::from([(
+                    ProjectSourceKey {
+                        package_identity: None,
+                        source_name,
+                    },
+                    path.clone(),
+                )]),
+                manifest: None,
+            }
+        });
+        if requested
+            .as_ref()
+            .is_none_or(|requested| project.source_paths.values().any(|path| path == requested))
+        {
+            return Some(project);
+        }
+    }
+    None
+}
 /// Project link graph with the open editor documents overlaid: the link request, the
 /// document URI of each project source, the open document URIs owned by the project, and
 /// the effective project manifest.
@@ -1739,25 +1987,27 @@ type LspOverlaidProject = (
 fn lsp_project_with_open_overlays(
     project: &LoadedSourceProject,
     documents: &HashMap<String, String>,
-) -> Option<LspOverlaidProject> {
+) -> Result<LspOverlaidProject, BuildError> {
+    let overlays = documents
+        .iter()
+        .filter_map(|(uri, source)| lsp_file_uri_path(uri).map(|path| (path, source.clone())))
+        .collect::<BTreeMap<_, _>>();
     let manifest_overlay = project.manifest.as_ref().and_then(|manifest| {
         documents
             .iter()
             .find(|(uri, _)| lsp_file_uri_path(uri).as_deref() == Some(manifest.path()))
     });
-    let reloaded = manifest_overlay
-        .map(|(_, text)| {
-            kotodama_lang::driver::load_source_project_manifest_with_text(
-                project
-                    .manifest
-                    .as_ref()
-                    .expect("manifest overlay owner")
-                    .path(),
-                text,
+    let reloaded = project
+        .manifest
+        .as_ref()
+        .map(|manifest| {
+            kotodama_lang::driver::load_source_project_manifest_with_text_and_overlays(
+                manifest.path(),
+                manifest_overlay.map_or(manifest.text(), |(_, text)| text.as_str()),
+                &overlays,
             )
         })
-        .transpose()
-        .ok()?;
+        .transpose()?;
     let project = reloaded.as_ref().unwrap_or(project);
     let mut graph = project.graph.clone();
     let mut source_uris = project
@@ -1791,7 +2041,85 @@ fn lsp_project_with_open_overlays(
             project_documents.insert(uri.clone());
         }
     }
-    (!source_uris.is_empty()).then_some((
+    let source_root = project
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.path().parent().map(Path::to_path_buf))
+        .or_else(|| {
+            let key = ProjectSourceKey {
+                package_identity: None,
+                source_name: graph.root.source_name.clone(),
+            };
+            let mut root = project.source_paths.get(&key)?.clone();
+            for _ in graph.root.source_name.split('/') {
+                root.pop();
+            }
+            Some(root)
+        })
+        .ok_or_else(|| BuildError::InvalidPath {
+            path: PathBuf::from(&graph.root.source_name),
+            message: "project root has no physical source path".into(),
+        })?;
+    graph.sources = kotodama_lang::driver::load_source_companions(
+        std::slice::from_ref(&graph.root),
+        &source_root,
+        &overlays,
+    )?;
+    for package in &mut graph.packages {
+        package.sources = kotodama_lang::driver::load_source_package_companions(
+            &package.modules,
+            &source_root,
+            &overlays,
+            &package.identity,
+        )
+        .map_err(|error| match error.into_diagnostics() {
+            Ok(mut bundle) => {
+                for diagnostic in &mut bundle.diagnostics {
+                    for span in diagnostic
+                        .primary_span
+                        .iter_mut()
+                        .chain(diagnostic.labels.iter_mut().map(|label| &mut label.span))
+                    {
+                        span.package_identity = Some(package.identity.clone());
+                    }
+                    if let Some(fix) = &mut diagnostic.fix {
+                        fix.span.package_identity = Some(package.identity.clone());
+                    }
+                }
+                BuildError::Compile(bundle)
+            }
+            Err(error) => error,
+        })?;
+    }
+    for (owner, source) in
+        graph
+            .sources
+            .iter()
+            .map(|source| (None, source))
+            .chain(graph.packages.iter().flat_map(|package| {
+                package
+                    .sources
+                    .iter()
+                    .map(move |source| (Some(package.identity.clone()), source))
+            }))
+    {
+        let path = source_root.join(&source.source_name);
+        let uri = lsp_path_file_uri(&path).ok_or_else(|| BuildError::InvalidPath {
+            path,
+            message: "source URI requires a UTF-8 path".into(),
+        })?;
+        if documents.contains_key(&uri) {
+            project_documents.insert(uri.clone());
+        }
+        source_uris.insert(
+            ProjectSourceKey {
+                package_identity: owner,
+                source_name: source.source_name.clone(),
+            },
+            uri,
+        );
+    }
+    Ok((
         graph,
         source_uris,
         project_documents,
@@ -1825,6 +2153,14 @@ fn replace_project_source(
             graph.root.source = source.to_owned();
             true
         }
+        None => graph
+            .sources
+            .iter_mut()
+            .find(|unit| unit.source_name == key.source_name)
+            .is_some_and(|unit| {
+                unit.source = source.to_owned();
+                true
+            }),
         Some(package_identity) => graph
             .packages
             .iter_mut()
@@ -1833,13 +2169,13 @@ fn replace_project_source(
                 package
                     .modules
                     .iter_mut()
+                    .chain(package.sources.iter_mut())
                     .find(|module| module.source_name == key.source_name)
             })
             .is_some_and(|module| {
                 module.source = source.to_owned();
                 true
             }),
-        None => false,
     }
 }
 fn lsp_file_uri_path(uri: &str) -> Option<PathBuf> {
@@ -1871,7 +2207,22 @@ fn lsp_file_uri_path(uri: &str) -> Option<PathBuf> {
         .strip_prefix('/')
         .filter(|path| path.as_bytes().get(1) == Some(&b':'))
         .unwrap_or(&decoded);
-    PathBuf::from(decoded).canonicalize().ok()
+    let path = PathBuf::from(decoded);
+    path.canonicalize().ok().or_else(|| {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    if !normalized.pop() {
+                        return None;
+                    }
+                }
+                std::path::Component::CurDir => {}
+                component => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized.is_absolute().then_some(normalized)
+    })
 }
 fn decode_hex_digit(byte: u8) -> Option<u8> {
     match byte {
@@ -2711,7 +3062,7 @@ mod tests {
         .expect("write project root");
         std::fs::write(
             &module,
-            "module Math { fn value(int unused) -> int { return 7; } }",
+            "module Math { export fn value(int unused) -> int { return 7; } }",
         )
         .expect("write project module");
         std::fs::write(
@@ -2870,7 +3221,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create module test root");
         std::fs::write(
             &source,
-            "module Math { fn add(int left, int right) -> int { return left + right; } }",
+            "module Math { export fn add(int left, int right) -> int { return left + right; } }",
         )
         .expect("write module source");
         let error = build(vec![
@@ -2908,7 +3259,7 @@ mod tests {
         .expect("write root source");
         std::fs::write(
             root.join("modules/math.ko"),
-            "module Math { fn value() -> int { return 7; } }",
+            "module Math { export fn value() -> int { return 7; } }",
         )
         .expect("write module source");
         let project = root.join("kotodama.project.json");
@@ -3163,7 +3514,7 @@ mod tests {
         let module = lsp_diagnostics(
             &session,
             "file:///workspace/math.ko",
-            "module Math { fn value() -> int { return 1; } }",
+            "module Math { export fn value() -> int { return 1; } }",
         );
         assert!(
             module.is_empty(),
@@ -3172,7 +3523,7 @@ mod tests {
         let invalid = lsp_diagnostics(
             &session,
             "file:///workspace/broken.ko",
-            "module Broken { fn value( -> int { return 1; } }",
+            "module Broken { export fn value( -> int { return 1; } }",
         );
         assert!(!invalid.is_empty());
     }
@@ -3188,7 +3539,7 @@ mod tests {
             ),
             (
                 module_uri.to_owned(),
-                "module Math { fn value() -> int { return 1; } }".to_owned(),
+                "module Math { export fn value() -> int { return 1; } }".to_owned(),
             ),
         ]);
         let diagnostics = collect_lsp_project_diagnostics(&driver, &documents);
@@ -3226,8 +3577,11 @@ mod tests {
             "seiyaku App { view fn run() -> int { return Math::value(); } }",
         )
         .expect("write valid project root");
-        std::fs::write(&module, "module Math { fn value() -> int { return 7; } }")
-            .expect("write project module");
+        std::fs::write(
+            &module,
+            "module Math { export fn value() -> int { return 7; } }",
+        )
+        .expect("write project module");
         std::fs::write(
             &manifest,
             r#"{
@@ -3304,11 +3658,11 @@ mod tests {
             3,
             "owned exports rename the root reference, declaration, and exact manifest token together"
         );
-        let mut invalid_project = project.clone();
-        let invalid_source = "module Math { /* 金庫😀 */ fn value() -> int { return missing; } }";
-        invalid_project.graph.packages[0].modules[0].source = invalid_source.to_owned();
-        let diagnostics =
-            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        // Unopened source changes are reloaded from disk under the same locked manifest.
+        let invalid_source =
+            "module Math { /* 金庫😀 */ export fn value() -> int { return missing; } }";
+        std::fs::write(&module, invalid_source).expect("write unopened dependency error");
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, Some(&project));
         let diagnostic = diagnostics[&module_uri]
             .diagnostics
             .iter()
@@ -3328,9 +3682,12 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(expected_character)
         );
-        invalid_project.graph.packages[0].modules[0].source = "module Math { /* 金庫😀 */ fn value() -> int { 7 } fn helper(int unused) -> int { 1 } }".to_owned();
-        let diagnostics =
-            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        std::fs::write(
+            &module,
+            "module Math { /* 金庫😀 */ export fn value() -> int { 7 } fn helper(int unused) -> int { 1 } }",
+        )
+        .expect("write unopened dependency lint");
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, Some(&project));
         let warning = diagnostics[&module_uri]
             .diagnostics
             .iter()

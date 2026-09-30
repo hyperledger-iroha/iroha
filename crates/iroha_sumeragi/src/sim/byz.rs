@@ -398,7 +398,7 @@ impl World {
         &mut self,
         r: usize,
         header: BlockHeader,
-        payload: Vec<u8>,
+        payload: &[u8],
         view: u64,
         justify: Option<TimeoutCert>,
         parent_qc: Option<Qc>,
@@ -406,7 +406,7 @@ impl World {
         let config = self.instances[self.replicas[r].inst].config(header.height);
         let body = crate::testing::author_body(
             header,
-            &payload,
+            payload,
             &config,
             &self.replicas[r].budget,
             &self.hasher,
@@ -516,10 +516,19 @@ impl World {
                 Action::ServeBlocks { .. } if strategies.contains(&Strategy::ForgeSync) => {
                     continue;
                 }
-                Action::ServePayload { .. }
+                Action::ServePayload { height, .. }
                     if strategies.contains(&Strategy::ForgeBodies)
-                        || strategies.contains(&Strategy::LateLeader(Late::Body)) =>
+                        || (strategies.contains(&Strategy::LateLeader(Late::Body))
+                            && self
+                                .adv
+                                .late_bodies
+                                .get(&(inst, *height))
+                                .is_some_and(|due| at < *due)) =>
                 {
+                    // F36 delays the initial rows. Once released, serve retries:
+                    // rows that raced ahead of metadata may need to be fetched.
+                    // Withholding them indefinitely introduces a different fault
+                    // whose recovery legitimately increases measured view latency.
                     continue;
                 }
                 _ => {
@@ -784,7 +793,8 @@ impl World {
                                 origin_view: p.proposal.view,
                                 payload_hash: preimage::payload_hash(&self.hasher, &payload),
                                 availability_digest: crate::types::Hash32::ZERO,
-                                payload_len: payload.len() as u32,
+                                payload_len: u32::try_from(payload.len())
+                                    .expect("bounded simulated payload"),
                                 skipped_leaders: topo
                                     .skipped_leader_keys(&committee, p.proposal.view),
                                 ..p.proposal.header.clone()
@@ -806,7 +816,7 @@ impl World {
                             msg = WireMessage::Proposal(Box::new(self.byz_proposal(
                                 r,
                                 header,
-                                payload,
+                                &payload,
                                 p.proposal.view,
                                 Some(min),
                                 p.proposal.parent_qc.clone(),
@@ -908,7 +918,7 @@ impl World {
         let twin = self.byz_proposal(
             r,
             header,
-            payload,
+            &payload,
             p.proposal.view,
             p.proposal.justify.clone(),
             p.proposal.parent_qc.clone(),
@@ -1504,7 +1514,7 @@ impl World {
                             let p = self.byz_proposal(
                                 r,
                                 header,
-                                payload,
+                                &payload,
                                 view,
                                 justify,
                                 tip_qc.clone(),

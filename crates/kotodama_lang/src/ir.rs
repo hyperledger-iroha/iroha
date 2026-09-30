@@ -15,7 +15,7 @@ use super::{
 use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
 use iroha_model_base::state_path::StatePath;
 use kotodama_surface::builtins::{Builtin, BuiltinLowering, PointerConstructor};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     if let semantic::ExprKind::Ident(name) = expr.kind() {
         Some(name.clone())
@@ -3057,6 +3057,8 @@ fn lower_function_named(
     }
     let loaded_params = param_temps.into_iter().collect::<HashMap<_, _>>();
     for param in &func.param_types {
+        ctx.binding_types
+            .insert(param.name.clone(), param.ty.clone());
         if param.is_state {
             let tmp = *loaded_params.get(&param.name).ok_or_else(|| {
                 format!(
@@ -3313,8 +3315,10 @@ fn merge_conditional_envs(
     else_env: &HashMap<String, Temp>,
     then_exit: usize,
     else_exit: usize,
+    join_label: Label,
     vars: &mut HashMap<String, Temp>,
 ) {
+    let mut products = Vec::new();
     let mut mutated = BTreeSet::new();
     for (name, entry_temp) in entry_env {
         let then_temp = then_env.get(name).copied().unwrap_or(*entry_temp);
@@ -3324,13 +3328,23 @@ fn merge_conditional_envs(
         }
     }
     for name in mutated {
-        let join_temp = ctx.new_temp();
         let entry_temp = entry_env
             .get(&name)
             .copied()
             .expect("entry env must contain variable");
         let then_temp = then_env.get(&name).copied().unwrap_or(entry_temp);
         let else_temp = else_env.get(&name).copied().unwrap_or(entry_temp);
+        if let Some(ty) = ctx.product_binding_type(&name) {
+            let words = runtime_value_word_types(&ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
+            copy_runtime_value_words_to_block(ctx, then_exit, then_temp, &ty, &words);
+            copy_runtime_value_words_to_block(ctx, else_exit, else_temp, &ty, &words);
+            products.push((name, ty, words));
+            continue;
+        }
+        let join_temp = ctx.new_temp();
         if let Some(block) = ctx.blocks.get_mut(then_exit) {
             push_copy(block, join_temp, then_temp);
         }
@@ -3339,6 +3353,32 @@ fn merge_conditional_envs(
         }
         vars.insert(name, join_temp);
     }
+    ctx.start_block(join_label);
+    for (name, ty, words) in products {
+        let value = rebuild_runtime_value(ctx, &ty, &words);
+        vars.insert(name, value);
+    }
+}
+/// Append a predecessor's scalar copies before its existing terminator. Virtual
+/// products have no machine register, so a join must carry their actual words.
+fn copy_runtime_value_words_to_block(
+    ctx: &mut LowerCtx,
+    block: usize,
+    value: Temp,
+    ty: &Type,
+    words: &[Temp],
+) {
+    let label = ctx.blocks[block].label;
+    let current = ctx.current.take();
+    ctx.current = Some(BasicBlock {
+        label,
+        instrs: Vec::new(),
+        terminator: Terminator::Jump(label),
+    });
+    copy_runtime_value_words(ctx, value, ty, words);
+    let copies = ctx.current.take().expect("copy block").instrs;
+    ctx.current = current;
+    ctx.blocks[block].instrs.extend(copies);
 }
 fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
     match expr.kind() {
@@ -3635,25 +3675,49 @@ fn initialize_loop_phi(
         let Some(temp) = vars.get(name).copied() else {
             continue;
         };
-        let slot = ctx.new_temp();
-        emit_copy(ctx, slot, temp);
+        let slot = if let Some(ty) = ctx.product_binding_type(name) {
+            let words = runtime_value_word_types(&ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
+            copy_runtime_value_words(ctx, temp, &ty, &words);
+            // This handle is compiler metadata only. Each loop destination
+            // rebuilds its virtual product from the words current on that edge.
+            let value = ctx.new_temp();
+            ctx.product_loop_phis.insert(value, (ty, words));
+            value
+        } else {
+            let slot = ctx.new_temp();
+            emit_copy(ctx, slot, temp);
+            slot
+        };
         phi.insert(name.clone(), slot);
     }
     phi
 }
 fn env_with_loop_phi(
+    ctx: &mut LowerCtx,
     base: &HashMap<String, Temp>,
     phi: &HashMap<String, Temp>,
 ) -> HashMap<String, Temp> {
     let mut env = base.clone();
-    for (name, temp) in phi {
-        env.insert(name.clone(), *temp);
-    }
+    apply_loop_phi(ctx, &mut env, phi);
     env
 }
-fn apply_loop_phi(env: &mut HashMap<String, Temp>, phi: &HashMap<String, Temp>) {
-    for (name, temp) in phi {
-        env.insert(name.clone(), *temp);
+fn apply_loop_phi(
+    ctx: &mut LowerCtx,
+    env: &mut HashMap<String, Temp>,
+    phi: &HashMap<String, Temp>,
+) {
+    let mut entries = phi.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, temp) in entries {
+        let value = if let Some((ty, words)) = ctx.product_loop_phis.get(temp).cloned() {
+            rebuild_runtime_value(ctx, &ty, &words)
+        } else {
+            *temp
+        };
+        env.insert(name.clone(), value);
     }
 }
 fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
@@ -3668,8 +3732,34 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
                 copies.push((*dest, *src));
             }
         }
+        // Read every carried value before writing any phi word: separately
+        // rebound products can still share the previous iteration's leaves.
+        let mut word_copies = Vec::new();
         for (dest, src) in copies {
-            ctx.current_instr(Instr::Copy { dest, src });
+            if let Some((ty, destinations)) = ctx.product_loop_phis.get(&dest).cloned() {
+                let mut words = Vec::with_capacity(destinations.len());
+                collect_function_value_words(ctx, src, &ty, &mut words);
+                if words.len() != destinations.len() {
+                    ctx.record_error("internal error: loop product word count mismatch".into());
+                }
+                word_copies.extend(destinations.into_iter().zip(words));
+            } else {
+                word_copies.push((dest, src));
+            }
+        }
+        let destinations = word_copies
+            .iter()
+            .map(|(dest, _)| *dest)
+            .collect::<HashSet<_>>();
+        for (_, src) in &mut word_copies {
+            if destinations.contains(src) {
+                let captured = ctx.new_temp();
+                emit_copy(ctx, captured, *src);
+                *src = captured;
+            }
+        }
+        for (dest, src) in word_copies {
+            emit_copy(ctx, dest, src);
         }
     }
 }
@@ -3737,7 +3827,17 @@ fn lower_statement(
 ) {
     match stmt {
         TypedStatement::Let { name, value } => {
+            ctx.binding_types.insert(name.clone(), value.ty.clone());
             let t = lower_expr(ctx, value, vars);
+            // A product rebind replaces every flattened projection of its old
+            // value. Following field bindings must read the newly captured root.
+            if matches!(
+                semantic::resolve_struct_type(&value.ty),
+                Type::Struct { .. } | Type::Tuple(_)
+            ) {
+                let projection_prefix = format!("{name}#");
+                vars.retain(|binding, _| !binding.starts_with(&projection_prefix));
+            }
             if ctx.state_name_literals.contains_key(name)
                 || ctx.state_runtime_roots.contains_key(name)
             {
@@ -3778,9 +3878,8 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
             merge_conditional_envs(
-                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
+                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, end_label, vars,
             );
-            ctx.start_block(end_label);
         }
         TypedStatement::IfLet {
             pattern,
@@ -3808,9 +3907,8 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
             merge_conditional_envs(
-                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
+                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, end_label, vars,
             );
-            ctx.start_block(end_label);
         }
         TypedStatement::While { cond, body } => {
             let cond_label = ctx.new_label();
@@ -3824,12 +3922,11 @@ fn lower_statement(
             collect_block_reads(body, &mut loop_reads);
             let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
             let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
-            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
             ctx.push_loop(cond_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
             ctx.start_block(cond_label);
-            let mut cond_vars = loop_env;
+            let mut cond_vars = env_with_loop_phi(ctx, &entry_vars, &loop_phi);
             let cond_t = lower_expr(ctx, cond, &mut cond_vars);
             ctx.finish_current(Terminator::Branch {
                 cond: cond_t,
@@ -3846,7 +3943,7 @@ fn lower_statement(
             ctx.pop_loop();
             ctx.start_block(end_label);
             *vars = entry_vars;
-            apply_loop_phi(vars, &loop_phi);
+            apply_loop_phi(ctx, vars, &loop_phi);
         }
         TypedStatement::For {
             line: _,
@@ -3878,12 +3975,11 @@ fn lower_statement(
             collect_block_reads(body, &mut loop_reads);
             let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
             let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
-            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
             ctx.push_loop(step_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
             ctx.start_block(cond_label);
-            let mut cond_vars = loop_env;
+            let mut cond_vars = env_with_loop_phi(ctx, &entry_vars, &loop_phi);
             let cond_t = if let Some(c) = cond {
                 lower_expr(ctx, c, &mut cond_vars)
             } else {
@@ -3903,7 +3999,7 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(step_label));
             ctx.start_block(step_label);
             if let Some(s) = step {
-                let mut step_vars = env_with_loop_phi(&entry_vars, &loop_phi);
+                let mut step_vars = env_with_loop_phi(ctx, &entry_vars, &loop_phi);
                 lower_statement(ctx, s, &mut step_vars, &body_live_after);
                 copy_env_to_loop_phi(ctx, &step_vars);
             }
@@ -3911,7 +4007,7 @@ fn lower_statement(
             ctx.pop_loop();
             ctx.start_block(end_label);
             *vars = entry_vars;
-            apply_loop_phi(vars, &loop_phi);
+            apply_loop_phi(ctx, vars, &loop_phi);
         }
         TypedStatement::Break => {
             if let Some((_, brk)) = ctx.loop_targets() {
@@ -3967,7 +4063,6 @@ fn lower_statement(
             collect_block_reads(body, &mut loop_reads);
             let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
             let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
-            let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
             ctx.push_loop(step_label, exit_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(loop_label));
@@ -3979,7 +4074,7 @@ fn lower_statement(
                 else_bb: exit_label,
             });
             ctx.start_block(body_label);
-            let mut body_vars = loop_env;
+            let mut body_vars = env_with_loop_phi(ctx, &entry_vars, &loop_phi);
             let key_temp = load_list_element(ctx, base, index, &element);
             body_vars.insert(key.clone(), key_temp);
             let mut body_live_after = loop_reads;
@@ -3998,7 +4093,7 @@ fn lower_statement(
             ctx.pop_loop();
             ctx.start_block(exit_label);
             *vars = entry_vars;
-            apply_loop_phi(vars, &loop_phi);
+            apply_loop_phi(ctx, vars, &loop_phi);
         }
         TypedStatement::MapSet { map, key, value } => {
             let key_tmp = lower_expr(ctx, key, vars);
@@ -6752,7 +6847,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             emit_i64_const(ctx, 0)
         }
         semantic::ExprKind::Member { object, field } => {
-            // Support nested struct field access via flattened variables: base#i#j
+            // Resolve any explicitly registered durable projection. Local
+            // products must instead project from their current SSA root: a
+            // flattened local can refer to the value before a loop backedge.
             fn flatten_member_chain(e: &semantic::TypedExpr) -> Option<(String, Vec<usize>)> {
                 match e.kind() {
                     semantic::ExprKind::Member { object, field } => {
@@ -6775,11 +6872,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     _ => None,
                 }
             }
-            if let Some((base, mut indices)) = flatten_member_chain(expr)
+            if let Some((base, indices)) = flatten_member_chain(expr)
                 && !indices.is_empty()
             {
-                // indices are collected from inner to outer; reverse for natural order
-                indices.reverse();
+                // Recursion already collects indices from the root outward.
                 let mut name = base;
                 for i in indices {
                     name.push('#');
@@ -6793,8 +6889,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         ctx.state_value_cache.insert(name.clone(), value);
                         return value;
                     }
-                } else if let Some(t) = vars.get(&name).copied() {
-                    return t;
                 }
             }
             // Generic tuple/struct field access via TupleGet when index is numeric.
@@ -6846,8 +6940,41 @@ fn lower_sum_type_call(
         }
         "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], true, vars),
         "unwrap_err_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], false, vars),
+        "expect" => lower_option_expect(ctx, &args[0], &args[1], vars),
         _ => return None,
     })
+}
+fn lower_option_expect(
+    ctx: &mut LowerCtx,
+    option: &semantic::TypedExpr,
+    error: &semantic::TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let tagged = lower_expr(ctx, option, vars);
+    let code = lower_expr(ctx, error, vars);
+    let Type::Option(payload_ty) = semantic::resolve_struct_type(&option.ty) else {
+        unreachable!("typed Option.expect receiver")
+    };
+    let Type::ErrorEnum(error_type) = semantic::resolve_struct_type(&error.ty) else {
+        unreachable!("typed nominal Option.expect error")
+    };
+    let encoded = ivm_abi::codec::encode_canonical_norito(error_type.as_ref())
+        .expect("validated nominal error schema encodes");
+    let descriptor = emit_data_ref(
+        ctx,
+        DataRefKind::NoritoBytes,
+        format!("0x{}", hex::encode(encoded)),
+    );
+    let tag = load_sum_tag(ctx, tagged);
+    let absent = emit_unary(ctx, UnaryOp::Not, tag);
+    ctx.current_instr(Instr::AbortIf {
+        cond: absent,
+        descriptor,
+        code,
+    });
+    // The abort precedes payload access: Option::none carries no inactive
+    // payload, and extraction must never synthesize a placeholder for it.
+    load_sum_payload(ctx, tagged, &payload_ty)
 }
 fn lower_tagged_unwrap(
     ctx: &mut LowerCtx,
@@ -7039,6 +7166,10 @@ struct LowerCtx {
     blocks: Vec<BasicBlock>,
     current: Option<BasicBlock>,
     loop_stack: Vec<LoopContext>,
+    /// Source binding layouts used to carry product leaves through CFG joins.
+    binding_types: HashMap<String, Type>,
+    /// Stable machine-word destinations behind each virtual loop-carried product.
+    product_loop_phis: HashMap<Temp, (Type, Vec<Temp>)>,
     /// Metadata for top-level state maps lowered to durable state syscalls.
     state_map_configs: HashMap<String, StateMapSpec>,
     /// Mapping from top-level state identifiers to Name literals used in TLVs.
@@ -7075,6 +7206,8 @@ impl LowerCtx {
             blocks: Vec::new(),
             current: None,
             loop_stack: Vec::new(),
+            binding_types: HashMap::new(),
+            product_loop_phis: HashMap::new(),
             state_map_configs: Default::default(),
             state_name_literals: Default::default(),
             state_runtime_roots: Default::default(),
@@ -7086,6 +7219,12 @@ impl LowerCtx {
             prelowered_argument_scopes: Vec::new(),
             error: None,
         }
+    }
+    fn product_binding_type(&self, name: &str) -> Option<Type> {
+        self.binding_types.get(name).and_then(|ty| {
+            let ty = semantic::resolve_struct_type(ty);
+            matches!(ty, Type::Struct { .. } | Type::Tuple(_)).then_some(ty)
+        })
     }
     fn prelowered_argument(&self, expression: &TypedExpr) -> Option<Temp> {
         let identity = std::ptr::from_ref(expression);

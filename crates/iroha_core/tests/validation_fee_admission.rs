@@ -199,6 +199,7 @@ fn payout_contract_artifact() -> (
             triggers: entrypoint.triggers.clone(),
             entry_pc: 0,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };
@@ -276,6 +277,7 @@ fn pool_contract_artifact() -> (
             triggers: entrypoint.triggers.clone(),
             entry_pc: 0,
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

@@ -15,7 +15,12 @@ The first-release SDK always submits to `/v1/pipeline/transactions` and reads st
 `/v1/pipeline/transactions/status` with exact `scope=global`. There is no endpoint-mode,
 status-scope, success-policy, or failure-policy selector. Submission requires one canonical V1
 versioned signed transaction and accepts only HTTP 202. Status reads accept only HTTP 200 with
-the closed response body or HTTP 404 for an absent observation.
+the closed response body or HTTP 404 for an absent observation. Global reads
+include accepted queue and block-pipeline existence hints from routed
+coordinators; a committed state outcome takes precedence over those hints.
+Global absence requires exact absence across every configured dataspace route
+and fails closed while a targeted route is unavailable. A signing deadline by
+itself never proves that a previously accepted input was rejected.
 
 # 3. One-shot Submission Semantics
 

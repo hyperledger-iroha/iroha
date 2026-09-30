@@ -648,6 +648,8 @@ struct Finishing<'s> {
     encoding_refusal: Option<super::commitment::ResultPreimageError>,
     native_contexts: Option<PreparedNativeContext>,
     archive_refusal: Option<NativeContextArchiveError>,
+    world_cut_refusal:
+        Option<crate::state::world_projection::world_state_accumulator::world_state_cut::CutError>,
 }
 
 /// The executed overlay of one block.
@@ -1173,7 +1175,7 @@ impl<'s> Worker<'s> {
             }
         };
         if let Err(error) = overlay.take_sumeragi_lanes() {
-            return invalid(height, &error);
+            return classify_lane_step(height, &error);
         }
         let inputs = match overlay.take_sumeragi_execution_inputs() {
             Ok(inputs) => inputs,
@@ -1205,6 +1207,7 @@ impl<'s> Worker<'s> {
             encoding_refusal: None,
             native_contexts: None,
             archive_refusal: None,
+            world_cut_refusal: None,
         });
         finish(self)
     }
@@ -1259,6 +1262,23 @@ impl<'s> Worker<'s> {
                 return Err(reason);
             }
         };
+        // Retain only original journal-touched native hashes at precisely this R.
+        // Local refusal leaves the same completed overlay and one-shot inputs live.
+        if let Err(error) = self
+            .finishing
+            .as_mut()
+            .unwrap()
+            .overlay
+            .capture_original_world_cut(transition.world_state_root)
+        {
+            let reason = error.to_string();
+            if matches!(&error, crate::state::world_projection::world_state_accumulator::world_state_cut::CutError::Invalid(_)) {
+                self.recovery = Some(format!("original World cut requires recovery: {reason}"));
+            }
+            self.finishing.as_mut().unwrap().world_cut_refusal = Some(error);
+            return Err(reason);
+        }
+        self.finishing.as_mut().unwrap().world_cut_refusal = None;
         let original = self.finishing.as_mut().unwrap();
         let FinishingPhase::ContextProof { inputs, .. } =
             std::mem::replace(&mut original.phase, FinishingPhase::Consuming)
@@ -2203,6 +2223,14 @@ fn invalid(height: u64, reason: &dyn std::fmt::Display) -> ExecOutcome {
     ExecOutcome::Invalid
 }
 
+/// Custody allocator refusal is local; a semantic lane transition defect is deterministic.
+fn classify_lane_step(height: u64, error: &lanes::step::LaneStepError) -> ExecOutcome {
+    match error {
+        lanes::step::LaneStepError::CustodyAllocation => ExecOutcome::Failed(error.to_string()),
+        _ => invalid(height, error),
+    }
+}
+
 /// Local conditions are `Failed` (retried); every other rejection is deterministic.
 fn classify(height: u64, error: &BlockValidationError) -> ExecOutcome {
     local_failure(error).map_or_else(|| invalid(height, error), ExecOutcome::Failed)
@@ -2246,8 +2274,7 @@ mod tests {
     #[test]
     fn empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work() {
         use iroha_sumeragi::{
-            availability::{AuthoringError, AvailabilityError},
-            preimage::payload_hash,
+            availability::PayloadBytes, message::ByteAdmissionError, preimage::payload_hash,
         };
         use std::collections::BTreeSet;
 
@@ -2255,22 +2282,12 @@ mod tests {
             let original = publication_tests::proposal(chain, worker);
             let state_height = worker.state.view().height();
             let before = worker.state.ivm_execution_budget().reserved_bytes();
-            let mut empty_header = original.header().clone();
-            empty_header.payload_len = 0;
-            empty_header.payload_hash =
-                payload_hash(&**worker.context.crypto.as_ref().unwrap(), &[]);
-            let (empty_owner, error) = chain
-                .author_payload_under_test_context(
-                    empty_header,
-                    Vec::new(),
-                    original.source().config(),
-                )
+            let budget = worker.state.ivm_execution_budget();
+            let empty = iroha_allocation::ChargedBuffer::new(0, &budget).unwrap();
+            let (empty_owner, error) = PayloadBytes::from_charged(empty, &budget)
                 .err()
                 .expect("empty payload never obtains available custody");
-            assert!(matches!(
-                error,
-                AuthoringError::Invalid(AvailabilityError::Shape)
-            ));
+            assert!(matches!(error, ByteAdmissionError::Length { length: 0 }));
             assert_eq!(worker.state.view().height(), state_height);
             assert!(worker.live.is_none());
             assert!(worker.finishing.is_none());
@@ -2304,6 +2321,25 @@ mod tests {
             assert!(worker.finishing.is_none());
             assert!(worker.context.staging.get(&hash).is_none());
         });
+    }
+
+    #[test]
+    fn lane_custody_allocation_refusal_is_local_and_semantic_errors_remain_invalid() {
+        use lanes::step::LaneStepError;
+        assert!(matches!(
+            classify_lane_step(2, &LaneStepError::CustodyAllocation),
+            ExecOutcome::Failed(_)
+        ));
+        for error in [
+            LaneStepError::Custody(lanes::step::CustodyViolation::StakeBinding),
+            LaneStepError::NotAdvanced,
+            LaneStepError::MissingLane(iroha_model_base::topology::LaneId::new(1)),
+        ] {
+            assert!(matches!(
+                classify_lane_step(2, &error),
+                ExecOutcome::Invalid
+            ));
+        }
     }
 
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.

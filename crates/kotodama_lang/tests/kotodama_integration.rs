@@ -11,10 +11,14 @@ mod cst_structure;
 mod documentation_fences;
 #[path = "frontend_budgets.rs"]
 mod frontend_budgets;
+#[path = "multifile_syntax.rs"]
+mod multifile_syntax;
 #[path = "parser_recovery.rs"]
 mod parser_recovery;
 #[path = "secret_security_diagnostics.rs"]
 mod secret_security_diagnostics;
+#[path = "simple_contracts.rs"]
+mod simple_contracts;
 #[path = "sugar_zero_cost.rs"]
 mod sugar_zero_cost;
 #[path = "v1_contract_edges.rs"]

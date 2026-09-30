@@ -1,13 +1,7 @@
 //! Ensure structured data events are emitted in the same order as instructions
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! execute within a single transaction (WSV Overlays & Commit ordering).
-use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
-};
-use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
-use std::{borrow::Cow, sync::Arc};
 // no specific event enum imports needed here
 use iroha_data_model::prelude::*;
 #[test]
