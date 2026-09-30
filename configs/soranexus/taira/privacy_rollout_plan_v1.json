@@ -2,8 +2,8 @@
   "schema": "iroha.taira.privacy_rollout_plan.v1",
   "schema_version": 1,
   "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
-  "cargo_lock_sha256": "c8a488c98f2df6c89be446c8beda84c69f9b7a975c37941d52df09dd09a218d2",
-  "protocol_matrix_sha256": "31e6f8246a0014c9ccacd523449f4812c93dd04231b16ceacac75ba6f97dfff7",
+  "cargo_lock_sha256": "85200754a1b6d2e6484894c811af1efd62b4133eb0f1e989908ab7cb3846e8fe",
+  "protocol_matrix_sha256": "1e8c12983c3fe0e3894e51c5839c27bccb47c075229c80f3720bf6d1d058697d",
   "wire_contract": {
     "catalog_size": 12,
     "catalog_commitment_le_hex": "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",

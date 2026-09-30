@@ -4,6 +4,28 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
+  func testNativePreparationVerificationRequiresExactTicketFrameAndReturnedNonce() throws {
+    let nonce = Data(repeating: 0x22, count: 32)
+    var preparation = Data(repeating: 0x11, count: 273)
+    preparation.replaceSubrange(49..<81, with: nonce)
+    let fields = [KagemushaCoreCoordinatorFrameV1.u32(8), Data([7, 0, 0, 0, 0, 0, 0, 0]), preparation]
+    let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: fields)
+    let response = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: request, fields: [nonce])
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
+      requestFrame: request, responseFrame: response), [nonce])
+    for malformed in [Array(fields.dropLast()), fields + [Data([1])],
+                      [fields[0], Data(repeating: 0, count: 8), preparation],
+                      [fields[0], fields[1], Data(preparation.dropLast())]] {
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment,
+        fields: malformed))
+    }
+    for malformed in [[], [Data(repeating: 0, count: 32)], [Data(repeating: 0x33, count: 32)], [nonce, nonce]] {
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+        requestFrame: request, fields: malformed))
+    }
+  }
+
   func testCoordinatorMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
     XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(14)))

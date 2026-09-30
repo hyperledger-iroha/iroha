@@ -34,7 +34,6 @@ iroha_telemetry = { path = "../iroha_telemetry" }
 iroha_i18n = { path = "../iroha_i18n" }
 ivm_abi = { path = "../ivm_abi" }
 ivm_artifact_admission = { path = "../ivm_artifact_admission" }
-kotodama_lang = { path = "../kotodama_lang" }
 nonzero_ext = { workspace = true }
 ## Do not depend on serde/serde_json directly; use `norito::json` helpers instead.
 ## serde and serde_json are pulled in via `norito` internally when needed.
@@ -74,6 +73,7 @@ dispatch2 = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+kotodama_lang = { path = "../kotodama_lang" }
 kotodama_surface = { path = "../kotodama_surface" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 hex-literal = "1.1.0"

@@ -1028,8 +1028,7 @@ final class TransferHistoryViewModel: ObservableObject {
       do {
         let sdk = IrohaSDK(baseURL: url)
         summaries = try await sdk.getTransactionHistory(accountId: trimmedAccount,
-                                                        page: 1,
-                                                        perPage: 25)
+                                                        limit: 25)
       } catch {
         errorMessage = error.localizedDescription
       }

@@ -316,11 +316,9 @@ trust boundary. Signed and proof evidence remain separate types/trust modes.
 
 ## Capacity evidence and remaining arithmetic
 
-The retained [word prototype](../docs/history/2026-09-29/ram-lfe-word-prototype.md)
-passes 12 native controls, including constrained BLAKE3 compression. The
-[byte prototype](../docs/history/2026-09-29/ram-lfe-byte-prototype.md) passes five
-native controls. These are exact-source isolated primitive builds, not a normal
-Core build or complete execution relation. No proof-mode admission follows.
+Word and byte prototypes remain isolated primitive implementations, including
+constrained BLAKE3 compression. They establish no normal Core build, complete
+execution relation or proof-mode admission.
 
 For the role table above, upstream fixed-length padding requires:
 
@@ -481,22 +479,20 @@ The parameter-byte digests are derived independently from the existing AXT
 capture, and the leaf has positive typed API and retired-name compile-fail
 controls. All 19 native controls and four documentation tests pass on the frozen
 ordinary build; actual GPU parameter staging and AXT fixture-generator consumers
-also compile. This [naming amendment](../docs/history/2026-09-29/bn254-poseidon-api.md)
-does not qualify hardware execution or a complete proof protocol.
+also compile. These API controls do not qualify hardware execution or a complete proof protocol.
 
 ## Smallest next implementation and acceptance gates
 
 1. The unused leaf candidate for the pinned Fp/Fq permutation and exact upstream
    fixed-length sponge is implemented; its ordinary native suite passes 18/18
-   controls in the [dated record](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md).
+   controls.
    It pins source provenance, canonical parameter
    fingerprints and all upstream permutation/`ConstantLength<2>` vectors.
    Independently check odd/even fixed lengths, domain/length separation and
    strict scalar decode at 0, p - 1, p and p + 1. Compare bytes across the leaf
    and Core field libraries. This first step changes no production contract.
 2. The private test-only circuit candidate uses the same constants and exact
-   sponge. Its [isolated native record](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md)
-   covers arbitrary-field round/input/copy/padding mutations, genuine proof
+   sponge. Its test controls cover arbitrary-field round/input/copy/padding mutations, genuine proof
    tampering/wrong-instance controls, clearing and measured 56-round geometry.
    The paired-partial layout passes ten isolated controls. Its maximum single
    hash uses 40,062 total rows at the unchanged k=16 cap and yields a 2,688-byte

@@ -48,9 +48,8 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "executes all three binaries from each clean extraction",
         "`scripts/package_sorafs_cli_candidate.py` assembles the whole platform",
         "exactly the five expected target-triple checksum manifests",
-        "The five-target CLI archive implementation is present, but a candidate is not source-complete",
+        "The five-target CLI archive implementation is present. Its hosted-run",
         "build, publish, and clean-install all six",
-        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command",
         "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
@@ -546,7 +545,7 @@ SORAFS_SIGNER_CONTRACT_COMMAND = (
     + " ".join(f"-p {package}" for package in SORAFS_SIGNER_CONTRACT_LIBRARIES)
     + " --lib"
 )
-SORAFS_NATIVE_AUTHORITY_PACKAGES = ("iroha_core", "iroha_torii", "irohad", "iroha_sccp")
+SORAFS_NATIVE_AUTHORITY_PACKAGES = ("iroha_core", "iroha_torii", "irohad", "irohad_lib", "iroha_sccp")
 SORAFS_NATIVE_AUTHORITY_FILTERS = (
     "final_promotion", "signer_finality", "sorafs::token::", "signer_operation",
     "signer_custody_history", "signer_check",
@@ -674,9 +673,6 @@ SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
 SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST = (
     "scripts/tests/check_build_efficiency_provenance_test.py"
 )
-SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
-    "python3 scripts/check_source_file_budget.py"
-)
 SORAFS_CLI_L1_QUALIFICATION_TESTS = (
     "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
     "scripts/tests/check_sorafs_l1_resilience_qualification_test.py",
@@ -801,12 +797,6 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "specs/sorafs/l1_resilience_qualification.md",
     }
 )
-SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS = frozenset(
-    {
-        "ci/source_file_budget.json",
-        "scripts/check_source_file_budget.py",
-    }
-)
 SORAFS_CLI_RESERVE_TRIGGER_PATHS = frozenset(
     {
         ".github/workflows/sorafs-cli-release.yml",
@@ -851,6 +841,7 @@ SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS = frozenset(
         "crates/iroha_crypto/**",
         "crates/iroha_data_model/**",
         "crates/irohad/Cargo.toml",
+        "crates/irohad/bins/Cargo.toml",
         "crates/irohad/src/lib.rs",
         "crates/irohad/src/main.rs",
         "crates/irohad/src/sorafs_provider_ingest_runtime.rs",
@@ -1007,7 +998,6 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         *RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
         '- "Dockerfile"',
         '- "ci/build_efficiency_provenance.json"',
-        '- "ci/source_file_budget.json"',
         '- "scripts/build_release_bundle.sh"',
         '- "scripts/build_release_image.sh"',
         '- "scripts/build_release_oci_archive.py"',
@@ -1017,7 +1007,6 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/copy_release_file.py"',
         '- "scripts/copy_release_tree.py"',
         '- "scripts/check_build_efficiency_provenance.py"',
-        '- "scripts/check_source_file_budget.py"',
         '- "scripts/generate_release_manifest.py"',
         '- "scripts/generate_sorafs_cli_release_manifest.py"',
         '- "scripts/release_artifact_contract.py"',
@@ -2147,7 +2136,7 @@ def _validate_native_authority_runtime(root: Path, gate: str) -> list[str]:
 
 
 def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
-    """Require lineage and source budgets to fail closed before Cargo work."""
+    """Require lineage authentication to fail closed before Cargo work."""
 
     relative = SORAFS_CLI_RELEASE_GATE_SCRIPT
     path = _require_regular_repo_file(root, relative)
@@ -2170,22 +2159,10 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
             f"{relative}: build-efficiency provenance command must appear "
             "exactly once as a standalone fail-closed command"
         )
-    budget_commands = tuple(
-        re.finditer(
-            rf"(?m)^{re.escape(SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND)}$",
-            source,
-        )
-    )
-    if len(budget_commands) != 1:
-        errors.append(
-            f"{relative}: source-file budget command must appear exactly once "
-            "as a standalone fail-closed command"
-        )
-    if len(provenance_commands) != 1 or len(budget_commands) != 1:
+    if len(provenance_commands) != 1:
         return errors
 
     provenance_command = provenance_commands[0]
-    budget_command = budget_commands[0]
     strict_mode = re.search(r"(?m)^set -euo pipefail$", source)
     if strict_mode is None or strict_mode.start() > provenance_command.start():
         errors.append(
@@ -2199,19 +2176,6 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
         errors.append(
             f"{relative}: build-efficiency provenance command must not run with "
             "errexit disabled"
-        )
-    if re.search(
-        r"(?m)^\s*set (?:\+e|\+o errexit)\s*$",
-        source[: budget_command.start()],
-    ):
-        errors.append(
-            f"{relative}: source-file budget command must not run with errexit "
-            "disabled"
-        )
-    if provenance_command.start() > budget_command.start():
-        errors.append(
-            f"{relative}: build-efficiency provenance command must run before "
-            "the source-file budget command"
         )
     if source.count(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST) != 1:
         errors.append(
@@ -2240,18 +2204,13 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
     if first_cargo_command is None:
         errors.append(
             f"{relative}: release gate must contain a Cargo command after the "
-            "source-file budget command"
+            "build-efficiency provenance command"
         )
     else:
         if first_cargo_command.start() < provenance_command.start():
             errors.append(
                 f"{relative}: build-efficiency provenance command must run "
                 "before every Cargo command"
-            )
-        if first_cargo_command.start() < budget_command.start():
-            errors.append(
-                f"{relative}: source-file budget command must run before every "
-                "Cargo command"
             )
     return errors
 
@@ -2369,15 +2328,6 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: pull_request.paths omits build-efficiency "
                 "provenance contract trigger(s): "
                 f"{', '.join(missing_provenance_triggers)}"
-            )
-        missing_source_budget_triggers = sorted(
-            SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS
-            - (pull_request_paths or frozenset())
-        )
-        if missing_source_budget_triggers:
-            errors.append(
-                f"{relative}: pull_request.paths omits source-file budget "
-                f"contract trigger(s): {', '.join(missing_source_budget_triggers)}"
             )
         missing_reserve_triggers = sorted(
             SORAFS_CLI_RESERVE_TRIGGER_PATHS - (pull_request_paths or frozenset())

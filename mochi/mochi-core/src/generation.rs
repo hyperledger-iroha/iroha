@@ -1851,8 +1851,7 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
             .set_topology(topology)
             .build_raw()
             .expect("build complete generation fixture manifest")
-            .with_chain_discriminant(chain_discriminant)
-            .with_consensus_meta();
+            .with_chain_discriminant(chain_discriminant);
         let manifest_path = genesis_dir.join("genesis.json");
         fs::write(
             &manifest_path,

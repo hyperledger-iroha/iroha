@@ -201,7 +201,7 @@ operators can lift the digest straight into governance packets.【crates/iroha_c
 1. Wire the treasury daemon to `treasury::RelayPayoutService` so it ingests `RelayRewardInstructionV1`,
    verifies Norito payloads, and mints XOR payouts deterministically. _Status:_ Implemented via batched
    payout processing (`RelayPayoutService::process_batch`) and the `iroha app sorafs incentives service process`
-   CLI batch mode that feeds bonded beneficiaries and reconciles multi-epoch exports.【crates/sorafs_orchestrator/src/treasury.rs#L202】【crates/iroha_cli/src/commands/sorafs.rs#L1261】【crates/iroha_cli/tests/cli_smoke.rs:1358】
+   CLI batch mode that feeds bonded beneficiaries and reconciles multi-epoch exports.【crates/sorafs_orchestrator/src/treasury.rs#L202】【crates/iroha_cli/src/commands/sorafs.rs#L1261】【crates/iroha_cli/bins/tests/cli_smoke.rs:1358】
 2. Publish dashboards + SLOs for the incentives pipeline and run dry-runs on the staging network.
    _Status:_ Completed — dashboards/alerts are live (`dashboards/grafana/soranet_incentives.json`,
    `dashboards/alerts/soranet_incentives_rules.yml`), and the 60-day shadow replay report is published

@@ -241,7 +241,7 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
         issued_at_height: u64,
         expires_at_height: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
         iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
     > {
         let request = BootleLanternPrepareAuthorizationRequestWireV1 {
@@ -277,14 +277,14 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
         }
         let authorization_bytes =
             ScrubbedBytes::new(std::mem::take(&mut authorization.authorization));
-        let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+        let authorization = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1::decode_exact(&authorization_bytes)
             .map_err(|_| {
                 self.session.poison();
                 iroha_torii::privacy_issuance_api::
                     BootleLanternIssuerCryptoProviderErrorV1::Unavailable
             })?;
-        iroha_core::privacy_engines::bootle_lantern::issuer::
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             issuer_validate_prepared_blind_issuance_authorization_v1(
                 context,
                 canonical_genesis_hash,
@@ -311,7 +311,7 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
         canonical_genesis_hash: [u8; 32],
         policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        authorization: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         request_bytes: &[u8],
         current_height: u64,
@@ -321,7 +321,7 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
             return Err(iroha_torii::privacy_issuance_api::
                 BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest);
         }
-        let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+        let expected = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             issuer_validate_blind_issuance_request_encoded_v1(
                 context,
                 canonical_genesis_hash,
@@ -373,19 +373,19 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
         canonical_genesis_hash: [u8; 32],
         policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        authorization: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         request_bytes: &[u8],
         current_height: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
         iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
     > {
         if context.network_id != self.session.network_id {
             return Err(iroha_torii::privacy_issuance_api::
                 BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest);
         }
-        iroha_core::privacy_engines::bootle_lantern::issuer::
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             issuer_validate_blind_issuance_request_encoded_v1(
                 context,
                 canonical_genesis_hash,
@@ -431,7 +431,7 @@ impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
                 BootleLanternIssuerCryptoProviderErrorV1::Unavailable);
         }
         let response_bytes = ScrubbedBytes::new(std::mem::take(&mut response.response));
-        let response = iroha_core::privacy_engines::bootle_lantern::issuer::
+        let response = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             issuer_validate_cached_blind_issuance_response_encoded_v1(
                 context,
                 canonical_genesis_hash,
@@ -700,7 +700,6 @@ impl ProviderIngestBrokerAuthenticatedSource {
     #[expect(
         clippy::needless_pass_by_value,
         clippy::too_many_arguments,
-        clippy::too_many_lines,
         reason = "the blocking stream owns all authenticated connection inputs"
     )]
     fn open_stream(

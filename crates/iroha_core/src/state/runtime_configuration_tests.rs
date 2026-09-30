@@ -143,6 +143,25 @@ fn configured_stake_index_pool_keeps_original_charge_through_reconfiguration() {
 }
 
 #[test]
+fn execution_pool_handle_preserves_original_identity_and_reservations() {
+    run_runtime_configuration_test(|| {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let original = state.ivm_execution_budget();
+        let borrowed = state.ivm_execution_budget();
+        assert!(borrowed.same_pool(&original));
+        let held = borrowed.try_reserve_bytes(1).expect("original pool charge");
+        assert!(held.belongs_to(&original));
+        assert_eq!(original.reserved_bytes(), 1);
+        drop(held);
+        assert_eq!(original.reserved_bytes(), 0);
+    });
+}
+
+#[test]
 fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isolated() {
     run_runtime_configuration_test(|| {
         let mut state = State::new_for_testing(

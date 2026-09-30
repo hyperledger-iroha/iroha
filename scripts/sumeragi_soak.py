@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Sumeragi release-gate soak: a real multi-process network under faults, judged from node logs.
+"""Optional Sumeragi fault diagnostics: a real multi-process network judged from node logs.
 
 This is the soak of ``specs/sumeragi.md`` §13.5 (last bullet) and §14 item 5 (goal S7 in
 ``specs/sumeragi_goals.md``): ``n = 4`` and ``n = 22`` validators, P2P loss of 10–30 % with delay
-spikes, random ``kill -9`` and restart, and disk-full injection, for 24 hours before a Taira
-cutover. O-AGR, O-SIGN, O-LIVE and O-PERF are computed only from what the nodes logged
+spikes, random ``kill -9`` and restart, and disk-full injection. On-chain governance owns
+deployment policy for Taira and production; no fixed duration or soak verdict is a cutover
+prerequisite. The profile named ``gate`` selects optional long-run diagnostic defaults.
+O-AGR, O-SIGN, O-LIVE and O-PERF are computed only from what the nodes logged
 (``scripts/sumeragi_soak_logs.py``); the verdict is written as JSON and the exit status is
 non-zero on any violation.
 
@@ -18,21 +20,21 @@ size-limited volume for one peer's state, and ``SIGKILL``.
 
 Typical runs::
 
-    # Build once (release for the gate, debug is fine for a smoke run).
+    # Build once (release for performance diagnostics, debug is fine for a smoke run).
     cargo build --release -p irohad --bin iroha3d -p iroha_kagami --bin kagami -p iroha_cli --bin iroha
 
     # Smoke: a few minutes, n = 4, kill -9 and proxy loss.
     python3 scripts/sumeragi_soak.py --profile smoke --validators 4 --faults kill,net \
         --net-mode proxy --bin-dir target/release --out artifacts/sumeragi-soak/smoke
 
-    # Release gate: 24 h at n = 4 and at n = 22 (Linux, netem in a namespace).
+    # Optional long diagnostic: 24 h (Linux, netem in a namespace).
     python3 scripts/sumeragi_soak.py --profile gate --validators 22 --seed 7 \
         --bin-dir target/release --out artifacts/sumeragi-soak/gate-n22
 
     # Recompute the verdict of a finished run from its logs.
     python3 scripts/sumeragi_soak.py --analyze artifacts/sumeragi-soak/gate-n22
 
-Operator runbook: ``specs/runbooks/sumeragi_taira_reset.md`` (section "Soak gate").
+Operator runbook: ``specs/runbooks/sumeragi_taira_reset.md`` (section "Optional fault diagnostics").
 """
 
 from __future__ import annotations
@@ -77,7 +79,7 @@ NODE_LOGGER = {"format": "json", "level": "info", "filter": logs.AUDIT_LOG_FILTE
 # The generated client account starts with a small fee-asset allocation that a sustained load
 # spends within minutes (about 0.002 per `Log` transaction at the default fee schedule); the
 # schedule is part of the execution policy genesis signs, so the soak funds the account instead
-# of quoting zero fees. One million covers a 24 h gate at 20 transactions per second 10 times over.
+# of quoting zero fees. One million covers a 24 h diagnostic at 20 transactions per second 10 times over.
 DEFAULT_FUND = "1000000"
 NODE_LOGGER_ENV = {f"LOG_{key.upper()}": value for key, value in NODE_LOGGER.items()}
 
@@ -175,9 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--analyze", type=Path, metavar="RUN_DIR", help="recompute the verdict of a finished run")
-    parser.add_argument("--profile", choices=sorted(PROFILES), default="smoke", help="preset (default smoke)")
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="smoke", help="optional diagnostic preset (default smoke); no deployment prerequisite")
     parser.add_argument("--duration", type=parse_duration, help="run length after the network is up (e.g. 5m, 24h)")
-    parser.add_argument("--validators", type=validators_arg, default=4, help="3f + 1 validators (4 or 22 for the gate)")
+    parser.add_argument("--validators", type=validators_arg, default=4, help="3f + 1 validators (4 or 22 for the optional long diagnostic)")
     parser.add_argument("--loss", type=parse_loss, default=(0.10, 0.30), help="P2P loss range of a net fault (default 10-30 %%)")
     parser.add_argument("--seed", type=int, default=None, help="seed of the fault plan and link noise (default: random, recorded)")
     parser.add_argument("--out", type=Path, help="run directory (network, logs, verdict)")
@@ -1338,7 +1340,7 @@ def judge(run_dir: Path) -> int:
     load_path = run_dir / "load.json"
     load = logs.LoadRecord.from_json(json.loads(load_path.read_text())) if load_path.exists() else None
     thresholds = logs.Thresholds(**run["thresholds"])
-    # Streamed through the incremental oracles: a 24 h gate's logs never sit in memory whole.
+    # Streamed through the incremental oracles: a long diagnostic's logs never sit in memory whole.
     analysis = logs.analyze_logs(run_dir / "logs")
     verdict = logs.build_verdict(
         analysis,

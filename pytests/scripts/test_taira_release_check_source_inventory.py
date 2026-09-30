@@ -140,7 +140,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         name = ("taira_public_reset::validator_config::tests::"
                 "materialization_replaces_localnet_admission_with_distinct_public_clients")
         self.assertEqual(gate.HARNESS_TARGETS["cli"][3],
-                         ["-p", "iroha_cli", "--bin", "iroha"])
+                         ["-p", "iroha_cli_lib", "--lib"])
         for scope in gate.QUALIFICATION_SCOPES:
             with self.subTest(scope=scope):
                 selected = gate.qualification_stages(scope)["cli"]
@@ -266,8 +266,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
 
     def test_cli_seating_selectors_follow_actual_module_aliases_and_entrypoint(self):
         sources = {
-            "Cargo.toml": '[package]\nname = "iroha_cli"\n[[bin]]\nname = "iroha"\npath = "src/bin/iroha.rs"\n',
-            "src/bin/iroha.rs": 'include!("../main_shared.rs");\n',
+            "Cargo.toml": '[package]\nname = "iroha_cli_lib"\n[lib]\nname = "iroha_cli"\npath = "src/main_shared.rs"\n',
             "src/main_shared.rs": 'mod taira;\n',
             "src/taira.rs": '#[path = "taira_parliament_seating.rs"]\npub(crate) mod parliament_seating;\n',
             "src/taira_parliament_seating.rs": '#[cfg(test)]\n#[path = "taira_parliament_seating_tests.rs"]\nmod tests;\n',
@@ -296,9 +295,8 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             self.root, selected("taira::seated_parliament::tests::seating_case"))
 
         for path, replacement in (
-            ("Cargo.toml", sources["Cargo.toml"].replace("src/bin/iroha.rs", "src/bin/unused.rs")),
-            ("Cargo.toml", sources["Cargo.toml"] + '[[bin]]\nname = "iroha"\npath = "src/bin/iroha.rs"\n'),
-            ("src/bin/iroha.rs", 'include!("../other.rs");\n'),
+            ("Cargo.toml", sources["Cargo.toml"].replace("src/main_shared.rs", "src/unused.rs")),
+            ("Cargo.toml", sources["Cargo.toml"].replace('name = "iroha_cli"', 'name = "foreign_cli"')),
             ("src/main_shared.rs", '#[path = "foreign.rs"]\nmod taira;\n'),
             ("src/taira.rs", '/*\n' + sources["src/taira.rs"] + '*/\n'),
             ("src/taira_parliament_seating.rs", 'const DECOY: &str = r#"\n'
@@ -311,8 +309,8 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                     gate.validate_selected_source_test_inventory(self.root, selected(correct))
         write_sources()
         for target in (
-            ("foreign package", "iroha", "bin", ["-p", "other", "--bin", "iroha"]),
-            ("foreign binary", "other", "bin", ["-p", "iroha_cli", "--bin", "other"]),
+            ("foreign package", "iroha_cli", "lib", ["-p", "other", "--lib"]),
+            ("foreign library", "other", "lib", ["-p", "iroha_cli_lib", "--lib"]),
         ):
             with self.subTest(target=target), patch.dict(gate.HARNESS_TARGETS, {"cli": target}):
                 with self.assertRaisesRegex(gate.CheckError, "CLI seating Cargo target registration"):

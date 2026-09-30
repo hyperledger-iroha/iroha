@@ -2054,7 +2054,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "cohesive ownership source contract")]
     fn public_owners_have_no_clone_debug_or_escape_surface_in_source() {
         const TEST_MODULE_MARKER: &str = "#[cfg(test)]\nmod tests {";
         fn public_method_names_v1(region: &str) -> Vec<&str> {

@@ -8,7 +8,6 @@ import importlib.util
 import re
 import sys
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 
@@ -175,29 +174,6 @@ class NoritoCodecContractsTest(unittest.TestCase):
             GATE.verify_history(empty_record, lambda _: payload)
         self.assertEqual(str(raised.exception), "history.images_missing")
 
-    def test_authoritative_size_validator_has_its_own_valid_mutation_baseline(self) -> None:
-        budget = load_module("norito_gate_source_budget", SOURCE_ROOT / "scripts/check_source_file_budget.py")
-        configuration = budget.load_budget(SOURCE_ROOT / "ci/source_file_budget.json")
-        default_limit = budget.limit_for(GATE.COLUMNAR, configuration)
-        exceptions = {path: limit for path, limit in configuration.exceptions.items() if path != GATE.COLUMNAR}
-        configurations = [configuration, replace(configuration, exceptions=exceptions)]
-        current_limit = configuration.exceptions.get(GATE.COLUMNAR, default_limit)
-        if current_limit > default_limit + 1:
-            configurations.append(replace(configuration, exceptions={**exceptions, GATE.COLUMNAR: current_limit - 1}))
-        for current in configurations:
-            with self.subTest(columnar_limit=current.exceptions.get(GATE.COLUMNAR)):
-                limit = current.exceptions.get(GATE.COLUMNAR, default_limit)
-                baseline = {**current.exceptions, GATE.COLUMNAR: limit}
-                self.assertEqual(budget.evaluate(baseline, current), [])
-                mutation = {**baseline, GATE.COLUMNAR: limit + 1}
-                self.assertNotEqual(mutation, baseline)
-                findings = budget.evaluate(mutation, current)
-                diagnostic = (
-                    f"grew from baseline {limit} to {limit + 1} lines"
-                    if GATE.COLUMNAR in current.exceptions
-                    else f"{limit + 1} lines exceeds the {limit}-line production limit"
-                )
-                self.assertEqual([(item.path, item.message) for item in findings], [(GATE.COLUMNAR, diagnostic)])
         # Current oversize source is reported separately by the existing CI guard.
         # This validator fixture never treats that unrelated failure as evidence
         # that any codec ownership mutation was detected.

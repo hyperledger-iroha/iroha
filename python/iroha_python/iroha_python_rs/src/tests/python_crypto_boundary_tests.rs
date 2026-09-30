@@ -635,13 +635,13 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
 }
 #[test]
 fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
-    use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
+    use iroha_core_privacy::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
 
     let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
     assert!(matches!(
         compiled_privacy_profile_v1(protocol_id),
         Err(
-            iroha_core::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            iroha_core_privacy::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
                 protocol_id: unavailable,
             }
         ) if unavailable == protocol_id
@@ -685,7 +685,7 @@ fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
 }
 #[test]
 fn vega_python_profile_is_unavailable_while_low_level_device_digest_binds_intent_and_session() {
-    use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
+    use iroha_core_privacy::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
     assert!(
         python_compiled_privacy_profile_v1(
             PrivacyProtocolIdV1::VegaExistingCredentialZkV1,

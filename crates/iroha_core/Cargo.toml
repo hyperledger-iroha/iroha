@@ -90,7 +90,7 @@ telemetry = []
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable stable fixed-width Core kernels and primitives SIMD backends.
-simd = ["iroha_primitives/simd-accel", "sha3/asm"]
+simd = ["iroha_primitives/simd-accel", "iroha_core_privacy/simd"]
 profiling = []
 # Enable FASTPQ GPU helper paths used by the daemon feature of the same name.
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
@@ -100,13 +100,16 @@ bench = []
 ids_projection = ["iroha_data_model/ids_projection"]
 # ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk", "iroha_core_zk/zk-halo2"]
-zk-stark = ["iroha_core_zk/zk-stark"]
+zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]
 # Non-shipping native privacy release evidence. This is deliberately not a
 # default feature and is forwarded only by explicit release runners and
 # integration gates; it enables only the exact-12 conformance generator and
 # sealed canonical-action builders, never the data model's general fixture
 # constructors or block-tampering helpers.
 privacy-release-evidence = [
+    "dep:orchard",
+    "dep:incrementalmerkletree",
+    "iroha_core_privacy/privacy-release-evidence",
     "zk-stark",
     "json",
     "iroha_data_model/privacy-exact12-conformance",
@@ -135,7 +138,7 @@ dev-tests = []
 # Enable internal test helpers (e.g., Topology and synthetic executor fixtures)
 # when building core tests. Production node builds must leave this disabled so
 # every user-provided executor path runs the admitted guest bytecode.
-iroha-core-tests = ["iroha_sccp/test-fixtures", "iroha_core_zk/test-utils"]
+iroha-core-tests = ["iroha_sccp/test-fixtures", "iroha_core_zk/test-utils", "iroha_core_privacy/test-utils", "iroha_core_timed_ovn/test-utils"]
 
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 
@@ -151,6 +154,8 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+iroha_core_privacy = { workspace = true }
+iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -182,9 +187,7 @@ iroha_sccp = { path = "../iroha_sccp" }
 iroha_sumeragi = { workspace = true }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
-sha3 = { version = "0.10.8", default-features = false, features = ["std", "zeroize"] }
 soranet_pq = { workspace = true }
-chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
 http = "1.3.1"
@@ -197,9 +200,8 @@ ff = "0.13.1"
 halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
-orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"] }
-incrementalmerkletree = "=0.8.2"
-nonempty = "=0.11.0"
+orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"], optional = true }
+incrementalmerkletree = { version = "=0.8.2", optional = true }
 
 dashmap = { workspace = true }
 eyre = { workspace = true }
@@ -216,7 +218,6 @@ hex = { workspace = true }
 tempfile = { workspace = true }
 blake3 = "1.8.2"
 zstd = { workspace = true }
-curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
@@ -228,6 +229,9 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_core_privacy = { workspace = true, features = ["test-utils"] }
+iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
+kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }

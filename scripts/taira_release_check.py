@@ -1194,13 +1194,14 @@ HARNESS_TARGETS = {
     "mv-admitted-map": ("native admitted map custody", "admitted_map_custody", "test", ["-p", "mv", "--test", "admitted_map_custody"]),
     "concread": ("native admitted B+ tree ownership", "concread", "lib", ["-p", "concread", "--lib"]),
     "wallet": ("native wallet resource bounds", "iroha_wallet", "lib", ["-p", "iroha_wallet", "--lib"]),
-    "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
+    "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad_lib", "--lib"]),
     "config-fixtures": ("native configuration loading fixtures", "iroha_config_integration", "test", ["-p", "iroha_config", "--test", "iroha_config_integration"]),
     "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
-    "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "cli": ("native CLI", "iroha_cli", "lib", ["-p", "iroha_cli_lib", "--lib"]),
+    "cli-bin": ("native shipping CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
     "sorafs-bin": ("native SoraFS shipping target", "sorafs-node", "bin", ["-p", "sorafs_node", "--bin", "sorafs-node"]),
     "taira-launcher": ("native Taira shipping launcher", "iroha3d_taira", "bin", ["-p", "irohad", "--bin", "iroha3d_taira"]),
@@ -1499,7 +1500,14 @@ def native_package_root(root: Path, package: str) -> Path:
     """Bind each maintained native package to its one captured source owner."""
     if package not in {target[3][1] for target in HARNESS_TARGETS.values()}:
         raise CheckError("native package lacks a maintained source owner")
-    return root / ("vendor" if package == "concread" else "crates") / package
+    owners = {
+        "irohad_lib": "crates/irohad",
+        "iroha_cli_lib": "crates/iroha_cli",
+        "irohad": "crates/irohad/bins",
+        "iroha_cli": "crates/iroha_cli/bins",
+        "concread": "vendor/concread",
+    }
+    return root / owners.get(package, "crates/" + package)
 
 
 def shipping_harnesses(root: Path) -> tuple[str, ...]:
@@ -2644,6 +2652,8 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
     fixture_features = {
         "iroha_core": "iroha-core-tests",
         "iroha_core_zk": "test-utils",
+        "iroha_core_privacy": "test-utils",
+        "iroha_core_timed_ovn": "test-utils",
         "iroha_torii": "test-fixtures",
     }
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check", "--keep-going",
@@ -2694,12 +2704,13 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
 
 PRODUCTION_LIBRARY_FORBIDDEN_FEATURES = {
     "iroha_core": "iroha-core-tests", "iroha_core_zk": "test-utils",
+    "iroha_core_privacy": "test-utils", "iroha_core_timed_ovn": "test-utils",
     "iroha_torii": "test-fixtures",
 }
 
 
 def observe_shipping_production_library(event: dict, observed: set[str]) -> None:
-    """Audit Core/Core-ZK/Torii features in the required default-feature build stream.
+    """Audit Core/proof/privacy/Torii features in the required default-feature build stream.
 
     Cargo reports fresh and rebuilt compiler artifacts alike. A missing library
     report is an evidence failure, even when every binary artifact is present.
@@ -3628,7 +3639,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
         # immutable release and signed build retain every shipping binary.
         shipping = shipping_harnesses(root)
         if focused_fixture:
-            required = {"taira-launcher", "cli", "kagami"}
+            required = {"taira-launcher", "cli-bin", "kagami"}
             if not required.issubset(shipping):
                 raise CheckError("focused four-peer fixture lacks an audited shipping binary")
             shipping = tuple(selection for selection in shipping if selection in required)
@@ -3851,15 +3862,15 @@ def validate_cli_seating_test_registration(root: Path, selections, mask) -> None
         return
     _, target, kind, arguments = HARNESS_TARGETS["cli"]
     manifest = tomllib.loads((package.parent / "Cargo.toml").read_text())
-    binaries = [row for row in manifest.get("bin", []) if row.get("name") == "iroha"]
-    if (target != "iroha" or kind != "bin"
-            or arguments != ["-p", "iroha_cli", "--bin", "iroha"]
-            or manifest.get("package", {}).get("name") != "iroha_cli"
-            or len(binaries) != 1):
+    library = manifest.get("lib", {})
+    if (target != "iroha_cli" or kind != "lib"
+            or arguments != ["-p", "iroha_cli_lib", "--lib"]
+            or manifest.get("package", {}).get("name") != "iroha_cli_lib"):
         raise ValueError("CLI seating Cargo target registration differs")
-    path = binaries[0].get("path", "src/bin/iroha.rs")
-    if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
-            or (package.parent / path).resolve() != (package / "bin/iroha.rs").resolve()):
+    path = library.get("path", "src/lib.rs")
+    if (library.get("name") != "iroha_cli" or not isinstance(path, str)
+            or Path(path).is_absolute() or ".." in Path(path).parts
+            or (package.parent / path).resolve() != (package / "main_shared.rs").resolve()):
         raise ValueError("CLI seating Cargo target source differs")
 
     def active_matches(relative, pattern):
@@ -3869,10 +3880,9 @@ def validate_cli_seating_test_registration(root: Path, selections, mask) -> None
                 if masked[match.start():match.start() + 2] == text[match.start():match.start() + 2]
                 and masked[:match.start()].count("{") == masked[:match.start()].count("}")]
 
-    includes = active_matches("bin/iroha.rs", r'^include!\("\.\./main_shared\.rs"\);$')
     parent = mask((package / "main_shared.rs").read_text())
     parents = list(re.finditer(r'^mod (taira);$', parent, re.MULTILINE))
-    if len(includes) != 1 or len(parents) != 1:
+    if len(parents) != 1:
         raise ValueError("CLI seating entrypoint module route differs")
     before = parent[:parents[0].start()]
     boundary = max(before.rfind(";"), before.rfind("}")) + 1

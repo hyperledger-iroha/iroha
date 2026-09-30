@@ -1,14 +1,10 @@
 //! Integration test: status payload limit warnings bubble into the TUI.
 use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener},
-    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
-fn monitor_bin() -> Option<PathBuf> {
-    std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
-}
 #[test]
 fn status_limit_warning_is_rendered() {
     let _serial = crate::serial_guard();
@@ -16,10 +12,7 @@ fn status_limit_warning_is_rendered() {
         eprintln!("skipping status_limit_warning_is_rendered: no stub addr");
         return;
     };
-    let Some(bin) = monitor_bin() else {
-        eprintln!("skipping: monitor binary path not provided by cargo");
-        return;
-    };
+    let bin = crate::monitor_bin();
     let mut child = Command::new(bin)
         .args([
             "--attach",

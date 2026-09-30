@@ -3,7 +3,7 @@ version = 1
 # These packages compile daemon executables even without an external-binary
 # requirement. Foundation-only PRs defer them along with node-launching tests;
 # their affected library dependencies and local CLI checks remain selected.
-daemon_packages = ["irohad"]
+daemon_packages = ["irohad", "irohad_lib"]
 
 # This manifest is intentionally exhaustive. `scripts/rust_ci.py validate` fails
 # whenever a workspace package is missing, duplicated, or no longer exists.
@@ -42,6 +42,8 @@ packages = [
   "fastpq_isi",
   "fastpq_prover",
   "iroha_core_zk",
+  "iroha_core_privacy",
+  "iroha_core_timed_ovn",
   "iroha_data_model",
   "iroha_data_model_derive",
   "iroha_executor_data_model",
@@ -63,6 +65,7 @@ description = "Node, Torii, client, configuration, networking, and node test sup
 packages = [
   "iroha",
   "iroha_cli",
+  "iroha_cli_lib",
   "iroha_config",
   "iroha_contract_deploy",
   "iroha_core",
@@ -81,6 +84,7 @@ packages = [
   "iroha_torii_shared",
   "iroha_wallet",
   "irohad",
+  "irohad_lib",
 ]
 
 [lanes.services]

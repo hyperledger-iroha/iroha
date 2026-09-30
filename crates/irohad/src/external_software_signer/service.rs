@@ -426,10 +426,6 @@ impl SoftwareSignerServiceV1 {
         state.ensure_available()?;
         state.attest_response(response_digest)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the administrative transaction keeps replay, rotation, revocation, and durable response ordering together"
-    )]
     pub(super) fn handle_admin_request(
         &self,
         request: &AdminRequestV1,

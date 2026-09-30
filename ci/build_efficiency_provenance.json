@@ -81,7 +81,7 @@
     }
   },
   "object_format": "sha1",
-  "schema_version": 3,
+  "schema_version": 4,
   "selected_paths": [
     {
       "donor": {
@@ -256,7 +256,7 @@
       "kind": "openpgp_v4_issuer_structure"
     }
   },
-  "source_budget": {
+  "historical_source_budget": {
     "excluded_prefixes": [
       "docs/portal/node_modules/",
       "target/",

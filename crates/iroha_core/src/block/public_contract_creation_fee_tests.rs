@@ -7,7 +7,7 @@ mod public_contract_creation_fees {
         let _guard = crate::status::nexus_fee_test_lock()
             .lock()
             .expect("fee status lock");
-        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+        let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku PublicQuote { view fn quote(int count) -> int { return count * 10; } }",
             )

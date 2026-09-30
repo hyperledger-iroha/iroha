@@ -426,7 +426,13 @@ fn native_checkpoint_input_requires_canonical_original_file_and_exact_network() 
             .unwrap(),
         original
     );
-    let other_network = NativeFinalityFixture::start("another-mobile-bootstrap-network");
+    // Chain labels alone do not change a genesis-derived NetworkId. Select a
+    // genuinely different signed genesis policy for the foreign-network control.
+    let other_network = NativeFinalityFixture::start_with_mode(
+        "another-mobile-bootstrap-network",
+        iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
+    );
+    assert_ne!(other_network.network_id(), checkpoint.network_id);
     let mut trailing = original.clone();
     trailing.push(0);
     for (index, bytes) in [
@@ -440,8 +446,23 @@ fn native_checkpoint_input_requires_canonical_original_file_and_exact_network() 
         let path = directory
             .path()
             .join(format!("invalid-native-{index}.norito"));
-        crate::secure_fs::write_private_file_atomic(&path, &bytes).unwrap();
-        assert!(read_finality_checkpoint(&path, checkpoint.network_id).is_err());
+        if bytes.is_empty() {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            // The positive writer correctly refuses empty payloads. Create this
+            // malformed input directly so the reader's refusal is exercised.
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
+        } else {
+            crate::secure_fs::write_private_file_atomic(&path, &bytes).unwrap();
+        }
+        assert!(
+            read_finality_checkpoint(&path, checkpoint.network_id).is_err(),
+            "malformed or foreign-network checkpoint control {index}"
+        );
     }
     let alias = directory.path().join("native-alias.norito");
     std::os::unix::fs::symlink(&input.expected_finality_checkpoint, &alias).unwrap();

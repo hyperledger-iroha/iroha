@@ -330,6 +330,20 @@ impl KagemushaHardwareTransactionVerifierV1 {
         })
     }
 
+    pub(crate) fn require_release_binding(
+        &self,
+        release: &KagemushaAuthenticatedReleaseV1,
+    ) -> Result<(), String> {
+        if self.release.release_id() != release.release_id()
+            || self.release.attestation_digest() != release.attestation_digest()
+            || self.release.authority_policy_digest() != release.authority_policy_digest()
+            || self.release.hardware_policy_digest() != release.hardware_policy_digest()
+        {
+            return Err("Kagemusha hardware and recursive authority differ".to_owned());
+        }
+        Ok(())
+    }
+
     /// Bind durable native storage to the exact authority, artifacts, profile and wallet.
     pub fn storage_binding(&self) -> Result<[u8; 32], String> {
         use sha2::{Digest as _, Sha256};

@@ -36,14 +36,12 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
-    privacy_release_evidence::{
-        PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
-        PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
-        build_privacy_release_pq_masp_network_actions_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
+    PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
+    build_privacy_release_pq_masp_network_actions_v1,
 };
+use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;

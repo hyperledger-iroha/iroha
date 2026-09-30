@@ -8,9 +8,6 @@ cd "${repo_root}"
 echo "[sorafs-release] build-efficiency provenance check"
 python3 -I -S scripts/check_build_efficiency_provenance.py
 
-echo "[sorafs-release] source-file budget check"
-python3 scripts/check_source_file_budget.py
-
 echo "[sorafs-release] reviewed shipping feature graph check"
 python3 -I -S scripts/check_release_feature_graph.py
 
@@ -198,19 +195,19 @@ cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture
 cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture
 provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"
 provider_ingest_list="$(
-  cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list
+  cargo test --locked -p irohad_lib --lib "${provider_ingest_test}" -- --exact --list
 )"
 if [[ "$(grep -Fxc -- "${provider_ingest_test}: test" <<<"${provider_ingest_list}" || true)" != 1 ]]; then
   echo "provider-ingest crash/restart contract must expose exactly one runnable test" >&2
   exit 1
 fi
-cargo test --locked -p irohad --lib "${provider_ingest_test}" -- \
+cargo test --locked -p irohad_lib --lib "${provider_ingest_test}" -- \
   --exact --include-ignored --nocapture
 echo "[sorafs-release] full signer contract libraries"
 cargo test --locked -p sorafs_manifest -p iroha_data_model -p iroha_executor_data_model -p iroha_schema_gen --lib
 bash ci/check_sorafs_native_authority_runtime.sh
 echo "[sorafs-release] external software signer protocol and CLI tests"
-cargo test --locked -p irohad --lib external_software_signer
+cargo test --locked -p irohad_lib --lib external_software_signer
 cargo test --locked -p irohad --features external-software-signer-bin \
   --bin sorafs_external_software_signer
 

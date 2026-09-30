@@ -34,10 +34,10 @@ NoritoDemoXcode/
 ## Local build instructions
 
 1. Open the repository on a macOS host.
-2. Generate the XCFramework following the steps in
-   [`docs/norito_bridge_release.md`](../../../docs/norito_bridge_release.md) and copy the
-   resulting `NoritoBridge.xcframework` into the demo directory (the project expects the
-   framework to sit next to the `.xcodeproj`).
+2. Generate the authenticated XCFramework following
+   [`docs/norito_bridge_release.md`](../../../docs/norito_bridge_release.md).
+   Set `MOBILE_SDK_APPLE_ARTIFACT_DIR` to its absolute canonical artifact directory
+   before invoking Xcode.
 3. Copy `Configs/demo.env.example` to `.env` (or fill the same values directly inside the
    Xcode scheme). The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL used for `/v1/connect` and `/v1/pipeline`.
@@ -47,13 +47,9 @@ NoritoDemoXcode/
    - `CONNECT_ROLE` — default role selected in the UI (`app` or `wallet`).
    - Optional helpers: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
      `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`, `CONNECT_APPROVE_SIGNATURE_B64`.
-4. Open `NoritoDemoXcode/NoritoDemoXcode.xcodeproj` in Xcode 15 or newer. To
-   exercise SDK-backed paths, add the repository-local `IrohaSwift/` package
-   through **File → Add Package Dependencies… → Add Local…** and select
-   `../../../IrohaSwift`.
-5. Add `NoritoBridge.xcframework` to the project (`File → Add Files…`), ensure it is
-   embedded for the `NoritoDemoXcode` target, and keep "Copy items if needed" enabled so
-   local builds use the freshly produced archive.
+4. Open `NoritoDemoXcode/NoritoDemoXcode.xcodeproj` in Xcode 15 or newer. The
+   app and XCTest target already declare the repository-local `IrohaSwift` package.
+5. Package admission validates the selected NoritoBridge artifact before building.
 6. Select the `NoritoDemoXcode` scheme, assign an iOS simulator/device target, and load
    the environment variables via the scheme editor (`Edit Scheme → Run → Arguments`).
 7. Build and run the project. The home screen confirms the Norito bridge status and

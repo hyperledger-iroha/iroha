@@ -34,6 +34,25 @@ fn make_network_builder_emits_only_native_sumeragi_config() -> Result<()> {
     );
     assert!(lookup(&["sumeragi", "block"]).is_none());
     assert!(lookup(&["sumeragi", "queues"]).is_none());
+    // The explicit loopback bypass owns local load generation. Authority limits
+    // retain the valid runtime defaults instead of emitting a retired zero sentinel.
+    for limit in [
+        "query_rate_per_authority_per_sec",
+        "query_burst_per_authority",
+        "tx_rate_per_authority_per_sec",
+        "tx_burst_per_authority",
+    ] {
+        assert!(lookup(&["torii", limit]).is_none());
+    }
+    assert_eq!(
+        lookup(&["torii", "api_rate_limit_bypass_cidrs"])
+            .and_then(TomlValue::as_array)
+            .map(|cidrs| cidrs
+                .iter()
+                .map(|cidr| cidr.as_str().unwrap())
+                .collect::<Vec<_>>()),
+        Some(vec!["127.0.0.0/8", "::1/128"])
+    );
     assert_eq!(
         lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
         Some(i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS).expect("connection capacity fits TOML"))

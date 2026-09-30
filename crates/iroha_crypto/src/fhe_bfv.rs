@@ -14005,10 +14005,6 @@ pub fn bfv_full_bootstrap_proof_key_pair_commitment_v1(
 /// Returns [`BfvError`] when the registered BFV profile cannot be derived, the schema digest is
 /// empty, key material is inert, or the generated pair does not satisfy the canonical proof-profile
 /// validator.
-#[expect(
-    clippy::too_many_lines,
-    reason = "constructor must spell out every proof-key metadata field in wire order"
-)]
 pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -17417,10 +17413,6 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     )
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "release-audit archive inventory intentionally enumerates signed evidence fields"
-)]
 fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
     generated_circuit_body: &[u8],
@@ -19816,10 +19808,6 @@ fn bfv_full_bootstrap_release_audit_append_field(body: &mut String, label: &str,
     body.push('=');
     body.push_str(value);
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "release-audit inventory output lists each signed proof-profile field explicitly"
-)]
 fn bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
     body: &mut String,
     proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
@@ -20221,10 +20209,6 @@ struct BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'a> {
     aliases: &'static [&'static [u8]],
     value: &'a [u8],
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "release-audit proof-profile scalar obligations intentionally enumerate audited fields"
-)]
 fn bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(
     proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> [BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1; 19] {
@@ -21916,10 +21900,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
     validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&profile)?;
     Ok(profile)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "signoff validation lists each signed release-audit commitment explicitly"
-)]
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
     payload: &BfvFullBootstrapReleaseAuditSignoffPayloadV1,
 ) -> Result<(), BfvError> {
@@ -36032,10 +36012,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_bytes_shape_v1(
     )?;
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "envelope validation mirrors every proof-key metadata field for auditability"
-)]
 fn validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(
     key: &BfvFullBootstrapProofKeyV1,
     envelope: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
@@ -36236,10 +36212,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_text_preflight_v1(
         BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN,
     )
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "pair validation enumerates every shared proof-key metadata field"
-)]
 fn validate_bfv_full_bootstrap_proof_key_pair_profile_match_v1(
     prover_key: &BfvFullBootstrapProofKeyV1,
     verifier_key: &BfvFullBootstrapProofKeyV1,

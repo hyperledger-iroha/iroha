@@ -223,8 +223,6 @@ custody and the original operator's current Operate permission. They require no
 role14 or role15 key operation, Reserve or Complete mutation. Current role15 key
 custody is not an additional condition for releasing an already completed receipt.
 
-The 15 native Check and 23 Core consumer tests pass in the
-[local native checkpoint](v1_closure_ledger.md#native-deployment-authority-and-schema-checkpoint).
 TODO: Qualify their production trust inputs and wire the actual daemon source. Torii role 11 requires its own
 purpose-owned authority; this role-14 action cannot supply missing per-token
 operation state. Bounded four-validator adversarial models
@@ -296,8 +294,8 @@ software provider, independent observer, approved spending journal, UTC/floor an
 configuration/submission source. Optional hardware uses the same contract; HSM,
 non-exportability and hardware-origin evidence are not prerequisites.
 A supplied digest or decoded record does not establish reviewed payload, signer
-custody, qualified time or rollback resistance. The local results remain scoped in
-the [account checkpoint](v1_closure_ledger.md#native-account-custody-and-shared-check-checkpoint).
+custody, qualified time or rollback resistance. The [qualification requirements](#qualification)
+apply to the configured production source.
 
 ## Qualification
 

@@ -8,9 +8,8 @@ Remaining implementation and qualification work is tracked in
 [`specs/sumeragi_goals.md`](sumeragi_goals.md).
 
 Wire and storage formats have one first-release definition. Retired layouts, raw-body transport
-constructors and alternate decoders are not supported. Revisions 2, 3, 4 and 4.1 applied
-adversarial reviews and the decisions taken on them
-(review logs: Appendices A–D). Appendix E reconciles the text with the implementation: the rules
+constructors and alternate decoders are not supported. Appendix E reconciles the text with
+the implementation: the rules
 the simulator and code review showed to be incomplete are amended in place, and every other
 code-level choice is listed.
 
@@ -303,7 +302,6 @@ authorization, immutable authority generation, complete ordered BLS roster with 
 of possession, and fresh authenticated leader randomness (§10). It contains no local certificate
 or signer subset. Every header, vote, QC, timeout, TC and probe echo carries this identity;
 verification requires equality with the authenticated context installed for that height.
-
 
 ```text
 prop_preimage(h, v, bh, ad)      = TAG_SIG ‖ 0x01 ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ ad
@@ -3383,9 +3381,14 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
   scheduler with the fake executor, and O9 with two threaded driver instances in one process.
   `Init` assembly and serving stay with the world in the simulator; the driver's versions are
   tested over in-memory backends.
-- Before the Taira cutover: a multi-process soak test (n = 4 and n = 22; netem loss 10–30 %,
-  delay spikes, random `kill -9`, disk-full injection; 24 h) with O-AGR, O-SIGN, O-LIVE and O-PERF
-  computed from node logs. It is a release gate.
+- Deployment policy is owned by on-chain governance for Taira and production. Multi-process
+  fault runs, including loss/delay, crashes, restarts and disk exhaustion, are optional
+  engineering diagnostics; their duration, topology and verdict do not authorize or block a
+  cutover. There is no mandatory 24-hour fault test for any network, and elapsed off-chain
+  runtime or a missing soak verdict is not a Sumeragi protocol or node-admission rule.
+  Operators still enforce signed native control authority, authenticated genesis and committee,
+  safety-record provenance and custody, and live readiness/write/restart checks. Optional
+  diagnostics compute O-AGR, O-SIGN, O-LIVE and O-PERF from node logs.
 
 ---
 
@@ -3455,13 +3458,6 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    holder-forwarding strategy or larger-committee parity tuning. The recommended `d = 4, p = 2`
    describes erasure geometry; it alone is not a validator-fault bandwidth guarantee.
 8. **Epoch length** of AMX-participating instances (handoff cadence for light clients, §11.7).
-
----
-
-## Appendices A–D. Review logs
-
-The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbatim in
-[`docs/history/2026-09-25/sumeragi-spec-review.md`](../docs/history/2026-09-25/sumeragi-spec-review.md).
 
 ---
 
@@ -3554,7 +3550,6 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E61 | Host frames (§13.5, §12.8) | A host that owns its scheduling sends opaque frames (`sim::host::Op::Frame` with a `HostFrame`, received through `Host::receive_frame`); the world carries them like messages of their class (NIC bandwidth, delay, loss, duplication, partitions) without reading them, and the network adversary does not rewrite them. The production kernel's availability frames travel so in the §13.5 conformance runs; the fake driver sends none. | `sim::host::{Op, HostFrame}`, `sim::world` |
 | E62 | F35 sparse local work (§8.1, §13.3) | The 100-seed sweep failed F35 seeds 6, 31, 78 and 87 (all `n = 22`): the progress check kept from the heartbeat era (8 heights in 120 s) and O-TXP's sanity check (half of the transactions older than 20 s committed) are not implied once leaders propose only nonempty work (§6.10). With the `f + 1` holders placed at random, up to `2f` workless leaders precede the first holder in a height's rotation and each failed view's timer grows ×1.5 up to `T_max` (§9.1): at `n = 22` one height may take 310 s (seed 6: views 0–7 of height 1, 129 s, had no holder leader; the other seeds lost views the same way, and no view `≥ 1` led by a holder failed). F35 checks the leader-turn bound (`Perf::LeaderTurns`) instead, from §6.10, §8.2 L1, L2, L4 and §9.1: with `v*(h)` the first view `≥ 1` whose leader (ground-truth topology) is a running holder, no honest replica passes `v*(h)` at an uncommitted height, and each commits `h` within `Σ_{v ≤ v*(h)} (P(v) + T(min(level_cap, s + v)) + σ + Δ)` of entering it (+3 % for drift), `s` the highest start level reported at `h`. A holder has work in any view `≥ 1`: the next transaction reaches it within the workload interval (`≤ 9 s`) of the parent's build, before view 1 ends (`P(0) + T(0) + P(1) + T(1) ≥ 10.4 s`, asserted by the scenario). O-TXP then requires each transaction in a block of the second height first committed after its submission (that block is built after the submission by a holder from its whole queue) instead of the 20-s check. The run lasts until heights 1 and 2 are due by the bound (no demotions yet, §2.1; start levels 0 and at most 1), at least 120 s, and requires both. `sim::tests::leader_turns_flags_holders_without_work` shows that the bound catches holders whose builders never return work. | `sim::scenarios::f35`, `sim::oracle::check_turns` |
 | E63 | F4 slow executors (§9.1, E32) | The 1000-seed sweep failed F4 seeds 163, 455, 675 and 799 (all `n = 22`, 6–7 heights in 40 s against 8): the fake builder prices a payload at its own machine's execution cost, so F4's slow executor (`exec_base` 1.5 s, above `exec_budget` = 750 ms at `n = 22` and 500 ms at `n ≤ 7`) fitted no transaction and, since leaders propose only nonempty work (§6.10), led like a silent member besides F4's silent ones (seed 163: views 0 and 1 of height 6, 12.9 s, led by its two slow executors). `exec_budget` is a calibrated estimate (§9.1) and E32 models F4's slow members as delaying only their Prepare, so their builders no longer price that slowness into payloads (`exec_per_kib: 0`, as for F15's and F34's slow executors). | `sim::scenarios::f04` |
-
 
 ### Native control-witness qualification boundary
 

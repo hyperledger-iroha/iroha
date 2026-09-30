@@ -211,7 +211,7 @@ whitelists malicious providers, or suppresses alerts.
   `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
   and failure scenarios animated in the threat model.
 - Capacity and repair soak results live under
-  `specs/sorafs/reports/sf2c_capacity_soak.md`, and the Sumeragi release-gate
+  `specs/sorafs/reports/sf2c_capacity_soak.md`, and the optional Sumeragi fault-diagnostic
   soak (`scripts/sumeragi_soak.py`, runbook `specs/runbooks/sumeragi_taira_reset.md`)
   covers consensus under loss, restarts and disk exhaustion. These artefacts
   capture the long-running drills referenced in the residual risk register.

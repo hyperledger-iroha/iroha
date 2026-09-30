@@ -10,10 +10,8 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use ivm::{
-    IVM, PointerType, ProgramMetadata, encoding, instruction, kotodama::compiler::Compiler,
-    syscalls as ivm_sys,
-};
+use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {

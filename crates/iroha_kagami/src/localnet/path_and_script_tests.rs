@@ -1,8 +1,4 @@
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the test validates one multi-file localnet path-normalization contract end to end"
-)]
 fn relative_out_dir_paths_are_absolute_in_configs() {
     struct DirGuard {
         prev: PathBuf,
@@ -402,6 +398,8 @@ fn ordinary_localnet_mint_seed_launcher_consumes_fresh_children_on_two_starts() 
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
     let root = tempfile::tempdir().expect("private localnet root");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+        .expect("protect localnet root");
     let signer_dir = root.path().join("runtime/mint-finality-signers");
     fs::create_dir_all(&signer_dir).expect("create private seed directory");
     fs::set_permissions(
@@ -488,6 +486,8 @@ fn ordinary_localnet_mint_seed_launcher_removes_the_one_shot_path_only_once_it_i
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
     let root = tempfile::tempdir().expect("private localnet root");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+        .expect("protect localnet root");
     let signer_dir = root.path().join("runtime/mint-finality-signers");
     fs::create_dir_all(&signer_dir).expect("create private seed directory");
     for directory in [root.path().join("runtime"), signer_dir.clone()] {

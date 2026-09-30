@@ -555,13 +555,6 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         self.assertGreaterEqual(combined.count("assert!("), 300)
         self.assertGreaterEqual(combined.count("assert_eq!("), 300)
 
-    def test_contract_sources_remain_readable(self) -> None:
-        # Completed compaction measurements are retained as historical evidence.
-        # The current source-file budget guard owns present source-size limits.
-        self.assertLessEqual(
-            max(len(line) for path in SOURCE_PATHS for line in (ROOT / path).read_text().splitlines()),
-            400,
-        )
 
 
 if __name__ == "__main__":

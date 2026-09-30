@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
 INITIAL_FIXTURE_SOURCE = SOURCE.with_name("soracloud_initial_fixture_tests.rs")
 INITIAL_FIXTURE_INCLUDE = 'include!("soracloud_initial_fixture_tests.rs");'
-MAXIMUM_SOURCE_LINES = 41_794
 
 HELPER_START = 'fn deploy_diagnostic_job_test_service('
 HELPER_END = 'const SORACLOUD_BFV_OPERATION_VECTOR_SET'
@@ -459,7 +458,9 @@ def _matching_brace(source: str, opening: int) -> int:
 
 
 def _function(source: str, name: str) -> str:
-    matches = list(re.finditer(rf"(?m)^\s*fn\s+{re.escape(name)}\b", source))
+    # Indentation cannot consume following lines: a blank suffix must not make
+    # each possible line start rescan the entire suffix for every function.
+    matches = list(re.finditer(rf"(?m)^[^\S\n]*fn\s+{re.escape(name)}\b", source))
     if len(matches) != 1:
         raise GuardError(f"{name}: expected exactly one function")
     opening = source.find("{", matches[0].end())
@@ -501,8 +502,6 @@ def validate_module_owner(owner: str) -> None:
 
 def validate_source(source: str, initial_fixture: str) -> None:
     expanded_source = _expanded_test_source(source, initial_fixture)
-    if len(expanded_source.splitlines()) > MAXIMUM_SOURCE_LINES:
-        raise GuardError("Soracloud test owner exceeded its source budget")
     if _test_inventory(expanded_source) != EXPECTED_TEST_INVENTORY:
         raise GuardError(
             "Soracloud current ordered test and feature inventory changed"
@@ -548,6 +547,18 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
             SOURCE.read_text(),
             INITIAL_FIXTURE_SOURCE.read_text(),
         )
+
+    def test_whitespace_growth_preserves_fixture_contract(self) -> None:
+        validate_source(
+            SOURCE.read_text() + "\n" * 100_000,
+            INITIAL_FIXTURE_SOURCE.read_text(),
+        )
+
+    def test_duplicate_protected_owner_after_whitespace_is_rejected(self) -> None:
+        source = SOURCE.read_text()
+        name = next(iter(PROTECTED_FUNCTION_SHA256))
+        with self.assertRaises(GuardError):
+            _function(source + "\n" * 100_000 + f"fn {name}() {{}}\n", name)
 
     def test_diagnostic_and_shared_fixture_mutations_fail_closed(self) -> None:
         source = SOURCE.read_text()
@@ -606,7 +617,6 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
                 "bounded-noise FHE inputs may pass",
                 1,
             ),
-            source + "\n" * (MAXIMUM_SOURCE_LINES - len(source.splitlines()) + 1),
         )
         for mutation in mutations:
             with self.subTest(digest=_sha256(mutation)[:12]):

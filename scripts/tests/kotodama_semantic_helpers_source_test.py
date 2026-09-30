@@ -11,10 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = Path("crates/kotodama_lang/src/semantic.rs")
 
-# The historical helper compaction used a 20,976-line opening and a 1,500-line
-# reduction gate. Those measurements are historical evidence, not a current
-# allowance: the parent now obeys the existing repository source-file budget.
-MAXIMUM_RUST_LINES = 16_100
+# Source-size policy is retired; preserve the semantic owners and regressions.
 OWNER_PATHS = (
     Path("crates/kotodama_lang/src/semantic/value_traits.rs"),
     Path("crates/kotodama_lang/src/semantic/trigger_lowering.rs"),
@@ -129,11 +126,6 @@ def _builtin_variants(source: str) -> list[str]:
 def validate_source(source: str, owners: dict[Path, str] | None = None) -> None:
     """Validate the parent, its two cohesive owners and semantic invariants."""
 
-    line_count = len(source.splitlines())
-    _require(
-        line_count <= MAXIMUM_RUST_LINES,
-        f"semantic.rs grew to {line_count} lines; maximum is {MAXIMUM_RUST_LINES}",
-    )
     _require(source.count(TEST_MARKER) == 1, "test module marker changed")
     marker_index = source.index(TEST_MARKER)
     parent_production = source[:marker_index]
@@ -287,6 +279,11 @@ class KotodamaSemanticHelpersSourceTest(unittest.TestCase):
     def test_repository_source_contract(self) -> None:
         validate_source(_read_source())
 
+    def test_whitespace_growth_preserves_semantic_contract(self) -> None:
+        source = _read_source()
+        changed = _replace_once(source, TEST_MARKER, "\n" * 20_000 + TEST_MARKER)
+        validate_source(changed)
+
     def test_mutations_fail_closed(self) -> None:
         source = _read_source()
         owners = _read_owners()
@@ -298,11 +295,6 @@ class KotodamaSemanticHelpersSourceTest(unittest.TestCase):
             "fn fixed_builtin_arg_accepts"
         )
         mutations = {
-            "line budget": _replace_once(
-                source,
-                TEST_MARKER,
-                ("// line-budget mutation\n" * 1_501) + TEST_MARKER,
-            ),
             "fixed diagnostic": _replace_once(
                 source,
                 "query page offset plus limit must fit i64",

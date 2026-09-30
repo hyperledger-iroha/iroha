@@ -2,6 +2,7 @@ package org.hyperledger.iroha.samples.wallet
 
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertFailsWith
 import org.junit.Test
 
 class SecurityPolicyLoaderTest {
@@ -75,4 +76,12 @@ class SecurityPolicyLoaderTest {
             )
         }
     }
+    @Test
+    fun `fingerprint rejects malformed certificate base64`() {
+        val malformed = "-----BEGIN CERTIFICATE-----\n%invalid%\n-----END CERTIFICATE-----"
+        assertFailsWith<IllegalArgumentException> {
+            PinnedCertificateVerifier.fingerprint(malformed.byteInputStream(Charsets.US_ASCII))
+        }
+    }
+
 }

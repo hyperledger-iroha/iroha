@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofResponseV1;
 import org.junit.Test;
 
 /** Kotlin-mirror parity tests for the strict Parliament V1 HTTP contract. */
@@ -637,7 +638,7 @@ public final class ParliamentApiV1Tests {
             NoritoHeader.COMPACT_LEN,
             NoritoHeader.COMPRESSION_NONE);
     final byte[] canonical = concat(header.encode(), payload);
-    final ParliamentApiV1.TimedOvnCastingProofResponse parsed =
+    final ParliamentTimedOvnCastingProofResponseV1 parsed =
         ParliamentApiV1.parseTimedOvnCastingProofResponse(canonical);
     assertArrayEquals(canonical, parsed.canonicalNorito());
     assertArrayEquals(payload, parsed.payload());

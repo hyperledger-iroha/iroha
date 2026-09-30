@@ -1,26 +1,27 @@
 package org.hyperledger.iroha.samples.wallet
 
 import android.content.Context
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.security.KeyFactory
-import java.security.Signature
-import java.security.spec.X509EncodedKeySpec
+import java.io.InputStream
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.JsonEncoder
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 import java.util.Base64
-import org.json.JSONArray
 import org.json.JSONObject
-import org.hyperledger.iroha.android.address.AccountAddress
-import org.hyperledger.iroha.android.address.AccountAddressException
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
 
 data class PosProvisionManifest(
     val manifestId: String,
-    val sequence: Int,
+    val sequence: Long,
     val publishedAtMs: Long,
     val validFromMs: Long,
     val validUntilMs: Long,
@@ -43,7 +44,7 @@ data class PosBackendRoot(
 
 data class ManifestStatus(
     val manifestId: String,
-    val sequence: Int,
+    val sequence: Long,
     val operator: String,
     val validWindowLabel: String,
     val rotationLabel: String,
@@ -191,171 +192,159 @@ data class BackendRootStatus(
 
 private data class DualStatus(val healthy: Boolean, val label: String)
 
+/** Reads displayed fields exclusively from the canonical, Ed25519-signed V1 payload. */
 object PosManifestLoader {
-    private const val MANIFEST_ASSET = "pos_manifest.json"
+    private const val MANIFEST_ASSET = "manifest_v1.json"
+    private const val MAX_MANIFEST_BYTES = 65_536
+    private const val SCHEMA = "iroha.example.pos-manifest.v1"
+    private val payloadRequired = setOf(
+        "schema", "manifest_id", "sequence", "published_at_ms", "valid_from_ms",
+        "valid_until_ms", "operator", "backend_roots"
+    )
+    private val rootRequired = setOf("label", "role", "public_key", "valid_from_ms", "valid_until_ms")
 
     fun loadFromAssets(context: Context): PosProvisionManifest {
-        context.assets.open(MANIFEST_ASSET).use { input ->
-            val reader = BufferedReader(InputStreamReader(input))
-            val raw = reader.readText()
-            return parse(raw)
+        context.assets.open(MANIFEST_ASSET).use { return parse(it) }
+    }
+
+    /** Read at most one bounded envelope before decoding any signed payload. */
+    internal fun parse(input: InputStream): PosProvisionManifest {
+        val bytes = ByteArrayOutputStream()
+        val buffer = ByteArray(4096)
+        while (true) {
+            val count = input.read(buffer, 0, minOf(buffer.size, MAX_MANIFEST_BYTES + 1 - bytes.size()))
+            if (count < 0) break
+            require(bytes.size() + count <= MAX_MANIFEST_BYTES) { "manifest exceeds byte bound" }
+            bytes.write(buffer, 0, count)
         }
+        return parse(decodeUtf8(bytes.toByteArray()))
     }
 
     fun parse(raw: String): PosProvisionManifest {
-        val json = JSONObject(raw)
-        val backendRoots = parseBackendRoots(json.optJSONArray("backend_roots"))
-        val payloadBase64 =
-            json.optString("payload_base64")
-                .takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("manifest missing payload_base64")
-        val operatorSignature =
-            json.optString("operator_signature")
-                .takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("manifest missing operator_signature")
-        val operator = json.getString("operator")
-        val payload = decodeBase64(payloadBase64)
-        val signature = decodeHex(operatorSignature)
-        val operatorKey = decodeOperatorPublicKey(operator)
-        verifySignature(operatorKey, payload, signature)
+        require(raw.length <= MAX_MANIFEST_BYTES) { "manifest exceeds byte bound" }
+        val envelope = objectValue(parseJson(raw), "manifest envelope")
+        exactFields(envelope, setOf("operator_signature", "payload_base64"), emptySet())
+        require(JsonEncoder.encode(envelope) + "\n" == raw) { "manifest envelope is not canonical" }
+        val payloadBase64 = string(envelope, "payload_base64")
+        val operatorSignature = string(envelope, "operator_signature")
+        require(operatorSignature.matches(Regex("[0-9a-f]{128}"))) {
+            "manifest signature must be 128 lowercase hex characters"
+        }
+        val payload = try {
+            Base64.getDecoder().decode(payloadBase64)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException("invalid base64 payload", error)
+        }
+        require(Base64.getEncoder().encodeToString(payload) == payloadBase64) {
+            "manifest payload base64 is not canonical"
+        }
+        val payloadText = decodeUtf8(payload)
+        val signed = objectValue(parseJson(payloadText), "manifest payload")
+        require(JsonEncoder.encode(signed) == payloadText) { "manifest payload is not canonical" }
+        exactFields(signed, payloadRequired, setOf("rotation_hint_ms", "metadata"))
+        require(string(signed, "schema") == SCHEMA) { "unsupported manifest schema" }
+        val operator = string(signed, "operator")
+        verifySignature(decodeOperatorPublicKey(operator), payload, decodeHex(operatorSignature))
+        val roots = signed["backend_roots"] as? List<*>
+            ?: throw IllegalArgumentException("backend_roots must be an array")
         return PosProvisionManifest(
-            manifestId = json.getString("manifest_id"),
-            sequence = json.getInt("sequence"),
-            publishedAtMs = json.getLong("published_at_ms"),
-            validFromMs = json.getLong("valid_from_ms"),
-            validUntilMs = json.getLong("valid_until_ms"),
-            rotationHintMs = json.optLong("rotation_hint_ms").takeIf { json.has("rotation_hint_ms") },
+            manifestId = string(signed, "manifest_id"),
+            sequence = nonnegativeInteger(signed, "sequence"),
+            publishedAtMs = nonnegativeInteger(signed, "published_at_ms"),
+            validFromMs = nonnegativeInteger(signed, "valid_from_ms"),
+            validUntilMs = nonnegativeInteger(signed, "valid_until_ms"),
+            rotationHintMs = if (signed.containsKey("rotation_hint_ms")) {
+                nonnegativeInteger(signed, "rotation_hint_ms")
+            } else null,
             operator = operator,
-            backendRoots = backendRoots,
-            metadata = json.optJSONObject("metadata"),
+            backendRoots = roots.map { parseBackendRoot(objectValue(it, "backend root")) },
+            metadata = metadata(signed),
             payloadBase64 = payloadBase64,
             operatorSignature = operatorSignature
         )
     }
 
-    private fun parseBackendRoots(array: JSONArray?): List<PosBackendRoot> {
-        if (array == null) return emptyList()
-        val items = mutableListOf<PosBackendRoot>()
-        for (index in 0 until array.length()) {
-            val entry = array.getJSONObject(index)
-            items.add(
-                PosBackendRoot(
-                    label = entry.getString("label"),
-                    role = entry.getString("role").lowercase(Locale.US),
-                    publicKey = entry.getString("public_key"),
-                    validFromMs = entry.getLong("valid_from_ms"),
-                    validUntilMs = entry.getLong("valid_until_ms"),
-                    metadata = entry.optJSONObject("metadata")
-                )
-            )
-        }
-        return items
+    private fun parseBackendRoot(root: Map<String, Any?>): PosBackendRoot {
+        exactFields(root, rootRequired, setOf("metadata"))
+        return PosBackendRoot(
+            label = string(root, "label"),
+            role = string(root, "role"),
+            publicKey = string(root, "public_key"),
+            validFromMs = nonnegativeInteger(root, "valid_from_ms"),
+            validUntilMs = nonnegativeInteger(root, "valid_until_ms"),
+            metadata = metadata(root)
+        )
     }
 
-    private fun decodeOperatorPublicKey(operatorId: String): ByteArray {
-        val address = operatorId.trim()
-        require(!address.contains("@")) { "domain-qualified operator account is not canonical" }
-        if (address.lowercase(Locale.US).startsWith("ed01")) {
-            val raw = decodeHex(address)
-            require(raw.size > 3 && raw[0] == 0xED.toByte() && raw[1] == 0x01.toByte()) {
-                "unsupported operator key encoding"
-            }
-            val declaredLen = raw[2].toInt() and 0xFF
-            require(declaredLen == raw.size - 3) { "unexpected operator key length" }
-            return raw.copyOfRange(3, raw.size)
-        }
-        try {
-            val decoded = AccountAddress.fromI105(address, null)
-            return extractSingleSignatoryKey(decoded.canonicalBytes())
-        } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("failed to parse operator account", ex)
+    private fun parseJson(raw: String): Any? = try {
+        JsonParser.parse(raw)
+    } catch (error: IllegalStateException) {
+        throw IllegalArgumentException("invalid manifest JSON", error)
+    }
+
+    private fun objectValue(value: Any?, name: String): Map<String, Any?> {
+        val objectValue = value as? Map<*, *>
+            ?: throw IllegalArgumentException("$name must be an object")
+        return objectValue.entries.associate { (key, entry) ->
+            require(key is String) { "$name contains a non-string key" }
+            key to entry
         }
     }
 
-    private fun extractSingleSignatoryKey(canonical: ByteArray): ByteArray {
-        if (canonical.size < 4) {
-            throw IllegalArgumentException("invalid canonical address length")
-        }
-        var cursor = 0
-        val header = canonical[cursor++].toInt() and 0xFF
-        val extensionFlag = header and 0x01
-        val classBits = (header shr 3) and 0x03
-        require(extensionFlag == 0) { "address extension flag set" }
-        require(classBits == 0 || classBits == 1) { "unknown address class" }
-        val controllerTag = canonical[cursor++].toInt() and 0xFF
-        require(controllerTag == 0x00) { "unsupported controller tag $controllerTag" }
-        if (cursor + 2 > canonical.size) {
-            throw IllegalArgumentException("invalid canonical address length")
-        }
-        val curveId = canonical[cursor++].toInt() and 0xFF
-        require(curveId == 0x01) { "unsupported signing algorithm $curveId" }
-        val keyLen = canonical[cursor++].toInt() and 0xFF
-        val end = cursor + keyLen
-        if (end != canonical.size) {
-            throw IllegalArgumentException("unexpected trailing bytes in address payload")
-        }
-        return canonical.copyOfRange(cursor, end)
-    }
-
-    private fun decodeBase64(value: String): ByteArray {
-        return try {
-            Base64.getDecoder().decode(value)
-        } catch (ex: IllegalArgumentException) {
-            throw IllegalArgumentException("invalid base64 payload", ex)
+    private fun exactFields(value: Map<String, Any?>, required: Set<String>, optional: Set<String>) {
+        require(value.keys.containsAll(required) && (value.keys - required - optional).isEmpty()) {
+            "manifest object has missing or unknown fields"
         }
     }
 
-    private fun decodeHex(value: String): ByteArray {
-        val normalized = value.trim()
-        if (normalized.length % 2 != 0) {
-            throw IllegalArgumentException("hex string must have even length")
+    private fun string(value: Map<String, Any?>, key: String): String =
+        (value[key] as? String)?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalArgumentException("$key must be a nonempty string")
+
+    private fun nonnegativeInteger(value: Map<String, Any?>, key: String): Long {
+        val integer = value[key] as? Long
+            ?: throw IllegalArgumentException("$key must be an Int64 integer")
+        require(integer >= 0) { "$key must be nonnegative" }
+        return integer
+    }
+
+    private fun metadata(value: Map<String, Any?>): JSONObject? {
+        if (!value.containsKey("metadata")) return null
+        val fields = objectValue(value["metadata"], "metadata")
+        require(fields.values.all { it is String }) { "metadata values must be strings" }
+        return JSONObject(fields)
+    }
+
+    private fun decodeUtf8(bytes: ByteArray): String = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes)).toString()
+    } catch (error: java.nio.charset.CharacterCodingException) {
+        throw IllegalArgumentException("manifest must contain valid UTF-8", error)
+    }
+
+    private fun decodeOperatorPublicKey(operator: String): ByteArray {
+        val canonical = try {
+            AccountAddress.fromI105(operator, null).canonicalBytes
+        } catch (error: AccountAddressException) {
+            throw IllegalArgumentException("failed to parse operator account", error)
         }
-        val out = ByteArray(normalized.length / 2)
-        var index = 0
-        while (index < normalized.length) {
-            val hi = Character.digit(normalized[index], 16)
-            val lo = Character.digit(normalized[index + 1], 16)
-            if (hi == -1 || lo == -1) {
-                throw IllegalArgumentException("invalid hex string")
-            }
-            out[index / 2] = ((hi shl 4) or lo).toByte()
-            index += 2
-        }
-        return out
+        require(canonical.size == 36 && canonical.copyOfRange(0, 4).contentEquals(
+            byteArrayOf(0x02, 0x00, 0x01, 0x20)
+        )) { "operator must be a canonical single Ed25519 account" }
+        return canonical.copyOfRange(4, 36)
+    }
+
+    private fun decodeHex(value: String): ByteArray = ByteArray(value.length / 2) { index ->
+        ((Character.digit(value[index * 2], 16) shl 4) or Character.digit(value[index * 2 + 1], 16)).toByte()
     }
 
     private fun verifySignature(publicKey: ByteArray, payload: ByteArray, signature: ByteArray) {
-        require(publicKey.size == 32) { "operator public key must be 32 bytes" }
-        val encoded = encodeEd25519PublicKey(publicKey)
-        try {
-            val keyFactory = KeyFactory.getInstance("Ed25519")
-            val publicSpec = X509EncodedKeySpec(encoded)
-            val verifier = Signature.getInstance("Ed25519")
-            verifier.initVerify(keyFactory.generatePublic(publicSpec))
-            verifier.update(payload)
-            if (!verifier.verify(signature)) {
-                throw IllegalArgumentException("manifest signature verification failed")
-            }
-        } catch (ex: Exception) {
-            if (ex is IllegalArgumentException) throw ex
-            throw IllegalArgumentException("manifest signature verification failed", ex)
-        }
-    }
-
-    private fun encodeEd25519PublicKey(raw: ByteArray): ByteArray {
-        // RFC 8410 SubjectPublicKeyInfo prefix for Ed25519
-        val prefix =
-            byteArrayOf(
-                0x30, 0x2A,
-                0x30, 0x05,
-                0x06, 0x03,
-                0x2B, 0x65, 0x70,
-                0x03, 0x21, 0x00
-            )
-        return ByteArray(prefix.size + raw.size).also {
-            System.arraycopy(prefix, 0, it, 0, prefix.size)
-            System.arraycopy(raw, 0, it, prefix.size, raw.size)
-        }
+        val verifier = Ed25519Signer()
+        verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+        verifier.update(payload, 0, payload.size)
+        require(verifier.verifySignature(signature)) { "manifest signature verification failed" }
     }
 }
 

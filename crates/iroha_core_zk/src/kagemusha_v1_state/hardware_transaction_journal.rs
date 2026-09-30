@@ -4,21 +4,16 @@
 //! exact public intent before dispatch and exact authenticated certificate before exposure.
 //! Restoring the complete wallet still requires the device's freshly selected checkpoint.
 
-#[cfg(any(test, feature = "test-utils"))]
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-#[cfg(any(test, feature = "test-utils"))]
 use norito::{Decode, Encode};
 
-#[cfg(any(test, feature = "test-utils"))]
 use super::private_journal::{PrivateJournal, PrivateJournalFormat};
 use crate::kagemusha_v1_recursion::KagemushaHardwareTransactionV1;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::kagemusha_v1_recursion::{
     KAGEMUSHA_HARDWARE_TRANSACTION_MAX_BYTES_V1, KagemushaHardwareTransactionVerifierV1,
 };
 
-#[cfg(any(test, feature = "test-utils"))]
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "hardware-transactions.norito.wal",
     magic: b"IKGHTW1\0",
@@ -39,7 +34,6 @@ pub trait KagemushaHardwareTransactionTransportV1: Send + Sync {
     ) -> Result<Vec<u8>, String>;
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::hardware_transaction_journal::Record")]
 enum Record {
@@ -56,13 +50,11 @@ enum Record {
     },
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 struct Entry {
     transaction: KagemushaHardwareTransactionV1,
     certificate: Option<Vec<u8>>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 /// Descriptor-locked public intent and certificate WAL for one authenticated hardware lane.
 /// History has no count or age eviction. Disk exhaustion is an I/O failure before exposure.
 pub struct KagemushaHardwareTransactionJournalV1 {
@@ -72,7 +64,6 @@ pub struct KagemushaHardwareTransactionJournalV1 {
     entries: BTreeMap<[u8; 32], Entry>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl KagemushaHardwareTransactionJournalV1 {
     /// Create a new exclusive WAL; existing paths are never overwritten or reset.
     pub fn create_new(
@@ -163,7 +154,6 @@ impl KagemushaHardwareTransactionJournalV1 {
         Ok(owner)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     /// Persist intent, execute/recover the one hardware transaction, verify it and fsync the
     /// original certificate before returning. Exact duplicate calls return the retained bytes.
     pub fn commit_or_recover(
@@ -220,12 +210,10 @@ impl KagemushaHardwareTransactionJournalV1 {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn validate_intent(
     id: [u8; 32],
     transaction: &KagemushaHardwareTransactionV1,

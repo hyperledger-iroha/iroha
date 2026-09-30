@@ -54,8 +54,6 @@ final class DemoConnectViewModel: ObservableObject {
   @Published var approveAccountId: String = ""
   @Published var approvePrivKeyB64: String = ""
   @Published var approveSigB64: String = ""
-  @Published var lastApproveAccount: String = ""
-  @Published var lastApproveSigB64: String = ""
   @Published var addressPreview: AddressPreview?
 
   private var webSocketTask: URLSessionWebSocketTask?
@@ -600,23 +598,6 @@ final class DemoConnectViewModel: ObservableObject {
     let issuedAt = ISO8601DateFormatter().string(from: Date())
     let obj: [String: Any] = ["domain": proofDomain, "uri": proofUri, "statement": proofStatement, "issued_at": issuedAt, "nonce": proofNonce]
     return try? JSONSerialization.data(withJSONObject: obj)
-  }
-  private func deriveKeysFromPeerPub(_ peerRaw: Data) {
-    guard let sidRaw = dataFromBase64OrBase64URL(sid), sidRaw.count == 32 else { log("sid must be 32 bytes"); return }
-    guard let sk = localPriv else { log("Generate local key first"); return }
-    guard let peer = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerRaw) else { log("Invalid peer public key"); return }
-    do {
-      let shared = try sk.sharedSecretFromKeyAgreement(with: peer)
-      guard let salt = computeSalt(sid: sidRaw) else { return }
-      let infoApp = Data("iroha-connect|k_app".utf8)
-      let infoWallet = Data("iroha-connect|k_wallet".utf8)
-      let kApp = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoApp, outputByteCount: 32)
-      let kWallet = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: infoWallet, outputByteCount: 32)
-      if role == .app { keySend = kApp; keyRecv = kWallet } else { keySend = kWallet; keyRecv = kApp }
-      sendKeyB64 = exportKeyB64(keySend)
-      recvKeyB64 = exportKeyB64(keyRecv)
-      log("Derived keys from peer pubkey")
-    } catch { log("Key agreement failed: \(error.localizedDescription)") }
   }
   private func exportKeyB64(_ key: SymmetricKey?) -> String {
     guard let key else { return "" }
@@ -1163,8 +1144,7 @@ final class TransferHistoryViewModel: ObservableObject {
       do {
         let sdk = IrohaSDK(baseURL: url)
         summaries = try await sdk.getTransactionHistory(accountId: trimmedAccount,
-                                                        page: 1,
-                                                        perPage: 25)
+                                                        limit: 25)
       } catch {
         errorMessage = error.localizedDescription
       }

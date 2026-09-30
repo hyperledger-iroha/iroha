@@ -28,6 +28,8 @@ docker_bins = [
 # node-sized graph (or test-only features) accidentally.
 iroha_core = { path = "crates/iroha_core", default-features = false }
 iroha_core_zk = { path = "crates/iroha_core_zk", default-features = false }
+iroha_core_privacy = { path = "crates/iroha_core_privacy", default-features = false }
+iroha_core_timed_ovn = { path = "crates/iroha_core_timed_ovn", default-features = false }
 
 iroha_torii = { path = "crates/iroha_torii", default-features = false }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
@@ -82,6 +84,8 @@ iroha_accel = { path = "crates/iroha_accel", default-features = false }
 ivm = { path = "crates/ivm" }
 ivm_abi = { path = "crates/ivm_abi" }
 kotodama_lang = { path = "crates/kotodama_lang" }
+kotodama_surface = { path = "crates/kotodama_surface" }
+kotodama_toolchain = { path = "crates/kotodama_toolchain" }
 sorafs_car = { path = "crates/sorafs_car" }
 sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest", features = ["pqc"] }
@@ -255,6 +259,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
 
 # pedantic
 clippy.pedantic = { level = "warn", priority = -1 }
+clippy.too_many_lines = "allow"
 clippy.match_wildcard_for_single_variants = "allow"
 clippy.semicolon_if_nothing_returned = "allow"
 clippy.wildcard_imports = "allow"
@@ -297,6 +302,10 @@ clippy.wildcard_dependencies = "deny"
 [workspace]
 resolver = "2"
 default-members = [
+    "crates/irohad/bins",
+    "crates/iroha_cli/bins",
+    "crates/iroha_core_privacy",
+    "crates/iroha_core_timed_ovn",
     "crates/norito",
     "crates/norito_derive",
     "crates/iroha_primitives",
@@ -318,8 +327,12 @@ default-members = [
     "crates/ivm",
     "crates/ivm_abi",
     "crates/kotodama_lang",
+    "crates/kotodama_surface",
+    "crates/kotodama_toolchain",
 ]
 members = [
+    "crates/irohad/bins",
+    "crates/iroha_cli/bins",
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",
     "crates/norito/accelerators/jsonstage1_metal",

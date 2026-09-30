@@ -73,15 +73,15 @@ Audited code evidence:
 - [../crates/iroha_core_zk/src/stark.rs](../crates/iroha_core_zk/src/stark.rs):
   generic native Goldilocks STARK/FRI verifier and AIR bindings; the generic
   boundary explicitly rejects the retired ZK-ACE relation.
-- [../crates/iroha_core/src/privacy_engines/zk_ace.rs](../crates/iroha_core/src/privacy_engines/zk_ace.rs)
+- [../crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs](../crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs)
   and
-  [../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs](../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs):
+  [../crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs):
   the private zeroizing witness, compiled profile, dedicated masked AIR,
   theorem-bound DEEP/FRI prover, and native verifier.
-- [../crates/iroha_core/src/privacy_engines/transparent_stark.rs](../crates/iroha_core/src/privacy_engines/transparent_stark.rs),
-  [../crates/iroha_core/src/privacy_engines/aggregate_stark.rs](../crates/iroha_core/src/privacy_engines/aggregate_stark.rs),
+- [../crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs),
+  [../crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs),
   and
-  [../crates/iroha_core/src/privacy_engines/proof_managed_note_stark.rs](../crates/iroha_core/src/privacy_engines/proof_managed_note_stark.rs):
+  [../crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs](../crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs):
   shared field, transcript, Merkle, aggregate DEEP/FRI, exact proof-codec, and
   proof-managed relation-profile boundaries.
 - [../crates/iroha_zkp_halo2/src/lib.rs](../crates/iroha_zkp_halo2/src/lib.rs):

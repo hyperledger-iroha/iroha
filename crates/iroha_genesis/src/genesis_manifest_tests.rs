@@ -1,3 +1,5 @@
+//! Genesis manifest ownership, preparation, framing, and refusal controls.
+
 use super::*;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -38,6 +40,188 @@ fn with_deterministic_test_topology(mut manifest: RawGenesisTransaction) -> RawG
         .expect("test genesis manifest has one transaction")
         .topology = deterministic_test_topology_entries();
     manifest
+}
+fn split_fixture() -> RawGenesisTransaction {
+    GenesisBuilder::new_without_executor(ChainId::from("split-genesis-fixture"), ".")
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+        )
+        .next_transaction()
+        .append_instruction(Log::new(Level::INFO, "first original instruction".into()))
+        .append_instruction(Log::new(Level::WARN, "second original instruction".into()))
+        .next_transaction()
+        .append_instruction(Log::new(Level::INFO, "third original instruction".into()))
+        .append_instruction(Log::new(Level::WARN, "fourth original instruction".into()))
+        .next_transaction()
+        .set_topology(deterministic_test_topology_entries())
+        .build_raw()
+        .unwrap()
+}
+#[test]
+fn instruction_only_split_preserves_exact_flat_semantics_and_structured_owners() {
+    let original = split_fixture();
+    let split = original
+        .clone()
+        .partition_instruction_only_transaction(1, &[1, 1])
+        .unwrap();
+    assert_eq!(split.transactions.len(), original.transactions.len() + 1);
+    assert_eq!(
+        norito::json::to_json(&split.transactions[0]).unwrap(),
+        norito::json::to_json(&original.transactions[0]).unwrap()
+    );
+    assert_eq!(
+        norito::json::to_json(split.transactions.last().unwrap()).unwrap(),
+        norito::json::to_json(original.transactions.last().unwrap()).unwrap()
+    );
+    assert_eq!(
+        norito::json::to_json(&split.transactions[3]).unwrap(),
+        norito::json::to_json(&original.transactions[2]).unwrap(),
+        "an unselected instruction batch retains its complete original boundary"
+    );
+    assert_eq!(
+        split.instructions().collect::<Vec<_>>(),
+        original.instructions().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        split.effective_parameters().unwrap(),
+        original.effective_parameters().unwrap()
+    );
+    let mut restored_boundaries = split.clone();
+    restored_boundaries.transactions = original.transactions.clone();
+    assert_eq!(
+        norito::json::to_json(&restored_boundaries).unwrap(),
+        norito::json::to_json(&original).unwrap(),
+        "every nontransaction manifest field is unchanged"
+    );
+    assert_eq!(
+        norito::json::to_json(
+            &split
+                .clone()
+                .partition_instruction_only_transaction(1, &[1])
+                .unwrap()
+        )
+        .unwrap(),
+        norito::json::to_json(&split).unwrap(),
+        "separation is idempotent"
+    );
+    assert!(
+        original
+            .clone()
+            .partition_instruction_only_transaction(original.transactions.len(), &[1])
+            .unwrap_err()
+            .to_string()
+            .contains("out of bounds")
+    );
+    assert!(
+        split.transactions[1..3]
+            .iter()
+            .all(|transaction| transaction.instructions.len() == 1)
+    );
+}
+#[test]
+fn instruction_only_split_refuses_mixed_structured_owners_and_parameter_instructions() {
+    for owner in ["parameters", "topology", "ivm_triggers"] {
+        for lengths in [vec![], vec![0, 2], vec![1], vec![3], vec![usize::MAX, 1]] {
+            assert!(
+                split_fixture()
+                    .partition_instruction_only_transaction(1, &lengths)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("preserve its exact 2 instructions")
+            );
+        }
+        let mut original = split_fixture();
+        match owner {
+            "parameters" => original.transactions[1].parameters = Some(Parameters::default()),
+            "topology" => original.transactions[1].topology = deterministic_test_topology_entries(),
+            "ivm_triggers" => {
+                original.transactions[1]
+                    .ivm_triggers
+                    .push(GenesisIvmTrigger::new(
+                    "split-control".parse().unwrap(),
+                    GenesisIvmAction::new(
+                        "original.to",
+                        Repeats::Exactly(1),
+                        iroha_test_samples::ALICE_ID.clone(),
+                        iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
+                    ),
+                ));
+            }
+            _ => unreachable!(),
+        }
+        let error = original
+            .clone()
+            .partition_instruction_only_transaction(1, &[1, 1])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("transaction 1 is not instruction-only"),
+            "{owner}: {error}"
+        );
+    }
+    let mut original = split_fixture();
+    original.transactions[1].instructions.push(
+        SetParameter::new(Parameter::Block(BlockParameter::MaxTransactions(
+            NonZeroU64::new(11).unwrap(),
+        )))
+        .into(),
+    );
+    assert!(
+        original
+            .partition_instruction_only_transaction(1, &[1, 1])
+            .unwrap_err()
+            .to_string()
+            .contains("SetParameter")
+    );
+}
+#[test]
+fn normalization_preserves_authored_instruction_boundaries_and_refuses_overbudget_sources() {
+    let manifest = split_fixture();
+    let normalized = manifest
+        .clone()
+        .partition_instruction_only_transaction(1, &[1, 1])
+        .unwrap()
+        .normalize()
+        .unwrap();
+    let logs = normalized
+        .transactions
+        .iter()
+        .filter_map(|batch| {
+            let messages = batch
+                .iter()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<Log>())
+                .map(|log| format!("{log:?}"))
+                .collect::<Vec<_>>();
+            (!messages.is_empty()).then_some(messages)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(logs.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 2]);
+    assert_eq!(
+        logs.concat(),
+        manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<Log>())
+            .map(|log| format!("{log:?}"))
+            .collect::<Vec<_>>()
+    );
+    let mut overbudget = manifest.clone();
+    while overbudget.transactions.len() <= 11 {
+        overbudget
+            .transactions
+            .push(manifest.transactions[1].clone());
+    }
+    let original = norito::json::to_json(&overbudget).unwrap();
+    assert!(
+        overbudget
+            .clone()
+            .normalize()
+            .unwrap_err()
+            .to_string()
+            .contains("exceeding the FASTPQ bootstrap limit 11")
+    );
+    assert_eq!(norito::json::to_json(&overbudget).unwrap(), original);
 }
 #[test]
 fn genesis_fixture_key_generation_preserves_algorithms() {

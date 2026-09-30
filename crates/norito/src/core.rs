@@ -270,11 +270,6 @@ pub mod header_flags {
     /// Compact varint lengths are used for per-field/element length prefixes (including string/blob
     /// lengths). Does not affect the fixed u64 sequence count header.
     pub const COMPACT_LEN: u8 = 0x02;
-    /// Retired packed-struct bit (`0x04`). It is reserved in v1: decoders reject
-    /// it in headers, encoders never emit it, and ambient layout guards mask it.
-    // TODO: delete once the remaining Sumeragi test reference
-    // (`iroha_core/src/sumeragi/v2_lane_work.rs`) stops naming it.
-    pub const PACKED_STRUCT: u8 = 0x04;
 }
 fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
     let mut hasher = Sha256::new();

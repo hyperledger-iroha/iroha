@@ -54,7 +54,7 @@ profiling = ["pprof"]
 # Enables Data Model Schema endpoint
 schema = ["iroha_schema", "iroha_schema_gen"]
 # App-facing JSON API (convenience endpoints, JSON DSL).
-app_api = []
+app_api = ["dep:kotodama_lang"]
 # Fixture execution and publication helpers for tests and benchmarks only.
 # Shipping/default feature sets must not include this authority.
 test-fixtures = ["iroha_core/iroha-core-tests"]
@@ -113,6 +113,8 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
+iroha_core_privacy = { workspace = true }
+iroha_core_timed_ovn = { workspace = true }
 iroha_sumeragi = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -138,6 +140,7 @@ iroha_schema_gen = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", optional = true }
 ivm = { path = "../ivm" }
+kotodama_lang = { workspace = true, optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-native-roots", "http2", "stream"] }
 url = { workspace = true }
@@ -200,6 +203,7 @@ criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
 ivm = { path = "../ivm" }
+kotodama_lang = { workspace = true }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }

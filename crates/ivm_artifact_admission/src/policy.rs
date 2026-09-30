@@ -23,10 +23,6 @@ impl ValidationProfile {
             || (self == Self::KotoTest && ivm_abi::syscalls::is_koto_test_syscall(number))
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered artifact/interface audit preserves stable fail-closed first-error precedence"
-)]
 pub fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
@@ -364,10 +360,6 @@ fn is_canonical_entrypoint_name(name: &str) -> bool {
 fn is_canonical_seiyaku_name(name: &str) -> bool {
     is_canonical_source_type_declaration_name(name)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the bytecode security pass keeps its exhaustive opcode policy in one auditable traversal"
-)]
 fn validate_bytecode_security(
     decoded: &[DecodedOp],
     zk_enabled: bool,
@@ -590,10 +582,6 @@ fn is_direct_call(op: &DecodedOp) -> bool {
     opcode == wide::control::JALS || (opcode == wide::control::JAL && wide::rd(op.inst) == 1)
 }
 /// Validate the deployable direct-call graph without trusting compiler metadata.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the direct-call graph audit keeps discovery, validation, and cycle rejection in one deterministic pass"
-)]
 fn validate_nonrecursive_direct_calls(
     decoded: &[DecodedOp],
     entrypoint_pcs: &BTreeSet<u64>,

@@ -11,7 +11,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
-MAX_SOURCE_LINES = 42_282
 
 REGIONS = {
     "verifier_record": (
@@ -261,8 +260,6 @@ def validate_module_owner(owner: str) -> None:
 
 
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) > MAX_SOURCE_LINES:
-        raise GuardError("Soracloud test owner exceeded its source budget")
     regions = {label: _region(source, label) for label in REGIONS}
     all_names = set(VERIFIER_CASES) | set(DIRECT_TESTS) | set(NAMED_CASES)
     for test_name in all_names:
@@ -413,9 +410,8 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         )
         self.assert_rejected(mutated)
 
-    def test_source_budget_growth_is_rejected(self) -> None:
-        growth = MAX_SOURCE_LINES - len(self.source.splitlines()) + 1
-        self.assert_rejected(self.source + "// synthetic growth\n" * growth)
+    def test_whitespace_growth_preserves_case_matrices(self) -> None:
+        validate_source(self.source + "\n" * 100_000)
 
 
 if __name__ == "__main__":

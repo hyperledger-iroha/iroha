@@ -693,10 +693,6 @@ mod tests {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test keeps the complete finalized status, task, and event success contract together"
-    )]
     fn assert_repair_read_success_contract() {
         let client = client_with_base_url(base_url());
         let cursor = finalized_cursor();

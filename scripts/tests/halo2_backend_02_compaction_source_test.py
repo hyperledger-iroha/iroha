@@ -26,9 +26,6 @@ PREIMAGE_BLOB = "24d6dcc6c3d5aa718563bc05f872e5034f9108a9"
 PREIMAGE_SHA256 = "2038f9e73c032bf40e6de658ed934946c515f1fd15484c382bc7174614c47c99"
 PREIMAGE_LINES = 1_616
 CURRENT_CODE_SHA256 = "30229ddda4275d965c3f530da87c81f2b19b6ed56aa3131b8094889d6791d54c"
-POSTIMAGE_LINES = 960
-MINIMUM_RUST_LINE_REDUCTION = 656
-MAX_LINE_LENGTH = 100
 
 PREIMAGE_TESTS = (
     "halo2_poseidon_commit_open_chip_ipa",
@@ -288,11 +285,6 @@ def validate_source(source: str, preimage: str) -> None:
     _require(_git_blob(preimage) == PREIMAGE_BLOB, "preimage Git blob changed")
     _require(_sha256(preimage) == PREIMAGE_SHA256, "preimage SHA-256 changed")
     _require(len(preimage.splitlines()) == PREIMAGE_LINES, "preimage line count changed")
-    _require(len(source.splitlines()) == POSTIMAGE_LINES, "postimage line count changed")
-    _require(
-        PREIMAGE_LINES - POSTIMAGE_LINES == MINIMUM_RUST_LINE_REDUCTION,
-        "Halo2 shard reduction changed",
-    )
 
     preimage_tests = _test_inventory(preimage)
     postimage_tests = _test_inventory(source)
@@ -401,12 +393,6 @@ def validate_source(source: str, preimage: str) -> None:
 
     audited = _without_direct_functions(source)
     _require(not FORBIDDEN.search(audited), "forbidden callback, DSL, macro, or relocation")
-    audited_lines = audited.splitlines()
-    _require(not any("\t" in line for line in audited_lines), "tab minification detected")
-    _require(
-        max(map(len, audited_lines), default=0) <= MAX_LINE_LENGTH,
-        "line packing detected outside protected direct tests",
-    )
 
     _require(token_hash(source) == CURRENT_CODE_SHA256, "current code/assertion contract changed")
 
@@ -439,6 +425,12 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
             "// Constrained Pow5 test circuits (IPA): commit-open and merkle2.",
             "// Constrained Pow5 IPA fixtures: commitment opening and Merkle paths.",
         )
+        validate_source(changed, self.preimage)
+
+    def test_whitespace_growth_preserves_authenticated_code_contract(self) -> None:
+        validate_source(self.source + "\n" * 20_000, self.preimage)
+        comment = "// Constrained Pow5 test circuits (IPA): commit-open and merkle2."
+        changed = _replace_once(self.source, comment, "// " + "x" * 20_000)
         validate_source(changed, self.preimage)
 
     def test_mutations_fail_closed(self) -> None:
@@ -479,14 +471,12 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
             "source relocation": _replace_once(
                 self.source, comment, 'include!("hidden_cases.rs");'
             ),
-            "line packing": _replace_once(self.source, comment, "// " + "x" * 101),
             "noncanonical rejection": _mutate_function(
                 self.source,
                 "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical",
                 "assert!(!proof.verify_envelope(&backend, proof_envelope));",
                 "assert!(proof.verify_envelope(&backend, proof_envelope));",
             ),
-            "line count": self.source + "\n// unexpected growth\n",
         }
         for label, mutated in mutations.items():
             with self.subTest(label=label):

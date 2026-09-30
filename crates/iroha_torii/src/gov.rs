@@ -16,14 +16,12 @@ use crate::{
     routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 use base64::Engine as _;
-use iroha_core::{
-    governance::{
-        parliament::{ParliamentBallotStateV1, ParliamentDecisionModeV1},
-        timed_ovn::TimedOvnLifecycleStateV1,
-    },
-    kura::Kura,
-    state::{StateReadOnly, WorldReadOnly},
-};
+use iroha_core::governance::parliament::ParliamentBallotStateV1;
+use iroha_core::governance::parliament::ParliamentDecisionModeV1;
+use iroha_core::kura::Kura;
+use iroha_core::state::StateReadOnly;
+use iroha_core::state::WorldReadOnly;
+use iroha_core_timed_ovn::evidence::TimedOvnLifecycleStateV1;
 use iroha_data_model::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
@@ -1110,7 +1108,7 @@ fn project_parliament_timed_ovn_progress_v1(
 }
 
 fn project_parliament_tle_key_session_v1(
-    session: &iroha_core::tle_release::TleKeySessionPublicStateV1,
+    session: &iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1,
 ) -> ParliamentTleKeySessionBindingV1 {
     ParliamentTleKeySessionBindingV1 {
         version: session.version,
@@ -1148,7 +1146,7 @@ fn project_parliament_tle_key_session_v1(
 }
 
 fn project_parliament_timed_ovn_release_identity_v1(
-    identity: &iroha_core::governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
+    identity: &iroha_core_timed_ovn::evidence::TimedOvnReleaseIdentityPublicV1,
 ) -> ParliamentTimedOvnReleaseIdentityProjectionV1 {
     use iroha_data_model::governance::types::{
         BallotAttemptId, BodyInstanceId, GovernanceAttemptId,
@@ -1183,7 +1181,7 @@ pub fn handle_gov_parliament_timed_ovn_casting_context_read(
     ballot_attempt_id: String,
 ) -> Result<JsonBody<ParliamentTimedOvnCastingContextResponseV1>, crate::Error> {
     use base64::Engine as _;
-    use iroha_core::tle_release::ParliamentTimedOvnCastingPhaseV1;
+    use iroha_core_timed_ovn::casting::ParliamentTimedOvnCastingPhaseV1;
     use iroha_data_model::governance::types::{
         BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId,
     };

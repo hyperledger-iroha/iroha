@@ -2,20 +2,24 @@
 
 Operator obligations of Sumeragi for a Taira reset: a fresh genesis with the current consensus
 parameters, the validators' consensus keys and their safety-record provenance
-(`specs/sumeragi.md` §7.4), key rotation (§7.4 **Keys**, §10.4) and the soak that gates the
-cutover (§13.5, §14 item 5; goal S7 in `specs/sumeragi_goals.md`).
+(`specs/sumeragi.md` §7.4), key rotation (§7.4 **Keys**, §10.4) and governance-owned deployment
+policy (§13.5, §14 item 5; goal S7 in `specs/sumeragi_goals.md`).
 
 The public reset itself — inventory, authorization, release artifacts, onboarding and write
 canaries — is owned by the same-revision `iroha taira public-reset preflight` and
 `iroha taira public-reset apply` workflow (`skills/sora-taira-testnet/SKILL.md`). This runbook
 states what that reset must satisfy for consensus; it does not replace it.
 
-## 1. Before the reset: the soak gate
+## 1. Deployment policy and optional fault diagnostics
 
-The cutover requires a passing soak on the release candidate (§13.5): 24 h at `n = 4` and at
-`n = 22`, P2P loss of 10–30 % with delay spikes, random `kill -9` and restart, and disk-full
-injection, with O-AGR, O-SIGN, O-LIVE and O-PERF computed from the node logs. See §8 for how
-to run it and read the verdict. A failing or missing verdict blocks the reset.
+On-chain governance owns deployment policy for Taira and production (§13.5). There is no
+mandatory 24-hour fault test, fixed soak duration or soak-verdict prerequisite for a reset.
+The native reset still enforces signed control authority, authenticated genesis and committee,
+safety-record provenance and custody, and live readiness/write/restart checks.
+
+Operators may run multi-process fault diagnostics with P2P loss/delay, crashes, restarts and
+disk exhaustion. Section 8 describes the optional harness and its O-AGR, O-SIGN, O-LIVE and
+O-PERF verdicts; those diagnostics do not authorize or block a cutover.
 
 ## 2. Committee
 
@@ -228,7 +232,7 @@ keys of one validator (two configured keys in one committee make the node sign w
    through probes (§7.4 R2).
 5. Keep the old key in `retired_keys` for good (§6).
 
-## 8. Soak gate: running it and reading the verdict
+## 8. Optional fault diagnostics: running and reading the verdict
 
 `scripts/sumeragi_soak.py` runs a real multi-process `kagami localnet`, offers a steady `Log`
 transaction load through the CLI, injects faults and judges the run only from the nodes' logs.
@@ -241,14 +245,16 @@ overrides its configuration file. It also changes only node-local settings, neve
 signed genesis execution policy covers (fees, for example): an explicit
 `[nexus.storage] local_budget_bytes` (`--storage-budget-mb`, below `--disk-size-mb`; without it a
 node on a nearly full disk derives no budget and refuses to start; Kura gets a quarter of it and
-keeps about 1 KiB per committed transaction, so the gate's 12 GiB hold a day at its 20
+keeps about 1 KiB per committed transaction, so the long profile's 12 GiB hold a day at its 20
 transactions per second, and a Kura over its share stops applying blocks), and
 `[sccp.light_client_keeper] enabled = false` (the keeper polls public Ethereum RPC endpoints by
 default).
 
-Build release binaries once, then run the gate at both committee sizes (the profiles' O-PERF
+For an optional long diagnostic, build release binaries once and select either committee size
+(the profiles' O-PERF
 thresholds assume release binaries; a debug build on a busy host misses the gap and latency
-thresholds even without faults):
+thresholds even without faults). The profile named `gate` selects diagnostic defaults; it
+does not authorize or block a Taira or production cutover:
 
 ```bash
 cargo build --release -p irohad --bin iroha3d -p iroha_kagami --bin kagami -p iroha_cli --bin iroha
@@ -313,5 +319,6 @@ persistence retries, panics):
 
 The P2P lane soak (`integration_tests/tests/sumeragi_lanes_soak.rs`, ignored by default) runs
 four validators with a fixed and an elastic lane under sustained load and restarts; the nightly
-workflow `.github/workflows/nightly_sumeragi_soak.yml` runs a smoke-length soak and the lane
-soak, and runs the 24 h gate on manual dispatch.
+workflow `.github/workflows/nightly_sumeragi_soak.yml` runs a smoke-length diagnostic and the
+lane soak, with an optional longer diagnostic on manual dispatch. These runs are engineering
+evidence, not deployment gates.

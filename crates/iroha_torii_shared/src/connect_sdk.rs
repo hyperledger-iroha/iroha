@@ -703,10 +703,6 @@ mod approve_preimage_tests {
         )))
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "cohesive canonical approval fixture verification"
-    )]
     fn canonical_approval_fixture_verifies_end_to_end() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
             "../../../fixtures/connect/session_vectors.json"

@@ -5,7 +5,6 @@ import java.time.Instant
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 val walletToriiEndpoint = providers.gradleProperty("retailWalletToriiEndpoint")
@@ -16,11 +15,12 @@ val walletGitCommit = providers.environmentVariable("GIT_COMMIT").orElse("UNKNOW
 val walletManifestOutput = layout.buildDirectory.file("sample-manifest/sample_manifest.json")
 val walletGraceOverrideMs = providers.gradleProperty("retailWalletVerdictGracePeriodMs").orElse("0")
 val walletGraceProfile = providers.gradleProperty("retailWalletVerdictGraceProfile").orElse("")
+val posManifestDir = rootProject.layout.projectDirectory.dir("../../fixtures/sdk/pos")
 val assetsDir = layout.projectDirectory.dir("src/main/assets")
 
 android {
     namespace = "org.hyperledger.iroha.samples.wallet"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.samples.wallet"
@@ -49,23 +49,45 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        jvmToolchain(21)
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+    sourceSets {
+        getByName("main").assets.srcDir(posManifestDir)
+        getByName("test").resources.srcDir(posManifestDir)
+    }
+    sourceSets.getByName("main").kotlin.srcDir(rootProject.layout.projectDirectory.dir("shared/src/main/kotlin"))
+    packaging.resources {
+        // JAR lookup indexes are not used by Android; retain combined component and license metadata.
+        excludes.add("META-INF/INDEX.LIST")
+        merges.addAll(listOf(
+            "META-INF/io.netty.versions.properties", "META-INF/LICENSE", "META-INF/LICENSE.txt",
+            "META-INF/NOTICE", "META-INF/NOTICE.txt"
+        ))
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(libs.bundles.androidxUi)
-    implementation(project(":android-sdk"))
+    implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
     implementation(libs.jxingCore)
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation(libs.junit)
+    testImplementation(kotlin("test-junit"))
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidxTestExtJunit)
     androidTestImplementation(libs.androidxTestEspressoCore)
 }
@@ -76,7 +98,7 @@ fun sha256Of(file: File): String =
         .joinToString(separator = "") { "%02x".format(it) }
 
 tasks.register("generateSampleManifest") {
-    val sdkVersionProvider = providers.provider { project(":android-sdk").version.toString() }
+    val sdkVersionProvider = providers.gradleProperty("irohaSdkVersion").orElse("0.1.0")
     inputs.property("sdkVersion", sdkVersionProvider)
     inputs.property("toriiEndpoint", walletToriiEndpoint)
     inputs.property("featureFlags", walletFeatureFlags)
@@ -85,7 +107,7 @@ tasks.register("generateSampleManifest") {
     inputs.property("graceOverrideMs", walletGraceOverrideMs)
     inputs.property("graceProfile", walletGraceProfile)
     inputs.files(
-        assetsDir.file("pos_manifest.json"),
+        posManifestDir.file("manifest_v1.json"),
         assetsDir.file("security_policy.json"),
         assetsDir.file("pinned_root.pem")
     )
@@ -106,7 +128,7 @@ tasks.register("generateSampleManifest") {
 
         val assets =
             linkedMapOf<String, Any?>()
-        val manifestFile = assetsDir.file("pos_manifest.json").asFile
+        val manifestFile = posManifestDir.file("manifest_v1.json").asFile
         val policyFile = assetsDir.file("security_policy.json").asFile
         val pinnedRootFile = assetsDir.file("pinned_root.pem").asFile
         if (manifestFile.exists()) {

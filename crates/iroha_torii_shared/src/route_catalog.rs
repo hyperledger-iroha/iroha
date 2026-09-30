@@ -743,10 +743,6 @@ pub enum CatalogValidationErrorKind {
 ///
 /// Returns every detected [`CatalogValidationError`] when any descriptor
 /// violates the catalog contract.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the single-pass closed-catalog validator keeps every route invariant and error ordering explicit"
-)]
 pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogValidationError>> {
     let mut errors = Vec::new();
     let mut ids = BTreeSet::new();

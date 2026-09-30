@@ -8,6 +8,7 @@ native_test_packages=(
   -p iroha_core
   -p iroha_torii
   -p irohad
+  -p irohad_lib
   -p iroha_sccp
 )
 native_test_filters=(

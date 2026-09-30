@@ -32,9 +32,8 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
 kotodama_lang = { workspace = true }
-kotodama_surface = { path = "../kotodama_surface" }
-# TODO: switch to `{ workspace = true }` once the root [workspace.dependencies] entry lands.
-kotodama_toolchain = { path = "../kotodama_toolchain" }
+kotodama_surface = { workspace = true }
+kotodama_toolchain = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }

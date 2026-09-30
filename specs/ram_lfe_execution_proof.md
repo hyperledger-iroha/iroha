@@ -30,7 +30,7 @@ Execution produces ciphertext. The former execute response incorrectly signed a
 ciphertext hash as an opened-plaintext hash; that issuer and response field are
 removed. An identifier's independent plaintext opening must come from its pinned
 opening authority and bind the exact execution. This remains a trusted attestation,
-not a decryption proof. See the [boundary repair](../docs/history/2026-09-29/ram-lfe-production-boundary.md).
+not a decryption proof.
 
 The [Core receipt helper](../crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs)
 refuses the unavailable relation before parsing any proof or key. The former
@@ -117,8 +117,6 @@ secret and associated data. Exactly 1,024 bytes become 32 consecutive big-endian
 sampler or rejection loop defines protocol semantics. The published profile's
 mandatory `initializer_descriptor_hash` commits the framing, contexts, dimensions
 and bounds. Superseded profiles are rejected rather than assigned another mapping.
-The source change and its focused native qualification are recorded in the
-[bounded-initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
 
 Secret commitment and private tape hashing now use separate BLAKE3 contexts and
 clearing owned hash/XOF state. The outer policy and tape digests remain properly
@@ -131,8 +129,7 @@ associated data and normalized input. These explicit first-release identities
 replace ambient-layout tuples. Borrowed interpreter fields and owned reference
 fixtures must produce identical frames; no reference-schema alias is introduced.
 Torii hashes the canonical ciphertext frame independently of ambient decoder
-flags. See the [canonical-transcript repair](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md)
-for the exact changes and pending validation.
+flags.
 The execution trace comes from the sole interpreter and owns clearing snapshots
 of its registers and memory. It is private prover input, not execution evidence.
 The future circuit must constrain these exact hash/Norito/fold semantics and all

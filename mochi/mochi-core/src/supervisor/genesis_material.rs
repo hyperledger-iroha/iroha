@@ -20,7 +20,7 @@ use iroha_data_model::{
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_model_base::chain::ChainId;
 #[cfg(any(test, feature = "test"))]
-use izanami::genesis_support::bind_and_sign_generated_genesis_from_config;
+use izanami::genesis_support::prepare_unpublished_genesis_from_config;
 use izanami::genesis_support::{ManagedNodeConfig, validate_prepared_genesis_for_startup};
 use norito::json::{self, Value};
 #[cfg(unix)]
@@ -195,8 +195,8 @@ impl Drop for TemporaryKagemushaMintFinalityParametersFile {
 ///
 /// # Errors
 ///
-/// Returns an error when the prepared manifest or node configuration cannot
-/// be parsed, their genesis bindings differ, or canonical signing fails.
+/// Returns an error when the unpublished draft or node configuration cannot
+/// be parsed, their genesis bindings differ, or canonical preparation fails.
 #[cfg(any(test, feature = "test"))]
 pub fn sign_kagami_stub_genesis_from_config(
     manifest_path: &Path,
@@ -204,7 +204,7 @@ pub fn sign_kagami_stub_genesis_from_config(
     key_pair: &KeyPair,
     expected_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> Result<(RawGenesisTransaction, iroha_data_model::block::SignedBlock)> {
-    let (bound_manifest, block) = bind_and_sign_generated_genesis_from_config(
+    let (bound_manifest, block) = prepare_unpublished_genesis_from_config(
         manifest_path,
         config_path,
         key_pair,
@@ -324,7 +324,6 @@ impl GenesisMaterial {
                 .into_builder()
                 .with_block_cadence_ms(block_cadence_ms)
                 .build_raw()?
-                .with_consensus_meta()
         };
         let manifest =
             genesis::with_local_account_onboarding_bootstrap(manifest, onboarding_authority)?;

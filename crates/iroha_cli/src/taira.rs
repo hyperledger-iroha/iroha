@@ -7007,10 +7007,6 @@ fn validate_soracloud_network_policy(value: &Value, context: &str) -> Result<(),
         _ => Err(format!("{context}.mode has unknown variant `{mode}`")),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the V1 status revision inventory is intentionally validated in one exact pass"
-)]
 fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), String> {
     const FIELDS: &[&str] = &[
         "sequence",
@@ -7482,10 +7478,6 @@ fn validate_soracloud_control_plane(value: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the public V1 status validator keeps the complete fail-closed contract visible"
-)]
 fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
     const ROOT_FIELDS: &[&str] = &[
         "schema_version",
@@ -9802,7 +9794,33 @@ mod tests {
             }
         }
     }
+    static MOCK_HTTP_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
+    struct MockHttpFixturePermit {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+    thread_local! {
+        static MOCK_HTTP_FIXTURE_OWNER: std::cell::RefCell<std::rc::Weak<MockHttpFixturePermit>> =
+            std::cell::RefCell::new(std::rc::Weak::new());
+    }
+    fn mock_http_fixture_guard() -> std::rc::Rc<MockHttpFixturePermit> {
+        // Independent blocking clients otherwise multiply worker threads and consume the
+        // deliberately short wall-clock deadlines under parallel unit execution. A test owns
+        // all of its loopback servers together; nested servers share the same permit.
+        MOCK_HTTP_FIXTURE_OWNER.with(|owner| {
+            if let Some(permit) = owner.borrow().upgrade() {
+                return permit;
+            }
+            let permit = std::rc::Rc::new(MockHttpFixturePermit {
+                _guard: MOCK_HTTP_FIXTURE_LOCK
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            });
+            *owner.borrow_mut() = std::rc::Rc::downgrade(&permit);
+            permit
+        })
+    }
     struct MockHttpServer {
+        _fixture_permit: std::rc::Rc<MockHttpFixturePermit>,
         base_url: String,
         requests: Arc<Mutex<Vec<MockRequest>>>,
         stop: Arc<AtomicBool>,
@@ -9812,6 +9830,7 @@ mod tests {
     where
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
     {
+        let fixture_permit = mock_http_fixture_guard();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let addr = listener.local_addr().expect("mock server address");
         listener
@@ -9883,6 +9902,7 @@ mod tests {
             }
         });
         MockHttpServer {
+            _fixture_permit: fixture_permit,
             base_url: format!("http://{addr}"),
             requests,
             stop,
@@ -9985,6 +10005,33 @@ mod tests {
             .expect("requests")
     }
 
+    #[test]
+    fn mock_http_fixture_ownership_is_reentrant_and_released_after_last_owner() {
+        let first = mock_http_fixture_guard();
+        let original = std::rc::Rc::downgrade(&first);
+        let second = mock_http_fixture_guard();
+        assert!(std::rc::Rc::ptr_eq(&first, &second));
+        assert!(
+            thread::spawn(|| MOCK_HTTP_FIXTURE_LOCK.try_lock().is_err())
+                .join()
+                .unwrap()
+        );
+        drop(first);
+        assert!(
+            original.upgrade().is_some(),
+            "the nested fixture still owns exclusion"
+        );
+        drop(second);
+        assert!(
+            original.upgrade().is_none(),
+            "the final fixture releases its ownership"
+        );
+        let next = mock_http_fixture_guard();
+        assert!(!std::rc::Weak::ptr_eq(
+            &original,
+            &std::rc::Rc::downgrade(&next)
+        ));
+    }
     #[test]
     fn mock_response_preserves_the_exact_frame_in_one_transport_write() {
         #[derive(Default)]
@@ -10844,10 +10891,6 @@ mod tests {
                 .expect("serialize remaining runtime balance"))
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture spells out the complete exact Soracloud V1 response"
-    )]
     fn exact_inrou_status(version: &str, action: &str, revision_count: u64) -> Value {
         let observed_block_hash = Hash::new(b"taira-test-observed-block").to_string();
         let validator_signer = fixture_key_pair(0x96).public_key().to_string();
@@ -11043,10 +11086,6 @@ mod tests {
         })
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one cohesive fail-closed deploy and upgrade contract test"
-    )]
     fn exact_inrou_status_requires_distinct_promoted_upgrade() {
         let deployed_version = inrou_canary_artifact_version(0x11);
         let upgraded_version = inrou_canary_artifact_version(0x22);
@@ -12240,6 +12279,7 @@ mod tests {
     }
     #[test]
     fn inrou_probe_requires_a_current_successful_route_observation() {
+        let _fixture = mock_http_fixture_guard();
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         let service_version = inrou_canary_artifact_version(0x24);
         let deployment = inrou_canary_deployment("deploy", &service_version);
@@ -12387,6 +12427,7 @@ mod tests {
     }
     #[test]
     fn candidate_inrou_qualifies_runtime_before_public_discovery_exists() {
+        let _fixture = mock_http_fixture_guard();
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         for scope in [InrouProbeScope::Candidate, InrouProbeScope::Public] {
             let service_version = inrou_canary_artifact_version(0x26);

@@ -18119,7 +18119,7 @@ seiyaku TriggerArguments {
   }
 }
 "#;
-        let code = ivm::KotodamaCompiler::new()
+        let code = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .expect("compile parameterized trigger callback");
         ivm::prepare_contract(Arc::<[u8]>::from(code))
@@ -18128,7 +18128,7 @@ seiyaku TriggerArguments {
     #[test]
     fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedValue {
@@ -18539,7 +18539,7 @@ seiyaku GuardedValue {
         Grant::account_permission(entrypoint_permission, authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("restore direct-call entrypoint permission");
-        let (rebound_program, rebound_manifest) = ivm::KotodamaCompiler::new()
+        let (rebound_program, rebound_manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedValueRebound {
@@ -18697,7 +18697,7 @@ seiyaku GuardedValueRebound {
     }
     #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku OrderedBatchGuard {
@@ -18944,7 +18944,7 @@ seiyaku OrderedBatchGuard {
     }
     #[test]
     fn resolved_contract_invocation_releases_cache_and_records_vm_error_gas() {
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku MeteredFailure {
@@ -19053,22 +19053,23 @@ seiyaku MeteredFailure {
     }
     #[test]
     fn identityless_raw_and_proved_dispatch_reject_before_argument_decode_or_proof_work() {
-        let program =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        let program = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            })
-            .compile_source(
-                r#"
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        )
+        .compile_source(
+            r#"
 seiyaku IdentityRequired {
   view fn write(int value) -> int {
     return value;
   }
 }
 "#,
-            )
-            .expect("compile identity-required raw contract");
+        )
+        .expect("compile identity-required raw contract");
         let chain_id = ChainId::from("identity-required-direct");
         let authority = ALICE_ID.clone();
         let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
@@ -19205,7 +19206,7 @@ seiyaku IdentityRequired {
     }
     #[test]
     fn reviewable_contract_metadata_binds_exact_invocation_arguments() {
-        let (program, _) = ivm::KotodamaCompiler::new()
+        let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku ReviewedValue {

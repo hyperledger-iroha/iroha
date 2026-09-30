@@ -814,10 +814,6 @@ struct PlanPageV1 {
     chunks: Vec<CarChunk>,
     files: Vec<FilePlan>,
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the provider-owned plan is validated in one ordered fail-closed audit surface"
-)]
 fn parse_plan_page(
     expected_manifest_id_hex: &str,
     body: &[u8],
@@ -2106,10 +2102,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the operator-header audit keeps every signed network, path, body, and freshness binding together"
-    )]
     fn operator_headers_bind_network_path_body_and_single_freshness_tuple() {
         let operator_key_pair = KeyPair::try_random().expect("operator key");
         let runtime = ProviderRuntimeV1 {

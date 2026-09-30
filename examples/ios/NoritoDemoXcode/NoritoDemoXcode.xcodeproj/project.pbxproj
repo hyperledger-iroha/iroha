@@ -6,6 +6,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3F1C3AD12C7F4F7A00C1C001 /* IrohaSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 3F1C3AD32C7F4F7A00C1C001 /* IrohaSwift */; };
+		3F1C3AD22C7F4F7A00C1C001 /* IrohaSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 3F1C3AD42C7F4F7A00C1C001 /* IrohaSwift */; };
 		3F1C3A922C7F000600C1C001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A912C7F000600C1C001 /* App.swift */; };
 		3F1C3A942C7F000600C1C001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A932C7F000600C1C001 /* ContentView.swift */; };
 		3F1C3AA02C7F05AA00C1C001 /* NoritoBridgeKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A9F2C7F05AA00C1C001 /* NoritoBridgeKit.swift */; };
@@ -28,8 +30,8 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		3F1C3A872C7EFFD900C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
-		3F1C3AB32C7F11B500C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		3F1C3A872C7EFFD900C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( 3F1C3AD12C7F4F7A00C1C001 /* IrohaSwift in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
+		3F1C3AB32C7F11B500C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( 3F1C3AD22C7F4F7A00C1C001 /* IrohaSwift in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -61,21 +63,21 @@
 			3F1C3A862C7EFFD900C1C001 /* Sources */,
 			3F1C3A872C7EFFD900C1C001 /* Frameworks */,
 			3F1C3A882C7EFFD900C1C001 /* Resources */,
-		); buildRules = ( ); dependencies = ( ); name = NoritoDemoXcode; productName = NoritoDemoXcode; productReference = 3F1C3A8C2C7EFFD900C1C001 /* NoritoDemoXcode.app */; productType = "com.apple.product-type.application"; };
+		); buildRules = ( ); dependencies = ( ); name = NoritoDemoXcode; packageProductDependencies = ( 3F1C3AD32C7F4F7A00C1C001 /* IrohaSwift */, ); productName = NoritoDemoXcode; productReference = 3F1C3A8C2C7EFFD900C1C001 /* NoritoDemoXcode.app */; productType = "com.apple.product-type.application"; };
 		3F1C3AB52C7F11B500C1C001 /* NoritoDemoXcodeTests */ = {isa = PBXNativeTarget; buildConfigurationList = 3F1C3AB92C7F11B500C1C001 /* Build configuration list for PBXNativeTarget "NoritoDemoXcodeTests" */; buildPhases = (
 			3F1C3AB22C7F11B500C1C001 /* Sources */,
 			3F1C3AB32C7F11B500C1C001 /* Frameworks */,
 			3F1C3AB42C7F11B500C1C001 /* Resources */,
 		); buildRules = ( ); dependencies = (
 			3F1C3AB82C7F11B500C1C001 /* PBXTargetDependency */,
-		); name = NoritoDemoXcodeTests; productName = NoritoDemoXcodeTests; productReference = 3F1C3AAF2C7F11B500C1C001 /* NoritoDemoXcodeTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+		); name = NoritoDemoXcodeTests; packageProductDependencies = ( 3F1C3AD42C7F4F7A00C1C001 /* IrohaSwift */, ); productName = NoritoDemoXcodeTests; productReference = 3F1C3AAF2C7F11B500C1C001 /* NoritoDemoXcodeTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
 		3F1C3A822C7EFFD900C1C001 /* Project object */ = {isa = PBXProject; attributes = { LastSwiftUpdateCheck = 1530; LastUpgradeCheck = 1530; ORGANIZATIONNAME = "Iroha"; TargetAttributes = { 3F1C3A8B2C7EFFD900C1C001 = { CreatedOnToolsVersion = 15.3; }; 3F1C3AB52C7F11B500C1C001 = { CreatedOnToolsVersion = 15.3; }; }; }; buildConfigurationList = 3F1C3A852C7EFFD900C1C001 /* Build configuration list for PBXProject "NoritoDemoXcode" */; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = ( en ); mainGroup = 3F1C3A812C7EFFD900C1C001; productRefGroup = 3F1C3A8D2C7EFFD900C1C001 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (
 			3F1C3A8B2C7EFFD900C1C001 /* NoritoDemoXcode */,
 			3F1C3AB52C7F11B500C1C001 /* NoritoDemoXcodeTests */,
-		); };
+		); packageReferences = ( 3F1C3AD52C7F4F7A00C1C001 /* XCLocalSwiftPackageReference "../../../IrohaSwift" */, ); };
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
@@ -245,6 +247,15 @@
 			3F1C3ABB2C7F11B500C1C001 /* Release */,
 		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3F1C3AD52C7F4F7A00C1C001 /* XCLocalSwiftPackageReference "../../../IrohaSwift" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../../../IrohaSwift; };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		3F1C3AD32C7F4F7A00C1C001 /* IrohaSwift */ = {isa = XCSwiftPackageProductDependency; package = 3F1C3AD52C7F4F7A00C1C001 /* XCLocalSwiftPackageReference "../../../IrohaSwift" */; productName = IrohaSwift; };
+		3F1C3AD42C7F4F7A00C1C001 /* IrohaSwift */ = {isa = XCSwiftPackageProductDependency; package = 3F1C3AD52C7F4F7A00C1C001 /* XCLocalSwiftPackageReference "../../../IrohaSwift" */; productName = IrohaSwift; };
+/* End XCSwiftPackageProductDependency section */
 
 	};
 	rootObject = 3F1C3A822C7EFFD900C1C001 /* Project object */;

@@ -79,7 +79,11 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
+use iroha_core::private_settlement::{
+    PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditorSidecarViewV1,
+    PrivateSettlementSidecarLifecycleV1, approve_private_settlement_leg_v1,
+};
+use iroha_core_privacy::{
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
@@ -100,11 +104,6 @@ use iroha_core::{
         },
     },
     privacy_profiles::compiled_privacy_profile_v1,
-    private_settlement::{
-        PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditorSidecarViewV1,
-        PrivateSettlementSidecarLifecycleV1, approve_private_settlement_leg_v1,
-        seal_private_settlement_audit_capsule_v1_with_rng,
-    },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, HybridKeyPair, KeyPair, SignatureOf};
 use iroha_data_model::prelude::QueryBuilderExt;
@@ -5391,3 +5390,5 @@ fn leakage_canary_identifiers_are_canonical_typed_values() {
 }
 
 include!("atomic_private_settlement_real_process_harness.rs");
+
+use iroha_core_privacy::privacy_engines::atomic_private_settlement::audit::seal_private_settlement_audit_capsule_v1_with_rng;

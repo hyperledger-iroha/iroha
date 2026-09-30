@@ -382,7 +382,6 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
 
 }
 #[test]
-#[expect(clippy::too_many_lines, reason = "one cohesive exact Soracloud priority-contract inventory")]
 fn generated_spec_documents_exact_soracloud_priority_contracts() {
     let document = canonical_document();
     let paths = contract_object(document.get("paths"), "paths");

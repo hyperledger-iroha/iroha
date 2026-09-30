@@ -1468,10 +1468,6 @@ fn make_handshake_response(
         server_transcript_digest: server_transcript_digest(&transcript)?,
     })
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 observation matrix is exhaustive"
-)]
 fn validate_observation(
     requested: &ProviderBindingWireV1,
     observed: &ProviderObservationWireV1,

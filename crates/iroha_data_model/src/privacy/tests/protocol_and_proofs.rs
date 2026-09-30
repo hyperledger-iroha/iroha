@@ -1274,10 +1274,6 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the Exact12 archive mutation matrix is clearer as one end-to-end invariant"
-)]
 fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
     use crate::{
         isi::privacy::SubmitPrivacyProofV1,
@@ -1561,10 +1557,6 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the cross-SDK matrix is one contiguous closed-schema conformance check"
-)]
 fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
     let matrix = include_str!("../../../../../fixtures/privacy/exact12_v1.tsv");
     let generated = privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");
@@ -2299,10 +2291,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one matrix verifies every consensus-limit boundary and hard maximum together"
-)]
 fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
     type HardMaximumMutation = (PrivacyLimitFieldV1, u32, fn(&mut PrivacyConsensusLimitsV1));
 

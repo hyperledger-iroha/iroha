@@ -7,7 +7,8 @@ name: Nightly Sumeragi Soak
 # (integration_tests/tests/sumeragi_lanes_soak.rs), analyzed with the same oracles.
 #
 # Nightly: a smoke-length soak at n = 4 and a 20-minute lane soak. Manual dispatch with
-# `gate: true` runs the 24 h release gate at n = 4 and n = 22 and a 2 h lane soak.
+# `gate: true` selects optional 24 h diagnostics at n = 4 and n = 22 and a 2 h lane soak.
+# No duration or verdict is a deployment prerequisite; on-chain governance owns that policy.
 # Operator procedure: specs/runbooks/sumeragi_taira_reset.md. The runner host must provide the
 # sch_netem kernel module.
 
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       gate:
-        description: "Run the 24 h release gate (n = 4 and n = 22) instead of the smoke soak"
+        description: "Run optional 24 h fault diagnostics (n = 4 and n = 22) instead of the smoke soak"
         type: boolean
         default: false
       seed:
@@ -38,7 +39,7 @@ env:
 
 jobs:
   soak:
-    name: Soak n=${{ matrix.validators }} (${{ inputs.gate && 'gate 24 h' || 'smoke' }})
+    name: Soak n=${{ matrix.validators }} (${{ inputs.gate && 'diagnostic 24 h' || 'smoke' }})
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08

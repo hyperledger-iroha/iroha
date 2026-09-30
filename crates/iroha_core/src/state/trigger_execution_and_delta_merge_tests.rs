@@ -1010,7 +1010,7 @@ fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_ar
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "missing_bytecode_by_call".parse().unwrap();
-    let program = ivm::KotodamaCompiler::new()
+    let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(
             r#"
 seiyaku MissingBytecodeTrigger {

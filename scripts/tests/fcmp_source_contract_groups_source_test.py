@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Guard current FCMP source-contract assets, direct assertions and owner wiring.
 
-Completed donor/postimage evidence is preserved under docs/history/2026-09-30.
 The active guard binds exact asset bytes to the current Rust consumer and rejects
 missing groups, malformed data, callback interpreters and assertion bypasses.
 """
@@ -15,16 +14,16 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TESTS = Path("crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs")
+TESTS = Path("crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs")
 COMMITMENT = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs"
 )
 RUNTIME = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs"
 )
 PATHS = (TESTS, COMMITMENT, RUNTIME)
 ASSET = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/"
     "source_contract_groups_v1.json"
 )
 BLOBS = {
@@ -33,86 +32,86 @@ BLOBS = {
     RUNTIME: "e81723d0b934b2295c2ed6fd198aab880867c61c",
 }
 GROUP_COUNT = 76
-EXPECTED_TEST_INVENTORY = ['crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|prover_copy_owner_clears_transfer_success_and_unwind_slots',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_owns_inputs_and_secret_outputs_on_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_source_stays_owned_through_release_transfer',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_owns_slots_on_success_error_and_inner_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_source_takes_every_slot_before_inner_conversion',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_owns_success_error_mismatch_and_unwind_slots',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_source_stays_owned_until_borrowed_constructor',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_owns_success_error_and_unwind_slots',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_direct_handoff_covers_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_source_keeps_feature_secret_owners_in_order',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_scope_owns_success_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_matches_equation_and_owns_all_exit_paths',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_step_matches_public_equations_and_owns_copies',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_branch_direct_handoff_covers_capacity_success_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_final_owner_zeroizes_on_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_owns_every_coordinate_difference_and_scans_full_shape',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_source_uses_only_borrowed_subtraction_and_owned_differences',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_buffer_zeroizes_on_drop_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|hidden_output_identifier_push_is_preallocated_and_owned_on_success_and_error',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|private_output_identifier_callsites_use_only_borrowed_owned_insertion',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_owners_cover_success_decode_error_capacity_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_owners_cover_success_decode_error_downstream_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|input_blind_v_padding_owner_covers_success_downstream_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_owner_covers_success_constructor_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_owner_covers_success_constructor_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_scalar_encoding_handoff_covers_decode_zeroize_downstream_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_source_owns_encoding_through_constructor',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_owner_covers_success_constructor_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_source_owns_encoding_through_constructor',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_owner_covers_success_constructor_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_source_owns_encoding_through_constructor',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_source_is_borrowed_owned_and_production_visible',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_source_uses_borrowed_exact_builder_and_owned_result',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_takes_all_bytes_before_decoding',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_constructor_takes_secret_bytes_before_validation',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_scalar_owner_handoff_covers_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_private_point_owners_cover_success_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_keeps_private_products_in_borrowed_erasing_owners',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|commitment_mask_openings_remain_borrowed_until_the_membership_boundary',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_witness_debug_is_redacted_and_explicit_zeroize_covers_the_full_path',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|constant_work_scan_primitives_visit_every_element_and_pair',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|typed_membership_and_duplicate_scans_cover_every_position',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|hidden_leaf_membership_and_duplicates_cover_first_middle_last_and_absent',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|shared_root_scan_covers_first_middle_last_and_absent_mismatches',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|private_push_guard_forbids_vector_growth',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|maximum_compiled_shape_has_canonical_paths_and_exact_resource_bound',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_private_owners_cover_success_error_and_unwind',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|secret_root_comparison_owns_encoding_on_match_mismatch_and_error',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_source_keeps_private_values_in_owned_borrowed_order',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|malicious_zero_rng_exhausts_a_fixed_bound_instead_of_hanging',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|borrowed_path_coordinate_handoff_preflights_and_keeps_allocation_stable',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|owned_secret_scalar_handoff_keeps_preallocation_and_clears_source_on_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|negated_scalar_owner_handoff_retains_source_and_clears_every_temporary',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|sampled_scalar_slots_are_owned_before_rejection_or_return',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_survive_handoff_until_success_drop',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_identity_coordinates_fail_without_unwrapping_owners',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_downstream_error_for_both_curves',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_unwind_for_both_curves',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_nonce_commitment_encoding_clears_both_point_owners_on_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_blind_response_encoding_clears_both_nonce_owners_on_every_exit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_prover_retries_only_prover_honest_aborts_at_a_fixed_bound',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|#[ignore '
+EXPECTED_TEST_INVENTORY = ['crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|prover_copy_owner_clears_transfer_success_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_owns_inputs_and_secret_outputs_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_source_stays_owned_through_release_transfer',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_owns_slots_on_success_error_and_inner_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_source_takes_every_slot_before_inner_conversion',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_owns_success_error_mismatch_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_source_stays_owned_until_borrowed_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_owns_success_error_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_direct_handoff_covers_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_source_keeps_feature_secret_owners_in_order',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_scope_owns_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_matches_equation_and_owns_all_exit_paths',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_step_matches_public_equations_and_owns_copies',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_branch_direct_handoff_covers_capacity_success_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_final_owner_zeroizes_on_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_owns_every_coordinate_difference_and_scans_full_shape',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_source_uses_only_borrowed_subtraction_and_owned_differences',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_buffer_zeroizes_on_drop_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|hidden_output_identifier_push_is_preallocated_and_owned_on_success_and_error',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|private_output_identifier_callsites_use_only_borrowed_owned_insertion',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_owners_cover_success_decode_error_capacity_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_owners_cover_success_decode_error_downstream_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|input_blind_v_padding_owner_covers_success_downstream_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_scalar_encoding_handoff_covers_decode_zeroize_downstream_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_source_is_borrowed_owned_and_production_visible',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_source_uses_borrowed_exact_builder_and_owned_result',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_takes_all_bytes_before_decoding',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_constructor_takes_secret_bytes_before_validation',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_scalar_owner_handoff_covers_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_private_point_owners_cover_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_keeps_private_products_in_borrowed_erasing_owners',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|commitment_mask_openings_remain_borrowed_until_the_membership_boundary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_witness_debug_is_redacted_and_explicit_zeroize_covers_the_full_path',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|constant_work_scan_primitives_visit_every_element_and_pair',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|typed_membership_and_duplicate_scans_cover_every_position',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|hidden_leaf_membership_and_duplicates_cover_first_middle_last_and_absent',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|shared_root_scan_covers_first_middle_last_and_absent_mismatches',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|private_push_guard_forbids_vector_growth',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|maximum_compiled_shape_has_canonical_paths_and_exact_resource_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_private_owners_cover_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|secret_root_comparison_owns_encoding_on_match_mismatch_and_error',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_source_keeps_private_values_in_owned_borrowed_order',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|malicious_zero_rng_exhausts_a_fixed_bound_instead_of_hanging',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|borrowed_path_coordinate_handoff_preflights_and_keeps_allocation_stable',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|owned_secret_scalar_handoff_keeps_preallocation_and_clears_source_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|negated_scalar_owner_handoff_retains_source_and_clears_every_temporary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|sampled_scalar_slots_are_owned_before_rejection_or_return',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_survive_handoff_until_success_drop',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_identity_coordinates_fail_without_unwrapping_owners',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_downstream_error_for_both_curves',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_unwind_for_both_curves',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_nonce_commitment_encoding_clears_both_point_owners_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_blind_response_encoding_clears_both_nonce_owners_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_prover_retries_only_prover_honest_aborts_at_a_fixed_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|#[ignore '
  '= "manual release resource audit; run under `/usr/bin/time -l` for peak '
  'RSS"]|maximum_compiled_shape_release_resource_audit',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_rng_unavailability_fails_without_calling_infallible_rng_methods',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|public_prover_rejects_unavailable_and_short_period_entropy_before_proving',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|deterministic_preflight_errors_take_precedence_over_entropy_failure',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|extracted_prover_test_module_retains_every_legacy_regression',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_one_layer_prover_round_trips_end_to_end',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_layer_prover_exercises_alternating_curve_path',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_input_prover_round_trips_at_the_compiled_bound',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_rejects_duplicate_outputs_key_images_and_input_overflow_preflight',
- 'crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_paths_reject_reordered_omitted_and_duplicated_layers']
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_rng_unavailability_fails_without_calling_infallible_rng_methods',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|public_prover_rejects_unavailable_and_short_period_entropy_before_proving',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|deterministic_preflight_errors_take_precedence_over_entropy_failure',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|extracted_prover_test_module_retains_every_legacy_regression',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_one_layer_prover_round_trips_end_to_end',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_layer_prover_exercises_alternating_curve_path',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_input_prover_round_trips_at_the_compiled_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_rejects_duplicate_outputs_key_images_and_input_overflow_preflight',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_paths_reject_reordered_omitted_and_duplicated_layers']
 FORBIDDEN_LOADER_TOKENS = (
     "Fn(",
     "FnMut",

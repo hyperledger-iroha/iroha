@@ -22,11 +22,11 @@ OPAQUE_OWNERS = (
         guard.require_opaque_release_authorizations,
     ),
     (
-        "crates/iroha_core/src/tle_release.rs",
+        "crates/iroha_core_timed_ovn/src/tle.rs",
         "ValidatedTleReleaseProjectionV1",
         "/// Closed failures while validating a public authenticated-broker projection.",
         "validated broker projection",
-        guard.require_opaque_release_authorizations,
+        guard.require_opaque_release_projection,
     ),
     (
         "crates/iroha_core/src/tle_release/casting.rs",
@@ -78,6 +78,7 @@ def test_opaque_checks_are_connected_to_production_entrypoint() -> None:
     calls = [node.func.id for node in ast.walk(body) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name)]
     assert calls.count("require_opaque_release_authorizations") == 1
+    assert calls.count("require_opaque_release_projection") == 1
     assert calls.count("require_opaque_casting_authorization") == 1
 
 

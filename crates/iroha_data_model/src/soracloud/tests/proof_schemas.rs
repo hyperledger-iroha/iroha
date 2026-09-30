@@ -627,10 +627,6 @@ fn soracloud_fhe_public_key_schema_advertises_proof_input_material() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "schema golden test keeps audited contract terms inline"
-)]
 fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
     let schema = std::str::from_utf8(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
         .expect("bootstrap-key proof schema is valid UTF-8");
@@ -924,10 +920,6 @@ fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "schema golden test keeps audited contract terms inline"
-)]
 fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
     let schema =
         std::str::from_utf8(SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1)

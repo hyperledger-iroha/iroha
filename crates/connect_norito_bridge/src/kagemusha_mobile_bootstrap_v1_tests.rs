@@ -157,17 +157,21 @@ fn freshness_read_delay_consumes_the_packages_remaining_lifetime() {
     let (_, policy, package) = fixture();
     let bytes = archive(&package);
     let mut current_pins = pins(&policy);
-    current_pins.trusted_now_ms = package.checkpoint.expires_at_ms - 500;
+    current_pins.trusted_now_ms = package.checkpoint.expires_at_ms
+        - u64::try_from(MAX_LIFETIME.as_millis()).expect("bounded installation lifetime");
     verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(current_pins))
         .expect("the signed package is still valid at the trusted UTC snapshot");
 
-    // Simulate a one-second suspension across the synchronous freshness read. The UTC
-    // snapshot is otherwise valid, but its remaining half-second must not restart afterward.
+    // Authentication above has a full lifetime rather than racing a subsecond lease.
+    // This read snapshot instead has half a second left after a one-second suspension;
+    // returning the otherwise valid UTC pins must not restart its installation clock.
+    let mut stale_read_pins = current_pins;
+    stale_read_pins.trusted_now_ms = package.checkpoint.expires_at_ms - 500;
     let started = NativeContinuousInstantV1::before_for_test(Duration::from_secs(1));
     let read = std::cell::Cell::new(false);
     let result = verify_from_reading(&bytes, started, || {
         read.set(true);
-        Ok(current_pins)
+        Ok(stale_read_pins)
     });
     assert!(read.get());
     assert_eq!(
@@ -345,16 +349,27 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
     for (time, accepted) in [
         (999, false),
         (1_000, true),
-        (299_000, true),
+        (299_999, true),
         (300_000, false),
     ] {
         let mut changed = pins(&policy);
         changed.trusted_now_ms = time;
+        // UTC validity is authenticated by the signed package owner. Installing a
+        // verified token additionally consumes real elapsed time, so the last valid
+        // millisecond must not be used as a scheduling deadline for this assertion.
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(changed)).is_ok(),
+            KagemushaMobileBootstrapPackageV1::decode_canonical_exact(&bytes)
+                .unwrap()
+                .authenticate(&changed)
+                .is_ok(),
             accepted
         );
+        if !accepted {
+            assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(changed)).is_err());
+        }
     }
+    verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(pins(&policy)))
+        .expect("authenticated package installs with its full native lease");
     for (floor, accepted) in [(0, false), (10, true), (11, false)] {
         let mut changed = pins(&policy);
         changed.minimum_sequence = floor;

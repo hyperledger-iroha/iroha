@@ -381,10 +381,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         }
         Ok(())
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the snapshot authenticates one cohesive finalized retention boundary"
-    )]
     fn authorization_snapshot(
         &self,
     ) -> std::result::Result<

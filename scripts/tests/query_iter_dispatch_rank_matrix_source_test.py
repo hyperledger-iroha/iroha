@@ -18,7 +18,6 @@ VALID_REQUEST_SOURCE_PATH = (
 ORDINARY_MEMORY_SOURCE_PATH = (
     REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/query/ordinary_memory.rs"
 )
-MAX_SOURCE_LINES = 8_950
 
 FIRST_RELEASE_FORBIDDEN_TOKENS = (
     "legacy_query_box",
@@ -249,9 +248,6 @@ def _direct_attributes(source: str, name: str) -> tuple[str, ...]:
 
 
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) > MAX_SOURCE_LINES:
-        raise GuardError("query.rs exceeded the frozen rank-matrix source budget")
-
     core = _core_region(source)
     for token in CORE_TOKENS:
         if token not in core:
@@ -339,6 +335,9 @@ class QueryIterDispatchRankMatrixSourceTests(unittest.TestCase):
         cls.source = SOURCE_PATH.read_text()
         cls.valid_request_source = VALID_REQUEST_SOURCE_PATH.read_text()
         cls.ordinary_memory_source = ORDINARY_MEMORY_SOURCE_PATH.read_text()
+
+    def test_whitespace_growth_preserves_case_matrix(self) -> None:
+        validate_source(self.source + "\n" * 100_000)
 
     def test_current_source_preserves_dispatch_matrix(self) -> None:
         validate_source(self.source)

@@ -1,0 +1,190 @@
+    #[derive(Clone, Copy)]
+    enum AliasSource {
+        Exact(&'static str),
+        CanonicalAccount,
+    }
+
+    #[derive(Clone, Copy)]
+    enum AliasLiteral {
+        Ignore,
+        String(&'static str),
+        DataRef(DataRefKind, &'static str),
+        CanonicalAccount,
+    }
+
+    fn assert_alias_lowering(
+        id: &str,
+        source: AliasSource,
+        literal: AliasLiteral,
+        expected_resolve: Option<bool>,
+        expected_static_account: Option<bool>,
+    ) {
+        let canonical = iroha_data_model::account::AccountId::new(
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string();
+        let source = match source {
+            AliasSource::Exact(source) => source.to_owned(),
+            AliasSource::CanonicalAccount => {
+                format!(r#"fn main() {{ let _acct = AccountId::parse("{canonical}"); }}"#)
+            }
+        };
+        let program = lower(&analyze(&parse(&source).unwrap()).unwrap()).expect("lower");
+        let instructions = program.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let resolves = instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instr::ResolveAccountAlias { .. }));
+        let static_account = instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::DataRef {
+                    kind: DataRefKind::Account,
+                    ..
+                }
+            )
+        });
+        if let Some(expected) = expected_resolve {
+            assert_eq!(
+                resolves, expected,
+                "{id}: resolve-account-alias instruction"
+            );
+        }
+        if let Some(expected) = expected_static_account {
+            assert_eq!(
+                static_account, expected,
+                "{id}: static account data reference"
+            );
+        }
+        match literal {
+            AliasLiteral::Ignore => {}
+            AliasLiteral::String(expected) => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::StringConst { value, .. } if value == expected),
+                ),
+                "{id}: missing string literal {expected:?}",
+            ),
+            AliasLiteral::DataRef(kind, expected) => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::DataRef { kind: actual_kind, value, .. } if *actual_kind == kind && value == expected),
+                ),
+                "{id}: missing {kind:?} literal {expected:?}",
+            ),
+            AliasLiteral::CanonicalAccount => assert!(
+                instructions.iter().any(
+                    |instruction| matches!(instruction, Instr::DataRef { kind: DataRefKind::Account, value, .. } if value == &canonical),
+                ),
+                "{id}: missing canonical account literal",
+            ),
+        }
+    }
+
+    macro_rules! alias_lowering_case {
+        ($name:ident, $source:expr, $literal:expr, $resolve:expr, $static_account:expr) => {
+            #[test]
+            fn $name() {
+                assert_alias_lowering(
+                    stringify!($name),
+                    $source,
+                    $literal,
+                    $resolve,
+                    $static_account,
+                );
+            }
+        };
+    }
+
+    alias_lowering_case!(
+        lower_resolve_account_alias_builtin,
+        AliasSource::Exact(
+            "fn main() { let _acct = ledger::account::resolve_alias(alias: \"banking@centralbank\"); }",
+        ),
+        AliasLiteral::Ignore,
+        Some(true),
+        None
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_builtin_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@paynet"); }"#,
+        ),
+        AliasLiteral::String("merchant@paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_invalid_literal_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@"); }"#,
+        ),
+        AliasLiteral::String("merchant@"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@bank.paynet"); }"#,
+        ),
+        AliasLiteral::String("merchant@bank.paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@bank."); }"#,
+        ),
+        AliasLiteral::String("merchant@bank."),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@paynet"); }"#),
+        AliasLiteral::DataRef(DataRefKind::Blob, "merchant@paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(
+            r#"fn main() { let _acct = AccountId::parse("merchant@bank.paynet"); }"#,
+        ),
+        AliasLiteral::DataRef(DataRefKind::Blob, "merchant@bank.paynet"),
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant"); }"#),
+        AliasLiteral::DataRef(DataRefKind::Account, "merchant"),
+        Some(false),
+        Some(true)
+    );
+    alias_lowering_case!(
+        lower_account_id_canonical_literal_to_static_account_dataref,
+        AliasSource::CanonicalAccount,
+        AliasLiteral::CanonicalAccount,
+        Some(false),
+        Some(true)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_alias_shaped_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@"); }"#),
+        AliasLiteral::Ignore,
+        Some(true),
+        Some(false)
+    );
+    alias_lowering_case!(
+        lower_account_id_invalid_domain_qualified_alias_literal_to_resolve_account_alias,
+        AliasSource::Exact(r#"fn main() { let _acct = AccountId::parse("merchant@bank."); }"#),
+        AliasLiteral::Ignore,
+        Some(true),
+        Some(false)
+    );

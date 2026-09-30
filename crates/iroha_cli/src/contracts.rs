@@ -1745,7 +1745,7 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
-    use ivm::kotodama::session::{CompileRequest, CompilerSession};
+    use kotodama_lang::session::{CompileRequest, CompilerSession};
     use url::Url;
     #[test]
     fn package_project_commands_are_owned_by_musubi() {
@@ -1821,14 +1821,14 @@ mod tests {
             include_str!("contracts/fixtures/minimal_view.ko"),
             "        "
         );
-        let compiler = ivm::KotodamaCompiler::new();
+        let compiler = kotodama_lang::compiler::Compiler::new();
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile view contract");
         program
     }
     fn compile_contract_program(source: &str) -> Vec<u8> {
-        let compiler = ivm::KotodamaCompiler::new();
+        let compiler = kotodama_lang::compiler::Compiler::new();
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile contract");

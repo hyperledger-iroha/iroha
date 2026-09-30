@@ -244,7 +244,7 @@ SORAFS_VALIDATE_RS = (
     REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs" / "toolkit" / "validation.rs"
 )
 SORAFS_VALIDATE_CLI_TEST_RS = (
-    REPO_ROOT / "crates" / "iroha_cli" / "tests" / "sorafs_validate_cli.rs"
+    REPO_ROOT / "crates" / "iroha_cli" / "bins" / "tests" / "sorafs_validate_cli.rs"
 )
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
@@ -8299,11 +8299,11 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
 def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     release_gate = read(REPO_ROOT / "ci" / "check_sorafs_cli_release.sh"); release_workflow = read(REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"); manifest = read(SCRIPTS_DIR / "generate_sorafs_cli_release_manifest.py"); manifest_test = read(SCRIPTS_DIR / "tests" / "generate_sorafs_cli_release_manifest_test.py"); candidate_packager = read(SCRIPTS_DIR / "package_sorafs_cli_candidate.py"); candidate_packager_test = read(SCRIPTS_DIR / "tests" / "package_sorafs_cli_candidate_test.py"); provider_ingest_test = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests" / "quarantine_restart.rs"); provider_ingest_parent = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests.rs"); provider_ingest_contract = read(SCRIPTS_DIR / "tests" / "check_sorafs_provider_ingest_runtime_contract_test.py")
 
-    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate and 'echo "[sorafs-release] source-file budget check"' in release_gate
+    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
     provenance_command = "python3 -I -S scripts/check_build_efficiency_provenance.py"
     assert release_gate.count(provenance_command) == 1
     assert release_gate.index(provenance_command) < release_gate.index(
-        "python3 scripts/check_source_file_budget.py"
+        "cargo fmt --all -- --check"
     )
     assert "scripts/tests/check_build_efficiency_provenance_test.py" in release_gate
     assert "scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py" in release_gate
@@ -8327,7 +8327,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert release_workflow.count("fetch-depth: 0") == 1
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
-    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
     assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
     assert "scripts/tests/package_iroha_cli_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
@@ -8337,10 +8337,10 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests",
         "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture", "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
-        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
+        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad_lib --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
     )
     assert all(marker in release_gate for marker in required)
-    assert release_gate.count("python3 scripts/check_source_file_budget.py") == 1 and release_gate.index("python3 scripts/check_source_file_budget.py") < release_gate.index("cargo fmt --all -- --check") and release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
+    assert release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
     assert release_gate.index("release helper adversarial tests") < release_gate.index("clippy sorafs_orchestrator")
 
 

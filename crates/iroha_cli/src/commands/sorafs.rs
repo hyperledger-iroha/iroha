@@ -4506,6 +4506,7 @@ impl Run for FetchArgs {
         }
         let provider_counts = ProviderCounts::new(0, gateway_provider_count);
         let metadata = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: crate::build_metadata().version(),
             provider_counts,
             max_peers: self.max_peers,
             retry_budget: self.retry_budget,
@@ -4827,6 +4828,7 @@ impl ProviderCounts {
 }
 #[derive(Clone)]
 struct ScoreboardMetadataInput {
+    version: &'static str,
     provider_counts: ProviderCounts,
     max_peers: Option<usize>,
     retry_budget: Option<usize>,
@@ -4844,7 +4846,7 @@ struct ScoreboardMetadataInput {
 }
 fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
     let mut metadata = Map::new();
-    metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));
+    metadata.insert("version".into(), Value::from(input.version));
     metadata.insert("use_scoreboard".into(), Value::from(true));
     metadata.insert("allow_implicit_metadata".into(), Value::from(false));
     metadata.insert(
@@ -6528,6 +6530,7 @@ mod cli_scoreboard_metadata_tests {
     #[test]
     fn cli_scoreboard_metadata_records_policy_overrides() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: "executable-version",
             provider_counts: ProviderCounts::new(2, 2),
             max_peers: Some(3),
             retry_budget: Some(5),
@@ -6544,6 +6547,10 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: None,
         });
         let object = value.as_object().expect("metadata should be a JSON object");
+        assert_eq!(
+            object.get("version").and_then(Value::as_str),
+            Some("executable-version")
+        );
         assert_eq_compact! { object.get("transport_policy").and_then(Value::as_str).expect("transport_policy string") => "direct-only" };
         assert_eq_compact! { object.get("transport_policy_override").and_then(Value::as_bool) => Some(true) };
         assert_eq_compact! { object.get("transport_policy_override_label").and_then(Value::as_str) => Some("direct-only") };
@@ -6556,6 +6563,7 @@ mod cli_scoreboard_metadata_tests {
     #[test]
     fn cli_scoreboard_metadata_includes_timestamp_and_telemetry_label() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: "executable-version",
             provider_counts: ProviderCounts::new(1, 0),
             max_peers: None,
             retry_budget: None,
@@ -6579,6 +6587,7 @@ mod cli_scoreboard_metadata_tests {
     #[test]
     fn cli_scoreboard_metadata_defaults_to_soranet_first_transport() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: "executable-version",
             provider_counts: ProviderCounts::new(0, 2),
             max_peers: None,
             retry_budget: None,
@@ -6603,6 +6612,7 @@ mod cli_scoreboard_metadata_tests {
     #[test]
     fn cli_scoreboard_metadata_distinguishes_gateway_providers() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: "executable-version",
             provider_counts: ProviderCounts::new(5, 7),
             max_peers: Some(4),
             retry_budget: Some(6),
@@ -6627,6 +6637,7 @@ mod cli_scoreboard_metadata_tests {
     #[test]
     fn cli_scoreboard_metadata_sets_provider_mix() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
+            version: "executable-version",
             provider_counts: ProviderCounts::new(0, 1),
             max_peers: None,
             retry_budget: None,

@@ -3,7 +3,7 @@
 
 This stdlib source check recognizes scoped calls, guards, and protocol constants.
 It is not a Rust parser or proof of behavior: source-sealed Rust runtime/codegen
-suites, feature qualification, source budgets, and build provenance remain required.
+suites, feature qualification, and build provenance remain required.
 Private helper names, line counts, full-file digests and test ordering are not policy.
 """
 from __future__ import annotations

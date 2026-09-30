@@ -52,9 +52,9 @@ preflights the role, reviewed manifest coordinates and private-journal purpose
 before credential access, and passes one source to both the software key provider
 and coordinator. This is local assembly of the already bounded four-signature
 ceremony, not a configured daemon entrypoint or finalized state implementation.
-The [role-13 finalized-source audit](../../docs/history/2026-09-24/sorafs-release-manifest-role13-finalized-source-audit.md)
-traces the closed Core action handler, raw custody-only reader, test-only state
-sources and rejected generic software dispatch. No production state source can
+Core actions remain closed; raw custody readers lack finalized operation
+evidence, current daemon state sources are test-only and generic software
+dispatch rejects this purpose. No production state source can
 be assembled from those current APIs.
 
 This is a producer prerequisite. Role13 remains rejected by the external software
@@ -63,15 +63,6 @@ custody/permission/Current Check and operation authority, a state/finality provi
 using actual State/Kura/Queue, qualified observer/time/floor and fee/submission
 assembly, configured software purpose dispatch, and ambiguous recovery. Injected
 provider tests and a local receipt journal establish none of that authority.
-The integrated daemon harness passes
-all seven new ceremony-owner controls and all 111 signer-operation tests;
-`target/first-release-release-ceremony-native/identity.json` records the copied
-binary and unchanged observed inputs. Its observation was captured while the
-development rebuild was queued/running, not as a before-build release seal.
-No production qualification is implied. The separate
-[software-adapter validation record](../../docs/history/2026-09-21/sorafs-signing-adapter-validation.md)
-records promotion controls and actual pinned-cosign cryptographic tests.
-
 ## Existing configuration and transport
 
 The closest complete public configuration is
@@ -179,9 +170,8 @@ execution result and executed wire/finality at H, then authenticate ancestry to
 the current applied cut J >= H and recheck native state and account/role Operate
 permissions together at J. Use a separate transaction account key and bounded monotonic phase
 time; no historical receipt refresh or new quorum-tip message protocol is implied.
-The Check/native consumer passes 38 focused Core tests within the latest
-[285-test runtime checkpoint](v1_closure_ledger.md#native-deployment-authority-and-schema-checkpoint).
-Its actual submission path and independent runtime trust inputs remain unqualified.
+The Check/native consumer requires qualification of its actual submission path
+and independent runtime trust inputs.
 Bounded adversarial models are design evidence, not protocol qualification. Both Torii and the daemon need
 the shared Core boundary described in the
 [native authority contract](final_promotion_native_authority_v1.md#current-authority-prerequisite).
@@ -189,7 +179,7 @@ the shared Core boundary described in the
 The new [native role-14 authority contract](final_promotion_native_authority_v1.md)
 uses a stable deployment scope and separate custody/operation histories. Its
 DataModel/ISI, scoped permissions, Core execution and bounded same-State readers
-are implemented and covered by the scoped native checkpoint. This does not yet supply a production
+are implemented. This does not yet supply a production
 `SignerOperationStateSourceV1` or a production signer adapter. The ordinary state
 source interface is separate from enrollment and audited-control capabilities,
 so native emergency revocation need not pretend to supply an old-key audit. The shared Manifest

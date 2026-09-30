@@ -456,65 +456,8 @@ def test_build_efficiency_provenance_contract_triggers_are_mandatory(
         automation.validate_release_automation(tmp_path)
 
 
-@pytest.mark.parametrize(
-    "relative",
-    sorted(automation.SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS),
-)
-def test_source_file_budget_contract_triggers_are_mandatory(
-    tmp_path: Path, relative: str
-) -> None:
-    _copy_workflows(tmp_path)
-    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
-    source = workflow.read_text(encoding="utf-8")
-    trigger = f'      - "{relative}"\n'
-    assert source.count(trigger) == 1
-    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
-
-    with pytest.raises(
-        ValueError,
-        match=r"pull_request\.paths omits source-file budget contract trigger",
-    ):
-        automation.validate_release_automation(tmp_path)
 
 
-@pytest.mark.parametrize(
-    ("old", "new", "message"),
-    (
-        (
-            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
-            "true",
-            "source-file budget command must appear exactly once",
-        ),
-        (
-            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
-            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND} || true",
-            "source-file budget command must appear exactly once",
-        ),
-        (
-            "set -euo pipefail",
-            "set -uo pipefail",
-            "strict shell mode must precede",
-        ),
-        (
-            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
-            "cargo fmt --all -- --check\n"
-            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}",
-            "source-file budget command must run before every Cargo command",
-        ),
-    ),
-)
-def test_source_file_budget_release_gate_fails_closed_before_cargo(
-    tmp_path: Path, old: str, new: str, message: str
-) -> None:
-    _copy_workflows(tmp_path)
-    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
-    source = release_gate.read_text(encoding="utf-8")
-    drifted = source.replace(old, new, 1)
-    assert drifted != source
-    release_gate.write_text(drifted, encoding="utf-8")
-
-    with pytest.raises(ValueError, match=message):
-        automation.validate_release_automation(tmp_path)
 
 
 @pytest.mark.parametrize("relative", automation.SORAFS_CLI_L1_QUALIFICATION_TESTS)
@@ -577,13 +520,19 @@ def test_production_promotion_import_regression_suites_are_exactly_once(
             "build-efficiency provenance command must appear exactly once",
         ),
         (
-            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND}\n\n"
-            'echo "[sorafs-release] source-file budget check"\n'
-            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}",
-            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}\n\n"
-            'echo "[sorafs-release] source-file budget check"\n'
-            f"{automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND}",
-            "build-efficiency provenance command must run before the source-file budget",
+            "set -euo pipefail",
+            "set -uo pipefail",
+            "strict shell mode must precede",
+        ),
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "set +e\n" + automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "build-efficiency provenance command must not run with errexit disabled",
+        ),
+        (
+            automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "set +o errexit\n" + automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
+            "build-efficiency provenance command must not run with errexit disabled",
         ),
         (
             automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND,
@@ -593,7 +542,7 @@ def test_production_promotion_import_regression_suites_are_exactly_once(
         ),
         (
             automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST,
-            "scripts/tests/check_source_file_budget_test.py",
+            "scripts/tests/removed_provenance_suite.py",
             "must execute the build-efficiency provenance regression suite",
         ),
     ),
@@ -2902,7 +2851,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture",
         "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture",
         'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"',
-        'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list',
+        'cargo test --locked -p irohad_lib --lib "${provider_ingest_test}" -- --exact --list',
         'grep -Fxc -- "${provider_ingest_test}: test"',
         "--exact --include-ignored --nocapture",
         "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py",

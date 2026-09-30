@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn owned_host_retains_prepared_arguments_and_requires_exact_prepayment() {
-        let (program, _) = crate::KotodamaCompiler::new()
+        let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku Prepared { view fn echo(bool ready) -> bool { return ready; } }",
             )

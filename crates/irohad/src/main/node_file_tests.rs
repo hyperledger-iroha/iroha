@@ -145,9 +145,11 @@ fn profile_node_file_loads_through_the_profile_path() {
     let node = ProfileNode::new();
     let (path, digest) = node.node_file();
     let path = path.to_str().expect("UTF-8 path").to_owned();
-    let (config, genesis) =
-        read_with_fixture_space(&parse_args_from(["iroha3d", "--config", &path]))
-            .unwrap_or_else(|report| panic!("{report:?}"));
+    let (config, genesis) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
     assert!(genesis.is_none());
     assert_eq!(config.data_dir.as_ref(), Some(&node.data_dir));
     assert!(config.lifecycle.exit_on_stdin_close);
@@ -158,27 +160,30 @@ fn profile_node_file_loads_through_the_profile_path() {
     );
     // `--sora` is refused with a profile.
     assert!(
-        read_with_fixture_space(&parse_args_from(["iroha3d", "--sora", "--config", &path]))
-            .is_err()
+        read_with_fixture_space(&parse_args_from(
+            test_build_metadata(),
+            ["iroha3d", "--sora", "--config", &path]
+        ))
+        .is_err()
     );
     // `--config-blake3` binds the exact node-file bytes.
-    let (bound, _) = read_with_fixture_space(&parse_args_from([
-        "iroha3d",
-        "--config",
-        &path,
-        "--config-blake3",
-        &digest,
-    ]))
+    let (bound, _) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path, "--config-blake3", &digest],
+    ))
     .unwrap_or_else(|report| panic!("{report:?}"));
     assert_eq!(bound.data_dir, config.data_dir);
     assert!(
-        read_with_fixture_space(&parse_args_from([
-            "iroha3d",
-            "--config",
-            &path,
-            "--config-blake3",
-            &"0".repeat(64),
-        ]))
+        read_with_fixture_space(&parse_args_from(
+            test_build_metadata(),
+            [
+                "iroha3d",
+                "--config",
+                &path,
+                "--config-blake3",
+                &"0".repeat(64),
+            ]
+        ))
         .is_err()
     );
 }
@@ -196,7 +201,8 @@ fn parser_read_key_files_fail_closed_on_custody() {
         vec!["iroha3d", "--config", path.as_str()],
         vec!["iroha3d", "--config", path.as_str(), "--check-config"],
     ] {
-        let Err(error) = read_with_fixture_space(&parse_args_from(args)) else {
+        let Err(error) = read_with_fixture_space(&parse_args_from(test_build_metadata(), args))
+        else {
             panic!("a group-readable validator key is refused");
         };
         assert!(
@@ -209,7 +215,11 @@ fn parser_read_key_files_fail_closed_on_custody() {
     fs::rename(&validator, &aside).expect("move the key aside");
     std::os::unix::fs::symlink(&aside, &validator).expect("symlinked key");
     assert!(
-        read_with_fixture_space(&parse_args_from(["iroha3d", "--config", &path])).is_err(),
+        read_with_fixture_space(&parse_args_from(
+            test_build_metadata(),
+            ["iroha3d", "--config", &path]
+        ))
+        .is_err(),
         "a symlinked validator key is refused"
     );
 }
@@ -248,9 +258,11 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
     let node = ProfileNode::new();
     let (path, _) = node.node_file();
     let path = path.to_str().expect("UTF-8 path").to_owned();
-    let (config, genesis) =
-        read_with_fixture_space(&parse_args_from(["iroha3d", "--config", &path]))
-            .unwrap_or_else(|report| panic!("{report:?}"));
+    let (config, genesis) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
     // A real start authenticates any local genesis once, before resolving the secrets.
     let authenticated_genesis = genesis
         .as_ref()
@@ -304,9 +316,12 @@ fn data_dir_launch_rejects_an_inherited_seed_descriptor() {
 
 #[test]
 fn check_flags_parse_and_conflict() {
-    let args = parse_args_from(["iroha3d", "--check-config", "--json"]);
+    let args = parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--check-config", "--json"],
+    );
     assert!(args.startup.check_config && args.startup.json);
-    let args = parse_args_from(["iroha3d", "--check-storage"]);
+    let args = parse_args_from(test_build_metadata(), ["iroha3d", "--check-storage"]);
     assert!(args.startup.check_storage && !args.startup.check_config);
     assert!(Args::try_parse_from(["iroha3d", "--json"]).is_err());
     assert!(Args::try_parse_from(["iroha3d", "--check-storage", "--check-config"]).is_err());

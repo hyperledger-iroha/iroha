@@ -96,8 +96,9 @@ use crate::privacy_engines::{
         FCMP_MAX_INPUTS_NATIVE_V1, FCMP_MAX_OUTPUTS_NATIVE_V1, FCMP_MAX_PROOF_WIRE_BYTES_V1,
         FCMP_MAX_TREE_LAYERS_V1, FCMP_MIN_PROOF_WIRE_BYTES_V1, FCMP_PROOF_INPUT_BYTES_V1,
         FCMP_PROOF_WIRE_HEADER_BYTES_V1, FcmpOutputTupleV1, FcmpProofInputPublicV1, FcmpTreeRootV1,
-        build_fcmp_frontier_v1, fcmp_release_fixture_v1, fcmp_release_invalid_path_fixture_v1,
-        prove_fcmp_plus_plus_v1, verify_fcmp_transaction_v1,
+        build_fcmp_frontier_v1, prove_fcmp_plus_plus_v1,
+        release_evidence_access::{fcmp_release_fixture_v1, fcmp_release_invalid_path_fixture_v1},
+        verify_fcmp_transaction_v1,
     },
     ivm_private_note::{
         IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1, PRIVATE_NOTE_MAX_INPUTS_V1,

@@ -65,7 +65,6 @@ mod ivm;
 pub mod ivm_cache;
 pub mod json;
 pub mod koto_test_return;
-pub mod kotodama;
 pub mod limits;
 pub mod list;
 mod memory;
@@ -178,7 +177,6 @@ pub use crate::{
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },
-    kotodama::compiler::Compiler as KotodamaCompiler,
     memory::{AccessRange, Memory, ReadLogSnapshot, WriteLogEntry, WriteLogSnapshot},
     pedersen::pedersen_commit,
     pointer_abi::{

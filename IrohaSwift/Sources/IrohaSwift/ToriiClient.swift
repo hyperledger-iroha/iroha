@@ -26216,14 +26216,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiPipelinePreflight.self, from: data)
     }
 
+    /// Return a healthy sampled network clock. Fallback, incomplete or unhealthy
+    /// snapshots are rejected before they can influence transaction timestamps.
     public func getTimeNow() async throws -> ToriiTimeSnapshot {
         let request = try makeRequest(path: "/v1/time/now")
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300, responseBody: data)
         let snapshot = try decodeJSON(ToriiTimeSnapshot.self, from: data)
-        guard snapshot.now > 0 else {
+        guard snapshot.healthyLowerBoundMs != nil else {
             throw ToriiClientError.invalidPayload(
-                "time/now returned a zero server timestamp."
+                "time/now returned an unhealthy or fallback network clock."
             )
         }
         recordObservedServerClock(

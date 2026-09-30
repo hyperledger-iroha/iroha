@@ -126,7 +126,7 @@ verify it without fetching confidential material.
 ## Private-note proof profile
 
 The settlement profile is implemented under
-`crates/iroha_core/src/privacy_engines/atomic_private_settlement/` and reuses the
+`crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/` and reuses the
 pinned IVM private-note STARK machinery. Its relation has exactly two input and
 three output slots. Activity is canonical from the private value: a positive
 input must prove membership in the old root, while a zero input is a virtual
@@ -251,7 +251,7 @@ Global timeout certificates are delivered to the immutable union of the global r
 
 ## Audit capsule and approval
 
-`crates/iroha_core/src/private_settlement/audit.rs` pads the canonical plaintext
+`crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs` pads the canonical plaintext
 to one configured class and encrypts it under a random 256-bit DEK with
 XChaCha20-Poly1305. The same DEK is independently wrapped to every auditor in
 the exact policy order using the existing X25519/ML-KEM-768 hybrid KEM and an

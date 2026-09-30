@@ -1,7 +1,7 @@
 //! Local, credential-free native racing prover, verifier, and parity-fixture generator.
 //! Run with `cargo iroha-fast -- run -p iroha_core --example race_prover -- <command>`.
 
-use iroha_core::execution_proofs::*;
+use iroha_core_privacy::execution_proofs::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,

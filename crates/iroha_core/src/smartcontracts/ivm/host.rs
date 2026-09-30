@@ -16900,12 +16900,13 @@ seiyaku BurnWithMemo {
   }
 }
 "#;
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
-                mode: ivm::kotodama::compiler::CompilerMode::Production,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
+                mode: kotodama_lang::compiler::CompilerMode::Production,
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        );
         let (code, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile by-call contract");
@@ -16975,13 +16976,14 @@ seiyaku OpaqueInstructionSubmission {
 "#;
         // This is intentionally the non-deployable local harness profile: the
         // retired opaque-instruction escape must remain outside the public language surface.
-        let error =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            })
-            .compile_source_with_manifest(source)
-            .expect_err("opaque instruction submission must remain source-inaccessible");
+        let error = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                mode: kotodama_lang::compiler::CompilerMode::Test,
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        )
+        .compile_source_with_manifest(source)
+        .expect_err("opaque instruction submission must remain source-inaccessible");
         let rendered = error.to_string();
         assert!(
             rendered.contains("error[K2002]")
@@ -18836,7 +18838,7 @@ seiyaku Callee {
         }
     }
     fn completed_unit_return_vm() -> IVM {
-        let program = ivm::KotodamaCompiler::new()
+        let program = kotodama_lang::compiler::Compiler::new()
             .compile_source("seiyaku ReturnBoundary { view fn main() { () } }")
             .expect("compile root result-table fixture");
         let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
@@ -19253,7 +19255,7 @@ seiyaku Callee {
   }
 }
 "#;
-        let (_, manifest) = ivm::KotodamaCompiler::new()
+        let (_, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(callee_source)
             .expect("compile exact callee error descriptor");
         let expected = manifest
@@ -19825,7 +19827,7 @@ seiyaku StoredAccountView {
             contract_invocation_from_json(&state, contract.clone(), "bind", &bind_payload),
             &mut ivm_cache,
         );
-        let (code, _manifest) = ivm::KotodamaCompiler::new()
+        let (code, _manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile source with manifest");
         let parsed = ivm::ProgramMetadata::parse(&code).expect("parse program metadata");
@@ -20004,7 +20006,9 @@ seiyaku Callee {
             payload,
         );
         result.expect("nested products must retain Unit words and nominal error identities");
-        let code = ivm::KotodamaCompiler::new().compile_source(source).unwrap();
+        let code = kotodama_lang::compiler::Compiler::new()
+            .compile_source(source)
+            .unwrap();
         let parsed = ivm::ProgramMetadata::parse(&code).unwrap();
         let interface = parsed.contract_interface.unwrap();
         let schema = interface
@@ -22541,7 +22545,7 @@ seiyaku DurableOwner {
                 }
             }
         "#;
-        let (program, _) = ivm::KotodamaCompiler::new()
+        let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile typed bytes contract");
         let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
@@ -22635,7 +22639,7 @@ seiyaku DurableOwner {
                 }
             }
         "#;
-        let (program, _) = ivm::KotodamaCompiler::new()
+        let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile typed map contract");
         let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
@@ -22789,7 +22793,7 @@ seiyaku DurableOwner {
                 }
             }
         "#;
-        let (code, _) = ivm::KotodamaCompiler::new()
+        let (code, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile validation-fee credit reader");
         let metadata = ivm::ProgramMetadata::parse(&code).expect("parse credit-reader metadata");
@@ -24981,7 +24985,7 @@ seiyaku DurableOwner {
             EntrypointArgumentRecordV1, EntrypointValueAtomV1,
             MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES, entrypoint_argument_schema_hash_v1,
         };
-        let (program, _) = ivm::KotodamaCompiler::new()
+        let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku PreparedBoundaryArguments {

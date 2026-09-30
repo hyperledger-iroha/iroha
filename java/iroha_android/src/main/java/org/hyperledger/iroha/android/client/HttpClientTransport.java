@@ -98,6 +98,11 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteBridge;
 import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteRequestV1;
 import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingCheckpointPersisterV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerifierV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofResponseV1;
+import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofTerminalV1;
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -1084,7 +1089,7 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /** Requests one exact, consensus-authenticated timed-OVN casting-proof page. */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+  public CompletableFuture<ParliamentTimedOvnCastingProofResponseV1>
       requestParliamentTimedOvnCastingProofV1(
           final String ballotAttemptId,
           final BigInteger trustedCheckpointHeight,
@@ -1103,7 +1108,7 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /** Convenience overload for positive signed checkpoint heights. */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+  public CompletableFuture<ParliamentTimedOvnCastingProofResponseV1>
       requestParliamentTimedOvnCastingProofV1(
           final String ballotAttemptId,
           final long trustedCheckpointHeight,
@@ -1113,7 +1118,7 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /** Fetches one bounded checkpoint-promotion page for native wallet verification. */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+  public CompletableFuture<ParliamentTimedOvnCastingProofResponseV1>
       getParliamentTimedOvnCastingProofPageV1(
           final String ballotAttemptId,
           final BigInteger trustedCheckpointHeight,
@@ -1123,7 +1128,7 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /** Convenience overload for positive signed checkpoint heights. */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+  public CompletableFuture<ParliamentTimedOvnCastingProofResponseV1>
       getParliamentTimedOvnCastingProofPageV1(
           final String ballotAttemptId,
           final long trustedCheckpointHeight,
@@ -1138,168 +1143,43 @@ public final class HttpClientTransport implements IrohaClient {
    * <p>The authentication must leave timestamp and nonce unpinned so each exact POST receives a
    * fresh anti-replay tuple. A promoted checkpoint is never used until persistence completes.
    */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+  public CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1>
       requestParliamentTimedOvnCastingProofUntilTerminalV1(
           final String ballotAttemptId,
           final BigInteger initialTrustedCheckpointHeight,
-          final byte[] initialTrustedCheckpointContextId,
+          final byte[] initialTrustedCheckpointNorito,
           final ToriiCanonicalRequestAuth canonicalAuth,
-          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
-          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister) {
-    final BigInteger initialHeight =
-        ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(
-            initialTrustedCheckpointHeight);
-    final byte[] initialContext =
-        requireCastingCheckpointContext(initialTrustedCheckpointContextId);
+          final ParliamentTimedOvnCastingProofPageVerifierV1 pageVerifier,
+          final ParliamentTimedOvnCastingCheckpointPersisterV1 checkpointPersister) {
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
     if (canonicalAuth.timestampMs() != null || canonicalAuth.nonce() != null) {
       throw new IllegalArgumentException(
           "casting-proof paging requires unpinned canonical authentication");
     }
-    return requestParliamentTimedOvnCastingProofPageV1(
-        ballotAttemptId,
-        initialHeight,
-        initialContext,
-        initialHeight,
-        canonicalAuth,
+    return org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPagerV1.synchronize(
+        initialTrustedCheckpointHeight,
+        initialTrustedCheckpointNorito,
+        height -> requestParliamentTimedOvnCastingProofV1(ballotAttemptId, height, canonicalAuth),
         Objects.requireNonNull(pageVerifier, "pageVerifier"),
-        Objects.requireNonNull(checkpointPersister, "checkpointPersister"),
-        0);
+        Objects.requireNonNull(checkpointPersister, "checkpointPersister"));
   }
 
   /** Convenience overload for a positive signed initial checkpoint. */
-  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+  public CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1>
       requestParliamentTimedOvnCastingProofUntilTerminalV1(
           final String ballotAttemptId,
           final long initialTrustedCheckpointHeight,
-          final byte[] initialTrustedCheckpointContextId,
+          final byte[] initialTrustedCheckpointNorito,
           final ToriiCanonicalRequestAuth canonicalAuth,
-          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
-          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister) {
+          final ParliamentTimedOvnCastingProofPageVerifierV1 pageVerifier,
+          final ParliamentTimedOvnCastingCheckpointPersisterV1 checkpointPersister) {
     return requestParliamentTimedOvnCastingProofUntilTerminalV1(
         ballotAttemptId,
         BigInteger.valueOf(initialTrustedCheckpointHeight),
-        initialTrustedCheckpointContextId,
+        initialTrustedCheckpointNorito,
         canonicalAuth,
         pageVerifier,
         checkpointPersister);
-  }
-
-  private CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
-      requestParliamentTimedOvnCastingProofPageV1(
-          final String ballotAttemptId,
-          final BigInteger currentHeight,
-          final byte[] currentContext,
-          final BigInteger initialHeight,
-          final ToriiCanonicalRequestAuth canonicalAuth,
-          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
-          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister,
-          final int verifiedPages) {
-    if (verifiedPages >= ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGES) {
-      return failedCastingProofPageFuture(
-          new IllegalStateException("Parliament casting-proof page limit was reached"));
-    }
-    return requestParliamentTimedOvnCastingProofV1(
-            ballotAttemptId, currentHeight, canonicalAuth)
-        .thenCompose(
-            response -> {
-              final ParliamentApiV1.TimedOvnCastingProofPageVerification verification =
-                  Objects.requireNonNull(
-                      pageVerifier.verify(
-                          response, currentHeight, currentContext.clone()),
-                      "native page verification");
-              validateCastingProofPromotion(
-                  initialHeight, currentHeight, currentContext, verification);
-              final CompletableFuture<Void> persisted =
-                  Objects.requireNonNull(
-                      checkpointPersister.persist(verification),
-                      "casting checkpoint persistence");
-              return persisted.thenCompose(
-                  ignored -> {
-                    final int nextPageCount = verifiedPages + 1;
-                    if (!verification.moreAvailable) {
-                      return CompletableFuture.completedFuture(
-                          new ParliamentApiV1.TimedOvnCastingProofTerminal(
-                              response,
-                              currentHeight,
-                              currentContext,
-                              verification,
-                              nextPageCount));
-                    }
-                    return requestParliamentTimedOvnCastingProofPageV1(
-                        ballotAttemptId,
-                        verification.evaluatedBlockHeight,
-                        verification.evaluatedContextId(),
-                        initialHeight,
-                        canonicalAuth,
-                        pageVerifier,
-                        checkpointPersister,
-                        nextPageCount);
-                  });
-            });
-  }
-
-  private static void validateCastingProofPromotion(
-      final BigInteger initialHeight,
-      final BigInteger currentHeight,
-      final byte[] currentContext,
-      final ParliamentApiV1.TimedOvnCastingProofPageVerification verification) {
-    final BigInteger evaluatedHeight = verification.evaluatedBlockHeight;
-    if (evaluatedHeight.compareTo(currentHeight) < 0) {
-      throw new IllegalArgumentException(
-          "native casting-proof verification regressed the checkpoint height");
-    }
-    final BigInteger pageAdvance = evaluatedHeight.subtract(currentHeight);
-    if (pageAdvance.compareTo(
-            BigInteger.valueOf(
-                ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE))
-        > 0) {
-      throw new IllegalArgumentException(
-          "native casting-proof verification exceeded the page height bound");
-    }
-    if (evaluatedHeight
-            .subtract(initialHeight)
-            .compareTo(
-                BigInteger.valueOf(
-                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE))
-        > 0) {
-      throw new IllegalArgumentException(
-          "native casting-proof verification exceeded the aggregate height bound");
-    }
-    if (verification.moreAvailable && pageAdvance.signum() == 0) {
-      throw new IllegalArgumentException(
-          "nonterminal casting-proof page did not advance its checkpoint");
-    }
-    if (!verification.moreAvailable
-        && pageAdvance.signum() == 0
-        && !MessageDigest.isEqual(currentContext, verification.evaluatedContextId())) {
-      throw new IllegalArgumentException(
-          "terminal casting-proof page changed context without advancing height");
-    }
-  }
-
-  private static byte[] requireCastingCheckpointContext(final byte[] value) {
-    if (value == null || value.length != 32) {
-      throw new IllegalArgumentException(
-          "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes");
-    }
-    boolean nonzero = false;
-    for (final byte item : value) {
-      nonzero |= item != 0;
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException(
-          "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes");
-    }
-    return value.clone();
-  }
-
-  private static CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
-      failedCastingProofPageFuture(final Throwable error) {
-    final CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal> future =
-        new CompletableFuture<>();
-    future.completeExceptionally(error);
-    return future;
   }
 
   /** Fetches the complete public transcript for one currently authorized TLE release. */

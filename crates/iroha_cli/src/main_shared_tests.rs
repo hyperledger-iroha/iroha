@@ -2262,10 +2262,13 @@ fn version_run_prints_localized_lines_in_text_mode() {
     Version.run(&mut ctx).expect("version run");
     let i18n = Localizer::new(Bundle::Cli, Language::English);
     let expected = vec![
-        i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)]),
+        i18n.t_with(
+            "info.client_git_sha",
+            &[("sha", build_metadata().source_commit_label())],
+        ),
         i18n.t_with(
             "info.client_version",
-            &[("version", env!("CARGO_PKG_VERSION"))],
+            &[("version", build_metadata().version())],
         ),
         i18n.t_with("info.server_version", &[("version", "1.2.3")]),
     ];
@@ -2849,3 +2852,31 @@ fn trigger_register_data_domain_filter_builds() {
 
 #[path = "main_shared_tests/canonical_reads.rs"]
 mod canonical_reads;
+
+#[test]
+fn library_test_build_metadata_is_an_explicit_development_identity() {
+    let build = build_metadata();
+    assert_eq!(build.source_commit_label(), "local-fast-build");
+    assert_eq!(build.sealed_source_commit(), None);
+    assert_eq!(
+        compiled_build_identity().unwrap().release_source_commit(),
+        Err(iroha_core::release_identity::BuildIdentityError::DevelopmentSource)
+    );
+}
+
+#[test]
+fn version_is_supplied_by_the_executable() {
+    let build = CompiledBuildMetadata::from_compiled_parts(
+        "executable-version",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    );
+    let error = args_command(build)
+        .try_get_matches_from(["iroha", "--version"])
+        .expect_err("version display exits through clap");
+    assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+    assert_eq!(error.render().to_string(), "iroha executable-version\n");
+}

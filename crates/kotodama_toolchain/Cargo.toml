@@ -43,7 +43,7 @@ ed25519-dalek = "2.2.0"
 
 [dev-dependencies]
 hex = { workspace = true }
-kotodama_surface = { path = "../kotodama_surface" }
+kotodama_surface = { workspace = true }
 mv = { workspace = true }
 
 [[test]]

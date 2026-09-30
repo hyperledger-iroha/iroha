@@ -430,10 +430,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     /// Returns a stable redacted error when finalized registry evidence is
     /// unavailable or invalid, every provider attempt fails, or cache
     /// verification or publication cannot be completed safely.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fail-closed fetch state machine keeps provider attempt, cache verification, stream fallback, and error precedence visible together"
-    )]
     pub fn fetch_exact(
         &self,
         archive_id: ArchiveId,

@@ -3,7 +3,7 @@ use crate::{Outcome, RunArgs};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
-use iroha_core::privacy_profiles::{
+use iroha_core_privacy::privacy_profiles::{
     CompiledPrivacyProfileV1, compiled_privacy_profile_catalog_v1, compiled_privacy_profile_v1,
 };
 use iroha_crypto::sha256;

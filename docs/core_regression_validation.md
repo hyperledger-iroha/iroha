@@ -60,7 +60,7 @@ authenticated configured Kura geometry before startup catalog projection.
 The combined test build is warning-free:
 
 ```sh
-cargo test -p iroha_cli --bin iroha -p iroha_core --lib --no-run
+cargo test -p iroha_cli_lib -p iroha_core --lib --no-run
 ```
 
 Focused execution passes 90 Core tests, 51 CLI tests and the four-peer P2P

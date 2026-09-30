@@ -3,7 +3,7 @@ use hex_literal::hex;
 use std::panic::AssertUnwindSafe;
 
 const CANDIDATE_SOURCE_V1: &str = include_str!("existing_radix_candidate_v1.rs");
-const CANDIDATE_TEST_SOURCE_V1: &str = include_str!("existing_radix_candidate_v1_tests.rs");
+
 const SESSION_SOURCE_V1: &str = include_str!("../commitment_session_v1.rs");
 const VERIFIER_SOURCE_V1: &str =
     include_str!("../../../../../rns_native_existing_radix_commitment_view.rs");
@@ -422,10 +422,6 @@ fn owner_is_move_only_source_bound_and_all_stronger_gates_remain_false() {
             "forbidden owner surface: {forbidden}"
         );
     }
-    assert!(CANDIDATE_SOURCE_V1.lines().count() <= 900);
-    assert!(CANDIDATE_SOURCE_V1.len() <= 45_000);
-    assert!(CANDIDATE_TEST_SOURCE_V1.lines().count() <= 500);
-    assert!(CANDIDATE_TEST_SOURCE_V1.len() <= 25_000);
 }
 
 #[test]

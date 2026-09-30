@@ -101,6 +101,8 @@ atomic-private-settlement-smoke = ["atomic-private-settlement-release"]
 parliament-test-signers = ["iroha_core/test-network-parliament-signers"]
 
 [dependencies]
+iroha_core_privacy = { workspace = true }
+iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }
 eyre = { workspace = true }
@@ -120,7 +122,8 @@ iroha = { workspace = true }
 zk_ace_prover = { path = "../crates/zk_ace_prover", optional = true }
 
 [dev-dependencies]
-irohad = { path = "../crates/irohad", default-features = false, features = ["daemon"] }
+kotodama_lang = { workspace = true }
+irohad = { package = "irohad_lib", path = "../crates/irohad", default-features = false, features = ["daemon"] }
 zeroize = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }
 iroha_service_model = { workspace = true }

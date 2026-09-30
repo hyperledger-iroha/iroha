@@ -6372,11 +6372,11 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(names(REPO_ROOT / ".github" / "workflows"), set())
         self.assertEqual(names(REPO_ROOT / "ci"), set())
         self.assertEqual(
-            names(REPO_ROOT / "crates" / "iroha_cli" / "src" / "bin"),
+            names(REPO_ROOT / "crates" / "iroha_cli" / "bins" / "src" / "bin"),
             {"taira_fee_sponsor_program.rs"},
         )
         self.assertEqual(
-            names(REPO_ROOT / "crates" / "irohad" / "src" / "bin"),
+            names(REPO_ROOT / "crates" / "irohad" / "bins" / "src" / "bin"),
             {"iroha3d_taira.rs", "taira_bootle_lantern_broker.rs"},
         )
         self.assertEqual(

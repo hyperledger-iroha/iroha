@@ -379,12 +379,11 @@ fn conditional_subtotal_preflight_accepts_only_the_frozen_inventory() {
     assert_eq!(wrong.validate_v2(), Err(CrossFieldErrorV2::Shape));
 }
 #[test]
-fn source_budget_and_uninhabited_api_boundary_are_static() {
+fn uninhabited_api_boundary_is_static() {
     let production = include_str!("phase23_rns_link_cross_field_v2.rs");
-    let tests = include_str!("phase23_rns_link_cross_field_v2_tests.rs");
+
     let parent = include_str!("phase23_rns_link.rs");
-    assert!(production.lines().count() <= 1_200);
-    assert!(tests.lines().count() <= 700);
+
     let parent_production = parent
         .split_once("#[cfg(test)]\nmod tests {")
         .expect("canonical parent test-module boundary")

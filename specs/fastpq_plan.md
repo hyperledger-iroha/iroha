@@ -84,8 +84,7 @@ compile-fail guards and one public example, developer integration passes 28,
 the exact raw-transcript control passes, and AXT binding passes 53. Separate
 artifact-dependent ignored tests remain open. Both normal and developer builds
 are warning-free; optimized artifact and integrated admission checks continue
-below. Exact source and failure history are retained in the
-[September 28 validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+below.
 
 | Owner | Outcome | Completion evidence |
 | --- | --- | --- |
@@ -101,18 +100,9 @@ resource ceilings and statement coverage are not reduced to obtain a pass.
 
 ## Current proof evidence
 
-The September 28 retained fixed-SMT child is 482,978 bytes and independently
-verifies with cap, context, tamper and changed-statement rejection controls.
-Complete one-child ordinary and AXT facade artifacts are 485,600 and 484,750
-bytes, respectively, and also pass retained verification. The cached seeded
-Metal child matches its pre-cache bytes. The same immutable executable's CPU
-child also matches those exact proof bytes and passes separate artifact replay.
-These runs use an unoptimized FASTPQ caller with optimized ISI arithmetic;
-optimized public-facade performance remains to be measured.
-
-The [dated validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
-contains exact binaries, source captures, measured timings, memory observations
-and earlier failures. Contended measurements are not controlled speed ratios or
-release throughput qualification. The superseded work breakdown is preserved
-verbatim as [historical source](../docs/history/2026-09-28/fastpq-plan-before-deep-reconciliation.md);
-its replay and earlier-geometry claims do not describe the current artifact path.
+Captured ordinary and AXT proofs, independent retained-artifact replays, CPU/Metal
+parity and maximum fixture measurements have separate source scopes. The
+[readiness record](fastpq_production_readiness.md#captured-proof-evidence) links
+the retained memory-repair and maximum-occupancy measurements. These contended
+results do not establish release throughput, current network authority or
+independent cryptographic qualification.

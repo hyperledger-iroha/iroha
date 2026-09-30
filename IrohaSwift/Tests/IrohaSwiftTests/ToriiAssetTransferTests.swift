@@ -952,6 +952,9 @@ final class ToriiAssetTransferTests: XCTestCase {
                     "now": value.server,
                     "offset_ms": 0,
                     "confidence_ms": 2,
+                    "sample_count": 6, "peer_count": 3, "enforcement_mode": "reject",
+                    "fallback": false,
+                    "health": ["healthy": true, "min_samples_ok": true, "offset_ok": true, "confidence_ok": true],
                 ])
                 return (
                     HTTPURLResponse(
@@ -1805,6 +1808,9 @@ final class ToriiAssetTransferTests: XCTestCase {
                 "now": now,
                 "offset_ms": 0,
                 "confidence_ms": 1,
+                "sample_count": 6, "peer_count": 3, "enforcement_mode": "reject",
+                "fallback": false,
+                "health": ["healthy": true, "min_samples_ok": true, "offset_ok": true, "confidence_ok": true],
             ])
         )
     }

@@ -262,8 +262,8 @@ bootstrap test remains selected. The current census covers authenticated genesis
 and rotation seats, bounded proof frames, one-shot attempt custody, exact provider
 inputs, and consumed configuration descriptors.
 
-The combined native test build selects the exact `iroha_cli --bin iroha`
-and `irohad --lib` test harnesses. The daemon cases execute signed genesis
+The combined native test build selects the exact `iroha_cli_lib --lib`
+and `irohad_lib --lib` test harnesses. The daemon cases execute signed genesis
 and check the deployment account in its final staged state, including role and
 revocation semantics; the deployment flag is restricted to offline `--check-config`. The genesis fixtures share the canonical daemon configuration and production staging setup; all affected unconditional manifest/crypto consumers are selected with them. A single Cargo invocation unifies the selected packages and their
 default/dev-dependency features; it does not add feature overrides. The CLI test
@@ -573,7 +573,7 @@ The selected toolchain's Cargo executes this command from `/` with the isolated
 environment and selected `CARGO_TARGET_DIR`:
 
 ```sh
-cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
+cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli_lib --lib --no-run --message-format=json-render-diagnostics
 ```
 
 Only existing disposable test fixtures are used. The gate accepts no live

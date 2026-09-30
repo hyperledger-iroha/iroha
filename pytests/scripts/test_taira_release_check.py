@@ -79,7 +79,7 @@ SPEC.loader.exec_module(gate)
 def production_library_events():
     return [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["lib"]},
              "profile": {"test": False}, "features": ["default"]}
-            for name in ("iroha_core", "iroha_core_zk", "iroha_torii")]
+            for name in ("iroha_core", "iroha_core_zk", "iroha_core_privacy", "iroha_core_timed_ovn", "iroha_torii")]
 
 
 def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
@@ -537,7 +537,7 @@ class BeaconGateTests(unittest.TestCase):
                     focused = gate.focused_regression_stages(scope, ("cli=" + regression,))
                     self.assertEqual(tuple(focused), ("cli",))
                     self.assertEqual([name for _, names in focused["cli"] for name in names], [regression])
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_real_beacon_fixture_replaces_clean_client_and_keeps_root_check_before_startup(self):
         real = EXPECTED_BEACON_NETWORK_TEST
@@ -911,7 +911,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for _, _, _, arguments in gate.HARNESS_TARGETS.values():
             package = arguments[1]
             if package != "concread":
-                self.assertEqual(gate.native_package_root(root, package), root / "crates" / package)
+                owners = {"irohad_lib": "crates/irohad", "iroha_cli_lib": "crates/iroha_cli",
+                          "irohad": "crates/irohad/bins", "iroha_cli": "crates/iroha_cli/bins"}
+                self.assertEqual(gate.native_package_root(root, package), root / owners.get(package, "crates/" + package))
         for unknown in ("foreign", "../concread", "vendor/concread"):
             with self.assertRaisesRegex(gate.CheckError, "maintained source owner"):
                 gate.native_package_root(root, unknown)
@@ -1406,7 +1408,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             names = [name for _, tests in gate.qualification_stages(scope)["cli"] for name in tests]
             with self.subTest(scope=scope):
                 self.assertEqual(names.count(required), 1)
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_both_scopes_require_exact_native_public_input_preparation(self):
         required = (
@@ -1431,7 +1433,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 with self.subTest(scope=scope, regression=name):
                     self.assertEqual(selected.count(name), 1)
                     self.assertEqual(leaf.count("fn " + name.rsplit("::", 1)[1] + "()"), 1)
-        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli_lib", "--lib"])
 
     def test_both_scopes_require_authenticated_execution_inclusion(self):
         required = {
@@ -1647,7 +1649,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_codegen_failure_stops_fixtures_and_checkpoint_changes_without_metadata_pass(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         later = ("run_config_checks", "run_stages",
                  "check_shipping_binaries", "compile_network_binaries", "run_network_checks",
                  "independent_check_evidence")
@@ -1689,7 +1691,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 raise gate.CheckError("stop after codegen graph assertion")
             with self.subTest(scope=scope), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
-                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli-bin", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "compile_test_harnesses", side_effect=stop_at_codegen) as compile, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, "stop after codegen"):
@@ -1721,7 +1723,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 order.append((harness, stages))
                 executed.extend((harness, test) for _, tests in stages for test in tests)
             with self.subTest(scope=scope), \
-                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli-bin", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "require_network_fixture_capacity"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
@@ -1977,7 +1979,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for scope in gate.QUALIFICATION_SCOPES:
             copies, checkpoint = self.copies(), MagicMock()
             selected = gate.qualification_stages(scope)
-            shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+            shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
             early, _, _ = gate.native_harness_plan(selected, shipping)
             independent = (("cli", selected["cli"]),) + early
             evidence = gate.independent_check_evidence(copies, independent, qualification_scope=scope)
@@ -2001,7 +2003,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             checkpoint.assert_not_called()
 
     def test_shipping_codegen_failure_stops_long_tests_and_new_checkpoint(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (False, True):
                 copies, checkpoint, output, executed = self.copies(), MagicMock(), io.StringIO(), []
@@ -2066,7 +2068,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         return independent, prefix, deferred
 
     def test_pre_network_partition_places_each_selected_independent_test_once(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
 
         def rows(groups):
             return [(name, test) for name, stages in groups for _, tests in stages for test in tests]
@@ -2097,7 +2099,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                        priority_torii=startup, native_archive=())
 
     def test_exact_pre_network_checkpoint_skips_prefix_but_reruns_network_and_deferred_groups(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (True, False):
                 copies, order, executed = self.copies(), [], []
@@ -2936,16 +2938,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_command_reuses_native_cargo_lane_and_does_not_run_full_suite(self):
         self.assertEqual(gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}), [
             "/fixed/cargo", "--config", "/repo/.cargo/config.toml", "test",
-            "--manifest-path", "/repo/Cargo.toml", "--locked", "--offline", "-p", "iroha_cli",
-            "--bin", "iroha", "--no-run", "--message-format=json-render-diagnostics",
+            "--manifest-path", "/repo/Cargo.toml", "--locked", "--offline", "-p", "iroha_cli_lib",
+            "--lib", "--no-run", "--message-format=json-render-diagnostics",
         ])
 
     def test_artifact_accepts_only_executable_iroha_binary_test_harness(self):
-        event = {"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["bin"]},
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha_cli", "kind": ["lib"]},
                  "profile": {"test": True}, "executable": "/warm/debug/deps/iroha-test"}
         self.assertEqual(gate.test_artifact(json.dumps(event)), event["executable"])
         for changes in ({"profile": {"test": False}}, {"executable": None},
-                        {"target": {"name": "iroha", "kind": ["lib"]}},
+                        {"target": {"name": "iroha_cli", "kind": ["bin"]}},
                         {"target": {"name": "kagami", "kind": ["bin"]}}):
             self.assertIsNone(gate.test_artifact(json.dumps(event | changes)))
         self.assertIsNone(gate.test_artifact("[cargo-fast] normal progress"))
@@ -3127,7 +3129,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_frozen_harness_uses_captured_manifest_config_and_no_git_lookup(self):
         child = MagicMock()
-        child.stdout = io.StringIO(json.dumps({"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["bin"]}, "profile": {"test": True}, "executable": "/warm/iroha-test"}) + "\n")
+        child.stdout = io.StringIO(json.dumps({"reason": "compiler-artifact", "target": {"name": "iroha_cli", "kind": ["lib"]}, "profile": {"test": True}, "executable": "/warm/iroha-test"}) + "\n")
         child.wait.return_value = 0
         process = MagicMock()
         process.__enter__.return_value = child
@@ -3392,7 +3394,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             self.assertIn("iroha3d_taira", spawn.call_args.args[0])
 
     def test_focused_four_peer_build_omits_only_unused_sorafs_shipping_binary(self):
-        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
         for focused, expected_names in (
             (False, {"iroha3d", "iroha", "iroha3d_taira", "sorafs-node", "kagami"}),
             (True, {"iroha3d", "iroha", "iroha3d_taira", "kagami"}),
@@ -3473,7 +3475,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             spawn.assert_not_called()
 
     def test_focused_fixture_requires_audited_runtime_shipping_inputs(self):
-        with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli", "sorafs-bin")), \
+        with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli-bin", "sorafs-bin")), \
              patch.object(gate.subprocess, "Popen") as spawn:
             with self.assertRaisesRegex(gate.CheckError, "lacks an audited shipping binary"):
                 gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
@@ -4168,7 +4170,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         return process
 
     def test_release_codegen_alone_enforces_the_complete_exact_harness_census(self):
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         for scope in gate.QUALIFICATION_SCOPES:
             _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
             metadata_lines = "".join(json.dumps({
@@ -4406,14 +4408,14 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
             "filenames": ["/warm/metadata.rmeta"]}) + "\n"
 
     def test_metadata_checks_exact_complete_test_graph_with_preserved_cargo_custody(self):
-        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        shipping = ("cli-bin", "kagami", "taira-launcher", "sorafs-bin")
         for scope in gate.QUALIFICATION_SCOPES:
             _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
             self.assertEqual(names, (
                 "config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
                 "kagami", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk",
                 "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared",
-                "torii-lifecycle", "daemon", "network", "cli", "taira-launcher",
+                "torii-lifecycle", "daemon", "network", "cli", "cli-bin", "taira-launcher",
                 "sorafs-bin",
             ))
             lines = "[cargo-fast] warm lane\n" + "".join(self.artifact(name) for name in names)
@@ -4558,7 +4560,7 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
 class ShippingMetadataCheckTests(unittest.TestCase):
     env = NativeTestMetadataCheckTests.env
     process = NativeTestBatchBuildTests.process
-    shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+    shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
 
     @staticmethod
     def artifact(name, *, test=False, kind="bin"):
@@ -4571,7 +4573,7 @@ class ShippingMetadataCheckTests(unittest.TestCase):
         root = SCRIPT.parent.parent
         self.assertEqual(gate.shipping_harnesses(root), self.shipping)
         lines = "[cargo-fast] existing warm target\n" + "".join(self.artifact(name) for name in self.shipping)
-        lines += self.artifact("cli")
+        lines += self.artifact("cli-bin")
         output = io.StringIO()
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
              patch.object(gate, "isolate_native_artifacts") as isolate, contextlib.redirect_stdout(output):
@@ -4625,7 +4627,7 @@ class ShippingMetadataCheckTests(unittest.TestCase):
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_shipping_metadata_refuses_core_and_torii_fixture_feature_leaks(self):
-        for library, feature in (("iroha_core", "iroha-core-tests"), ("iroha_core_zk", "test-utils"),
+        for library, feature in (("iroha_core", "iroha-core-tests"), ("iroha_core_zk", "test-utils"), ("iroha_core_privacy", "test-utils"), ("iroha_core_timed_ovn", "test-utils"),
                                  ("iroha_torii", "test-fixtures")):
             event = {"reason": "compiler-artifact", "package_id": "opaque-cargo-package-identity",
                      "target": {"name": library, "kind": ["lib"]}, "profile": {"test": False},
@@ -4646,6 +4648,8 @@ class ShippingMetadataCheckTests(unittest.TestCase):
                   for name, kind, features in (
                       ("iroha_core", "lib", ["default", "json"]),
                       ("iroha_core_zk", "lib", ["default"]),
+                      ("iroha_core_privacy", "lib", ["default"]),
+                      ("iroha_core_timed_ovn", "lib", ["default"]),
                       ("iroha_torii", "lib", ["default", "app_api"]),
                       ("another_library", "lib", ["test-fixtures", "iroha-core-tests"]),
                       ("iroha_torii", "bin", ["test-fixtures"]),
@@ -4675,9 +4679,9 @@ class ShippingMetadataCheckTests(unittest.TestCase):
                 with self.assertRaises(gate.CheckError):
                     gate.check_shipping_binaries(Path("/frozen"), self.env, ())
                 spawn.assert_not_called()
-        injected = (*gate.HARNESS_TARGETS["cli"][:3], ["-p", "iroha_cli", "--bin", "iroha", "--features", "test-fixtures"])
-        with patch.dict(gate.HARNESS_TARGETS, {"cli": injected}), \
-             patch.object(gate, "shipping_harnesses", return_value=("cli",)), \
+        injected = (*gate.HARNESS_TARGETS["cli-bin"][:3], ["-p", "iroha_cli", "--bin", "iroha", "--features", "test-fixtures"])
+        with patch.dict(gate.HARNESS_TARGETS, {"cli-bin": injected}), \
+             patch.object(gate, "shipping_harnesses", return_value=("cli-bin",)), \
              patch.object(gate.subprocess, "Popen") as spawn:
             with self.assertRaisesRegex(gate.CheckError, "explicit library, integration or binary targets"):
                 gate.check_shipping_binaries(Path("/frozen"), self.env, ())
@@ -4732,8 +4736,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             executable.parent.mkdir(mode=0o700, exist_ok=True)
         executable.write_bytes(payload)
         executable.chmod(0o700)
-        package_directory = (self.source / "vendor" / "concread" if package == "concread"
-                             else self.source / "crates" / package)
+        package_directory = gate.native_package_root(self.source, package)
         row = {"name": name, "executable": str(executable), "profile": {"test": is_test},
                "manifest_path": str(package_directory / "Cargo.toml")}
         event = {"reason": "compiler-artifact", "target": {"name": name, "kind": [kind]},
@@ -5521,7 +5524,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         executable, row, _ = self.artifact()
         development = self.directory / "checkout"
         development.mkdir(mode=0o700)
-        row["manifest_path"] = str(development / "crates/iroha_cli/Cargo.toml")
+        row["manifest_path"] = str(development / "crates/iroha_cli/bins/Cargo.toml")
         original = self.contract.stable_hash_path
         def guarded_hash(*args, **kwargs):
             self.assert_profile_locked()

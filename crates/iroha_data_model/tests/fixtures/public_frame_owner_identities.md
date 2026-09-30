@@ -109,10 +109,10 @@ cargo test -p iroha_data_model --test manual_frame_identity --features http --lo
 This is focused qualification after declaration and test relocation. The prior
 3,655-test result above belongs to its earlier source seal. At that checkpoint,
 query and generated declarations, active codec cutover, physical model extraction
-and complete workspace/release qualification remained open. The source budget still
-reports 236 paths and 173 unchanged exceptions; the KAGEMUSHA V1 module grows
-from 6,254 to 6,258 lines and still requires meaningful decomposition. No budget
-or dependency limit is widened.
+and complete workspace/release qualification remained open. The preceding
+source inventory recorded 236 paths and 173 exceptions, with KAGEMUSHA V1
+growing from 6,254 to 6,258 lines in that capture. These historical measurements
+impose no current code-size requirement. Dependency limits are unchanged.
 
 ## Query and time owners
 
@@ -203,8 +203,9 @@ import is removed; the combined build reports no warnings.
 
 The eight source/fixture paths are integrated from patch
 `53638d8b1b2575240d98add873069a087a6ff6037abd3c80f41f6f40bd809bc5`.
-Codec and formatting guards pass. Source budgets retain exactly 236 findings,
-173 exceptions and their existing limits. Complete declaration coverage, atomic
+Codec and formatting guards passed. The preceding source inventory recorded
+236 findings and 173 exceptions under the now-retired size policy. Complete
+declaration coverage, atomic
 identity cutover, physical model extraction and workspace/release qualification
 remain open; no dependency, optimization or ABI change is introduced here.
 
@@ -246,8 +247,9 @@ inputs with no stack override. All **384 focused tests pass**, with no failures
 or ignored cases: 21 public tests preserving **525 immutable frames**, 329 model
 tests including 16 new identity suites, 33 query/SM
 integration tests and one allocation test. Formatting and codec checks pass.
-The source budget removes exactly one finding, leaving 235 findings and 173
-unchanged exceptions under the existing 5,000/3,000-line limits.
+The preceding source inventory removed one finding, recording 235 findings
+and 173 unchanged exceptions at that checkpoint. Its 5,000/3,000-line
+requirements are now retired.
 
 The 40-path source patch is
 `f4a77b15755c25f43644b474852930a515ff4d322828053ad408981fbcc4ccd4`.

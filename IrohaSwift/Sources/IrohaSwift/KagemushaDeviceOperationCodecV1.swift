@@ -1600,15 +1600,28 @@ internal struct KagemushaDeviceAuthenticatedReplyV1: Equatable, Sendable {
   let payload: Data
 }
 
-internal struct KagemushaDeviceQualificationReplyV1: Equatable, Sendable {
-  let releaseID: Data
-  let hardwarePolicyDigest: Data
-  let coreAuthorizationKeyReference: Data
-  let profile: KagemushaHardwareProfileV1
-  let credential: KagemushaHardwareCredentialV1
+/// Exact operation-1 shape. Decoding alone grants no hardware or enrollment authority.
+/// Native Core must independently admit the original complete response and retained observation.
+public struct KagemushaDeviceQualificationReplyV1: Equatable, Sendable {
+  public let releaseID: Data
+  public let hardwarePolicyDigest: Data
+  public let coreAuthorizationKeyReference: Data
+  public let profile: KagemushaHardwareProfileV1
+  public let credential: KagemushaHardwareCredentialV1
 }
 
 extension KagemushaDeviceOperationCodecV1 {
+  /// Parse the original canonical operation-1 success archive after the caller has
+  /// authenticated its complete lifecycle response. This is shape projection only:
+  /// callers must retain that response for independent native observation admission.
+  public static func decodeQualificationReplyShapeExact(
+    _ canonicalBytes: Data
+  ) throws -> KagemushaDeviceQualificationReplyV1 {
+    let reply = try decodeControlReplyAfterAuthentication(operation: 1,
+      canonicalBytes: canonicalBytes)
+    return try decodeQualificationReplyAfterAuthentication(reply)
+  }
+
   internal static func decodeControlReplyAfterAuthentication(
     operation: UInt8,
     canonicalBytes: Data

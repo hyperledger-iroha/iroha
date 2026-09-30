@@ -9,9 +9,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RETIRED_SOURCES = (
-    "crates/iroha_cli/src/bin/direct_asset_transfer.rs",
-    "crates/iroha_cli/src/bin/ivm_contract_call.rs",
-    "crates/iroha_cli/src/bin/split_contract_deploy.rs",
+    "crates/iroha_cli/bins/src/bin/direct_asset_transfer.rs",
+    "crates/iroha_cli/bins/src/bin/ivm_contract_call.rs",
+    "crates/iroha_cli/bins/src/bin/split_contract_deploy.rs",
     "crates/iroha_core/examples/bench_dag.rs",
 )
 RETIRED_TARGETS = (
@@ -35,7 +35,7 @@ class DeveloperExecutableRetirementSourceTest(unittest.TestCase):
     def test_retired_sources_and_targets_are_absent(self) -> None:
         for relative in RETIRED_SOURCES:
             self.assertFalse((ROOT / relative).exists(), relative)
-        manifest = (ROOT / "crates/iroha_cli/Cargo.toml").read_text(encoding="utf-8")
+        manifest = (ROOT / "crates/iroha_cli/bins/Cargo.toml").read_text(encoding="utf-8")
         for target in RETIRED_TARGETS:
             self.assertNotIn(target, manifest)
 

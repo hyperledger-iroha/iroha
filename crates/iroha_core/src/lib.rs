@@ -78,8 +78,6 @@ pub mod da;
 pub mod exec_witness;
 /// Local execution attempts and non-consensus retry outcomes.
 pub mod execution_attempt;
-/// Native transparent execution proofs and bounded deterministic race relations.
-pub mod execution_proofs;
 /// Runtime executor integration and helpers.
 pub mod executor;
 /// FASTPQ transcript helpers and host plumbing.
@@ -112,20 +110,16 @@ pub mod oracle;
 pub mod peers_gossiper;
 /// Pipeline helpers (access-set derivation, scheduler glue)
 pub mod pipeline;
+/// Internal privacy owner paths used by Core and Sumeragi-owned tests.
+pub(crate) use iroha_core_privacy::{
+    execution_proofs, privacy_engines, privacy_profiles, privacy_state, privacy_verifier,
+};
 /// First-release privacy protocol governance and admission budgets.
 pub mod privacy;
-/// Native transparent privacy protocol engines.
-pub mod privacy_engines;
-/// Deterministic compiled manifests for executable privacy engines.
-pub mod privacy_profiles;
 /// Native deterministic privacy release evidence, compiled only into explicit
 /// release runners and opt-in integration gates.
 #[cfg(feature = "privacy-release-evidence")]
 pub mod privacy_release_evidence;
-/// Durable records produced by verified first-release privacy actions.
-pub mod privacy_state;
-/// Exhaustive native proof verification and verified-effect derivation.
-pub(crate) mod privacy_verifier;
 /// Atomic private-settlement runtime helpers.
 pub mod private_settlement;
 pub(crate) mod publication_lock;
@@ -174,9 +168,12 @@ pub mod validation_fee;
 /// Independently anchored evidence for pending committee signer custody.
 pub mod validator_committee_evidence;
 /// Crate-local path to `iroha_core_zk`; external crates import `iroha_core_zk` directly.
-// TODO(zk-split): replace this module with `pub(crate) use iroha_core_zk as zk;` once
+#[cfg(not(feature = "iroha-core-tests"))]
+pub(crate) use iroha_core_zk as zk;
+// TODO(zk-split): remove this non-shipping test adapter once
 // integration_tests/tests/sumeragi_npos_committee_transition.rs (user-owned, Sumeragi)
 // imports `verify_kagemusha_mint_finality_candidate_possession_v1` from iroha_core_zk.
+#[cfg(feature = "iroha-core-tests")]
 #[doc(hidden)]
 pub mod zk {
     pub(crate) use iroha_core_zk::*;
@@ -194,8 +191,6 @@ pub use block::InvalidGenesisError;
 #[cfg(feature = "zk-stark")]
 pub(crate) use iroha_core_zk::stark as zk_stark;
 use iroha_model_base::peer::PeerId;
-/// Encode one schema-bound public contract argument record using the canonical IVM ABI.
-pub use ivm::encode_argument_record_from_json;
 /// Pre-validate a genesis block against the expected genesis account prior to startup.
 ///
 /// # Errors

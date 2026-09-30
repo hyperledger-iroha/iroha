@@ -69,10 +69,6 @@ const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
         _ => STANDARD_DECODE_POLICY_V1,
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 operation limits remain explicit"
-)]
 const fn operation_semantic_frame_limit(operation: u16) -> usize {
     match operation {
         OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
@@ -293,10 +289,6 @@ const fn operation_frame_limit(operation: u16) -> usize {
         broker_limit
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 operation allowlist remains explicit"
-)]
 const fn operation_is_known(operation: u16) -> bool {
     matches!(
         operation,
@@ -1115,7 +1107,7 @@ fn decode_parliament_tle_partial_release_sign_request(
 ) -> Result<
     (
         ParliamentTlePartialReleaseSignRequestWireV1,
-        iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+        iroha_core_timed_ovn::tle::ValidatedTleReleaseProjectionV1,
     ),
     BrokerError,
 > {
@@ -1140,7 +1132,7 @@ fn decode_parliament_tle_capability_attest_request(
 ) -> Result<
     (
         ParliamentTleCapabilityAttestRequestWireV1,
-        iroha_core::tle_release::ValidatedTleKeySessionV1,
+        iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
     ),
     BrokerError,
 > {
@@ -1165,7 +1157,7 @@ fn decode_parliament_tle_capability_attest_request(
 }
 
 fn verify_parliament_tle_capability_attest_result(
-    session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+    session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
     participant_index: u16,
     result: &ParliamentTleCapabilityAttestResultWireV1,
 ) -> Result<(), BrokerError> {
@@ -1241,8 +1233,8 @@ fn verify_global_beacon_capability_attest_result(
 }
 
 fn verify_parliament_tle_partial_release_result(
-    projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
-    partial: &iroha_core::tle_release::TlePartialReleaseShareV1,
+    projection: &iroha_core_timed_ovn::tle::ValidatedTleReleaseProjectionV1,
+    partial: &iroha_core_timed_ovn::tle::TlePartialReleaseShareV1,
 ) -> Result<(), BrokerError> {
     projection
         .session()
@@ -1367,7 +1359,6 @@ fn validate_operation_response_envelope(
 }
 #[expect(
     clippy::if_not_else,
-    clippy::too_many_lines,
     reason = "the fail-closed branch and fixed V1 result matrix remain explicit"
 )]
 fn validate_operation_result(
@@ -1525,12 +1516,12 @@ fn validate_operation_result(
                 if authorization.authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1 {
                     return Err(BrokerError::Protocol);
                 }
-                let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+                let authorization = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
                     BootleLanternIssuanceAuthorizationV1::decode_exact(
                         &authorization.authorization,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
-                iroha_core::privacy_engines::bootle_lantern::issuer::
+                iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
                     issuer_validate_prepared_blind_issuance_authorization_v1(
                         &prepare.context,
                         prepare.canonical_genesis_hash,
@@ -1557,7 +1548,7 @@ fn validate_operation_result(
                     result,
                     MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                 )?;
-                let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+                let expected = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
                     issuer_validate_blind_issuance_request_encoded_v1(
                         &issue.context,
                         issue.canonical_genesis_hash,
@@ -1585,7 +1576,7 @@ fn validate_operation_result(
                 if response.response.len() != BOOTLE_LANTERN_RESPONSE_BYTES_V1 {
                     return Err(BrokerError::Protocol);
                 }
-                iroha_core::privacy_engines::bootle_lantern::issuer::
+                iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
                     issuer_validate_cached_blind_issuance_response_encoded_v1(
                         &issue.context,
                         issue.canonical_genesis_hash,

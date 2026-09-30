@@ -996,10 +996,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(FinalizedLocationStateV1::Exact { page })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the finalized transaction state machine keeps all fail-closed archive-location checks adjacent"
-    )]
     fn location_transaction_advance(
         &self,
         request: &PublicationRequestV1,
@@ -1405,10 +1401,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             .stage_seed_ingress(&self.seed_ingress_url, &request, &car_plan, car)
             .map_err(map_transport_error)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "provider registration is an ordered checkpointed state machine whose evidence checks must remain adjacent"
-    )]
     fn checkpoint_archive_location_provider_registrations(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2290,10 +2282,6 @@ private_key = "{}"
         response: MusubiStorageCoordinationResponseV1,
         page: MusubiArchiveLocationPageV1,
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture assembles one internally consistent publication rebase state"
-    )]
     fn rebase_fixture() -> RebaseFixture {
         let torii_url = "http://127.0.0.1:9/".parse().expect("dummy URL");
         let temporary = tempdir().expect("temporary directory");
@@ -2725,10 +2713,6 @@ private_key = "{}"
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the checkpoint substitution cases exercise one end-to-end signature binding contract"
-    )]
     fn provider_attestation_transaction_checkpoint_binds_exact_instruction_and_signature() {
         let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
@@ -3623,10 +3607,6 @@ private_key = "{}"
         server.join().expect("finalized query server");
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the cases jointly cover every terminal archive-location rebase outcome"
-    )]
     fn location_transaction_records_rebase_expiry_application_and_later_retirement() {
         let mut rejected = rebase_fixture();
         let rejected_intent = rebase_location_intent(&rejected);

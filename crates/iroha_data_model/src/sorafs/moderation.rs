@@ -2011,10 +2011,6 @@ impl ModerationCommitteeAggregateV1 {
     ///
     /// Returns [`ModerationCommitteeAggregateError`] when policy authentication,
     /// result validation, quorum, ordering, time, or aggregate encoding fails.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "aggregate construction validates and binds all member evidence atomically"
-    )]
     pub fn aggregate_authenticated(
         manifest: &ModerationReproManifestV1,
         policy: &ModerationTrustPolicyV1,

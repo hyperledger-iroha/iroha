@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import stat
 import sys
@@ -26,6 +27,9 @@ EXPECTED_SOURCES = (
     "crates/kotodama_lang/src/semantic.rs",
     "crates/kotodama_lang/src/ir.rs",
 )
+OUT_OF_LINE_TEST_SOURCES = {
+    "crates/kotodama_lang/src/compiler.rs": "crates/kotodama_lang/src/compiler/tests.rs",
+}
 EXPECTED_TEST_INCLUDES = {
     "crates/kotodama_lang/src/compiler.rs": (
         "compiler/tests/staged_mint_access_hints.rs",
@@ -504,6 +508,39 @@ def _macro_case_spans(source_path: str, source: str) -> list[FunctionSpan]:
     return spans
 
 
+def _logical_source(root: Path, source_path: str) -> str:
+    """Read a sealed source owner together with its out-of-line test module.
+
+    The manifest keys fixture ownership by the production source. Includes in
+    its test module are rebased to that logical owner while retaining the same
+    physical targets; the test module is mandatory, rather than a fallback.
+    """
+
+    source = _regular_bytes(root / source_path, source_path).decode("utf-8")
+    test_path = OUT_OF_LINE_TEST_SOURCES.get(source_path)
+    if test_path is None:
+        return source
+    relative = posixpath.relpath(test_path, str(PurePosixPath(source_path).parent))
+    declaration = f'#[cfg(test)]\n#[path = "{relative}"]\nmod tests;'
+    if source.count(declaration) != 1:
+        _fail(f"out-of-line test declaration changed in {source_path}")
+    test_source = _regular_bytes(root / test_path, test_path).decode("utf-8")
+    masked = _mask_rust(test_source)
+    includes = re.compile(
+        r'\b(?P<macro>include|include_str|include_bytes)!\(\s*"(?P<path>[^"\n]+)"\s*\)'
+    )
+    edits: list[tuple[int, int, str]] = []
+    for match in includes.finditer(test_source):
+        if not masked[match.start() :].startswith(match.group("macro") + "!"):
+            continue
+        target = _resolved_include_path(test_path, match.group("path"), "test include")
+        rebased = posixpath.relpath(target, str(PurePosixPath(source_path).parent))
+        edits.append((match.start("path"), match.end("path"), rebased))
+    for start, end, rebased in reversed(edits):
+        test_source = test_source[:start] + rebased + test_source[end:]
+    return source.replace(declaration, "mod tests {\n" + test_source + "\n}")
+
+
 def _capture_manifest(root: Path) -> dict[str, Any]:
     """Capture current consumers; reject unowned, duplicate, or missing assets."""
 
@@ -511,7 +548,7 @@ def _capture_manifest(root: Path) -> dict[str, Any]:
     fixtures: list[dict[str, Any]] = []
     seen_assets: set[str] = set()
     for source_path in EXPECTED_SOURCES:
-        source = _regular_bytes(root / source_path, source_path).decode("utf-8")
+        source = _logical_source(root, source_path)
         names = _expanded_test_names(root, source_path, source)
         directories = EXPECTED_FIXTURE_DIRECTORIES[source_path]
         external = EXPECTED_EXTERNAL_FIXTURES.get(source_path, ())

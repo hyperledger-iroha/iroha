@@ -18,14 +18,14 @@ ACTUAL_SHIPPING_AUDIT = gate.shipping_harnesses
 ACTUAL_COMPILE_TESTS = gate.compile_test_harnesses
 BINARIES = (("iroha3d_taira", "irohad"), ("iroha", "iroha_cli"),
             ("sorafs-node", "sorafs_node"), ("kagami", "iroha_kagami"))
-SHIPPING = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+SHIPPING = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
 
 
 def shipping_source(root):
     (root / "scripts").mkdir(exist_ok=True)
     (root / "scripts/taira_release.py").write_text("BINARIES = " + repr(BINARIES) + "\n")
     for name, package in BINARIES:
-        directory = root / "crates" / package
+        directory = gate.native_package_root(root, package)
         (directory / "src").mkdir(parents=True, exist_ok=True)
         (directory / "src/main.rs").write_text("fn main() {}\n")
         (directory / "Cargo.toml").write_text(
@@ -111,7 +111,7 @@ class ShippingArtifactTests(unittest.TestCase):
         self.names = {"cli": "cli_fixture", "kagami": gate.KAGAMI_STAGES[0][1][0],
                       "network": "network_fixture"}
         self.events = {}
-        for selection in (*SHIPPING, "network"):
+        for selection in (*SHIPPING, "network", "cli"):
             name = self.names.get(selection)
             payload = executable([name] if name is not None else [], self.executed).encode()
             _, _, event = self.artifact(selection, payload)
@@ -138,7 +138,7 @@ class ShippingArtifactTests(unittest.TestCase):
         stack.enter_context(patch.object(gate, "run_network_checks", side_effect=self.network))
 
     def build(self, root, env, *, harnesses, lock_fds):
-        self.assertEqual(harnesses, ("kagami", "network", "cli", "taira-launcher", "sorafs-bin"))
+        self.assertEqual(harnesses, ("kagami", "network", "cli", "taira-launcher", "cli-bin", "sorafs-bin"))
         events = copy.deepcopy([self.events[name] for name in harnesses if name != self.missing])
         if self.wrong_manifest:
             events[0]["manifest_path"] = str(self.source / "crates/wrong/Cargo.toml")

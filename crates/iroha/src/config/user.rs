@@ -168,10 +168,6 @@ fn resolve_account_private_key(
         }
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "network-identity source resolution keeps ordered fail-closed filesystem and canonical-spelling checks together"
-)]
 fn resolve_network_id_source(
     inline: Option<NetworkId>,
     file: Option<WithOrigin<PathBuf>>,

@@ -1,11 +1,13 @@
-#if canImport(IrohaSwift)
 import Foundation
 import IrohaSwift
 
 struct DemoAccelerationConfig {
-  static func load(logger: ((String) -> Void)? = nil) throws -> AccelerationSettings {
+  static func load(configurationURL: URL? = nil,
+                   bundle: Bundle? = .main,
+                   logger: ((String) -> Void)? = nil) throws -> AccelerationSettings {
     try AccelerationSettingsLoader.load(
-      bundle: .main,
+      configurationURL: configurationURL,
+      bundle: bundle,
       logger: { message in
         if let logger {
           logger("NoritoDemo: \(message)")
@@ -14,4 +16,3 @@ struct DemoAccelerationConfig {
     )
   }
 }
-#endif

@@ -720,7 +720,7 @@ fn install_governed_contract_for_test(
     iroha_data_model::smart_contract::ContractAddress,
     iroha_crypto::Hash,
 ) {
-    let (artifact, manifest) = ivm::KotodamaCompiler::new()
+    let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku GovernedReadFixture {

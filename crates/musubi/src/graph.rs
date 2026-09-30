@@ -241,10 +241,6 @@ pub struct GraphUpdateV1 {
 ///
 /// Returns an error for invalid or oversized local graphs, invalid existing locks, or a
 /// locked invocation whose effective manifest graph has changed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the local graph commitment validates every effective edge before producing its lock"
-)]
 pub fn resolve_workspace_local(
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],

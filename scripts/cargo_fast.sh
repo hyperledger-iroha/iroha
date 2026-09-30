@@ -46,7 +46,7 @@ Options:
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
                           Explicit modes must pass the native compiler probe
   --node-set              Check the node leaves in one Cargo invocation:
-                          check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins
+                          check -p irohad_lib -p iroha_cli_lib -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins
                           Unified features share one iroha_core/iroha_torii artifact per
                           edit; remaining cargo args are appended. Per-crate checks
                           remain the gate for crate-specific feature gating.
@@ -188,9 +188,9 @@ done
 if [[ "${node_set}" == true ]]; then
 	# Bash 3.2 treats an empty array expansion as unbound under set -u.
 	if [[ ${#cargo_args[@]} -eq 0 ]]; then
-		cargo_args=(check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins)
+		cargo_args=(check -p irohad_lib -p iroha_cli_lib -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins)
 	else
-		cargo_args=(check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins "${cargo_args[@]}")
+		cargo_args=(check -p irohad_lib -p iroha_cli_lib -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins "${cargo_args[@]}")
 	fi
 fi
 

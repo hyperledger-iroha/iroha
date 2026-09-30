@@ -1,10 +1,6 @@
 // Exact source-assignment revision and resolver projection test.
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the test checks one immutable job across exact archive revisions and source rotation"
-)]
 fn current_assignment_binding_tracks_new_revision_and_rejects_stale_source() {
     let daemon_root = physical_tempdir().expect("daemon root");
     let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(

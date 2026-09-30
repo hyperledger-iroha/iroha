@@ -570,8 +570,9 @@ impl VerifySettlementArgs {
             "target transaction must contain exactly one explicit settlement for the expected session"
         );
         let settlement = matches[0];
-        let profile = iroha_core::execution_proofs::compiled_execution_profile_v1(&self.profile_id)
-            .ok_or_else(|| eyre!("expected profile is not compiled into this verifier"))?;
+        let profile =
+            iroha_core_privacy::execution_proofs::compiled_execution_profile_v1(&self.profile_id)
+                .ok_or_else(|| eyre!("expected profile is not compiled into this verifier"))?;
         let statement = &settlement.proof.statement;
         ensure!(
             settlement.proof.profile_id == self.profile_id
@@ -585,8 +586,9 @@ impl VerifySettlementArgs {
                 == self.outcome_hash,
             "settlement outcome commitment mismatch"
         );
-        let outcome = iroha_core::execution_proofs::verify_execution_proof_v1(&settlement.proof)
-            .wrap_err("independent native execution proof verification failed")?;
+        let outcome =
+            iroha_core_privacy::execution_proofs::verify_execution_proof_v1(&settlement.proof)
+                .wrap_err("independent native execution proof verification failed")?;
         ensure!(
             outcome == settlement.outcome,
             "native verified outcome differs from finalized settlement"
@@ -812,7 +814,7 @@ mod tests {
             trusted_checkpoint: fixture.checkpoint_path.clone(),
             expected_entry_hash: Hash::from(fixture.block_proofs.entry_hash),
             session_id: Hash::new(b"expected session"),
-            profile_id: iroha_core::execution_proofs::race_profile_id_v1(),
+            profile_id: iroha_core_privacy::execution_proofs::race_profile_id_v1(),
             outcome_hash: Hash::new(b"expected outcome"),
             max_finality_heights: DEFAULT_TOTAL_HEIGHTS,
             max_finality_archive_bytes: DEFAULT_TOTAL_ARCHIVES,
@@ -1228,7 +1230,7 @@ mod tests {
             outcome: outcome.clone(),
             proof: ExecutionProofEnvelopeV1 {
                 version: 1,
-                profile_id: iroha_core::execution_proofs::race_profile_id_v1(),
+                profile_id: iroha_core_privacy::execution_proofs::race_profile_id_v1(),
                 statement: ExecutionPublicInputsV1 {
                     network_id,
                     session_id,
@@ -1316,7 +1318,7 @@ mod tests {
     #[test]
     #[ignore = "expensive end-to-end native execution proof and finalized settlement qualification"]
     fn genuine_execution_proof_and_finalized_settlement_verify_together() {
-        use iroha_core::execution_proofs::{
+        use iroha_core_privacy::execution_proofs::{
             prove_race_v1, race_result_v1, race_transcript_root_v1, replay_race_v1,
         };
         use iroha_data_model::{
@@ -1331,7 +1333,7 @@ mod tests {
         use norito::codec::Encode as _;
         let network_id = fixture_network();
         let session_id = Hash::new(b"expected session");
-        let profile_id = iroha_core::execution_proofs::race_profile_id_v1();
+        let profile_id = iroha_core_privacy::execution_proofs::race_profile_id_v1();
         let replay = RaceReplayV1 {
             track: RaceTrackV1::NeonTokyo,
             player_count: 2,

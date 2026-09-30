@@ -261,6 +261,17 @@ def require_opaque_release_authorizations(tle_release: str) -> None:
             raise RuntimeError(
                 f"{tle_release_path}: opaque release authorization exposes {forbidden!r}"
             )
+    if re.search(
+        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
+        tle_release,
+    ):
+        raise RuntimeError(
+            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
+        )
+
+def require_opaque_release_projection(tle_release: str) -> None:
+    """Public verification results must never become decodable capabilities."""
+    tle_release_path = "crates/iroha_core_timed_ovn/src/tle.rs"
     validated_projection = section(
         tle_release,
         "/// Revalidated public statement admitted by an authenticated runtime broker.",
@@ -275,13 +286,6 @@ def require_opaque_release_authorizations(tle_release: str) -> None:
             raise RuntimeError(
                 f"{tle_release_path}: validated broker projection exposes {forbidden!r}"
             )
-    if re.search(
-        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
-        tle_release,
-    ):
-        raise RuntimeError(
-            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
-        )
 
 def require_opaque_casting_authorization(casting: str) -> None:
     """Keep the replay-validated casting context outside payload and frame codecs."""
@@ -341,7 +345,7 @@ def require_parliament_broker_primitives(source: str) -> None:
         (
             "ParliamentTleCapabilityAttestRequestWireV1",
             (
-                "pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1",
+                "pub(super) key_session: iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1",
                 "pub(super) participant_index: u16",
             ),
         ),
@@ -2771,7 +2775,7 @@ def main() -> int:
         ),
     )
 
-    evidence_path = "crates/iroha_core/src/governance/timed_ovn.rs"
+    evidence_path = "crates/iroha_core_timed_ovn/src/evidence.rs"
     evidence = read(evidence_path)
     require_all(
         evidence_path,
@@ -2783,7 +2787,7 @@ def main() -> int:
             "fn verify_final_release_pregate(",
             "CorpusOpen(TimedOvnCorpusOpenStateV1)",
             "fn is_bounded_ballot_prefix_extension(",
-            "pub(crate) fn validate_committed_cache(",
+            "pub fn validate_committed_cache(",
         ),
     )
     corpus_open_impl = section(
@@ -3500,7 +3504,9 @@ def main() -> int:
     )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
-    tle_release = read(tle_release_path)
+    tle_public = read("crates/iroha_core_timed_ovn/src/tle.rs")
+    require_opaque_release_projection(tle_public)
+    tle_release = read(tle_release_path) + "\n" + tle_public
     require_all(
         tle_release_path,
         tle_release,
@@ -3603,7 +3609,13 @@ def main() -> int:
             )
 
     casting_path = "crates/iroha_core/src/tle_release/casting.rs"
-    casting = read(casting_path)
+    casting_public = read("crates/iroha_core_timed_ovn/src/casting.rs")
+    casting_error_offset = casting_public.index(
+        "/// Closed failures while authorizing a public timed-OVN casting context."
+    )
+    # Preserve declaration section boundaries across the state-free and state-authority owners.
+    casting = (casting_public[:casting_error_offset] + "\n" + read(casting_path)
+               + "\n" + casting_public[casting_error_offset:])
     require_all(
         casting_path,
         casting,
@@ -4245,7 +4257,7 @@ def main() -> int:
         tle_broker_backend,
         (
             "fn attest_partial_release_capability(",
-            "session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
+            "session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1",
             "expected_participant_index: u16",
             "ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,\n    >;",
         ),

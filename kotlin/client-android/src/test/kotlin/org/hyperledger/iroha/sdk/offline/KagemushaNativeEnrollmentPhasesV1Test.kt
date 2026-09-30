@@ -67,6 +67,31 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     }
 
     @Test
+    fun `preparation verifier retains original bytes before key generation and rejects substitution`() {
+        val endpoint = Endpoint()
+        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint).initialEnrollment()
+        val selected = phases.begin(account)
+        val original = preparation(selected)
+        assertContentEquals(ByteArray(32) { 2 }, phases.verifySignedPreparation(selected, original))
+        assertContentEquals(ByteArray(32) { 2 }, phases.verifySignedPreparation(selected, original.copyOf()))
+        val calls = endpoint.calls
+        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, original.copyOf().also { it[209] = 9 }) }
+        assertEquals(calls, endpoint.calls)
+        phases.cancel(selected)
+        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, original) }
+    }
+
+    @Test
+    fun `substituted native verified issuer nonce revokes the original owner`() {
+        val endpoint = Endpoint().apply { wrongPreparationNonce = true }
+        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint).initialEnrollment()
+        val selected = phases.begin(account)
+        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        assertEquals(1, endpoint.closeCalls)
+        assertNull(phases.recoverExactSelection(account))
+    }
+
+    @Test
     fun `uncertain phase one response revokes the native owner before selection recovery`() {
         val endpoint = Endpoint().apply { loseBegin = true }
         val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/enrollment", endpoint)
@@ -291,6 +316,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         }
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
+        var wrongPreparationNonce = false
         var calls = 0
         var prepareCalls = 0
         var loseBegin = false
@@ -324,6 +350,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
                         changedSelectionField?.let { response[it][0] = (response[it][0].toInt() xor 1).toByte() }
                     }
                 }
+                8 -> arrayOf(if (wrongPreparationNonce) ByteArray(32) { 9 } else fields[2].copyOfRange(49, 81))
                 2 -> {
                     challengeId = fields[6].copyOf()
                     arrayOf(fields[1], fields[7], fields[8], fields[9])

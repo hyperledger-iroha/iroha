@@ -207,10 +207,6 @@ fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1
         Err(WorkspaceTestErrorV1::UnsupportedPlatform)
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "workspace-test execution authenticates the exact lock graph, targets, and VM inputs in one ordered fail-closed workflow"
-)]
 fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     source: &S,
     workspace: &Workspace,
@@ -950,10 +946,6 @@ fn declared_test_sources(
     sources.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
     Ok(sources)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the bounded recursive directory walk carries each confinement and resource-budget guard explicitly"
-)]
 fn collect_declared_test_directory(
     package_root: &Path,
     directory: &Path,
@@ -1749,10 +1741,6 @@ default-members = ["app"]
         assert_eq!(registry.releases.borrow().len(), 2);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture proves authenticated reachability across path and registry package boundaries"
-    )]
     fn authenticates_registry_edges_reachable_through_a_pure_path_package_only() {
         let temp = tempdir().expect("tempdir");
         write(

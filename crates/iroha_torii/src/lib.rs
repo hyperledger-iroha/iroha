@@ -19666,7 +19666,7 @@ fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Respo
     }
     response
 }
-#[cfg(feature = "connect")]
+#[cfg(all(test, feature = "connect"))]
 fn admitted_torii_proxy_snapshot_to_response(admitted: AdmittedToriiProxySnapshot) -> Response {
     let mut response = torii_proxy_snapshot_to_response(admitted.snapshot);
     if let Some(reservation) = admitted.fanout_reservation {

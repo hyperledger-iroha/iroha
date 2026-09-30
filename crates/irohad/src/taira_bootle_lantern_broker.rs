@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use iroha_config::parameters::{
     actual::RuntimeProviderBrokerEndpointPath, validate_production_runtime_handle,
 };
-use iroha_core::privacy_engines::bootle_lantern::issuer::{
+use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
     BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceAuthorizationV1,
     BootleLanternIssuanceErrorV1, BootleLanternIssuerKeyPairV1,
     BootleLanternIssuerPolicyMetadataV1, MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1,
@@ -1088,10 +1088,6 @@ fn map_backend_crypto_error_v1(
     }
 }
 #[cfg(unix)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the loader performs one ordered descriptor-relative credential hardening audit"
-)]
 fn load_credential_v1(
     path: &Path,
     minimum_bytes: usize,
@@ -1398,7 +1394,7 @@ fn run_after_credential_open_test_hook_v1(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::privacy_engines::bootle_lantern::issuer::{
+    use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
         holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_v1,
     };
     use iroha_data_model::privacy::{
@@ -1867,10 +1863,6 @@ mod tests {
         ));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test audits every authenticated authorization substitution dimension"
-    )]
     fn crypto_boundary_rejects_network_genesis_policy_principal_lifetime_and_wire_substitution() {
         let backend = backend_v1();
         let context = statement_context_v1();

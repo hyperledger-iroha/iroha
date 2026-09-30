@@ -394,7 +394,7 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     """Only packages that start independent test nodes require release artifacts."""
 
     manifest = rust_ci.load_lane_manifest()
-    assert manifest.daemon_packages == ("irohad",)
+    assert manifest.daemon_packages == ("irohad", "irohad_lib")
     assert manifest.package_binaries == {
         "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
         "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
@@ -466,13 +466,12 @@ def executable_docs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ("docs/new.md", "```\nseiyaku Unlabelled {}\n```\n", True),
     ("docs/new.md", "```kotodama\nseiyaku Unterminated {}\n", True),
     ("docs/new.md", "```kotodama\n\n```\n", True),
-    ("docs/history/2026-09-06/old.md", "```kotodama\nmalformed historical evidence\n", False),
-    ("docs/history/current-roadmap-coverage.json", "{}", False),
+    ("docs/history/retired.md", "```kotodama\nmalformed retired example\n", False),
 ])
 def test_executable_document_routing_uses_source_and_git_history(
     executable_docs, path: str, contents: str | None, selected: bool,
 ) -> None:
-    """Actual examples select Koto; unrelated prose/history requests no binaries."""
+    """Actual examples select Koto; prose and retired inputs request no binaries."""
 
     root, manifest, _ = executable_docs
     document = root / path
@@ -530,13 +529,13 @@ def test_documentation_uncertainty_still_selects_compiler(executable_docs, probl
     assert result.reasons
 
 
-def test_historical_fences_are_not_current_checker_inputs(executable_docs) -> None:
-    """Even malformed archived fences remain evidence rather than current source."""
+def test_retired_directory_is_excluded_from_current_checker_inputs(executable_docs) -> None:
+    """The retired-directory denylist excludes malformed obsolete examples."""
 
     root, _, _ = executable_docs
-    archive = root / "docs/history/2026-09-06/obsolete.md"
-    archive.parent.mkdir(parents=True)
-    archive.write_text("```kotodama\nthis old fence was never terminated\n")
+    retired = root / "docs/history/obsolete.md"
+    retired.parent.mkdir(parents=True)
+    retired.write_text("```kotodama\nthis obsolete fence was never terminated\n")
     checker = rust_ci.KOTODAMA_DOCS
     inventory = checker.load_document_set(root / "specs/kotodama_v1_docs.json", root)
     fences = checker.collect_source_fences(inventory, root)

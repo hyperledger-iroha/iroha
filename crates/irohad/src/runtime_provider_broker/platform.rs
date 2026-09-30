@@ -42,10 +42,6 @@ fn set_socket_mode(path: &Path) -> io::Result<()> {
     )
 }
 #[cfg(test)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "broker scenario tests keep each ordered protocol transcript together"
-)]
 mod tests {
     use super::process_admission_fixture::*;
     fn validated_production_endpoint()

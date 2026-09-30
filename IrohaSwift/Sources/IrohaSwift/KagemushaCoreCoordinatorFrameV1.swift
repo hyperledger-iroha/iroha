@@ -159,6 +159,9 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         try count(fields, 2); try ticket(fields, 1)
       case 5:
         try count(fields, 3); try ticket(fields, 1); try bounded(fields, 2, 16 * 1024)
+      case 8:
+        try count(fields, 3); try ticket(fields, 1)
+        try require(fields[2].count == 273, "invalid signed app preparation")
       default:
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
       }
@@ -216,6 +219,10 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         try count(response, 2); try equal(response, 0, request, 1); try digest(response, 1)
       case 6:
         try count(response, 0)
+      case 8:
+        try count(response, 1); try digest(response, 0)
+        try require(response[0] == Data(request[2][49..<81]),
+          "native preparation verification changed the server nonce")
       default:
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
       }

@@ -12,7 +12,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-SOURCE_LINE_BUDGET = 16_100
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
@@ -247,8 +246,6 @@ def _helper_region(source: str) -> str:
 
 
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) > SOURCE_LINE_BUDGET:
-        raise GuardError("iroha_cli.rs exceeded its source-file budget")
     helper = _helper_region(source)
     if _normalized_hash(helper) != HELPER_HASH:
         raise GuardError("typed SoraCloud command helper changed")
@@ -379,8 +376,8 @@ class IrohaCliSoracloudCommandSourceTests(unittest.TestCase):
         old = f"stringify!({name})"
         self.assert_rejected(_replace_once(self.source, old, '"wrong-network-context"'))
 
-    def test_source_growth_is_rejected(self) -> None:
-        self.assert_rejected(self.source + "\n" * (SOURCE_LINE_BUDGET + 1))
+    def test_whitespace_growth_preserves_command_contract(self) -> None:
+        validate_source(self.source + "\n" * 25_000)
 
 
 if __name__ == "__main__":

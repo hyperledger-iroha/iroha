@@ -82,7 +82,7 @@ fn execution_transport_ready(app: &SharedAppState) -> bool {
 pub(crate) fn capabilities(app: &SharedAppState) -> Result<Response, Error> {
     let transport_ready = execution_transport_ready(app);
     let view = app.state.view();
-    let profiles = iroha_core::execution_proofs::compiled_execution_profiles_v1();
+    let profiles = iroha_core_privacy::execution_proofs::compiled_execution_profiles_v1();
     Ok(crate::utils::JsonBody(norito::json!({
         "version":1,"current_height":(view.height().to_string()),"network_id":(view.network_id()),
         "fee_asset_id":(view.nexus().fees.fee_asset_id),

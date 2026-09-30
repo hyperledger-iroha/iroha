@@ -18,7 +18,6 @@ use halo2_proofs::{
     halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
     poly::ipa::commitment::ParamsIPA,
 };
-#[cfg(test)]
 use iroha_data_model::{
     NetworkId,
     kagemusha::{KagemushaHardwarePlatformClassV1, KagemushaReleasePurposeV1},
@@ -42,7 +41,6 @@ use super::{
     },
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
 };
-#[cfg(test)]
 use crate::kagemusha_v1_state::{
     CreditStageStatementV1, DurabilityAnchorStatementV1, KagemushaGuardBundleVerifierV1,
     MintReservationStatementV1, MintStageStatementV1,
@@ -86,7 +84,6 @@ pub enum KagemushaGuardVerificationErrorV1 {
     HardwareAssertionFoldUnavailable,
 }
 
-#[cfg(test)]
 fn require_hardware_assertion_fold_v1(
     platform_class: KagemushaHardwarePlatformClassV1,
 ) -> Result<()> {
@@ -105,7 +102,6 @@ fn require_hardware_assertion_fold_v1(
     }
 }
 
-#[cfg(test)]
 fn require_production_guard_release_v1(purpose: KagemushaReleasePurposeV1) -> Result<()> {
     if purpose != KagemushaReleasePurposeV1::Production {
         return Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable);
@@ -113,7 +109,6 @@ fn require_production_guard_release_v1(purpose: KagemushaReleasePurposeV1) -> Re
     Ok(())
 }
 
-#[cfg(test)]
 fn require_signed_guard_network_v1(
     release_network: NetworkId,
     statement_network: DigestV1,
@@ -167,10 +162,9 @@ struct GuardProofWire {
     ep_history: HistoryBytes,
 }
 
-#[cfg(test)]
 /// Monetary Guard verifier bound to an explicitly admitted release and its actual paired proofs.
 /// Independent hardware journal transactions additionally require a registered transaction owner.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct KagemushaAuthenticatedGuardBundleVerifierV1 {
     authority: Option<(
         KagemushaGuardProofDiagnosticVerifierV1,
@@ -179,7 +173,6 @@ pub struct KagemushaAuthenticatedGuardBundleVerifierV1 {
     transactions: Option<super::KagemushaHardwareTransactionVerifierV1>,
 }
 
-#[cfg(test)]
 impl KagemushaAuthenticatedGuardBundleVerifierV1 {
     /// Construct only after the verifier admits the independently authenticated monetary release.
     ///
@@ -197,6 +190,40 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
             )),
             transactions: None,
         })
+    }
+
+    /// Bind independent journal operations to the same threshold-authenticated release.
+    /// The transaction transport returns untrusted bytes and cannot grant authority.
+    ///
+    /// # Errors
+    /// Rejects a transaction verifier admitted under a different release or authority policy.
+    pub fn with_hardware_transactions(
+        mut self,
+        transactions: super::KagemushaHardwareTransactionVerifierV1,
+    ) -> Result<Self> {
+        let (_, release) = self
+            .authority
+            .as_ref()
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        transactions
+            .require_release_binding(release)
+            .map_err(|_| KagemushaGuardVerificationErrorV1::Binding)?;
+        self.transactions = Some(transactions);
+        Ok(self)
+    }
+
+    /// Borrow the independently authenticated release retained by this verifier.
+    /// Shape-valid proof bytes and device projections cannot construct this authority.
+    ///
+    /// # Errors
+    /// Rejects the private, test-only unadmitted sentinel.
+    pub fn authenticated_release(
+        &self,
+    ) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>> {
+        self.authority
+            .as_ref()
+            .map(|(_, release)| Arc::clone(release))
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)
     }
 
     fn verify_transaction(
@@ -428,7 +455,6 @@ impl KagemushaGuardProofDiagnosticVerifierV1 {
     }
 }
 
-#[cfg(test)]
 impl KagemushaGuardBundleVerifierV1 for KagemushaAuthenticatedGuardBundleVerifierV1 {
     fn verify_bootstrap(
         &self,
@@ -539,7 +565,6 @@ impl KagemushaGuardBundleVerifierV1 for KagemushaAuthenticatedGuardBundleVerifie
     }
 }
 
-#[cfg(test)]
 fn unavailable(operation: &'static str) -> KagemushaGuardVerificationErrorV1 {
     KagemushaGuardVerificationErrorV1::HardwareTransactionUnavailable(operation)
 }
@@ -1272,7 +1297,10 @@ mod tests {
         let bytes = norito::encode_canonical(&wire).expect("shape-valid frame");
         // The private sentinel exercises the production trait's independent fail-closed check.
         // No authenticated constructor or test authority bypass is introduced.
-        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1::default();
+        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1 {
+            authority: None,
+            transactions: None,
+        };
         let expected =
             KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string();
         assert_eq!(

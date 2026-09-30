@@ -142,7 +142,7 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     /// Returns an error if the provider is unavailable or rejects the validated request.
     fn attest_partial_release_capability(
         &self,
-        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -155,9 +155,9 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     /// Returns an error if the provider is unavailable or rejects the validated request.
     fn sign_projected_partial_release(
         &self,
-        projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+        projection: &iroha_core_timed_ovn::tle::ValidatedTleReleaseProjectionV1,
     ) -> Result<
-        iroha_core::tle_release::TlePartialReleaseShareV1,
+        iroha_core_timed_ovn::tle::TlePartialReleaseShareV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
 }
@@ -670,7 +670,7 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         issued_at_height: u64,
         expires_at_height: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
         BootleLanternIssuanceBrokerBackendErrorV1,
     >;
     /// Verify one canonical `ILQ1` against the injected issuer key without randomness or state mutation.
@@ -687,7 +687,7 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
         canonical_genesis_hash: [u8; 32],
         policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        authorization: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         request_bytes: &[u8],
         current_height: u64,
@@ -702,12 +702,12 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
         canonical_genesis_hash: [u8; 32],
         policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        authorization: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         request_bytes: &[u8],
         current_height: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
         BootleLanternIssuanceBrokerBackendErrorV1,
     >;
 }

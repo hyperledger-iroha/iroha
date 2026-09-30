@@ -1365,7 +1365,7 @@ It also has:
 
 ### 11.3 Deferred TODOs, in priority order
 
-- **T1 (P7, consensus-affecting): `SetDataspaceCommitteeV1 {dataspace, members}`.** Authorized by `CanManageDataspace{ds}`, with the same f and lane. It needs the add-only rule (`runtime_catalog.rs:180-184, 213-222`) relaxed for binding-only revisions, and the frozen-successor handoff (`docs/history/2026-09-22/epoch-authority-cutover.md:17-22`) so that in-flight sessions finish under the old committee.
+- **T1 (P7, consensus-affecting): `SetDataspaceCommitteeV1 {dataspace, members}`.** Authorized by `CanManageDataspace{ds}`, with the same f and lane. It needs the add-only rule (`runtime_catalog.rs:180-184, 213-222`) relaxed for binding-only revisions, and the frozen-successor handoff so that in-flight sessions finish under the old committee.
 - **T2:** restricted gossip targets `commit_topology ∪ resolved lane committee`. The commit topology must be kept, because every node follows every public lane and the global chain merges the certified lane blocks by reference (`specs/sumeragi_lanes.md` §4.1; `gossiper.rs`).
 - **T3:** a manifest `p2p_address` dial hint for owner nodes behind strict inbound firewalls.
 - **T4:** a dynamic external-peer budget. The first release uses the static genesis parameter.
@@ -1416,8 +1416,8 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 | `taira_authenticated_height.rs` + tests | 1,709 (copied and generalized in P0) | `iroha_deploy::verify::finality` | P8 |
 | Taira items in `crates/iroha_cli/src/soracloud.rs` (`TAIRA_INROU_*` :508-558, stage/binder :6760-9577, `TairaMutationBindingV1` :18995-19420, ~63 tests; the `defaults::taira` users) | ~8,300 | `iroha_deploy::inrou` (P5) | P8 |
 | `operator_key.rs` FD loader (:29-150), `main_shared.rs` taira modules and dispatch (:33-35, 1274-1292, 1461-1477, 1515-1604) | ~420 | File loader; `network` and `dataspace` modules | P8 |
-| `crates/iroha_cli/src/bin/taira_fee_sponsor_program.rs` | 517 | nothing (no callers) | P8 |
-| `crates/irohad/src/bin/iroha3d_taira.rs` + `taira_runtime_signer.rs` | 12 + 2,007 | `irohad::node_secrets` | P8 |
+| `crates/iroha_cli/bins/src/bin/taira_fee_sponsor_program.rs` | 517 | nothing (no callers) | P8 |
+| `crates/irohad/bins/src/bin/iroha3d_taira.rs` + `taira_runtime_signer.rs` | 12 + 2,007 | `irohad::node_secrets` | P8 |
 | `beacon_bootstrap.rs` daemon subcommand + tests | 1,093 + 676 (≈1.1k core moved in P1) | `iroha_core::beacon::ceremony` | P8 |
 | `defaults::taira` | ~70 | Profiles | P8 |
 | Kura public-reset marker (`lane_geometry.rs` :1540-1548, 1630-1700) + tests | ~190 | `GENERATION` outside the store root | P8 |

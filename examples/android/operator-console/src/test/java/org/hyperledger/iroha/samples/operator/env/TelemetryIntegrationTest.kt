@@ -4,8 +4,8 @@ import java.nio.file.Files
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
-import org.hyperledger.iroha.android.client.ClientResponse
-import org.hyperledger.iroha.android.telemetry.TelemetryRecord
+import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.telemetry.TelemetryRecord
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,9 +48,9 @@ class TelemetryIntegrationTest {
                 rotationId = "rot",
                 exporter = "sample"
             )
-        assertTrue(enabledConfig.toTelemetryOptions().enabled())
+        assertTrue(enabledConfig.toTelemetryOptions().enabled)
 
         val invalidConfig = enabledConfig.copy(saltHex = "xyz")
-        assertFalse(invalidConfig.toTelemetryOptions().enabled())
+        assertFalse(invalidConfig.toTelemetryOptions().enabled)
     }
 }

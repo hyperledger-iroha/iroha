@@ -57,6 +57,24 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             }
         }
 
+        /**
+         * Builds a canonical Log instruction using the protocol Level tag.
+         *
+         * Tags are TRACE=0, DEBUG=1, INFO=2, WARN=3 and ERROR=4. The instruction carries
+         * the exact Norito-framed Log payload required by transaction encoding.
+         */
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun logInstruction(level: Long, message: String): InstructionBox {
+            try {
+                return decodeInstructionBox(
+                    TransactionPayloadAdapter.encodeCanonicalLogInstruction(level, message),
+                )
+            } catch (ex: Exception) {
+                throw NoritoException("Failed to build canonical Norito Log instruction", ex)
+            }
+        }
+
         /** Decode one exact canonical wire-framed instruction box. */
         @JvmStatic
         @Throws(NoritoException::class)

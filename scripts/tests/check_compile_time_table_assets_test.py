@@ -126,3 +126,13 @@ def test_current_include_scope_is_explicitly_limited_to_soracloud_manifests() ->
             Path("crates/example/src/assets/manifest.json"),
             MODULE.CURRENT_INCLUDE_CONSUMER_SCOPE,
         )
+
+
+def test_historical_source_owner_can_differ_from_moved_consumer(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    consumer = root / "crates/new/src/assets"
+    preimage = {"path": "../tables.rs", "source_path": "crates/old/src/tables.rs"}
+    assert MODULE._historical_source_path(root, consumer, preimage, "fixture") == "crates/old/src/tables.rs"
+    assert MODULE._historical_source_path(root, consumer, {"path": "../tables.rs"}, "fixture") == "crates/new/src/tables.rs"
+    with pytest.raises(MODULE.AssetError, match="escapes"):
+        MODULE._historical_source_path(root, consumer, {"source_path": "../escape.rs"}, "fixture")

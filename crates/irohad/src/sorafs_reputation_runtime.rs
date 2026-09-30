@@ -2187,10 +2187,6 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test validates one complete idempotent native-outcome protocol"
-    )]
     fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
         let temp = TempDir::new().expect("tempdir");
         let network_id = network_id("reputation-runtime-native-admission");

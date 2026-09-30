@@ -20,8 +20,8 @@ directly.
 
 ## Prerequisites
 
-- Android Studio Iguana or newer (Gradle 8.2+, AGP 8.2+).
-- Android SDK Platform 34 and Build Tools 34.0.0.
+- Android Studio with AGP 9.0.1 support (the canonical SDK uses Gradle 9.3.0).
+- Android SDK Platform 35.
 - JDK 21+ on your PATH or via `JAVA_HOME`.
 
 ## Building
@@ -32,9 +32,24 @@ cd examples/android
 ./gradlew :retail-wallet:assembleDebug
 ```
 
-The provided `gradlew` script delegates to the system Gradle installation. If Gradle is not available, install version 8.2 or newer, or run the tasks from Android Studio.
+The Unix and Windows launchers use the maintained `kotlin/gradlew` wrapper.
+Both apps resolve the canonical Kotlin `client-android` AAR through a Gradle
+composite build. Run both local unit suites with:
 
-From the repository root you can invoke `scripts/check_android_samples.sh` to build both apps (and the shared SDK module) in one go. Wire this script into CI once Gradle is available on the runners.
+```bash
+./gradlew :operator-console:testDebugUnitTest :retail-wallet:testDebugUnitTest
+```
+
+Native account tests require `IROHA_NATIVE_LIBRARY_PATH` to point to the rebuilt
+host bridge directory. These local JVM tests do not qualify physical devices.
+The signed POS fixture is shared at `fixtures/sdk/pos/manifest_v1.json`; display
+fields come exclusively from its signed payload. Offline transaction previews
+derive the authority from the actual signer and use an explicit synthetic
+network identity; the samples never submit those previews.
+
+From the repository root, `scripts/check_android_samples.sh` builds both apps
+and the canonical AAR, and runs the SDK unit suites including its Java consumer
+checks.
 
 ## Sample Manifests
 

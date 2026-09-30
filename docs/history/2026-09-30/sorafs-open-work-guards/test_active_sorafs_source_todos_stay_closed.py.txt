@@ -1,2 +1,0 @@
-def test_active_sorafs_source_todos_stay_closed() -> None:
-    assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []

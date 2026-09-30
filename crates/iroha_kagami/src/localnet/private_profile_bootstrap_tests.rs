@@ -462,7 +462,9 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
             .expect("read private-profile start script");
         assert!(
             start_script.contains("IROHA_SORA_MODE=\"1\"")
-                && start_script.contains(" --sora --config "),
+                && start_script.contains("if env.get(\"IROHA_SORA_MODE\") == \"1\":")
+                && start_script.contains("cmd.append(\"--sora\")")
+                && start_script.contains("cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"),
             "an explicit Sora profile must keep requesting the matching daemon profile"
         );
         for peer_index in 0..opts.peers.get() {

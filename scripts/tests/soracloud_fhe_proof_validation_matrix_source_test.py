@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/iroha_data_model/src/soracloud/tests/proof_validation.rs"
-MAXIMUM_LINE_COUNT = 16_100
 PROVENANCE_SUFFIX_TESTS = 13
 PROVENANCE_SUFFIX_SHA256 = (
     "7d5f0d1dadc0d37aa6dcadbab85d5a816f7670ccba4aa4c079604799da2abb76"
@@ -270,11 +269,6 @@ def _assert_ordered(region: bytes, atoms: tuple[bytes, ...]) -> None:
 
 
 def validate_source(data: bytes) -> None:
-    lines = data.splitlines(keepends=True)
-    if len(lines) > MAXIMUM_LINE_COUNT:
-        raise GuardFailure(
-            f"Rust line floor regressed: {len(lines)} > {MAXIMUM_LINE_COUNT}"
-        )
     if data.count(SUFFIX_MARKER) != 1:
         raise GuardFailure("provenance suffix marker must occur exactly once")
     suffix_index = data.index(SUFFIX_MARKER)
@@ -384,9 +378,6 @@ def exercise_mutation_guard(data: bytes) -> int:
         data[: data.index(SUFFIX_MARKER)]
         + b"let callback = |value| value;\n"
         + data[data.index(SUFFIX_MARKER) :],
-        data[: data.index(SUFFIX_MARKER)]
-        + (b"\n" * (MAXIMUM_LINE_COUNT - len(data.splitlines()) + 1))
-        + data[data.index(SUFFIX_MARKER) :],
         data.replace(b"Some(workflow_input_json),", b'Some("changed workflow bytes"),', 1),
     )
     for number, mutation in enumerate(mutations, start=1):
@@ -408,8 +399,11 @@ class SoracloudFheProofValidationMatrixSourceTest(unittest.TestCase):
     def test_source_contract(self) -> None:
         validate_source(self.data)
 
+    def test_whitespace_growth_preserves_fhe_contract(self) -> None:
+        validate_source(b"\n" * 25_000 + self.data)
+
     def test_mutations_fail_closed(self) -> None:
-        self.assertEqual(exercise_mutation_guard(self.data), 12)
+        self.assertEqual(exercise_mutation_guard(self.data), 11)
 
 
 if __name__ == "__main__":

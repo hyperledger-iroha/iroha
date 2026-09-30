@@ -189,7 +189,7 @@ impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
         _: u64,
         _: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
         crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendErrorV1,
     > {
         panic!("qualification-only adversarial backend must not issue")
@@ -199,7 +199,7 @@ impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
         _: &iroha_data_model::privacy::PrivacyStatementContextV1,
         _: [u8; 32],
         _: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        _: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        _: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         _: &[u8],
         _: u64,
@@ -212,12 +212,12 @@ impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
         _: &iroha_data_model::privacy::PrivacyStatementContextV1,
         _: [u8; 32],
         _: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
-        _: &iroha_core::privacy_engines::bootle_lantern::issuer::
+        _: &iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             BootleLanternIssuanceAuthorizationV1,
         _: &[u8],
         _: u64,
     ) -> Result<
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
         crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendErrorV1,
     > {
         panic!("qualification-only adversarial backend must not issue")

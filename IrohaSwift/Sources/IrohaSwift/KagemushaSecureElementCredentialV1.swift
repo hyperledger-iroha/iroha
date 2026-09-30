@@ -39,8 +39,25 @@ import Foundation
       return KagemushaSecureElementCredentialSessionV1(admission: admission)
     }
 
-    /// Execute one canonical lifecycle command entirely through the admitted wired-mode applet.
-    public func execute(
+    /// Execute one command and authenticate its complete original response natively.
+    /// Decoded applet bytes alone never grant qualification or monetary authority.
+    public func executeAuthenticated(
+      operation: KagemushaDeviceLifecycleOperationV1,
+      requestID: Data,
+      canonicalCommand: Data,
+      acceptedDevicePublicKey: Data?
+    ) async throws -> KagemushaDeviceLifecycleResultV1 {
+      let key = try KagemushaDeviceLifecycleBridgeV1.requireAcceptedDevicePublicKey(
+        operation: operation, acceptedDevicePublicKey: acceptedDevicePublicKey)
+      let result = try await executeUnverified(operation: operation,
+        requestID: requestID, canonicalCommand: canonicalCommand)
+      return try KagemushaDeviceLifecycleBridgeV1.authenticateResponse(
+        result.canonicalResponseFrame, operation: operation, requestID: requestID,
+        canonicalCommand: canonicalCommand, capabilities: acceptedCapabilities,
+        acceptedDevicePublicKey: key)
+    }
+
+    private func executeUnverified(
       operation: KagemushaDeviceLifecycleOperationV1,
       requestID: Data,
       canonicalCommand: Data
@@ -277,10 +294,12 @@ import Foundation
       nil
     }
 
-    public func execute(
+    /// Restricted Apple session access remains unavailable without the real compile entitlement.
+    public func executeAuthenticated(
       operation _: KagemushaDeviceLifecycleOperationV1,
       requestID _: Data,
-      canonicalCommand _: Data
+      canonicalCommand _: Data,
+      acceptedDevicePublicKey _: Data?
     ) async throws -> KagemushaDeviceLifecycleResultV1 {
       throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
     }

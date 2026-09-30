@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Node-log parsing and oracles of the Sumeragi release-gate soak.
+"""Node-log parsing and oracles for optional Sumeragi fault diagnostics.
 
 The soak (``scripts/sumeragi_soak.py``, ``specs/sumeragi.md`` §13.5 and §14 item 5) runs a real
 multi-process network under faults and judges it only from what the nodes logged. The driver

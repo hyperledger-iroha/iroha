@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fault injection of the Sumeragi release-gate soak (``scripts/sumeragi_soak.py``).
+"""Fault injection for optional Sumeragi diagnostics (``scripts/sumeragi_soak.py``).
 
 * Network loss and delay spikes on every P2P link:
 

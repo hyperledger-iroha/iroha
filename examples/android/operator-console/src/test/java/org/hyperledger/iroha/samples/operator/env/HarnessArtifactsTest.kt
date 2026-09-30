@@ -22,6 +22,10 @@ class HarnessArtifactsTest {
                 sorafsSummarySha256 = "summary-sha",
                 sorafsReceiptsPath = "/tmp/receipts.json",
                 telemetryLogPath = "/tmp/telemetry.log",
+                telemetrySaltHex = TelemetryConfig.DEFAULT_SALT_HEX,
+                telemetrySaltVersion = TelemetryConfig.DEFAULT_SALT_VERSION,
+                telemetryRotationId = TelemetryConfig.DEFAULT_ROTATION_ID,
+                telemetryExporter = TelemetryConfig.DEFAULT_EXPORTER,
                 handoffEndpoint = "https://handoff.example",
                 handoffInboxPath = "/tmp/handoff"
             )

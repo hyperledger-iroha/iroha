@@ -488,7 +488,7 @@ fn exact_membership_sources_are_pretranscript_closed() {
             "forbidden exact prover source: {forbidden}"
         );
     }
-    assert!(parent.lines().count() <= 3_000 && parent.len() <= 120 * 1024);
-    let child = include_str!("bulletproof_t256_streaming_constraint_tests.rs");
-    assert!(child.lines().count() <= 500 && child.len() <= 24 * 1024);
+
+
+
 }

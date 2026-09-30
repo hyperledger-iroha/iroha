@@ -11,7 +11,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
-MAX_SOURCE_LINES = 40_506
 
 REGION_START = '#[derive(Clone, Copy)]\nenum FheInputAdmissionPayloadShape'
 REGION_END = '#[cfg(feature = "zk-stark")]\n#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
@@ -174,8 +173,6 @@ def validate_module_owner(owner: str) -> None:
 
 
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) > MAX_SOURCE_LINES:
-        raise GuardError("Soracloud test owner exceeded its source budget")
     region = _region(source)
     for test_name, (expected_attributes, expected_cases) in TEST_CASES.items():
         occurrences = len(re.findall(rf"\b{re.escape(test_name)}\b", source))
@@ -222,6 +219,9 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
             self.assertEqual(owner.count(old), 1)
             with self.subTest(target=old), self.assertRaises(GuardError):
                 validate_module_owner(owner.replace(old, new, 1))
+
+    def test_whitespace_growth_preserves_case_matrix(self) -> None:
+        validate_source(self.source + "\n" * 100_000)
 
     def test_current_source_preserves_case_matrix(self) -> None:
         validate_source(self.source)

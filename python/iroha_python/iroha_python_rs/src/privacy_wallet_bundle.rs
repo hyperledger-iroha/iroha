@@ -16,7 +16,7 @@ use crate::privacy_native_actions::{
     parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
 };
 use core::fmt;
-use iroha_core::privacy_engines::{
+use iroha_core_privacy::privacy_engines::{
     bootle_lantern::{relation::BootleLanternPresentationWitnessV1, ring::ApplicationPolynomialV1},
     fcmp_plus_plus::{
         FcmpInputRerandomizationV1, FcmpOutputTupleV1, FcmpProverInputV1, FcmpTreeRootV1,

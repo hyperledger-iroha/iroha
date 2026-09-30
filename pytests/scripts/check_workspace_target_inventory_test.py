@@ -45,7 +45,7 @@ def test_external_software_signer_is_declared_but_never_default() -> None:
 
 def test_external_software_signer_requires_explicit_release_opt_in() -> None:
     manifest = tomllib.loads(
-        (ROOT / "crates" / "irohad" / "Cargo.toml").read_text(encoding="utf-8")
+        (ROOT / "crates" / "irohad" / "bins" / "Cargo.toml").read_text(encoding="utf-8")
     )
     marker = "external-software-signer-bin"
     signer = next(
@@ -178,13 +178,13 @@ def test_taira_custody_launcher_is_an_explicit_shipping_owner() -> None:
     target = ("irohad", "iroha3d_taira")
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target in TARGET_INVENTORY.resolved_default_bins(metadata)
-    manifest = tomllib.loads((ROOT / "crates/irohad/Cargo.toml").read_text())
+    manifest = tomllib.loads((ROOT / "crates/irohad/bins/Cargo.toml").read_text())
     launcher = next(row for row in manifest["bin"] if row["name"] == target[1])
     assert launcher["path"] == "src/bin/iroha3d_taira.rs"
     assert launcher["required-features"] == ["daemon"]
     assert "daemon" in manifest["features"]["default"]
-    assert "irohad::taira_runtime_signer::main_entry();" in (
-        ROOT / "crates/irohad/src/bin/iroha3d_taira.rs"
+    assert "irohad::taira_runtime_signer::main_entry(iroha_core::compiled_build_metadata!());" in (
+        ROOT / "crates/irohad/bins/src/bin/iroha3d_taira.rs"
     ).read_text()
 
 
@@ -248,3 +248,23 @@ def test_rejects_unreviewed_default_owner_within_unchanged_ceiling() -> None:
     assert any("non-shipping binaries enabled by default" in error for error in errors)
     assert not any("exceeds" in error for error in errors)
     assert not any("declared binary count" in error for error in errors)
+
+
+def test_runtime_libraries_do_not_capture_executable_source_revisions() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    packages = {package["name"]: package for package in metadata["packages"]}
+    for package_name, crate_name in (("irohad", "irohad"), ("iroha_cli", "iroha_cli")):
+        library = packages[package_name + "_lib"]
+        executable = packages[package_name]
+        assert not any("custom-build" in target["kind"] for target in library["targets"])
+        assert any(target["name"] == crate_name and target["kind"] == ["lib"]
+                   for target in library["targets"])
+        assert any("custom-build" in target["kind"] for target in executable["targets"])
+        assert not any("lib" in target["kind"] for target in executable["targets"])
+        source_root = ROOT / "crates" / package_name / "src"
+        for source in source_root.rglob("*.rs"):
+            text = source.read_text(encoding="utf-8")
+            assert "compiled_build_metadata!" not in text, source
+            assert "compiled_build_identity!" not in text, source
+            assert 'option_env!("VERGEN_GIT_SHA")' not in text, source
+            assert 'option_env!("IROHA_GIT_COMMIT_HASH")' not in text, source

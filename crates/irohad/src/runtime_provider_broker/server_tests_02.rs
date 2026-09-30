@@ -1864,7 +1864,7 @@ fn bootle_lantern_binding_rejects_slot_handle_qualification_and_metadata_substit
     assert!(validate_wire_binding(&wrong).is_err());
     for lifetime in [
         0,
-        iroha_core::privacy_engines::bootle_lantern::issuer::
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
             MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1
             + 1,
     ] {

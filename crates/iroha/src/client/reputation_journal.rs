@@ -429,10 +429,6 @@ mod tests {
         check(query);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the authenticated journal-query fixture audits all exact request and response bindings together"
-    )]
     fn typed_queries_are_authenticated_and_preserve_exact_fields() {
         let client = client_with_base_url(base_url());
 

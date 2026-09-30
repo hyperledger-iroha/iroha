@@ -25603,7 +25603,7 @@ pub mod isi {
             contract_artifact_with_max_cycles(4)
         }
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
-            let (artifact, _) = ivm::KotodamaCompiler::new()
+            let (artifact, _) = kotodama_lang::compiler::Compiler::new()
                 .compile_source_with_manifest(
                     r#"
 seiyaku GovernanceLifecycle {
