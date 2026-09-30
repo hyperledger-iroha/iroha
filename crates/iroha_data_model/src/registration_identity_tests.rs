@@ -179,7 +179,11 @@ fn signed_block_identity_preserves_canonical_envelope() {
     assert!(!block.is_resultless_proposal());
     assert_eq!(block.hash(), proposal_hash);
     assert_eq!(
-        block.canonical_resultless_proposal().encode_wire().unwrap(),
+        block
+            .canonical_resultless_proposal()
+            .expect("valid original proposal")
+            .encode_wire()
+            .unwrap(),
         proposal_wire,
     );
     block

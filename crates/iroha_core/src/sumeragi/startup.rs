@@ -228,18 +228,30 @@ pub fn apply_genesis(
     Ok(GenesisTip { block_hash, result })
 }
 
-/// The genesis tip recorded in Kura, if genesis is stored.
-#[must_use]
-pub fn stored_genesis(state: &State) -> Option<(SignedBlock, CommitCertificate, GenesisTip)> {
-    let block = state
+/// The genesis tip recorded in Kura, if genesis is stored with its result certificate.
+///
+/// # Errors
+/// The stored frame cannot project to a valid original proposal.
+pub fn stored_genesis(
+    state: &State,
+) -> Result<Option<(SignedBlock, CommitCertificate, GenesisTip)>, StartupError> {
+    let Some(block) = state
         .kura()
-        .get_block(core::num::NonZeroUsize::new(1).expect("non-zero"))?;
-    let certificate = block.commit_certificate()?.clone();
+        .get_block(core::num::NonZeroUsize::new(1).expect("non-zero"))
+    else {
+        return Ok(None);
+    };
+    let Some(certificate) = block.commit_certificate().cloned() else {
+        return Ok(None);
+    };
     let tip = GenesisTip {
         block_hash: core_hash_of(&block),
         result: result_of_preimage(certificate.result_preimage()),
     };
-    Some((block.canonical_resultless_proposal(), certificate, tip))
+    let proposal = block
+        .canonical_resultless_proposal()
+        .map_err(|error| StartupError::Local(format!("stored genesis proposal: {error}")))?;
+    Ok(Some((proposal, certificate, tip)))
 }
 
 /// The validators of a signed genesis, in canonical order (`C_g`).

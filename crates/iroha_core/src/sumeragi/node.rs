@@ -40,6 +40,7 @@ use super::{
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
+    metrics::{InstanceMetrics, MetricsInstance},
     net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress, subscribe},
     records::{FileRecordStore, FreshKeyAssertion, install},
     schedule,
@@ -286,16 +287,7 @@ pub(crate) fn status_dto(
         signer: status.signer.as_ref().and_then(key),
         unanchored: status.unanchored,
         abstaining: status.abstaining,
-        halted: driver.halted().map(|reason| match reason {
-            HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
-            HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
-            HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
-            HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
-            HaltReason::PublicationRecoveryRequired { height } => {
-                SumeragiHaltReason::PublicationRecoveryRequired(height)
-            }
-            HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
-        }),
+        halted: driver.halted().map(halt_reason_dto),
         footprint: SumeragiFootprint {
             votes: widen(footprint.votes),
             timeouts: widen(footprint.timeouts),
@@ -313,6 +305,20 @@ pub(crate) fn status_dto(
             probe: widen(footprint.probe),
         },
     })
+}
+
+/// The served form of a core halt reason (`/v1/sumeragi/status`, `sumeragi_halted{reason}`).
+pub(crate) fn halt_reason_dto(reason: HaltReason) -> SumeragiHaltReason {
+    match reason {
+        HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
+        HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
+        HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
+        HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
+        HaltReason::PublicationRecoveryRequired { height } => {
+            SumeragiHaltReason::PublicationRecoveryRequired(height)
+        }
+        HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
+    }
 }
 
 impl NodeHandle {
@@ -495,7 +501,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     }
     // Genesis: re-execute the stored one, or apply the supplied one.
     let (tip, config_fingerprint): (GenesisTip, iroha_crypto::Hash) =
-        match startup::stored_genesis(&state) {
+        match startup::stored_genesis(&state)? {
             Some((block, certificate, stored)) => {
                 if let Some(supplied) = &genesis
                     && startup::core_hash_of(supplied) != stored.block_hash
@@ -873,6 +879,10 @@ impl Prepared {
                 recovery: Arc::clone(&recovery_publisher),
             }),
         )
+        .with_metrics(InstanceMetrics::for_node(
+            &state.telemetry,
+            MetricsInstance::Global,
+        ))
         .spawn(
             driver,
             DriverStart {
@@ -2188,7 +2198,9 @@ mod tests {
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
-        let (genesis, certificate, _) = startup::stored_genesis(&state).expect("stored genesis");
+        let (genesis, certificate, _) = startup::stored_genesis(&state)
+            .expect("valid stored genesis projection")
+            .expect("stored genesis");
         let tip = startup::apply_genesis(
             &state,
             genesis,

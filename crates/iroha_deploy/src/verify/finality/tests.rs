@@ -460,7 +460,11 @@ impl Chain {
                     commitment.preimage().unwrap(),
                 )
             } else {
-                let payload = b.canonical_resultless_proposal().encode_wire().unwrap();
+                let payload = b
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal")
+                    .encode_wire()
+                    .unwrap();
                 let header = CoreHeader {
                     instance: native.instance(),
                     epoch: core_epoch(&context).unwrap().id,

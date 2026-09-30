@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "chain_height": 42,
+  "sumeragi": {
+    "block_cadence_ms": 1000
+  },
+  "admission": {
+    "max_signatures": 16,
+    "max_instructions": 4096,
+    "max_tx_bytes": 1048576,
+    "max_decompressed_bytes": 4194304,
+    "max_metadata_depth": 8
+  },
+  "block": {
+    "max_transactions": 512
+  },
+  "pipeline": {
+    "signature_batch_max_ed25519": 64,
+    "signature_batch_max_secp256k1": 32,
+    "signature_batch_max_pqc": 12,
+    "signature_batch_max_bls": 24,
+    "overlay_max_instructions": 2048,
+    "ivm_max_cycles_upper_bound": 2000000,
+    "ivm_admission_cycle_limit": 1000000,
+    "ivm_max_decoded_instructions": 131072
+  },
+  "queue": {
+    "size": 3,
+    "queued": 2,
+    "inflight": 1
+  },
+  "fees": {
+    "fee_asset_id": "PLACEHOLDER-regenerate-with-UPDATE_FIXTURES",
+    "fee_sink_account_id": "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+    "base_fee": "0.1",
+    "per_byte_fee": "0.0002",
+    "per_instruction_fee": "0.001",
+    "per_gas_unit_fee": "0.00005",
+    "sponsor_vault_custody_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+    "settlement_mode": "direct",
+    "successful_claim_fee_exempt_authorities": [
+      "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+    ]
+  }
+}

@@ -1,12 +1,14 @@
 //! Benchmark fixture for validating and publishing canonical block outputs.
+//!
+//! Each measured block is assembled by the leader's payload builder, executed by the node's
+//! `StateExecutor`, certified by a BLS `CommitQC`, stored in Kura and published: the path every
+//! certified block takes on the global chain.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 mod common;
 use common::*;
-use iroha_core::{prelude::*, state::State, sumeragi::network_topology::Topology};
-use iroha_crypto::Algorithm;
-use iroha_data_model::{isi::InstructionBox, prelude::*};
-use iroha_model_base::peer::PeerId;
+use iroha_core::{state::StateReadOnly as _, sumeragi::test_chain::CertifiedTestChain};
+use iroha_data_model::isi::InstructionBox;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use std::sync::{Arc, OnceLock};
 type InstructionBatch = Arc<[InstructionBox]>;
@@ -51,80 +53,47 @@ fn instruction_batches() -> &'static [InstructionBatch; 3] {
         ]
     })
 }
+/// A certified chain at its benchmark genesis and the instruction batches to commit on it.
 pub struct StateValidateBlocks {
-    state: State,
+    chain: CertifiedTestChain,
     instructions: Vec<InstructionBatch>,
-    account_private_key: PrivateKey,
-    account_id: AccountId,
-    topology: Topology,
-    peer_private_key: PrivateKey,
 }
 impl StateValidateBlocks {
-    /// Create [`State`] and blocks for benchmarking
+    /// Start the certified benchmark chain.
     ///
     /// # Panics
     ///
-    /// - Failed to parse [`AccountId`]
-    /// - Failed to generate [`KeyPair`]
-    /// - Failed to create instructions for block
-    pub fn setup(rt: &tokio::runtime::Handle) -> Self {
-        let (peer_public_key, peer_private_key) =
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
-        let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
-        let alice_id = (*ALICE_ID).clone();
-        let alice_keypair = (*ALICE_KEYPAIR).clone();
-        let mut state = build_state(rt, &alice_id);
+    /// The benchmark genesis does not apply.
+    pub fn setup() -> Self {
         let (domain_ids, account_ids, _) = generate_ids(
             BENCH_DOMAINS,
             BENCH_ACCOUNTS_PER_DOMAIN,
             BENCH_ASSETS_PER_DOMAIN,
         );
-        seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &alice_id);
+        let chain = start_chain(&ALICE_ID, &domain_ids, &account_ids);
         let instructions = instruction_batches().to_vec();
         Self {
-            state,
+            chain,
             instructions,
-            account_private_key: alice_keypair.private_key().clone(),
-            account_id: alice_id,
-            topology,
-            peer_private_key,
         }
     }
-    /// Run benchmark body.
+    /// Run benchmark body: validate, certify and publish one block per instruction batch.
     ///
-    /// # Errors
-    /// - Not enough blocks
-    /// - Failed to apply block
+    /// Each fixture is measured once; its chain then holds every benchmark block.
     ///
     /// # Panics
-    /// If state height isn't updated after applying block
-    pub fn measure(
-        Self {
-            state,
-            instructions,
-            account_private_key,
-            account_id,
-            topology,
-            peer_private_key,
-        }: Self,
-    ) {
-        let base_height = {
-            let view = state.view();
-            view.height()
-        };
-        for (instruction_batch, i) in instructions.into_iter().zip(1..) {
-            let (block, state_block) = create_block(
-                &state,
+    ///
+    /// A block does not execute, a transaction fails, or the committed height does not
+    /// advance by one per block.
+    pub fn measure(&mut self) {
+        let base_height = self.chain.state().view().height();
+        for (instruction_batch, i) in self.instructions.iter().zip(1..) {
+            commit_instructions(
+                &mut self.chain,
+                &ALICE_KEYPAIR,
                 instruction_batch.iter().cloned(),
-                account_id.clone(),
-                &account_private_key,
-                &topology,
-                &peer_private_key,
             );
-            state
-                .commit_executed_block_for_testing(state_block, block)
-                .expect("publish actual benchmark block outputs");
-            assert_eq!(state.view().height(), base_height + i);
+            assert_eq!(self.chain.state().view().height(), base_height + i);
         }
     }
 }

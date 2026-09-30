@@ -59,7 +59,7 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
         Err(ChainReadError::Discontinuous { height: 2 })
     ));
     let mut foreign = CertifiedPrefix::new(
-        &ChainId::from("foreign instance"),
+        &ChainId::from("foreign-instance"),
         chain.network_id(),
         original,
     )

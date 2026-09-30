@@ -229,7 +229,11 @@ fn replace_outputs_untrusted(block: &SignedBlock, rows: Vec<ExecutionOutputV1>) 
 fn canonical_query_refuses_resultless_missing_foreign_and_internal_substituted_rows() {
     let block = fixture();
     assert!(matches!(
-        block_committed_transactions(&block.canonical_resultless_proposal()),
+        block_committed_transactions(
+            &block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
+        ),
         Err(QueryExecutionFail::Conversion(_))
     ));
     for mutation in 0..4 {

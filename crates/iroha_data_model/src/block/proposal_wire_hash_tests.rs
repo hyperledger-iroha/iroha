@@ -29,7 +29,11 @@ fn plain_signed_block() -> SignedBlock {
 }
 
 fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
-    let reference = block.canonical_resultless_proposal().encode_wire().unwrap();
+    let reference = block
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
     assert_eq!(reference[0], block.version());
     assert_eq!(
         block.resultless_proposal_wire_len().unwrap(),
@@ -41,6 +45,7 @@ fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     assert!(
         block
             .canonical_resultless_proposal()
+            .expect("valid original proposal")
             .matches_resultless_proposal_wire(&reference)
             .unwrap(),
         "version, SignedBlock header and payload"
@@ -221,14 +226,22 @@ fn complete_comparison_proposal() -> SignedBlock {
 }
 
 fn assert_checked_comparison_matches_wire(left: &SignedBlock, right: &SignedBlock) {
-    let left_wire = left.canonical_resultless_proposal().encode_wire().unwrap();
-    let right_wire = right.canonical_resultless_proposal().encode_wire().unwrap();
+    let left_wire = left
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
+    let right_wire = right
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
     assert_eq!(
-        left.checked_resultless_payload_len().unwrap(),
+        left.checked_raw_resultless_payload_len().unwrap(),
         left_wire.len() - 1 - norito::core::Header::SIZE,
     );
     assert_eq!(
-        right.checked_resultless_payload_len().unwrap(),
+        right.checked_raw_resultless_payload_len().unwrap(),
         right_wire.len() - 1 - norito::core::Header::SIZE,
     );
     let expected = left_wire == right_wire;
@@ -336,11 +349,11 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
 #[test]
 fn checked_resultless_comparison_uses_fixed_flags_independent_of_ambient_layout() {
     let proposal = complete_comparison_proposal();
-    let expected_len = proposal.checked_resultless_payload_len().unwrap();
+    let expected_len = proposal.checked_raw_resultless_payload_len().unwrap();
     for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
-            proposal.checked_resultless_payload_len().unwrap(),
+            proposal.checked_raw_resultless_payload_len().unwrap(),
             expected_len
         );
         assert!(proposal.checked_resultless_proposal_eq(&proposal).unwrap());
@@ -382,8 +395,8 @@ fn checked_resultless_comparison_rejects_archive_cap_in_isolated_process() {
         1,
         SignatureOf::try_from_hash(key.private_key(), larger.hash()).unwrap(),
     ));
-    let small_len = small.checked_resultless_payload_len().unwrap();
-    let larger_len = larger.checked_resultless_payload_len().unwrap();
+    let small_len = small.checked_raw_resultless_payload_len().unwrap();
+    let larger_len = larger.checked_raw_resultless_payload_len().unwrap();
     assert!(larger_len > small_len && small_len > 1);
     norito::core::set_max_archive_len(u64::try_from(larger_len).unwrap());
     assert!(larger.checked_resultless_proposal_eq(&larger).unwrap());
@@ -481,8 +494,8 @@ fn checked_resultless_comparison_binds_registration_metadata_beyond_entity_ident
     let mut second = first.clone();
     second.payload.external_entrypoints = vec![TransactionEntrypoint::from(second_transaction)];
     assert_eq!(
-        first.checked_resultless_payload_len().unwrap(),
-        second.checked_resultless_payload_len().unwrap()
+        first.checked_raw_resultless_payload_len().unwrap(),
+        second.checked_raw_resultless_payload_len().unwrap()
     );
     assert_checked_comparison_matches_wire(&first, &second);
     assert!(!first.checked_resultless_proposal_eq(&second).unwrap());
@@ -572,8 +585,8 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
         let mut changed = original.clone();
         changed.payload.da_pin_intents.as_mut().unwrap().intents[0] = changed_pin;
         assert_eq!(
-            original.checked_resultless_payload_len().unwrap(),
-            changed.checked_resultless_payload_len().unwrap(),
+            original.checked_raw_resultless_payload_len().unwrap(),
+            changed.checked_raw_resultless_payload_len().unwrap(),
             "equal lengths for {name}"
         );
         assert_checked_comparison_matches_wire(&original, &changed);
@@ -610,8 +623,8 @@ fn checked_resultless_comparison_binds_complete_native_lane_merge() {
         }
         assert_ne!(original.lane_merge(), changed.lane_merge());
         assert_eq!(
-            original.checked_resultless_payload_len().unwrap(),
-            changed.checked_resultless_payload_len().unwrap()
+            original.checked_raw_resultless_payload_len().unwrap(),
+            changed.checked_raw_resultless_payload_len().unwrap()
         );
         assert_checked_comparison_matches_wire(&original, &changed);
         assert!(
@@ -638,7 +651,7 @@ fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
         session_id: [1; 32],
         roster_hash: [2; 32],
         transcript_hash: [3; 32],
-        context: crate::consensus::GlobalThresholdBeaconPulseContextV1 {
+        context: GlobalThresholdBeaconPulseContextV1 {
             instance: [7; 32],
             epoch: 0,
             epoch_context_id: [8; 32],
@@ -723,7 +736,11 @@ fn proposal_writer_propagates_partial_destination_refusal_and_retries_exactly() 
     }
     let mut block = plain_signed_block();
     block.result = Some(BlockResult::default());
-    let expected = block.canonical_resultless_proposal().encode_wire().unwrap();
+    let expected = block
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
     for accepted in [0, 1, norito::core::Header::SIZE, expected.len() - 1] {
         let mut writer = RefuseAfter {
             accepted: Vec::new(),
@@ -743,7 +760,11 @@ fn proposal_writer_preserves_ambient_codec_flags_and_source_graph() {
     let mut block = plain_signed_block();
     block.result = Some(BlockResult::default());
     let original = block.clone();
-    let expected = block.canonical_resultless_proposal().encode_wire().unwrap();
+    let expected = block
+        .canonical_resultless_proposal()
+        .expect("valid original proposal")
+        .encode_wire()
+        .unwrap();
     let ambient = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _flags = norito::core::DecodeFlagsGuard::enter(ambient);
     let before = norito::core::get_decode_flags();
@@ -756,4 +777,165 @@ fn proposal_writer_preserves_ambient_codec_flags_and_source_graph() {
     assert_eq!(bytes, expected);
     assert_eq!(norito::core::get_decode_flags(), before);
     assert_eq!(block, original);
+}
+
+fn merged_projection_fixture() -> (SignedBlock, SignedBlock) {
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+    let mut original = complete_comparison_proposal();
+    SignedBlock::refresh_entrypoint_roots(&mut original.payload);
+    let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).unwrap();
+    let merged = TransactionEntrypoint::from(comparison_transaction(&key));
+    let context = ExternalExecutionContext::new(merged.hash(), LaneId::new(7), DataSpaceId::new(2));
+    let expanded = original
+        .clone()
+        .with_merged_entrypoints(vec![merged], vec![context])
+        .unwrap();
+    (original, expanded)
+}
+
+#[test]
+fn merged_execution_projects_exact_original_signed_proposal_in_every_borrowed_operation() {
+    let (original, mut expanded) = merged_projection_fixture();
+    expanded.result = Some(BlockResult::default());
+    let expected = original.encode_wire().unwrap();
+    assert_ne!(expanded.encode_wire().unwrap(), expected);
+    assert_eq!(
+        expanded
+            .canonical_resultless_proposal()
+            .expect("valid original proposal"),
+        original
+    );
+    let source = expanded.clone();
+    let entrypoints = expanded.payload.external_entrypoints.as_ptr();
+    let contexts = expanded
+        .payload
+        .execution_context
+        .as_ref()
+        .unwrap()
+        .external
+        .as_ptr();
+    let merge_rows = expanded.lane_merge().unwrap().merges.as_ptr();
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            expanded.resultless_proposal_wire_len().unwrap(),
+            expected.len()
+        );
+        let mut actual = Vec::new();
+        expanded
+            .write_resultless_proposal_wire(&mut actual)
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            expanded.canonical_proposal_wire_hash().unwrap(),
+            Hash::new(&expected)
+        );
+        assert!(expanded.checked_resultless_proposal_eq(&original).unwrap());
+        assert!(original.checked_resultless_proposal_eq(&expanded).unwrap());
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    assert_eq!(expanded, source);
+    assert_eq!(expanded.payload.external_entrypoints.as_ptr(), entrypoints);
+    assert_eq!(
+        expanded
+            .payload
+            .execution_context
+            .as_ref()
+            .unwrap()
+            .external
+            .as_ptr(),
+        contexts
+    );
+    assert_eq!(expanded.lane_merge().unwrap().merges.as_ptr(), merge_rows);
+}
+
+#[test]
+fn merged_projection_never_normalizes_raw_proposal_ingress() {
+    let (original, expanded) = merged_projection_fixture();
+    assert!(expanded.is_resultless_proposal());
+    assert!(
+        !expanded
+            .matches_resultless_proposal_wire(&original.encode_wire().unwrap())
+            .unwrap()
+    );
+    assert!(
+        expanded
+            .matches_resultless_proposal_wire(&expanded.encode_wire().unwrap())
+            .unwrap()
+    );
+}
+
+#[test]
+fn merged_projection_rejects_impossible_suffix_before_writing() {
+    let (original, expanded) = merged_projection_fixture();
+    for mutation in 0..3 {
+        let mut malformed = expanded.clone();
+        let context = malformed.payload.execution_context.as_mut().unwrap();
+        match mutation {
+            0 => context.lane_merge.as_mut().unwrap().merged_count = u32::MAX,
+            1 => {
+                context.external.pop();
+            }
+            2 => {
+                context.external.push(context.external[0].clone());
+            }
+            _ => unreachable!(),
+        }
+        let mut destination = vec![0xa5];
+        assert!(malformed.resultless_proposal_wire_len().is_err());
+        assert!(
+            malformed
+                .write_resultless_proposal_wire(&mut destination)
+                .is_err()
+        );
+        assert_eq!(destination, [0xa5]);
+        assert!(malformed.canonical_proposal_wire_hash().is_err());
+        assert!(malformed.checked_resultless_proposal_eq(&original).is_err());
+        assert!(original.checked_resultless_proposal_eq(&malformed).is_err());
+    }
+}
+
+#[test]
+fn merged_projection_preserves_signatures_merge_authority_and_all_original_inputs() {
+    let (original, expanded) = merged_projection_fixture();
+    for mutation in 0..8 {
+        let mut changed = expanded.clone();
+        match mutation {
+            0 => changed.signatures.clear(),
+            1 => changed.payload.da_commitments = None,
+            2 => changed.payload.da_proof_policies = None,
+            3 => changed.payload.da_pin_intents = None,
+            4 => changed.payload.npos_consensus_effects = None,
+            5 => {
+                changed.payload.execution_context.as_mut().unwrap().external[0].dataspace_id =
+                    iroha_model_base::topology::DataSpaceId::new(999)
+            }
+            6 => {
+                changed
+                    .payload
+                    .execution_context
+                    .as_mut()
+                    .unwrap()
+                    .lane_merge
+                    .as_mut()
+                    .unwrap()
+                    .merges[0]
+                    .tip_hash[0] ^= 1
+            }
+            7 => {
+                changed.payload.external_entrypoints[0] =
+                    changed.payload.external_entrypoints[1].clone()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !changed.checked_resultless_proposal_eq(&original).unwrap(),
+            "mutation {mutation}"
+        );
+        assert_ne!(
+            changed.canonical_proposal_wire_hash().unwrap(),
+            original.canonical_proposal_wire_hash().unwrap(),
+            "mutation {mutation}"
+        );
+    }
 }

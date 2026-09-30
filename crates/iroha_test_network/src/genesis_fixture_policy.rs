@@ -54,7 +54,7 @@ pub(super) fn bind_proposal(
             )
         })?;
     Ok((
-        GenesisBlock(executed.0.canonical_resultless_proposal()),
+        GenesisBlock(executed.0.canonical_resultless_proposal()?),
         manifest,
     ))
 }

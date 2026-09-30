@@ -87,7 +87,11 @@ fn stored_body_retains_original_certificate_and_projected_payload_across_refusal
     assert_eq!(body.availability().as_slice().as_ptr(), table_pointer);
     assert_eq!(
         body.payload().as_slice(),
-        block.canonical_resultless_proposal().encode_wire().unwrap()
+        block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
+            .encode_wire()
+            .unwrap()
     );
     assert!(body.admitted_to(&budget));
     drop(body);

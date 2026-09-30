@@ -3,6 +3,15 @@
 //! The same-release, source-closed Python renderer remains the sole definition
 //! of FD198/199/200 custody. Its bytes are embedded in the signed native CLI;
 //! this command never opens or prints a retained signer or beacon credential.
+//!
+//! The renderer also defines the one-shot Sumeragi first boot (record provenance,
+//! `specs/sumeragi.md` §7.4) of every unit, initial and beacon alike: the launcher
+//! starts `iroha3d_taira --config … --sora` and adds `--sumeragi-assert-fresh-key`
+//! only when it consumes the token `/var/lib/taira/<slug>/sumeragi-first-boot`.
+//! Only the explicit first-boot step on the validator host creates that token
+//! (`scripts/taira_validator_unit.py --arm-first-boot`), and only while the
+//! configured `sumeragi-records` directory and `sumeragi-installation.log` are
+//! absent (`specs/runbooks/sumeragi_taira_reset.md` §5).
 
 use super::*;
 use std::process::{Command, Stdio};
@@ -465,6 +474,55 @@ mod tests {
             assert!(beacon.contains("stage_signer(global_beacon_credential, 200"));
             assert!(beacon.contains("/var/lib/taira/beacon/credential.norito"));
             assert_ne!(initial, beacon);
+        }
+    }
+
+    #[test]
+    fn embedded_renderer_carries_the_one_shot_first_boot_contract() {
+        let base = "/private/runtime/taira-public-reset/run/network/runtime";
+        for (index, slug) in VALIDATOR_SLUGS.iter().enumerate() {
+            let runtime =
+                Path::new(base).join(format!("taira-runtime-signers/peer{index}.private_key"));
+            let mint = Path::new(base).join(format!("mint-finality-signers/peer{index}.seed"));
+            let state = format!("/var/lib/taira/{slug}");
+            let current = format!("/srv/taira/{slug}/current");
+            for (credential, config_file) in [
+                (None, "config.toml"),
+                (
+                    Some("/var/lib/taira/beacon/credential.norito"),
+                    "beacon.toml",
+                ),
+            ] {
+                let unit = String::from_utf8(
+                    render_one(slug, &runtime, &mint, credential, config_file).unwrap(),
+                )
+                .unwrap();
+                // The token and the configured Sumeragi history share the unit's state root.
+                assert!(unit.contains(&format!("WorkingDirectory={state}\n")));
+                assert!(unit.contains(&format!("state_root = '{state}'")));
+                assert!(
+                    unit.contains(&format!("first_boot_token = '{state}/sumeragi-first-boot'"))
+                );
+                assert!(unit.contains(&format!(
+                    "sumeragi_history = ('{state}/sumeragi-records', \
+                     '{state}/sumeragi-installation.log')"
+                )));
+                // Native unit capture reads one literal daemon argv, as `daemon_in_unit` does;
+                // only a consumed token appends the assertion to it.
+                let argv = unit
+                    .split("\\n")
+                    .filter(|line| line.starts_with("cmd = ['"))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    argv,
+                    [format!(
+                        "cmd = ['{current}/bin/iroha3d_taira', '--config', \
+                         '{current}/config/{config_file}', '--sora']"
+                    )]
+                );
+                assert_eq!(unit.matches("--sumeragi-assert-fresh-key").count(), 1);
+                assert!(unit.contains("launch_argv = cmd + ['--sumeragi-assert-fresh-key']"));
+            }
         }
     }
 

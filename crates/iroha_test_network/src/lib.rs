@@ -3952,7 +3952,7 @@ impl Network {
     ) -> Result<()> {
         let mut latest_status: Option<iroha_torii_shared::status::Status> = None;
         let status_timeout = {
-            let configured = client_status_timeout_env();
+            let configured = peer.client_policy().status_timeout;
             if configured == Duration::ZERO {
                 GENESIS_BLOCK_LOG_INTERVAL
             } else {
@@ -8360,14 +8360,15 @@ impl NetworkBuilder {
         };
         let exact_genesis_hash = network.genesis().0.hash();
         let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
-        let client_identity = PeerClientIdentity {
+        let client_config = PeerClientConfig {
             chain: network.chain_id(),
             network_id,
             chain_discriminant,
+            policy: PeerClientPolicy::from_env(),
         };
         for peer in network.all_peers() {
-            peer.client_identity
-                .set(client_identity.clone())
+            peer.client_config
+                .set(client_config.clone())
                 .expect("test-network peer client identity must be initialized exactly once");
         }
         // The test-network generator is the operator provisioning both the
@@ -8541,13 +8542,32 @@ fn start_checked_storage_fallback_ready(
 ) -> bool {
     has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
-/// Exact generated network and account profile shared by all clients for one peer.
-/// One immutable binding prevents a client from combining identities from different networks.
+/// Network identity and request policy captured when a peer joins its network.
+/// Every client for the peer uses this immutable configuration.
 #[derive(Clone, Debug)]
-struct PeerClientIdentity {
+struct PeerClientConfig {
     chain: ChainId,
     network_id: NetworkId,
     chain_discriminant: u16,
+    policy: PeerClientPolicy,
+}
+
+/// Immutable request and transaction deadlines for one attached peer.
+#[derive(Clone, Debug)]
+struct PeerClientPolicy {
+    status_timeout: Duration,
+    request_timeout: Duration,
+    ttl: Duration,
+}
+impl PeerClientPolicy {
+    fn from_env() -> Self {
+        let status_timeout = client_status_timeout_env();
+        Self {
+            status_timeout,
+            request_timeout: client_request_timeout_env(),
+            ttl: client_ttl_env(status_timeout),
+        }
+    }
 }
 
 /// Controls execution of an `iroha3d` child process.
@@ -8563,7 +8583,8 @@ pub struct NetworkPeer {
     mnemonic: String,
     span: tracing::Span,
     key_pair: KeyPair,
-    client_identity: Arc<OnceLock<PeerClientIdentity>>,
+    client_config: Arc<OnceLock<PeerClientConfig>>,
+    retained_client: Arc<OnceLock<Client>>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -8919,7 +8940,7 @@ impl NetworkPeer {
         }
         {
             let tasks = &mut tasks;
-            let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+            let client = self.retained_client().client().clone();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
@@ -8930,7 +8951,7 @@ impl NetworkPeer {
             let startup_warn_gate = StartupWarnGate::new(STARTUP_STATUS_WARN_GRACE);
             tasks.spawn(
                 async move {
-                    let status_timeout = client_status_timeout_env();
+                    let status_timeout = client.transaction_status_timeout();
                     let status_client = client.clone();
                     let storage_min_height = Arc::new(AtomicU64::new(0));
                     let mut last_progress: Instant;
@@ -9705,7 +9726,7 @@ impl NetworkPeer {
     pub async fn process_id(&self) -> Option<u32> {
         self.run.lock().await.as_ref().and_then(|run| run.pid)
     }
-    /// Create a client to interact with this peer
+    /// Create a distinct client for an explicit account, using the attached peer policy.
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
         Client::from_client(self.async_client_for(account_id, account_private_key))
             .expect("peer blocking client runtime should initialize")
@@ -9720,17 +9741,18 @@ impl NetworkPeer {
             port = %self.port_api,
             "TEST_NETWORK client"
         );
-        let status_timeout = client_status_timeout_env();
-        let request_timeout = client_request_timeout_env();
-        let ttl = client_ttl_env(status_timeout);
         let default_account_domain =
             iroha_model_base::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
         let identity = self
-            .client_identity
+            .client_config
             .get()
             .expect("peer must be attached to a network before creating clients");
+        let policy = self.client_policy();
+        let status_timeout = policy.status_timeout;
+        let request_timeout = policy.request_timeout;
+        let ttl = policy.ttl;
         let config = ConfigReader::new()
             .without_env()
             .with_toml_source(TomlSource::inline(
@@ -9776,12 +9798,27 @@ impl NetworkPeer {
             .build()
             .expect("peer account context should be valid")
     }
-    /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
+    /// Clone Alice's retained client context for this peer.
+    ///
+    /// Network identity, operator authority and deadline policy are fixed at network
+    /// attachment. Clones share connection pools and the owned blocking runtime;
+    /// each call still performs fresh requests and applies the configured deadlines.
     pub fn client(&self) -> Client {
-        self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
+        self.retained_client().clone()
+    }
+    fn client_policy(&self) -> &PeerClientPolicy {
+        &self.client_config
+            .get()
+            .expect("peer must be attached to a network before creating clients")
+            .policy
+    }
+    fn retained_client(&self) -> &Client {
+        self.retained_client.get_or_init(|| {
+            self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
+        })
     }
     pub async fn status(&self) -> Result<Status> {
-        let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let client = self.retained_client().client().clone();
         let result = client.status().get().await.map_err(Report::from);
         match &result {
             Ok(status) => self.record_status_success(status),
@@ -10277,7 +10314,8 @@ impl NetworkPeerBuilder {
             mnemonic,
             span,
             key_pair,
-            client_identity: Arc::new(OnceLock::new()),
+            client_config: Arc::new(OnceLock::new()),
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -10679,6 +10717,7 @@ mod tests {
     include!("genesis_validation_cache_tests.rs");
     include!("profile_account_defaults_tests.rs");
     include!("peer_client_profile_tests.rs");
+    include!("peer_client_context_tests.rs");
     include!("genesis_profile_tests.rs");
     include!("sora_profile_tests.rs");
     use iroha_config::parameters::defaults;
@@ -11156,7 +11195,8 @@ mod tests {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
-            client_identity: Arc::new(OnceLock::new()),
+            client_config: Arc::new(OnceLock::new()),
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11214,10 +11254,10 @@ mod tests {
             .expect("generate watchdog streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-        let client_identity = Arc::new(OnceLock::new());
+        let client_config = Arc::new(OnceLock::new());
         assert!(
-            client_identity
-                .set(PeerClientIdentity {
+            client_config
+                .set(PeerClientConfig {
                     chain: config::chain_id(),
                     network_id: NetworkId::from_genesis_hash(HashOf::<
                         iroha_data_model::block::BlockHeader,
@@ -11225,6 +11265,7 @@ mod tests {
                         CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
                     )),
                     chain_discriminant: defaults::common::chain_discriminant(),
+                    policy: PeerClientPolicy::from_env(),
                 })
                 .is_ok()
         );
@@ -11232,7 +11273,8 @@ mod tests {
             mnemonic: "wait-block-authority-barrier".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
-            client_identity,
+            client_config,
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11617,11 +11659,12 @@ mod tests {
             ),
         );
         assert!(
-            peer.client_identity
-                .set(PeerClientIdentity {
+            peer.client_config
+                .set(PeerClientConfig {
                     chain: config::chain_id(),
                     network_id,
                     chain_discriminant: defaults::common::chain_discriminant(),
+                    policy: PeerClientPolicy::from_env(),
                 })
                 .is_ok()
         );

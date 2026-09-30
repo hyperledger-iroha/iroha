@@ -1950,9 +1950,17 @@ for sample in status.samples:
 print("RTT buckets:", status.rtt.buckets)
 ```
 
-Pipeline preflight requires the current `ivm_max_cycles_upper_bound` and
-`ivm_admission_cycle_limit` fields. Fee sink, sponsor custody, and fee-exempt
-authority values must be exact canonical I105 account ids, never account aliases.
+Pipeline preflight requires exactly the fields Torii serves, including the
+current `ivm_max_cycles_upper_bound` and `ivm_admission_cycle_limit` fields, and
+rejects any other field. Fee sink, sponsor custody, and fee-exempt authority
+values must be exact canonical I105 account ids, never account aliases. Its
+`sumeragi` section carries only `block_cadence_ms`, the signed-genesis target
+block time. Torii serves no stall threshold, so `stall_threshold_ms` is derived
+as `iroha_python.client.PIPELINE_STALL_BLOCK_CADENCES` (20) × `block_cadence_ms`;
+`is_status_stalled(status)` reports a stall only when queued work exists and the
+time since the last non-empty block (or since the last block, before the first
+non-empty one) exceeds it. Call `status.is_queue_stalled(threshold_ms)` directly
+when the deployment's local consensus timers are known.
 
 Use these outputs when filing telemetry readiness notes or running the Connect
 automation notebook. The typed DTOs mirror the current Rust payloads.

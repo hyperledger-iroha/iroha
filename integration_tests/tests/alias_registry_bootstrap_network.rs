@@ -1733,9 +1733,9 @@ fn authenticate_retained_history(
     let stored_genesis = decode_framed_signed_block(&retained.blocks[0])?;
     ensure!(
         stored_genesis
-            .canonical_resultless_proposal()
+            .canonical_resultless_proposal()?
             .encode_wire()?
-            == genesis.0.canonical_resultless_proposal().encode_wire()?,
+            == genesis.0.canonical_resultless_proposal()?.encode_wire()?,
         "original signed genesis changed"
     );
     let states = native_lane_states(retained)?;

@@ -1,5 +1,7 @@
 # Roadmap
 
+Qualify the checked proposal projection, retained per-peer client context and completed telemetry/status retirement on the latest-source SORA Nexus happy-day workload, then execute the selected full-Core controls and measure accepted repeated settlements. Preserve failed runs and exact source/image binding; component passes are insufficient. See [current repair evidence](docs/history/2026-09-30/paper-happy-day-projection.md).
+
 Last updated: 2026-09-29.
 
 Core/network owners must qualify the [restricted native-lane gossip fix](docs/history/2026-09-30/restricted-lane-gossip.md) with a fresh same-source daemon and harness: all governed pools must finalize with disjoint global/participant committees, and unrelated identities must receive no restricted gossip. The passing scoped controls do not close network settlement qualification.

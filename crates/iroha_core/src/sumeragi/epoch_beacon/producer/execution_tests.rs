@@ -94,7 +94,9 @@ fn executor(chain: &CertifiedTestChain) -> StateExecutor {
         genesis_account: chain.genesis_account().clone(),
         consensus_mode: ConsensusMode::Permissioned,
         applied: (8, chain.committed(8).core_hash()),
-        crypto: None,
+        // Replay verifies each certified CommitQC; the worker admits the scheduled committee
+        // from its authenticated proofs of possession, as the node's executor does.
+        crypto: Some(Arc::new(crate::sumeragi::crypto::BlsCrypto::new())),
         applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
             8,
             Some(chain.committed(8).block_hash()),
@@ -138,7 +140,10 @@ fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_resu
     let certified = CertifiedChain::new(&view).unwrap().certified(9).unwrap();
     let original_qc = certified.commit_qc().unwrap().clone();
     drop(view);
-    let proposal = stored.block().canonical_resultless_proposal();
+    let proposal = stored
+        .block()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let mut worker = executor(&replay);
     // A correctly decoded control witness is still obligatory at this exact source.
     let mut missing_header = stored.header().unwrap().clone();
@@ -183,7 +188,10 @@ fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work(
         .chain
         .commit_with_control(Some(50_000), Vec::new(), Signers::Quorum, witness);
     let stored = fixture.chain.committed(9);
-    let proposal = stored.block().canonical_resultless_proposal();
+    let proposal = stored
+        .block()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let header = stored.header().unwrap().clone();
     let proposal_bytes = payload::encode(&proposal).unwrap();
     let mut worker = executor(&predecessor);

@@ -13,6 +13,7 @@ RUNNER = ROOT / "ci/check_sora_parliament_lifecycle.sh"
 WORKFLOW = ROOT / ".github/workflows/pr.yml"
 MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
+SUPPORT = ROOT / "integration_tests/tests/sora_parliament_lifecycle_support.rs"
 NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_paths.rs"
 FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
 ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
@@ -24,7 +25,7 @@ BEACON = ROOT / "crates/iroha_core/src/beacon.rs"
 BEACON_TEST_SIGNER = (
     ROOT / "crates/iroha_core/src/beacon/parliament_test_network_signer.rs"
 )
-BEACON_LIFECYCLE = ROOT / "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+BEACON_PRODUCER = ROOT / "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
 MANDATORY_NPOS_TEST_NAME = (
     "four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate"
 )
@@ -197,7 +198,7 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
         .wrap_err_with(|| format!("{label}: inactive governed-contract response is not JSON"))?;''',
     EXACT_INACTIVE_CONTRACT_PROJECTION,
     "expected the exact inactive governed-contract projection",
-    "fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str)",
+    "fn assert_asset_not_found(\n    client: &Client,\n    asset_id: &AssetId,\n    label: &str,\n) -> Result<()> {",
     "let query = FindAssetById::new(asset_id.clone());",
     "query.asset_id(),",
     '"{label}: bind the exact requested asset"',
@@ -219,9 +220,9 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
         "a sealed corpus is no longer a cast-capable context",
     )
     .await?;''',
-    "fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str)",
+    "fn assert_no_global_beacon_pulse_at(\n    client: &Client,\n    height: u64,\n    label: &str,\n) -> Result<()> {",
     "fn exact_block(client: &Client, height: u64) -> Result<SignedBlock>",
-    "NonZeroU64::new(height)",
+    'NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?',
     ".query(FindBlocks)",
     '.filter_with(|block| block.equals("height", height).into_predicate())',
     ".execute_all()",
@@ -309,10 +310,15 @@ PARLIAMENT_NETWORK_TEST_ATTRIBUTE = "#[test]"
 
 
 def read_corridor_source() -> str:
-    """Read the lifecycle target together with its source-budget support module."""
+    """Read the lifecycle target together with its compiled support modules.
+
+    The shared helper module comes first, so a first-occurrence mutation of a
+    helper marker removes the helper's own statement, not a caller's.
+    """
 
     return "\n".join(
         (
+            SUPPORT.read_text(encoding="utf-8"),
             CORRIDOR.read_text(encoding="utf-8"),
             NO_RESULT_PATHS.read_text(encoding="utf-8"),
             FAILURE_PATHS.read_text(encoding="utf-8"),
@@ -371,9 +377,16 @@ BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
     assert_eq!(current_height(&client).await?, boundary_height);'''
 SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);'''
-SUCCESSOR_SEED_EQUALITY = (
-    "assert_eq!(status.height_context.epoch_seed, successor_seed);"
+SUCCESSOR_SEED_EQUALITY = "assert_eq!(context.leader_seed, successor_seed);"
+SECOND_SUCCESSOR_SEED_EQUALITY = "assert_eq!(context.leader_seed, second_successor_seed);"
+RETAINED_SESSION_PULSE = (
+    "assert_eq!(successor_pulse.session_id, beacon_record.session.session_id);"
 )
+RETAINED_SUCCESSOR_PULSE_VERIFICATION = '''verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_beacon_session,
+        successor_pulse,
+        successor_pulse.finalized_chain_anchor,
+    )'''
 POSITIVE_BEACON_MODES = """constPOSITIVE_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_BEACON_MODES = """constFAIL_CLOSED_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_STATUS_REQUEST_BOUND = """letstatus_poll_request_timeout=status_poll_window.checked_div(requests_per_sweep).unwrap_or(Duration::ZERO).max(Duration::from_millis(1)).min(Duration::from_secs(5));"""
@@ -494,27 +507,47 @@ def mutate_parliament_workflow(source: str, marker: str) -> str:
     return source[: job.start("body")] + mutated + source[job.end("body") :]
 
 
+SUPPORT_MODULE = '#[path = "sora_parliament_lifecycle_support.rs"]\nmod support;\nuse support::*;'
+ENACTMENT_MODULE = '#[path = "sora_parliament_enactment.rs"]\npub(super) mod enactment;'
+
+
+def shared_enactment_helper(name: str) -> re.Pattern[str]:
+    """Match one top-level shared enactment helper through its closing brace."""
+
+    return re.compile(rf"(?ms)^pub\(crate\) (?:async )?fn {name}\(.*?^\}}\n")
+
+
+def preceding_item_leading(source: str, start: int, label: str) -> str:
+    """Return the text between the previous top-level item or statement and `start`."""
+
+    ends = [
+        position + len(boundary)
+        for boundary in ("\n}\n", ";\n")
+        if (position := source.rfind(boundary, 0, start)) >= 0
+    ]
+    require(bool(ends), f"{label} has no preceding item boundary")
+    return source[max(ends):start]
+
+
 def parliament_lifecycle_test(source: str) -> tuple[re.Match[str], str]:
     """Return the one exact executable Parliament lifecycle test item."""
 
     matches = list(PARLIAMENT_LIFECYCLE_TEST.finditer(source))
     require(len(matches) == 1, "Parliament lifecycle corridor is not one exact test item")
     match = matches[0]
-    previous_item_end = source.rfind("\n}\n", 0, match.start())
-    require(previous_item_end >= 0, "Parliament lifecycle test has no preceding item boundary")
-    leading = source[previous_item_end + len("\n}\n") : match.start()]
+    leading = preceding_item_leading(source, match.start(), "Parliament lifecycle test")
     require(
         "#[" not in leading,
         "Parliament lifecycle corridor gained an extra attribute",
     )
     test = match.group(0)
-    require('#[path = "sora_parliament_enactment.rs"]\nmod enactment;' in source,
+    require(SUPPORT_MODULE in source and ENACTMENT_MODULE in source,
             "lifecycle must retain its exact shared enactment owner")
     require("enactment::builder(" in test and "enactment::enact(" in test,
             "lifecycle must execute the shared builder and enactment")
     helpers = []
     for name in ("builder", "enact"):
-        found = list(re.finditer(rf"(?ms)^pub\(super\) (?:async )?fn {name}\(.*?^\}}\n", source))
+        found = list(shared_enactment_helper(name).finditer(source))
         require(len(found) == 1, f"shared enactment needs one exact {name} owner")
         helpers.append(found[0].group(0))
     return match, test + "\n" + "\n".join(helpers)
@@ -529,7 +562,7 @@ def mutate_parliament_lifecycle_test(source: str, old: str, new: str = "") -> st
     if old in original:
         return source[:match.start()] + original.replace(old, new, 1) + source[match.end():]
     for name in ("builder", "enact"):
-        helper = re.search(rf"(?ms)^pub\(super\) (?:async )?fn {name}\(.*?^\}}\n", source)
+        helper = shared_enactment_helper(name).search(source)
         require(helper is not None, f"shared {name} owner must exist")
         if old in helper.group(0):
             return source[:helper.start()] + helper.group(0).replace(old, new, 1) + source[helper.end():]
@@ -554,8 +587,8 @@ def validate_optional_parliament_pulse_progression(source: str) -> None:
             f"demanded Parliament pulse regained racing tick `{retired_tick}`",
         )
     for marker in (
-        "!status.restart_required",
-        "!restarted_status.restart_required",
+        "!status.is_halted()",
+        "!restarted_status.is_halted()",
     ):
         require(
             marker in test,
@@ -913,7 +946,7 @@ def validate_consensus_sized_test_stacks(source: str) -> None:
 
 
 def validate_mandatory_npos_boundary(source: str) -> None:
-    """Require old-session boundary safety and a genuine successor pulse."""
+    """Require both real NPoS boundaries to adopt pulses of the retained beacon session."""
 
     _, test = mandatory_npos_test(source)
     require(
@@ -932,28 +965,24 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "assert_eq!(network.peers().len(), VALIDATOR_COUNT);",
         "assert_eq!(beacon_record.session.committee_size, 4);",
         "assert_eq!(beacon_record.session.threshold, 2);",
-        "deterministic_parliament_beacon_successor_key_record_v1(",
-        "assert_ne!(\n        successor_beacon_record.session.session_id,",
         "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
         "pulse_height = boundary_height - 1",
-        "lifecycle_certificate_replacing(",
-        "Some(beacon_record.session.session_id)",
-        "successor_beacon_record.session.session_id",
         AUTONOMOUS_PULSE_PROGRESSION,
         "verify_finalized_global_threshold_beacon_pulse_v1(",
         "let successor_epoch = 1;",
         "global_threshold_beacon_npos_successor_seed_v1(",
         BOUNDARY_PROGRESSION,
         SUCCESSOR_PROGRESSION,
-        "assert_eq!(status.height_context.epoch, successor_epoch);",
+        "assert_eq!(context.epoch, successor_epoch);",
         SUCCESSOR_SEED_EQUALITY,
         "let successor_pulse_height = boundary_height",
-        "assert_eq!(\n        successor_pulse.session_id,",
-        "&validated_successor_beacon_session",
+        RETAINED_SESSION_PULSE,
+        "assert_eq!(successor_pulse.session_id, pulse.session_id);",
+        RETAINED_SUCCESSOR_PULSE_VERIFICATION,
         "let second_successor_epoch = 2;",
-        "assert_eq!(status.height_context.epoch, second_successor_epoch);",
-        "assert_eq!(status.height_context.epoch_seed, second_successor_seed);",
-        "!status.restart_required",
+        "assert_eq!(context.epoch, second_successor_epoch);",
+        SECOND_SUCCESSOR_SEED_EQUALITY,
+        "!status.is_halted()",
     )
     for marker in required:
         require(marker in test, f"mandatory NPoS beacon test lost `{marker}`")
@@ -962,7 +991,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "mandatory NPoS beacon test must independently verify predecessor and successor pulses",
     )
     require(
-        test.count("!status.restart_required") == 2,
+        test.count("!status.is_halted()") == 2,
         "mandatory NPoS beacon test must prove both successor epochs remain live",
     )
     require(
@@ -1032,15 +1061,12 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "filter(|mode| **mode == ParliamentBeaconSignerMode::Valid)",
         "let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;",
         "let predecessor_height = pulse_height - 1;",
-        "let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {",
-        "SumeragiV2StatusPhase::PendingApply",
-        "SumeragiV2BodyState::PendingApply",
-        "SumeragiV2BodyState::Applied",
-        "status.liveness.work.application,",
-        "SumeragiV2LocalWorkStage::Queued",
-        "SumeragiV2LocalWorkStage::Running",
-        "SumeragiV2LocalWorkStage::Complete",
-        "SumeragiV2ProgressTransition::Applied",
+        "let pulse_status_is_active = |status: &SumeragiStatus| -> bool {",
+        "assert_eq!(status.committed_height, predecessor_height);",
+        "assert!(status.applied_height <= status.committed_height);",
+        "if status.height == predecessor_height {",
+        "assert!(status.awaiting);",
+        "!status.awaiting && status.applied_height == predecessor_height",
         "let status_poll_window = network.sync_timeout();",
         "status_poll_window.is_zero()",
         "let requests_per_sweep = u32::try_from(network.peers().len())",
@@ -1060,7 +1086,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "activation_deadline.saturating_duration_since(Instant::now())",
         "in-flight request bound; last status fetch error: {}",
         "last status fetch error: {}",
-        "all_pulse_heights_active &= pulse_status_is_active(&status)?;",
+        "all_pulse_heights_active &= pulse_status_is_active(&status);",
         "unexpected_pulse_height.is_err()",
         "let post_observation_deadline = Instant::now()",
         "let mut last_post_observation_status_error = None;",
@@ -1072,23 +1098,30 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "after the below-threshold observation; last status fetch error: {}",
         "without leaving detached blocking",
         "peer.is_running()",
-        "!status.restart_required",
-        "assert_eq!(status.last_committed_height, predecessor_height);",
+        "!status.is_halted()",
         "assert_eq!(status.height, pulse_height);",
     )
     for marker in required:
         require(marker in test, f"fail-closed NPoS beacon test lost `{marker}`")
     compacted = compact(test)
-    pre_apply_start = compacted.index(
-        "ifstatus.body_state==SumeragiV2BodyState::PendingApply{"
-    )
-    applied_handoff_start = compacted.index(
-        "assert_eq!(status.body_state,SumeragiV2BodyState::Applied);",
-        pre_apply_start,
+    predecessor_start = compacted.find("ifstatus.height==predecessor_height{")
+    pulse_context_start = compacted.find(
+        "assert_eq!(status.height,pulse_height);", max(predecessor_start, 0)
     )
     require(
-        "returnOk(false);" in compacted[pre_apply_start:applied_handoff_start],
-        "the durable pre-application predecessor must remain a retry, not an active pulse",
+        0 <= predecessor_start < pulse_context_start
+        and "assert!(status.awaiting);returnfalse;}"
+        in compacted[predecessor_start:pulse_context_start],
+        "the committed predecessor awaiting its successor configuration must remain a retry, "
+        "not an active pulse",
+    )
+    require(
+        compacted.find(
+            "!status.awaiting&&status.applied_height==predecessor_height};",
+            pulse_context_start,
+        )
+        > pulse_context_start,
+        "the pulse context is active only after the predecessor is applied and configured",
     )
     require(
         FAIL_CLOSED_STATUS_REQUEST_BOUND in compacted,
@@ -1134,7 +1167,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "both fail-closed NPoS status gates must bound their retry sleep by the remaining deadline",
     )
     require(
-        test.count("pulse_status_is_active(&status)?") == 2,
+        test.count("pulse_status_is_active(&status)") == 2,
         "fail-closed NPoS beacon test must validate the pulse context before and after observation",
     )
     require(
@@ -1159,9 +1192,8 @@ def validate_feature_only_fault_wiring(
     test_network: str,
     daemon: str,
     beacon: str,
-    lifecycle: str,
 ) -> None:
-    """Pin the hidden child arg and receiver-side invalid-share corridor."""
+    """Pin the hidden child arg, the per-peer signer modes and the provider hook."""
 
     for marker in (
         "pub enum ParliamentBeaconSignerMode",
@@ -1183,13 +1215,30 @@ def validate_feature_only_fault_wiring(
         "test_network_emit_invalid_outbound_partial_v1" in beacon,
         "beacon signer trait lost the feature-only outbound hook",
     )
+
+
+def validate_native_invalid_outbound_producer(producer: str) -> None:
+    """Require the sole native pulse producer to emit the adversarial share.
+
+    The `Invalid` signer mode only sets the provider hook. The producer must
+    corrupt that signed share, keep it out of its own reducer and broadcast it,
+    so every receiving validator rejects it through the ordinary ingress proof
+    check. Without the producer side, `Invalid` silently signs valid shares.
+    """
+
     for marker in (
         '#[cfg(feature = "test-network-parliament-signers")]',
-        "test_network_emit_invalid_outbound_partial_v1()",
+        ".test_network_emit_invalid_outbound_partial_v1()",
         "partial.signature_share[0] ^= 1;",
-        "let _ = next_aggregator.accept_partial(partial)?;",
     ):
-        require(marker in lifecycle, f"feature-only beacon lifecycle lost `{marker}`")
+        require(
+            marker in producer,
+            f"native beacon producer lost the feature-only invalid outbound share `{marker}`",
+        )
+    require(
+        "let inserted = active.aggregator.accept_partial(partial)?;" in producer,
+        "native beacon ingress lost its receiver-side partial proof check",
+    )
 
 
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
@@ -1200,9 +1249,12 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         parliament_lifecycle_test(source)
         for original, replacement in (
             ('#[path = "sora_parliament_enactment.rs"]', '#[path = "other.rs"]'),
+            ('#[path = "sora_parliament_lifecycle_support.rs"]', '#[path = "other_support.rs"]'),
+            ("use support::*;", "use other_support::*;"),
             ("let builder = enactment::builder(", "let builder = other::builder("),
             ("let enacted_fixture = enactment::enact(", "let enacted_fixture = other::enact("),
-            ("pub(super) async fn enact(", "pub(super) async fn disconnected_enact("),
+            ("pub(crate) async fn enact(", "pub(crate) async fn disconnected_enact("),
+            ("pub(crate) fn builder(", "pub(crate) fn disconnected_builder("),
         ):
             with self.subTest(original=original), self.assertRaises(ContractError):
                 parliament_lifecycle_test(source.replace(original, replacement, 1))
@@ -1285,7 +1337,11 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             TEST_NETWORK.read_text(encoding="utf-8"),
             DAEMON.read_text(encoding="utf-8"),
             BEACON.read_text(encoding="utf-8"),
-            BEACON_LIFECYCLE.read_text(encoding="utf-8"),
+        )
+
+    def test_invalid_beacon_share_mode_reaches_the_native_producer(self) -> None:
+        validate_native_invalid_outbound_producer(
+            BEACON_PRODUCER.read_text(encoding="utf-8")
         )
 
     def test_required_bounded_soranet_pow_rejects_adversarial_mutations(self) -> None:
@@ -1363,10 +1419,10 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     network.ensure_blocks(release_height).await?;''',
             ),
             "enacted peer fail-stop status omitted": mutate_parliament_lifecycle_test(
-                corridor, "!status.restart_required", "true"
+                corridor, "!status.is_halted()", "true"
             ),
             "restarted peer fail-stop status omitted": mutate_parliament_lifecycle_test(
-                corridor, "!restarted_status.restart_required", "true"
+                corridor, "!restarted_status.is_halted()", "true"
             ),
         }
         for label, mutated in mutations.items():
@@ -1594,7 +1650,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "seed read without equality": mutate_mandatory_npos_test(
                 corridor,
                 SUCCESSOR_SEED_EQUALITY,
-                "let _ = (status.height_context.epoch_seed, successor_seed);",
+                "let _ = (context.leader_seed, successor_seed);",
             ),
             "missing pulse verifier": mutate_mandatory_npos_test(
                 corridor, "verify_finalized_global_threshold_beacon_pulse_v1("
@@ -1605,28 +1661,31 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "missing threshold assertion": mutate_mandatory_npos_test(
                 corridor, "assert_eq!(beacon_record.session.threshold, 2);"
             ),
-            "missing successor transcript": mutate_mandatory_npos_test(
+            "successor pulse not bound to the retained session": mutate_mandatory_npos_test(
                 corridor,
-                "deterministic_parliament_beacon_successor_key_record_v1(",
+                RETAINED_SESSION_PULSE,
+                RETAINED_SESSION_PULSE.replace("assert_eq!", "assert_ne!"),
             ),
-            "missing compare-and-set predecessor": mutate_mandatory_npos_test(
-                corridor, "Some(beacon_record.session.session_id)"
+            "successor pulse not chained to the predecessor session": mutate_mandatory_npos_test(
+                corridor, "assert_eq!(successor_pulse.session_id, pulse.session_id);"
             ),
-            "successor pulse not bound to successor session": mutate_mandatory_npos_test(
+            "retained pulse not independently verified": mutate_mandatory_npos_test(
                 corridor,
-                "assert_eq!(\n        successor_pulse.session_id,",
-                "assert_ne!(\n        successor_pulse.session_id,",
+                RETAINED_SUCCESSOR_PULSE_VERIFICATION,
+                RETAINED_SUCCESSOR_PULSE_VERIFICATION.replace(
+                    "        successor_pulse,\n", "        pulse,\n"
+                ),
             ),
-            "rotated pulse not independently verified": mutate_mandatory_npos_test(
-                corridor, "&validated_successor_beacon_session"
+            "successor epoch equality omitted": mutate_mandatory_npos_test(
+                corridor, "assert_eq!(context.epoch, successor_epoch);"
             ),
             "second epoch seed equality omitted": mutate_mandatory_npos_test(
                 corridor,
-                "assert_eq!(status.height_context.epoch_seed, second_successor_seed);",
-                "let _ = (status.height_context.epoch_seed, second_successor_seed);",
+                SECOND_SUCCESSOR_SEED_EQUALITY,
+                "let _ = (context.leader_seed, second_successor_seed);",
             ),
             "successor fail-stop status omitted": mutate_mandatory_npos_test(
-                corridor, "!status.restart_required", "true"
+                corridor, "!status.is_halted()", "true"
             ),
         }
         for label, mutated in mutations.items():
@@ -1716,17 +1775,17 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             ),
             "applied predecessor handoff weakened": mutate_fail_closed_npos_test(
                 corridor,
-                "SumeragiV2StatusPhase::PendingApply",
-                "SumeragiV2StatusPhase::AwaitingProposal",
+                "!status.awaiting && status.applied_height == predecessor_height",
+                "!status.awaiting",
             ),
-            "pre-application predecessor accepted as active": mutate_fail_closed_npos_test(
+            "application lag accepted": mutate_fail_closed_npos_test(
                 corridor,
-                '''            return Ok(false);
-        }
-        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);''',
-                '''            return Ok(true);
-        }
-        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);''',
+                "assert!(status.applied_height <= status.committed_height);",
+            ),
+            "awaiting predecessor accepted as active": mutate_fail_closed_npos_test(
+                corridor,
+                "            assert!(status.awaiting);\n            return false;",
+                "            assert!(status.awaiting);\n            return true;",
             ),
             "activation height-fetch retry omitted": mutate_fail_closed_npos_test(
                 corridor,
@@ -1775,12 +1834,12 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             ),
             "validator fail-stop status omitted": mutate_fail_closed_npos_test(
                 corridor,
-                "!status.restart_required",
+                "!status.is_halted()",
                 "true",
             ),
             "stalled height omitted": mutate_fail_closed_npos_test(
                 corridor,
-                "assert_eq!(status.last_committed_height, predecessor_height);",
+                "assert_eq!(status.committed_height, predecessor_height);",
             ),
         }
         for label, mutated in mutations.items():

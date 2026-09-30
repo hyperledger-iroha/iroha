@@ -18,7 +18,9 @@ mod lane_authority;
 pub use lane_authority::TestLaneStoreAuthorities;
 #[path = "test_chain/availability.rs"]
 mod availability;
+mod genesis_policy;
 mod local_certificate;
+pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};
 
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
@@ -1768,23 +1770,12 @@ pub(crate) fn signed_genesis_fixture(
     if (mode == ConsensusMode::Npos) != npos.is_some() {
         return Err("fixture NPoS policy must exactly match signed mode".into());
     }
-    let parameters = npos
-        .into_iter()
-        .flat_map(|policy| {
-            [
-                Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
-                    policy.epoch_length_blocks,
-                )),
-                Parameter::Custom(policy.into_custom_parameter()),
-            ]
-        })
-        .collect();
     build_genesis(
         chain_id,
         genesis_key,
         validators,
         instructions,
-        parameters,
+        genesis_policy::npos_genesis_parameters(npos),
         mode.into(),
         genesis_time_ms,
     )
@@ -2132,6 +2123,7 @@ mod tests {
             genesis
                 .block()
                 .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
                 .encode_wire()
                 .unwrap(),
             original,

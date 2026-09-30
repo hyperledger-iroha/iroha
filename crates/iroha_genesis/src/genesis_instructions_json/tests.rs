@@ -861,19 +861,26 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     super::super::init_instruction_registry();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/kagami/iroha3-dev/genesis.template.json");
-    let template: Value = norito::json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let template: Value = norito::json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let fields = template.as_object().unwrap();
     let discriminant: u16 =
         norito::json::value::from_value(fields["chain_discriminant"].clone()).unwrap();
     let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
     let definition: AssetDefinitionId = staking::stake_asset_id().parse().unwrap();
     assert_eq!(definition.to_string(), fees::fee_asset_id());
+    // The NPoS source leaves its XOR pin to the operator: materialize it with the dev XOR.
+    let manifest = super::super::GenesisSourceTemplate::from_path(&path)
+        .unwrap()
+        .materialize(
+            super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            Some(definition.clone()),
+        )
+        .unwrap();
     let escrow = parse_account_id(&staking::stake_escrow_account_id(), "staking escrow").unwrap();
     let mut registered = false;
     let mut prefunded = std::collections::BTreeMap::new();
     let mut registrations = 0;
-    for value in fields["transactions"].as_array().unwrap() {
-        let transaction: RawGenesisTx = norito::json::value::from_value(value.clone()).unwrap();
+    for transaction in manifest.transactions() {
         if let Some(parameters) = &transaction.parameters {
             let custom = parameters
                 .custom()
@@ -882,7 +889,7 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
             let npos = super::super::SumeragiNposParameters::from_custom_parameter(custom).unwrap();
             assert_eq!(npos.xor_asset_definition_id, definition);
         }
-        for instruction in transaction.instructions {
+        for instruction in &transaction.instructions {
             if let Some(RegisterBox::AssetDefinition(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
             {
@@ -994,7 +1001,14 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         ("../../configs/soranexus/taira/genesis.template.json", 5),
     ] {
         // Public Nexus forbids the Taira XOR definition; its operator provisions a mainnet one.
-        let xor = if path.contains("nexus/") {
+        // Match whole directory names: public Taira under `soranexus/` requires the Taira XOR.
+        let nexus = std::path::Path::new(path).components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("nexus" | "iroha3-nexus")
+            )
+        });
+        let xor = if nexus {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("mainnet-fixture.universal")
                     .expect("fixture domain"),

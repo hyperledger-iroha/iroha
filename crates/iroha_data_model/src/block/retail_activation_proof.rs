@@ -1,8 +1,12 @@
 //! Finalized first-release retail activation evidence.
 //!
-//! This authenticates an executed activation transaction at its block height.
-//! It does not prove a later state-map value: the native execution root
-//! commits to that block's witness, not to all accumulated contract state.
+//! This authenticates an executed activation transaction at its block height. Finality comes
+//! only from a [`VerifiedSumeragiBlock`]: the portable `SumeragiFinalityVerifier` constructs it
+//! from the contiguous `SumeragiFinalityProof` prefix of Kura-certified frames (the block with
+//! its exact-quorum `CommitQC` over the core header and certified result `R`,
+//! `specs/sumeragi.md` §12.7), rooted in an independently selected signed genesis or checkpoint.
+//! It does not prove a later state-map value: `R` commits the complete World state only as a
+//! multiset root without per-entry membership proofs.
 
 use super::{
     SignedBlock,
@@ -43,7 +47,8 @@ pub struct FinalizedRetailActivationV1 {
 /// Why finalized activation evidence was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RetailActivationProofError {
-    /// Finality, block wire, context, or output material failed verification.
+    /// The block differs from the verified frame, or its executed wire, entry or output
+    /// material does not authenticate the requested activation entry.
     #[error("activation block finality or executed wire is not authenticated: {0}")]
     Finality(#[from] TrustedBlockProofAnchorError),
     /// Exact transaction and successful result are absent.
@@ -72,7 +77,8 @@ pub enum RetailActivationProofError {
 /// Verify one direct activation from a finalized, result-bearing block.
 ///
 /// `verified` must come from the native verifier rooted in an independently
-/// selected genesis or complete authenticated checkpoint.
+/// selected genesis or complete authenticated checkpoint, and `block` must carry its header and
+/// executed wire (as [`VerifiedSumeragiBlock::block`] does); any other block is refused.
 /// The owner, complete policy (including cap, reserve, issuer accounts and
 /// keys), and exact BPNG coordinates must come from signed allocation and
 /// policy authority, not from the candidate transaction or this response.

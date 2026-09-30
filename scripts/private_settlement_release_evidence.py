@@ -1219,7 +1219,7 @@ def parse_manifest(document: Any) -> tuple[dict[str, Any], list[Artifact]]:
             "real_network_participants",
             "validators_per_dataspace",
             "quorum",
-            "mandatory_signed_rs16_da_rbc",
+            "mandatory_signed_rs16_da",
             "max_unavailable_per_committee",
             "loss_percentages",
             "crash_boundaries",
@@ -1242,9 +1242,9 @@ def parse_manifest(document: Any) -> tuple[dict[str, Any], list[Artifact]]:
     )
     if qualification["quorum"] != "3-of-4":
         raise EvidenceError("manifest.qualification.quorum must be '3-of-4'")
-    if qualification["mandatory_signed_rs16_da_rbc"] is not True:
+    if qualification["mandatory_signed_rs16_da"] is not True:
         raise EvidenceError(
-            "manifest.qualification.mandatory_signed_rs16_da_rbc must be true"
+            "manifest.qualification.mandatory_signed_rs16_da must be true"
         )
     _exact_integer(
         qualification["max_unavailable_per_committee"],
@@ -1622,7 +1622,7 @@ def _validate_soak_report(
             "seeds",
             "validators_per_dataspace",
             "quorum",
-            "mandatory_signed_rs16_da_rbc",
+            "mandatory_signed_rs16_da",
             "max_unavailable_per_committee",
             "partial_visibility_observations",
             "partial_spendable_observations",
@@ -1657,7 +1657,7 @@ def _validate_soak_report(
         or seeds != sorted(set(seeds))
         or report["validators_per_dataspace"] != 4
         or report["quorum"] != "3-of-4"
-        or report["mandatory_signed_rs16_da_rbc"] is not True
+        or report["mandatory_signed_rs16_da"] is not True
         or report["max_unavailable_per_committee"] != 1
         or report["partial_visibility_observations"] != 0
         or report["partial_spendable_observations"] != 0
@@ -2587,7 +2587,7 @@ def _validate_configuration_manifest(
                 "participants",
                 "validators_per_dataspace",
                 "quorum",
-                "mandatory_signed_rs16_da_rbc",
+                "mandatory_signed_rs16_da",
                 "path",
                 "sha256",
                 "bytes",
@@ -2599,7 +2599,7 @@ def _validate_configuration_manifest(
             participants not in REQUIRED_PARTICIPANTS
             or row["validators_per_dataspace"] != 4
             or row["quorum"] != "3-of-4"
-            or row["mandatory_signed_rs16_da_rbc"] is not True
+            or row["mandatory_signed_rs16_da"] is not True
         ):
             raise EvidenceError(
                 "configuration manifest contains an invalid network profile"
@@ -2660,22 +2660,29 @@ def _validate_configuration_manifest(
         )
         if topology.get("quorum") != "3-of-4":
             raise EvidenceError(f"{label}.topology.quorum must be '3-of-4'")
-        consensus = configuration.get("consensus")
-        if not isinstance(consensus, dict):
-            raise EvidenceError(f"{label}.consensus must be an object")
+        # Exact fields: the release profile has no consensus knob beyond these bindings.
+        consensus = _exact_fields(
+            configuration.get("consensus"),
+            {
+                "mandatory_signed_rs16_da",
+                "minimum_signed_rs16_da_observations_per_run",
+                "authenticated_private_settlement_route_control",
+                "maximum_simultaneously_unavailable_per_committee",
+            },
+            f"{label}.consensus",
+        )
         if (
-            consensus.get("mandatory_signed_rs16_da_rbc") is not True
-            or consensus.get("authenticated_private_settlement_route_control") is not True
-            or consensus.get("legacy_rbc_bypass_permitted") is not False
+            consensus["mandatory_signed_rs16_da"] is not True
+            or consensus["authenticated_private_settlement_route_control"] is not True
         ):
             raise EvidenceError(f"{label}.consensus weakens the release profile")
         _exact_integer(
-            consensus.get("minimum_signed_rs16_da_observations_per_run"),
+            consensus["minimum_signed_rs16_da_observations_per_run"],
             (participants + 1) * 4,
             f"{label}.consensus.minimum_signed_rs16_da_observations_per_run",
         )
         _exact_integer(
-            consensus.get("maximum_simultaneously_unavailable_per_committee"),
+            consensus["maximum_simultaneously_unavailable_per_committee"],
             1,
             f"{label}.consensus.maximum_simultaneously_unavailable_per_committee",
         )

@@ -775,6 +775,7 @@ fn state_promotion_accepts_another_exact_quorum_for_the_same_certified_decision(
         certificate.consensus_header().to_vec(),
         norito::encode_canonical(&qc).unwrap(),
         certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
     );
     block.set_commit_certificate(Some(replacement));
     proof.block_wire = block.encode_wire().unwrap();

@@ -64,7 +64,7 @@ class RegisteredScopeReleaseTests(unittest.TestCase):
         campaign=self.root/'accounting/campaigns/campaign-0-failed'
         attempt=next(path for path in sorted((campaign/'attempts').iterdir(),reverse=True) if (path/'started.json').exists())
         with self.changed_records() as replace:
-            request=json.loads((attempt/'request.json').read_bytes());request['configuration']['consensus']['mandatory_signed_rs16_da_rbc']=False
+            request=json.loads((attempt/'request.json').read_bytes());request['configuration']['consensus']['mandatory_signed_rs16_da']=False
             binding=replace(attempt/'request.json',request)
             started=json.loads((attempt/'started.json').read_bytes());started['request'].update(binding);replace(attempt/'started.json',started)
             # The exact frozen request/session graph must reject a consistently

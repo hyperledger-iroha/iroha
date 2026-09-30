@@ -846,6 +846,7 @@ fn native_client_continues_real_h2_quorum_and_keeps_checkpoint_on_rejection() {
         certificate.consensus_header().to_vec(),
         norito::encode_canonical(&qc).unwrap(),
         certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
     )));
     altered.block_wire = block.encode_wire().unwrap();
     assert!(

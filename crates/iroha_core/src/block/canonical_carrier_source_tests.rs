@@ -41,6 +41,7 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         valid
             .as_ref()
             .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
             .encode_wire()
             .unwrap(),
         original

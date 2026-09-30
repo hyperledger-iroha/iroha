@@ -27861,70 +27861,6 @@
         "type": "String"
       },
       {
-        "name": "leader_index",
-        "type": "u64"
-      },
-      {
-        "name": "highest_qc_height",
-        "type": "u64"
-      },
-      {
-        "name": "locked_qc_height",
-        "type": "u64"
-      },
-      {
-        "name": "locked_qc_view",
-        "type": "u64"
-      },
-      {
-        "name": "commit_signatures_present",
-        "type": "u64"
-      },
-      {
-        "name": "commit_signatures_counted",
-        "type": "u64"
-      },
-      {
-        "name": "commit_signatures_set_b",
-        "type": "u64"
-      },
-      {
-        "name": "commit_signatures_required",
-        "type": "u64"
-      },
-      {
-        "name": "commit_qc_height",
-        "type": "u64"
-      },
-      {
-        "name": "commit_qc_view",
-        "type": "u64"
-      },
-      {
-        "name": "commit_qc_epoch",
-        "type": "u64"
-      },
-      {
-        "name": "commit_qc_signatures_total",
-        "type": "u64"
-      },
-      {
-        "name": "commit_qc_validator_set_len",
-        "type": "u64"
-      },
-      {
-        "name": "block_created_dropped_by_lock_total",
-        "type": "u64"
-      },
-      {
-        "name": "block_created_hint_mismatch_total",
-        "type": "u64"
-      },
-      {
-        "name": "block_created_proposal_mismatch_total",
-        "type": "u64"
-      },
-      {
         "name": "tx_queue_depth",
         "type": "u64"
       },
@@ -27958,50 +27894,6 @@
       },
       {
         "name": "tx_queue_oldest_queued_age_ms",
-        "type": "u64"
-      },
-      {
-        "name": "epoch_length_blocks",
-        "type": "u64"
-      },
-      {
-        "name": "epoch_commit_deadline_offset",
-        "type": "u64"
-      },
-      {
-        "name": "epoch_reveal_deadline_offset",
-        "type": "u64"
-      },
-      {
-        "name": "prf_epoch_seed",
-        "type": "Option<String>"
-      },
-      {
-        "name": "prf_height",
-        "type": "u64"
-      },
-      {
-        "name": "prf_view",
-        "type": "u64"
-      },
-      {
-        "name": "view_change_proof_accepted_total",
-        "type": "u64"
-      },
-      {
-        "name": "view_change_proof_stale_total",
-        "type": "u64"
-      },
-      {
-        "name": "view_change_proof_rejected_total",
-        "type": "u64"
-      },
-      {
-        "name": "view_change_suggest_total",
-        "type": "u64"
-      },
-      {
-        "name": "view_change_install_total",
         "type": "u64"
       },
       {

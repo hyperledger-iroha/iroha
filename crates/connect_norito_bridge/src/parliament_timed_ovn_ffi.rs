@@ -1705,6 +1705,7 @@ mod tests {
             certificate.consensus_header().to_vec(),
             qc,
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         );
         bad_block.set_commit_certificate(Some(bad_certificate));
         bad_tip.block_wire = bad_block.encode_wire().unwrap();

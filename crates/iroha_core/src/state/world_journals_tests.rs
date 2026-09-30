@@ -209,14 +209,14 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 311);
+    assert_eq!(detached.field_count(), 312);
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        311
+        312
     );
     assert_eq!(
         detached

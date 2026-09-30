@@ -126,11 +126,45 @@ first boot with the assertion.
 networks only: a production launcher must not derive the assertion from a missing directory,
 because a lost record store looks the same.
 
-TODO(S7): the Taira validator unit rendered by `scripts/taira_validator_unit.py` starts
-`iroha3d_taira --config … --sora` and has no first-boot form that adds
-`--sumeragi-assert-fresh-key`, so a public reset cannot yet start a fresh chain that commits. The
-reset needs an explicit one-shot first-boot unit (or reset step) that passes the flag once per
-validator.
+### Taira validator units: the first-boot step
+
+Every Taira validator unit rendered by `scripts/taira_validator_unit.py` (embedded in
+`iroha taira public-reset prepare-validator-units`; initial and beacon units alike) starts
+`iroha3d_taira --config … --sora` and adds `--sumeragi-assert-fresh-key` only when its launcher
+consumes the one-shot token `/var/lib/taira/<role>/sumeragi-first-boot`. The first-boot step is
+the only producer of that token:
+
+1. Stop the validator and put the reset's fresh state root `/var/lib/taira/<role>` in place
+   (owned by root, writable by nobody else).
+2. As root on the validator host, arm the first boot with the same-revision script:
+   `python3 scripts/taira_validator_unit.py --arm-first-boot --role <role>`. It refuses unless the
+   state root is as in step 1 and neither the configured `records_dir`
+   (`/var/lib/taira/<role>/sumeragi-records`) nor `installation_log`
+   (`/var/lib/taira/<role>/sumeragi-installation.log`) exists. It never replaces a token; it
+   creates an empty, root-owned, mode-0600 token and syncs it with its directory.
+3. Start the unit: `systemctl start iroha3d-<role>.service`.
+
+At every start the launcher looks for the token before it stages any signer descriptor:
+
+- Without a token it starts the daemon without the flag: every restart, `Restart=on-failure`,
+  reboot and daemon update. Missing history never authorizes the assertion, so losing
+  `records_dir` and the installation log never renews it.
+- With a token it requires a regular, root-owned, mode-0600, single-link, empty file in a
+  root-owned state root that nobody else can write, and the absence of both history paths.
+  Otherwise it refuses to start and keeps the token, and every `Restart=on-failure` retry refuses
+  again until an operator investigates and removes the token.
+- After staging it checks the token again, removes it, syncs the state root and only then execs
+  `iroha3d_taira --config … --sora --sumeragi-assert-fresh-key`. If the exec itself fails, it
+  restores the token for the next start. A daemon that exits before it writes its installation
+  log has consumed the token all the same: unless the unit is stopped and the step repeated
+  first, its next start (an automatic `Restart=on-failure` retry included) writes the
+  `(instance, key)` entry without a record, as a first boot without the assertion does.
+
+TODO(S7): `iroha taira public-reset apply` does not run this step yet. Its host `Start` action
+starts the unit without arming the token, and its process attestation accepts only the argv
+`iroha3d_taira --config … --sora`. Until the host arms the token for the fresh state's first start
+and accepts the flag in that process's argv, a public reset starts a fresh chain whose keys stay
+unanchored.
 
 ## 6. Backups, restores and retired records
 

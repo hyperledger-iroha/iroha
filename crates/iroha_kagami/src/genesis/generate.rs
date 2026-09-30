@@ -807,23 +807,29 @@ mod consensus_manifest_tests {
         .expect("build source-template test authority")
         .kagemusha_mint_finality_genesis_parameters()
         .clone();
+        // Public Nexus forbids the Taira XOR definition; match whole directory names so public
+        // Taira under `configs/soranexus/` keeps the canonical Taira definition it requires.
+        let nexus = std::path::Path::new(relative_path)
+            .components()
+            .any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some("nexus" | "iroha3-nexus")
+                )
+            });
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
             .and_then(|template| {
                 template.materialize(
                     parameters,
-                    Some(
-                        if relative_path.contains("nexus/")
-                            || relative_path.contains("iroha3-nexus/")
-                        {
-                            AssetDefinitionId::derive_from_components(
-                                DomainId::parse_fully_qualified("mainnet-fixture.universal")
-                                    .expect("fixture domain"),
-                                "xor".parse().expect("fixture asset"),
-                            )
-                        } else {
-                            SumeragiNposParameters::default().xor_asset_definition_id
-                        },
-                    ),
+                    Some(if nexus {
+                        AssetDefinitionId::derive_from_components(
+                            DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                                .expect("fixture domain"),
+                            "xor".parse().expect("fixture asset"),
+                        )
+                    } else {
+                        SumeragiNposParameters::default().xor_asset_definition_id
+                    }),
                 )
             })
             .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))

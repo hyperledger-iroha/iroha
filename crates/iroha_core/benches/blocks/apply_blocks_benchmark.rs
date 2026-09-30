@@ -1,29 +1,27 @@
 //! Criterion benchmark driver for applying blocks.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod apply_blocks;
-use apply_blocks::StateApplyBlocks;
 use apply_blocks::common::{generate_ids, generated_asset_definition_name};
+use apply_blocks::{CertifiedBlocks, StateApplyBlocks};
 use criterion::{BatchSize, Criterion};
 use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, asset::AssetDefinition, domain::Domain};
+use std::rc::Rc;
 fn apply_blocks(c: &mut Criterion) {
     // Ensure instruction registry is initialized for benches using InstructionBox
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime");
     let mut group = c.benchmark_group("apply_blocks");
     group.significance_level(0.1).sample_size(10);
+    // The certified source blocks are built once, only when this benchmark is selected.
+    let mut blocks = None;
     group.bench_function("apply_blocks", |b| {
+        let blocks: &Rc<CertifiedBlocks> = blocks.get_or_insert_with(CertifiedBlocks::setup);
         b.iter_batched_ref(
-            || StateApplyBlocks::setup(rt.handle()),
-            |bench| {
-                StateApplyBlocks::measure(bench);
-            },
-            criterion::BatchSize::SmallInput,
+            || StateApplyBlocks::setup(blocks),
+            StateApplyBlocks::measure,
+            BatchSize::SmallInput,
         );
     });
     group.finish();

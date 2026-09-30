@@ -781,8 +781,8 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (125,
-                    '9e212737d19d4dba13c2382e08af353e4c53795543ff0d84c66c57ee75fc87c8'),
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (122,
+                    '5884fd093625ff4ad84772890379e6bb98535909e9fe9d849529746d787b7ed9'),
  'StreamingTelemetry': (16,
                         'e3c87c4656bea8817ad977df0211c5505d70dd214e8b1c34527a80cfd09dad46'),
  'Telemetry': (184,
@@ -833,7 +833,6 @@ MACRO_SPECS = {
 
 EXCLUDED_DIRECT_METHODS = {
     "StateTelemetry": {
-        "record_lane_lifecycle_outcome",
         "record_sorafs_fee_projection",
         "inc_sorafs_disputes",
         "record_musubi_governance_rejection",
@@ -1348,10 +1347,10 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
             {
                 "rows": 151,
                 "forward_rows": 61,
-                "source_lines": 11_844,
+                "source_lines": 11_660,
                 "provider_lines": 26,
-                "governed_lines": 11_870,
-                "net_reduction": 2_388,
+                "governed_lines": 11_686,
+                "net_reduction": 2_572,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)

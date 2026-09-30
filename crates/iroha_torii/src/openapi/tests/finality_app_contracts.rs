@@ -185,12 +185,12 @@ fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_field
     assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
     assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));
     let mut missing_result = proof.clone(); let mut block = decode_versioned_signed_block(&missing_result.block_wire).unwrap();
-    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new())));
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new(), certificate.availability().to_vec())));
     missing_result.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_result).is_err(), "missing canonical execution preimage");
     let mut forged_qc = proof.clone(); let mut block = decode_versioned_signed_block(&forged_qc.block_wire).unwrap();
     let mut qc = qc; qc.agg_sig.0[0] ^= 0x80;
-    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec())));
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec(), certificate.availability().to_vec())));
     forged_qc.block_wire = block.encode_wire().unwrap(); assert!(verifier.verify_retained_decision(&forged_qc).is_err(), "forged exact native QC");
     let mut retired_header = header.clone(); retired_header.insert("result_merkle_root".to_owned(), Value::Null);
     assert!(norito::json::from_value::<iroha_data_model::block::BlockHeader>(Value::Object(retired_header)).is_err());

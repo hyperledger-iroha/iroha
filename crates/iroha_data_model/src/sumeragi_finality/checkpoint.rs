@@ -188,6 +188,7 @@ impl SumeragiFinalityVerifier {
             genesis_wire: self
                 .genesis
                 .canonical_resultless_proposal()
+                .map_err(malformed)?
                 .encode_wire()
                 .map_err(malformed)?,
             genesis_committee: self.genesis_committee.clone(),
@@ -232,6 +233,7 @@ impl SumeragiFinalityVerifier {
                 && genesis.hash().as_ref() == network.as_bytes()
                 && genesis
                     .canonical_resultless_proposal()
+                    .map_err(malformed)?
                     .encode_wire()
                     .map_err(malformed)?
                     == checkpoint.genesis_wire,

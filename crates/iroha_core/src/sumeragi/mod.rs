@@ -31,6 +31,8 @@ pub mod finality;
 pub mod genesis_meta;
 /// Lanes of the global chain: identity, pinned configuration, batches and admission.
 pub mod lanes;
+/// Per-instance observations of the current Sumeragi core and driver.
+pub mod metrics;
 /// Bounded canonical native journals for offline operators and qualification.
 pub mod native_journal;
 /// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and

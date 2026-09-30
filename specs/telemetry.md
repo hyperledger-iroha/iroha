@@ -956,9 +956,11 @@ verify what binary is actually serving traffic. The object includes:
 - `git_commit_sha` — source revision baked into the node binary.
 - `cargo_features` — enabled Cargo feature set used for the build.
 - `target_triple` — compilation target triple for the running binary.
-- `wire_schema_hash` — lowercase hex of `iroha_data_model::wire_schema_hash`
-  over the compiled consensus-message and block wire schema plus the IVM ABI v1
-  hash; target independent, and pinned by release manifests.
+- `wire_schema_hash` — lowercase hex of
+  `iroha_core::release_identity::wire_schema_hash()` over the compiled block
+  wire (`SignedBlock`) and consensus wire (`iroha_sumeragi::message::WireMessage`)
+  schemas plus the IVM ABI v1 hash; target independent but feature dependent,
+  and pinned by release manifests.
 
 Queue-aware liveness checks should use the raw `/status` facts together with
 operator-authenticated `GET /v1/pipeline/preflight`. The preflight request must

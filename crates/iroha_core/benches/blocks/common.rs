@@ -1,92 +1,177 @@
-//! Shared state and block fixtures for execution benchmarks.
-#![allow(clippy::disallowed_types, clippy::items_after_test_module)]
+//! Shared certified-chain fixtures for the block execution benchmarks.
+//!
+//! Every benchmark block goes through [`CertifiedTestChain`]: a real signed genesis of the
+//! fixed four-validator committee, proposals assembled by the leader's payload builder,
+//! execution, application and publication by the node's `StateExecutor`, durable Kura frames
+//! and a BLS-certified `CommitQC`. Fixture setup never publishes a block outside that path.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
-    block::{BlockBuilder, CommittedBlock},
-    governance::manifest::LaneManifestRegistry,
-    prelude::*,
-    query::store::LiveQueryStore,
-    smartcontracts::{Execute, Registrable as _},
-    state::{State, StateBlock, World},
-    sumeragi::network_topology::Topology,
+    state::{StateReadOnly as _, World, WorldReadOnly as _},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    account::{Account, AccountAddress},
+    account::Account,
     asset::{AssetDefinition, AssetDefinitionId},
     domain::Domain,
     isi::InstructionBox,
-    parameter::TransactionParameters,
+    parameter::{
+        CustomParameter, CustomParameterId, Parameter, SmartContractParameter,
+        TransactionParameter, system::IVM_HEAP_MAX_BYTES,
+    },
     prelude::*,
-    sns::{NameControllerV1, NameRecordV1},
     transaction::IvmBytecode,
 };
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
 };
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
-use std::{
-    num::{NonZeroU16, NonZeroU64},
-    sync::Arc,
-};
-/// Create block
-pub fn create_block<'a>(
-    state: &'a State,
-    instructions: impl IntoIterator<Item = InstructionBox>,
-    account_id: AccountId,
-    account_private_key: &PrivateKey,
-    topology: &Topology,
-    peer_private_key: &PrivateKey,
-) -> (CommittedBlock, StateBlock<'a>) {
-    let network_id = *state.network_id_ref();
-    let transaction = TransactionBuilder::new(
-        network_id,
-        account_id,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(instructions)
-    .sign(account_private_key);
-    let (max_clock_drift, tx_limits) = {
-        let state_view = state.view();
-        let params = state_view.world.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction())
-    };
-    let crypto_cfg = state.crypto();
-    let unverified_block = BlockBuilder::new(vec![
-        AcceptedTransaction::accept(
-            transaction,
-            &network_id,
-            max_clock_drift,
-            tx_limits,
-            crypto_cfg.as_ref(),
-        )
-        .unwrap(),
-    ])
-    .chain(0, state.view().latest_block().as_deref())
-    .sign(peer_private_key)
-    .unpack(|_| {});
-    let (mut state_block, state_block_recorder) =
-        iroha_core::block::ValidBlock::start_component_execution(
-            &unverified_block.clone().into(),
-            &state,
-        )
-        .expect("original writer-first component execution");
-    let block = unverified_block
-        .validate_and_record_transactions(&mut state_block, state_block_recorder)
-        .unpack(|_| {})
-        .commit(topology)
-        .unpack(|_| {})
-        .unwrap();
+use std::num::{NonZeroU16, NonZeroU64};
+
+/// Creation time of the benchmark genesis, in milliseconds.
+pub const GENESIS_TIME_MS: u64 = 1_000;
+
+/// Per-block IVM gas allowance of the benchmark chains.
+///
+/// The larger fixture registers 1,000 accounts and asset definitions in one block. Metering
+/// stays enabled with an explicit allowance for that measured workload.
+pub const GAS_LIMIT_PER_BLOCK: u64 = 64_000_000;
+
+/// Start a certified chain for the benchmark workload.
+///
+/// The initial World holds `owner`, the benchmark `domains` owned by `owner` (the State seeds
+/// their SNS name leases), explicit authority for `owner` to unregister `accounts` (universal
+/// accounts do not give their registrant ownership) and lifted transaction and executor
+/// limits. The signed genesis raises the per-block gas allowance and installs the canonical
+/// guest executor from `defaults/executor.to` when that artifact is present.
+///
+/// # Panics
+///
+/// The signed benchmark genesis does not apply, or the chain does not run with the benchmark
+/// parameters.
+pub fn start_chain(
+    owner: &AccountId,
+    domains: &[DomainId],
+    accounts: &[AccountId],
+) -> CertifiedTestChain {
+    let mut world = World::with(
+        domains
+            .iter()
+            .map(|domain_id| Domain::new(domain_id.clone()).build(owner)),
+        [Account::new(owner.clone()).build(owner)],
+        [],
+    );
+    world.account_permissions_mut_for_testing().insert(
+        owner.clone(),
+        accounts
+            .iter()
+            .map(|account| {
+                Permission::from(CanUnregisterAccount {
+                    account: account.clone(),
+                })
+            })
+            .collect(),
+    );
     {
-        let failed_outputs = block.as_ref().failed_outputs().collect::<Vec<_>>();
-        assert!(
-            failed_outputs.is_empty(),
-            "benchmark transactions must execute successfully: {failed_outputs:?}"
-        );
+        // The signed genesis parameter snapshot never carries transaction or executor
+        // limits, so the initial World supplies them.
+        let mut block = world.block();
+        for parameter in world_parameters() {
+            block.parameters.get_mut().set_parameter(parameter);
+        }
+        block.commit();
     }
-    (block, state_block)
+    let mut config = TestChainConfig::new(world, GENESIS_TIME_MS);
+    config.genesis_parameters.push(gas_limit_parameter());
+    if let Some(executor) = canonical_executor() {
+        config
+            .genesis_instructions
+            .push(Upgrade::new(executor).into());
+    }
+    let chain = CertifiedTestChain::start(config).expect("signed benchmark genesis applies");
+    {
+        let view = chain.state().view();
+        let installed = view.world().parameters().parameters().collect::<Vec<_>>();
+        for parameter in world_parameters()
+            .into_iter()
+            .chain([gas_limit_parameter()])
+        {
+            assert!(
+                installed.contains(&parameter),
+                "the benchmark chain runs with {parameter}"
+            );
+        }
+    }
+    chain
 }
+
+/// The per-block IVM gas allowance, signed by the benchmark genesis.
+fn gas_limit_parameter() -> Parameter {
+    Parameter::Custom(CustomParameter::new(
+        CustomParameterId::new(
+            "ivm_gas_limit_per_block"
+                .parse()
+                .expect("gas parameter name"),
+        ),
+        iroha_primitives::json::Json::new(GAS_LIMIT_PER_BLOCK),
+    ))
+}
+
+/// Transaction and executor limits of the benchmark World, lifted as far as their types allow
+/// (the executor heap stays within the ABI heap window).
+fn world_parameters() -> [Parameter; 8] {
+    [
+        Parameter::Transaction(TransactionParameter::MaxSignatures(NonZeroU64::MAX)),
+        Parameter::Transaction(TransactionParameter::MaxInstructions(NonZeroU64::MAX)),
+        Parameter::Transaction(TransactionParameter::IvmBytecodeSize(NonZeroU64::MAX)),
+        Parameter::Transaction(TransactionParameter::MaxTxBytes(NonZeroU64::MAX)),
+        Parameter::Transaction(TransactionParameter::MaxDecompressedBytes(NonZeroU64::MAX)),
+        Parameter::Transaction(TransactionParameter::MaxMetadataDepth(NonZeroU16::MAX)),
+        Parameter::Executor(SmartContractParameter::Fuel(NonZeroU64::MAX)),
+        Parameter::Executor(SmartContractParameter::Memory(
+            NonZeroU64::new(IVM_HEAP_MAX_BYTES).expect("ABI heap window is non-zero"),
+        )),
+    ]
+}
+
+/// The canonical guest executor, when `defaults/executor.to` is present and non-empty.
+fn canonical_executor() -> Option<Executor> {
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
+    let bytecode = std::fs::read(path)
+        .ok()
+        .filter(|bytecode| !bytecode.is_empty())?;
+    Some(Executor::new(IvmBytecode::from_compiled(bytecode)))
+}
+
+/// Commit `instructions` as one transaction of `authority` in the chain's next certified block.
+///
+/// The transaction is created at the tip's block time, so the block follows the tip by the
+/// chain's one-millisecond cadence and the workload is deterministic.
+///
+/// # Panics
+///
+/// The block does not execute, or its transaction does not execute successfully.
+pub fn commit_instructions(
+    chain: &mut CertifiedTestChain,
+    authority: &KeyPair,
+    instructions: impl IntoIterator<Item = InstructionBox>,
+) {
+    let height = chain.height();
+    let created_ms = {
+        let view = chain.state().view();
+        let tip = view.latest_block().expect("the chain has an applied tip");
+        u64::try_from(tip.header().creation_time().as_millis()).expect("block time fits u64")
+    };
+    let transaction = chain.sign(authority, instructions, created_ms);
+    assert_eq!(
+        chain.commit(vec![transaction]),
+        [true],
+        "benchmark transactions must execute successfully"
+    );
+    assert_eq!(chain.height(), height + 1);
+}
+
 fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> Option<&DomainId> {
     if domains.is_empty() || total_items == 0 {
         return None;
@@ -94,6 +179,7 @@ fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> O
     let domain_index = index.saturating_mul(domains.len()) / total_items;
     domains.get(domain_index.min(domains.len() - 1))
 }
+
 /// Return the semantic name assigned by [`generate_ids`] to an asset fixture.
 ///
 /// # Panics
@@ -123,6 +209,9 @@ pub fn generated_asset_definition_name(
         index % assets_per_domain
     )
 }
+
+/// Register every account and asset definition and grant `owner_id` the authority to
+/// unregister each asset definition.
 pub fn populate_state(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -156,6 +245,9 @@ pub fn populate_state(
     }
     instructions
 }
+
+/// Unregister every `nth` account and asset definition of each domain, and all children of
+/// every `nth` domain.
 pub fn delete_every_nth(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -197,6 +289,8 @@ pub fn delete_every_nth(
     }
     instructions
 }
+
+/// Register again everything [`delete_every_nth`] unregistered with the same `nth`.
 pub fn restore_every_nth(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -247,155 +341,11 @@ pub fn restore_every_nth(
     }
     instructions
 }
-pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State {
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query_handle = {
-        let _guard = rt.enter();
-        LiveQueryStore::start_test()
-    };
-    let domain_id: DomainId =
-        DomainId::try_new("bench", "universal").expect("valid bench domain id");
-    let domain = Domain::new(domain_id.clone()).build(account_id);
-    // Install the fixture's authenticated lane markers and fee-free execution
-    // policy before publishing genesis. A plain production constructor expects
-    // its caller to supply those startup inputs and funded fee accounts.
-    let state = State::new_for_testing(
-        World::with(
-            [domain],
-            [Account::new(account_id.clone()).build(account_id)],
-            [],
-        ),
-        Arc::clone(&kura),
-        query_handle,
-    );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    {
-        let mut state_block = state.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("positive genesis height"),
-            None,
-            None,
-            0,
-            0,
-        ));
-        state_block.world.parameters.transaction = TransactionParameters::with_max_signatures(
-            NonZeroU64::MAX,
-            NonZeroU64::MAX,
-            NonZeroU64::MAX,
-            NonZeroU64::MAX,
-            NonZeroU64::MAX,
-            NonZeroU16::new(u16::MAX).expect("u16::MAX is non-zero"),
-        );
-        state_block.world.parameters.executor.fuel = NonZeroU64::MAX;
-        state_block.world.parameters.executor.memory =
-            NonZeroU64::new(iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES)
-                .expect("ABI heap window is non-zero");
-        // The larger fixture registers 1,000 accounts and asset definitions.
-        // Retain metering with an explicit allowance for that measured workload.
-        state_block
-            .world
-            .parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                iroha_data_model::parameter::CustomParameter::new(
-                    iroha_data_model::parameter::CustomParameterId::new(
-                        "ivm_gas_limit_per_block"
-                            .parse()
-                            .expect("gas parameter name"),
-                    ),
-                    iroha_primitives::json::Json::new(64_000_000_u64),
-                ),
-            ));
-        let mut state_transaction = state_block.transaction();
-        let path_to_executor =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
-        if let Ok(bytecode) = std::fs::read(&path_to_executor)
-            && !bytecode.is_empty()
-        {
-            let executor = Executor::new(IvmBytecode::from_compiled(bytecode));
-            // Ignore upgrade failure and keep the default executor when bytecode is invalid
-            let _ = Upgrade::new(executor).execute(account_id, &mut state_transaction);
-        }
-        state_transaction.apply();
-        state_block
-            .commit_world_overlay_for_testing()
-            .expect("install initial benchmark parameters and executor");
-    }
-    state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish authenticated benchmark predecessor");
-    state
-}
-/// Bootstrap benchmark domains, SNS leases and exact account-removal permissions.
-///
-/// Universal accounts do not give their registrant ownership. The fixture supplies
-/// explicit removal authority before measuring account registration and deletion.
-pub fn seed_benchmark_domains(
-    state: &mut State,
-    domains: &[DomainId],
-    accounts: &[AccountId],
-    owner_id: &AccountId,
-) {
-    let mut permissions = state
-        .world
-        .account_permissions_mut_for_testing()
-        .view()
-        .get(owner_id)
-        .cloned()
-        .unwrap_or_default();
-    permissions.extend(accounts.iter().map(|account| {
-        Permission::from(CanUnregisterAccount {
-            account: account.clone(),
-        })
-    }));
-    state
-        .world
-        .account_permissions_mut_for_testing()
-        .insert(owner_id.clone(), permissions);
-    let address =
-        AccountAddress::from_account_id(owner_id).expect("benchmark owner id is addressable");
-    for domain_id in domains {
-        let selector =
-            iroha_core::sns::selector_for_domain(domain_id).expect("benchmark domain id is valid");
-        let record = NameRecordV1::new(
-            selector.clone(),
-            owner_id.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        state.world.smart_contract_state_mut_for_testing().insert(
-            iroha_core::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&record),
-        );
-    }
-    let current_header = state
-        .view()
-        .latest_block()
-        .expect("benchmark state has an initialized block")
-        .as_ref()
-        .header()
-        .clone();
-    let mut state_block = state.block(current_header);
-    let mut state_transaction = state_block.transaction();
-    for domain_id in domains {
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(owner_id, &mut state_transaction)
-            .expect("register synthetic benchmark domain");
-    }
-    state_transaction.apply();
-    state_block
-        .commit_world_overlay_for_testing()
-        .expect("commit synthetic benchmark domains");
-}
+
 fn construct_domain_id(i: usize) -> DomainId {
     DomainId::try_new(format!("non_inlinable_domain_name_{i}"), "universal").unwrap()
 }
+
 fn generate_account_id(seed: u128) -> AccountId {
     let mut seed_material = b"iroha-core-block-bench-account".to_vec();
     seed_material.extend_from_slice(&seed.to_le_bytes());
@@ -403,52 +353,7 @@ fn generate_account_id(seed: u128) -> AccountId {
         .expect("derive block benchmark account key");
     AccountId::new(keypair.public_key().clone())
 }
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
-    #[allow(unused_imports)]
-    use iroha_model_base::peer::PeerId;
-    #[allow(unused_imports)]
-    use tokio::runtime::Runtime;
-    #[test]
-    fn build_state_succeeds_without_executor_bytecode() {
-        let rt = Runtime::new().unwrap();
-        let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        // Should not panic even if executor bytecode is missing or invalid
-        let state = build_state(rt.handle(), &account_id);
-        let view = state.view();
-        assert_eq!(view.height(), 1);
-        assert!(view.latest_block().is_some());
-    }
-    #[test]
-    fn seed_benchmark_domains_makes_generated_children_registrable() {
-        let rt = Runtime::new().unwrap();
-        let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let mut state = build_state(rt.handle(), &account_id);
-        let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 1, 1);
-        seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &account_id);
-        let (peer_public_key, peer_private_key) =
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
-        let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
-        let (block, _) = create_block(
-            &state,
-            populate_state(
-                &domain_ids,
-                &account_ids,
-                &asset_definition_ids,
-                &account_id,
-            ),
-            account_id.clone(),
-            keypair.private_key(),
-            &topology,
-            &peer_private_key,
-        );
-        assert_eq!(block.as_ref().failed_outputs().count(), 0);
-    }
-}
+
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         domain_id,
@@ -457,6 +362,8 @@ fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefiniti
             .unwrap(),
     )
 }
+
+/// Deterministic benchmark domains, accounts and asset definitions, partitioned by domain.
 pub fn generate_ids(
     domains: usize,
     accounts_per_domain: usize,
@@ -479,4 +386,58 @@ pub fn generate_ids(
         }
     }
     (domain_ids, account_ids, asset_definition_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use mv::storage::StorageReadOnly as _;
+
+    #[test]
+    fn start_chain_applies_the_benchmark_genesis() {
+        let (domain_ids, account_ids, _) = generate_ids(2, 2, 2);
+        let chain = start_chain(&ALICE_ID, &domain_ids, &account_ids);
+        assert_eq!(chain.height(), 1);
+        let view = chain.state().view();
+        assert_eq!(view.height(), 1);
+        assert!(view.latest_block().is_some());
+        for domain_id in &domain_ids {
+            assert!(view.world().domains().get(domain_id).is_some());
+        }
+        let permissions = view
+            .world()
+            .account_permissions()
+            .get(&*ALICE_ID)
+            .expect("the owner holds explicit removal authority");
+        for account_id in &account_ids {
+            assert!(
+                permissions.contains(&Permission::from(CanUnregisterAccount {
+                    account: account_id.clone(),
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn benchmark_world_makes_generated_children_registrable() {
+        let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 1, 1);
+        let mut chain = start_chain(&ALICE_ID, &domain_ids, &account_ids);
+        commit_instructions(
+            &mut chain,
+            &ALICE_KEYPAIR,
+            populate_state(&domain_ids, &account_ids, &asset_definition_ids, &ALICE_ID),
+        );
+        commit_instructions(
+            &mut chain,
+            &ALICE_KEYPAIR,
+            delete_every_nth(&domain_ids, &account_ids, &asset_definition_ids, 1),
+        );
+        commit_instructions(
+            &mut chain,
+            &ALICE_KEYPAIR,
+            restore_every_nth(&domain_ids, &account_ids, &asset_definition_ids, 1),
+        );
+        assert_eq!(chain.height(), 4);
+    }
 }

@@ -122,15 +122,22 @@ fn fixture_with_topology() -> (Box<State>, SignedBlock, Topology) {
     let nexus = iroha_config::parameters::actual::Nexus::default();
     let mut parameters = SumeragiGenesisContextParameters::recommended();
     {
+        // Like kagami's signer, the provisional execution reports the exact staged policies;
+        // native validation still refuses the provisional source itself.
         let (proposal, topology) = genesis(parameters, &[], &nexus);
         let state = state_for(&proposal, &nexus);
-        let (_, staged) = signed_genesis_execution(&state, proposal, &topology);
-        parameters.nexus_amx_context_hash =
-            *crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).as_ref();
-        parameters.execution_policy_hash =
-            *crate::sumeragi::staged_genesis_execution_policy_hash(&staged)
-                .unwrap()
-                .as_ref();
+        if let Some((execution, nexus_amx)) = crate::sumeragi::test_chain::staged_genesis_policies(
+            proposal,
+            &topology,
+            &SAMPLE_GENESIS_ACCOUNT_ID,
+            &state,
+            ConsensusMode::Permissioned,
+        )
+        .expect("provisional genesis executes")
+        {
+            parameters.execution_policy_hash = execution.into();
+            parameters.nexus_amx_context_hash = nexus_amx.into();
+        }
     }
     let (proposal, topology) = genesis(parameters, &[], &nexus);
     let state = state_for(&proposal, &nexus);

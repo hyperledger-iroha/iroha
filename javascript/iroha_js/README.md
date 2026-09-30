@@ -3965,10 +3965,19 @@ for (const sample of status.samples) {
 console.log("histogram", status.rtt.buckets);
 ```
 
-`getPipelinePreflight()` exposes both `ivm_max_cycles_upper_bound` and
+`getPipelinePreflight()` parses exactly the fields Torii serves and rejects any
+other field. It exposes both `ivm_max_cycles_upper_bound` and
 `ivm_admission_cycle_limit`. Its fee-account fields contain exact canonical I105
 account ids; alias-shaped `name@domain` values are rejected as protocol drift.
-```
+The `sumeragi` section carries only `block_cadence_ms`, the signed-genesis
+target block time. Torii serves no stall threshold, so the result's
+`stallThresholdMs` is derived as 20 × `block_cadence_ms`, and
+`isStatusStalled(status)` reports a stall only when `status.queue_size > 0` and
+the time since the last non-empty block (or since the last block, before the
+first non-empty one) exceeds it. Twenty cadences cover one crashed leader's view
+change at the Sumeragi default timings; pass a deployment-specific threshold to
+`isStatusQueueStalled(status, thresholdMs)` instead when the local consensus
+timers are known.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";

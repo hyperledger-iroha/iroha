@@ -73,7 +73,7 @@ def fixture_worker(path):
             header = {key: request[key] for key in ('version', 'protocol', 'request_id', 'invocation_nonce',
                                                    'commit', 'participants')}
             header['request_sha256'] = row['request']['sha256']
-            native_result = {**header, 'mandatory_signed_rs16_da_rbc': True,
+            native_result = {**header, 'mandatory_signed_rs16_da': True,
                 'signed_rs16_da_observations': 1, 'authenticated_private_settlement_route_control': True,
                 'process_inventory': [], 'payload': {'fixture_only': True}}
             terminal_ref = publish(row['output_directory']+'/evidence/benchmark-protocol/rust-result.json',
@@ -358,7 +358,7 @@ class AdapterControls(unittest.TestCase):
         with self.assertRaises(ValueError): adapter.terminal_envelope(control.canonical(value), request, row['request']['sha256'])
         result = {key: value[key] for key in ('version', 'protocol', 'request_id', 'invocation_nonce',
                                              'request_sha256', 'commit', 'participants')}
-        result.update(mandatory_signed_rs16_da_rbc=True, signed_rs16_da_observations=1,
+        result.update(mandatory_signed_rs16_da=True, signed_rs16_da_observations=1,
                       authenticated_private_settlement_route_control=True, process_inventory=[], payload={})
         value['outcome'] = {'kind': 'succeeded', 'result': result}
         result['version'] = True

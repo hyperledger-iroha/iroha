@@ -482,11 +482,20 @@ class SmokeEvidenceTests(unittest.TestCase):
             with self.assertRaises(M.CampaignError):
                 self.validate()
 
-    def test_finality_rejects_retired_layouts_and_context_fields(self) -> None:
-        for field, value in (("version", 2), ("finality_artifact", {}), ("height_context", {})):
-            with self.subTest(field=field):
+    def test_finality_retains_only_the_bare_native_proof_schema(self) -> None:
+        # SumeragiFinalityBundle and SumeragiFinalityAttestation wrap this proof; neither
+        # wrapper nor any extra field is the retained SumeragiFinalityProof carrier.
+        proof = copy.deepcopy(self.evidence["finality-after-15.json"])
+        network = copy.deepcopy(self.result["network_id"])
+        variants = {
+            "bundle network field": {**proof, "network_id": network},
+            "bundle wrapper": {"network_id": network, "finality_proof": proof},
+            "attestation wrapper": {"body": {"finality_proof": proof}, "signature": [1] * 64},
+        }
+        for name, value in variants.items():
+            with self.subTest(variant=name):
                 self.evidence, self.result = evidence_fixture(0, self.sha)
-                self.evidence["finality-after-15.json"][field] = value
+                self.evidence["finality-after-15.json"] = copy.deepcopy(value)
                 with self.assertRaisesRegex(M.release_runner.RunnerError, "finality proof fields mismatch"):
                     self.validate()
         self.evidence, self.result = evidence_fixture(0, self.sha)

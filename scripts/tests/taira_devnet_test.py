@@ -589,8 +589,6 @@ class FakeRuntime:
         self.targeted_restart_started = False
         self.initial_sumeragi_transport_unavailable_seen: set[int] = set()
         self.restart_sumeragi_transport_unavailable_seen: set[int] = set()
-        self.restart_required_peer: int | None = None
-        self.sumeragi_blocker_peer: int | None = None
         self.onboarding_proof_required = False
         self.ambiguous_submit_kind: str | None = None
         self.ambiguous_submit_raised = False
@@ -1490,18 +1488,7 @@ class FakeRuntime:
                 ):
                     self.restart_sumeragi_transport_unavailable_seen.add(index)
                     return 0, None
-                if self.sumeragi_status_http != 200:
-                    return self.sumeragi_status_http, None
-                blocker = (
-                    {"blocker": "application_pending", "details": None}
-                    if index == self.sumeragi_blocker_peer
-                    else None
-                )
-                return 200, {
-                    "protocol_version": 4,
-                    "restart_required": index == self.restart_required_peer,
-                    "liveness": {"blocker": blocker},
-                }
+                return self.sumeragi_status_http, None
             if url.endswith("/status"):
                 return 200, {
                     "build": {

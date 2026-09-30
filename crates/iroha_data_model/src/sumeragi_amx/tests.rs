@@ -218,6 +218,7 @@ fn sign(
         parent_hash: Hash32([7; 32]),
         parent_result: Hash32([8; 32]),
         payload_hash: Hash32([9; 32]),
+        availability_digest: Hash32([10; 32]),
         payload_len: 100,
         proposer: 0,
         skipped_leaders: vec![],

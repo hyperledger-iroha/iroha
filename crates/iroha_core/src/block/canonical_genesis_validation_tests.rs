@@ -20,7 +20,9 @@ fn install_genesis_outputs(
         max_total_output_bytes: 262_144,
         max_executed_wire_bytes: 1_048_576,
     };
-    let proposal = block.canonical_resultless_proposal();
+    let proposal = block
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     block
         .set_execution_outputs(
             outputs,
@@ -32,7 +34,12 @@ fn install_genesis_outputs(
             &limits,
         )
         .expect("structural genesis outputs must fit their explicit finite fixture policy");
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(
+        block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection"),
+        proposal
+    );
 }
 
 fn canonical_executed_genesis_fixture() -> SignedBlock {
@@ -159,7 +166,12 @@ fn check_genesis_block_requires_canonical_execution_results() {
     let canonical = canonical_executed_genesis_fixture();
     assert_eq!(check_genesis_block(&canonical, &genesis_account), Ok(()));
     assert_eq!(
-        check_genesis_block(&canonical.canonical_resultless_proposal(), &genesis_account),
+        check_genesis_block(
+            &canonical
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection"),
+            &genesis_account
+        ),
         Err(InvalidGenesisError::MissingResults)
     );
 
@@ -557,8 +569,12 @@ fn authenticated_genesis_uses_the_actual_whole_output_owner() {
     }
     assert!(block.committed_fragment_count() >= count);
     assert_eq!(
-        source.canonical_resultless_proposal(),
-        original.canonical_resultless_proposal()
+        source
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection"),
+        original
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
     );
     assert_eq!(source.header(), original.header());
     block.verify_execution_output_seal(source).unwrap();
@@ -613,7 +629,9 @@ fn genesis_rejection_selects_first_complete_output_and_retains_typed_source() {
 fn check_genesis_block_intents_accepts_resultless_source_and_checks_all_payload_commitments() {
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
-    let original = canonical_executed_genesis_fixture().canonical_resultless_proposal();
+    let original = canonical_executed_genesis_fixture()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let wire = original.encode_wire().unwrap();
     assert_eq!(
         check_genesis_block_intents(&original, &SAMPLE_GENESIS_ACCOUNT_ID),

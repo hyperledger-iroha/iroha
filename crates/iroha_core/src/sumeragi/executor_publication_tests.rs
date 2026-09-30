@@ -50,7 +50,7 @@ fn with_worker_from(
         .spawn(move || {
             let chain = make_chain();
             assert_eq!(chain.validators().len(), 4);
-            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap();
+            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
             assert!(certificate.consensus_header().is_empty());
             assert!(
                 certificate.commit_qc().is_empty(),
@@ -500,7 +500,7 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
     with_worker(|chain, worker, blocks, _| {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
-        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap();
+        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap().unwrap();
         let make_crypto = || {
             let crypto = BlsCrypto::new();
             crypto

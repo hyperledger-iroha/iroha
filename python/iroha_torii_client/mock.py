@@ -233,11 +233,9 @@ class _MockState:
             self.pipeline_preflight = {
                 "schema_version": 1,
                 "chain_height": 0,
-                "sumeragi": {
-                    "block_time_ms": 1000,
-                    "commit_time_ms": 2000,
-                    "stall_threshold_ms": 6000,
-                },
+                # Torii serves only the signed-genesis target block time here; SDKs derive
+                # their stall threshold from it (`PIPELINE_STALL_BLOCK_CADENCES`).
+                "sumeragi": {"block_cadence_ms": 1000},
                 "admission": {
                     "max_signatures": 32,
                     "max_instructions": 4096,

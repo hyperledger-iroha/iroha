@@ -5813,13 +5813,16 @@ export interface ToriiStatusSnapshot {
   metrics: ToriiStatusMetrics;
 }
 
+/**
+ * Typed `GET /v1/pipeline/preflight` body. Every object carries exactly the
+ * fields Torii serves; any other field is rejected as protocol drift.
+ */
 export interface ToriiPipelinePreflight {
   schema_version: number;
   chain_height: number;
   sumeragi: {
-    block_time_ms: number;
-    commit_time_ms: number;
-    stall_threshold_ms: number;
+    /** Signed-genesis target block time in milliseconds (always positive). */
+    block_cadence_ms: number;
   };
   admission: {
     max_signatures: number;
@@ -5849,24 +5852,47 @@ export interface ToriiPipelinePreflight {
   fees: {
     fee_asset_id: string;
     fee_sink_account_id: string;
-    base_fee: unknown;
-    per_byte_fee: unknown;
-    per_instruction_fee: unknown;
-    per_gas_unit_fee: unknown;
+    /** Canonical decimal quantity string. */
+    base_fee: string;
+    /** Canonical decimal quantity string. */
+    per_byte_fee: string;
+    /** Canonical decimal quantity string. */
+    per_instruction_fee: string;
+    /** Canonical decimal quantity string. */
+    per_gas_unit_fee: string;
     sponsor_vault_custody_account_id: string;
-    settlement_mode: string;
+    settlement_mode: "direct" | "lane_relay_burn";
     successful_claim_fee_exempt_authorities: string[];
   };
   raw: Readonly<Record<string, unknown>>;
+  /**
+   * SDK-derived stall threshold, not a served field:
+   * `20 * sumeragi.block_cadence_ms`, saturated at `Number.MAX_SAFE_INTEGER`.
+   * Twenty target block cadences cover one crashed leader's view change at
+   * the Sumeragi default timings (`specs/sumeragi.md` §8.2 P4, §9.3).
+   */
+  stallThresholdMs: number;
+  /**
+   * `isStatusQueueStalled(status, stallThresholdMs)`: queued work exists and
+   * no non-empty block was committed for longer than `stallThresholdMs`.
+   */
   isStatusStalled(
     status: ToriiStatusPayload | Record<string, unknown>,
   ): boolean;
 }
 
+/**
+ * Milliseconds since the last committed non-empty block, or since the last
+ * block while the peer has not reported a non-empty one.
+ */
 export function statusLivenessElapsedMs(
   status: ToriiStatusPayload | Record<string, unknown>,
 ): number;
 
+/**
+ * True when `queue_size > 0` and `statusLivenessElapsedMs(status)` exceeds
+ * `stallThresholdMs`.
+ */
 export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,

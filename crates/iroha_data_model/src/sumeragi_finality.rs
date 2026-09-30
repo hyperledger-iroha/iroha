@@ -660,11 +660,13 @@ impl SumeragiFinalityVerifier {
                     && decoded
                         .block
                         .canonical_resultless_proposal()
+                        .map_err(malformed)?
                         .encode_wire()
                         .map_err(malformed)?
                         == self
                             .genesis
                             .canonical_resultless_proposal()
+                            .map_err(malformed)?
                             .encode_wire()
                             .map_err(malformed)?
                     && decoded.committee_digest == self.genesis_committee_digest

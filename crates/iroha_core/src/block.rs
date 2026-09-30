@@ -8145,7 +8145,9 @@ pub(crate) mod valid {
                 None,
                 None,
             );
-            let proposal = block.canonical_resultless_proposal();
+            let proposal = block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection");
             assert!(proposal.is_resultless_proposal());
             authenticate_genesis_block_intents(&proposal, &genesis_account)
                 .expect("the configured genesis key must authenticate a resultless proposal");
@@ -8250,7 +8252,13 @@ pub(crate) mod valid {
                 "the last ordered genesis parameter wins in actual execution",
             );
             assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
-            assert_eq!(valid.as_ref().canonical_resultless_proposal(), genesis);
+            assert_eq!(
+                valid
+                    .as_ref()
+                    .canonical_resultless_proposal()
+                    .expect("valid fixture proposal projection"),
+                genesis
+            );
             drop((valid, overlay));
             assert_eq!(prepared.state.view().height(), 0);
             assert_eq!(prepared.kura.blocks_count(), 0);

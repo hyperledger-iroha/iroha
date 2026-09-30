@@ -604,6 +604,7 @@ fn rejects_wrong_network_key_and_resultless_genesis() {
     let resultless = fixture
         .block
         .canonical_resultless_proposal()
+        .expect("valid original proposal")
         .encode_wire()
         .unwrap();
     assert!(

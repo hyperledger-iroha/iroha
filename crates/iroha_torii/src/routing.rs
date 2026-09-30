@@ -582,6 +582,9 @@ pub(crate) struct PipelinePreflightResponse {
 }
 }
 #[cfg(test)]
+#[path = "routing/pipeline_preflight_fixture_tests.rs"]
+mod pipeline_preflight_fixture_tests;
+#[cfg(test)]
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
 }

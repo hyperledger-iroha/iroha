@@ -170,7 +170,9 @@ fn event_fixture_block(
     }
     builder.set_execution_context(routes.map(BlockExecutionContextBundle::new));
     let mut block = builder.build_with_signature(0, keypair.private_key());
-    let proposal = block.canonical_resultless_proposal();
+    let proposal = block
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let fragments = u64::try_from(
         outputs
             .iter()
@@ -194,7 +196,12 @@ fn event_fixture_block(
             },
         )
         .expect("complete fixture outputs must satisfy their explicit finite policy");
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(
+        block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection"),
+        proposal
+    );
     block
         .signatures()
         .next()

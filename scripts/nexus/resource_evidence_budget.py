@@ -5,7 +5,7 @@ one-lane/four-lane pairs; every run has one resource capture directory and three
 public files. The caller supplies trusted geometry, actual pinned static sizes,
 and explicit maximum sizes for every dynamic control file. This module performs
 no filesystem, process, network, sampler, or replay work. An admitted reservation
-is not proof that writers enforce it: ``iroha transaction load`` enforces the
+is not proof that writers enforce it: ``iroha tx load`` enforces the
 journal and trace caps it receives from the probe worker's admission receipt, and
 the gate enforces the run receipt, manifest and report caps before it publishes.
 """
@@ -178,7 +178,7 @@ class FileBudget:
 class RunBudget:
     """One mandatory sampled run with exactly three public file allocations.
 
-    ``iroha transaction load`` writes the collector journal and the transaction
+    ``iroha tx load`` writes the collector journal and the transaction
     trace; the scaling gate writes the run receipt (network, lane and status
     observations of the run). The raw resource captures are charged separately
     from the capture geometry. This evidence ledger does not admit the private

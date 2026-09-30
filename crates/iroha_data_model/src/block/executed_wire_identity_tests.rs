@@ -56,7 +56,9 @@ fn assert_exact_identity(block: &SignedBlock) -> (u64, Hash) {
 #[test]
 fn executed_identity_matches_resultless_and_nonempty_executed_wire() {
     let executed = executed_fixture();
-    let proposal = executed.canonical_resultless_proposal();
+    let proposal = executed
+        .canonical_resultless_proposal()
+        .expect("valid original proposal");
     assert!(!proposal.has_results());
     assert_eq!(proposal.network_entrypoint_count(), 2);
     let proposal_identity = assert_exact_identity(&proposal);

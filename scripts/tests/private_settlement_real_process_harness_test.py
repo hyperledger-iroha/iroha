@@ -73,7 +73,7 @@ def request_header(
         "validators_per_dataspace": 4,
         "global_validators": 4,
         "quorum": "3-of-4",
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "minimum_signed_rs16_da_observations": (participants + 1) * 4,
         "authenticated_private_settlement_route_control": True,
         "seed": seed,
@@ -198,7 +198,7 @@ def rust_result(bound_request: dict[str, Any], request_sha: str) -> dict[str, An
         "request_sha256": request_sha,
         "commit": bound_request["commit"],
         "participants": participants,
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "signed_rs16_da_observations": (participants + 1) * 4,
         "authenticated_private_settlement_route_control": True,
         "process_inventory": inventory(participants),
@@ -224,7 +224,7 @@ def native_fixture(profile):
         'partial_visible_observations': 0, 'partial_spendable_observations': 0,
         'economic_vector_sha256': vector['economic_vector_sha256'],
         'primary_payment_count': 3, 'monetary_movement_count': 4}
-    result = {'payload': payload, 'mandatory_signed_rs16_da_rbc': True,
+    result = {'payload': payload, 'mandatory_signed_rs16_da': True,
         'authenticated_private_settlement_route_control': True, 'signed_rs16_da_observations': 16,
         'process_inventory': ready['process_inventory']}
     return result, request, ready, vector
@@ -595,6 +595,10 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             SOURCE_ROOT
             / "integration_tests/tests/nexus/atomic_private_settlement_real_process_harness.rs"
         ).read_text(encoding="utf-8")
+        transport = (
+            SOURCE_ROOT
+            / "integration_tests/tests/nexus/atomic_private_settlement_transport.rs"
+        ).read_text(encoding="utf-8")
         private_benchmark = harness[
             harness.index("fn run_real_process_private_benchmark") : harness.index(
                 "fn write_real_process_result"
@@ -628,8 +632,19 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("process_id()", harness)
         self.assertIn("get_sumeragi_finality_proof", harness)
         self.assertIn("authenticated_native_history", harness)
-        self.assertIn("require_signed_rs16_transport()?", harness)
-        self.assertIn("full_body_finality_cannot_qualify_signed_rs16_transport", harness)
+        # Live finality qualifies signed RS16 transport only from the certified original
+        # source replayed against the retained process log; restart recovery adds none.
+        self.assertIn('#[path = "atomic_private_settlement_transport.rs"]', harness)
+        self.assertIn("verify_signed_rs16_transport(", harness)
+        self.assertIn("transport_evidence::verify(&bytes, &expected)?", harness)
+        self.assertIn(
+            "recovered_finality_requires_the_original_anchor_without_new_transport", harness
+        )
+        self.assertIn(
+            "pub(super) fn verify(log: &[u8], expected: &Expected) -> Result<Verified>",
+            transport,
+        )
+        self.assertIn("fn substituted_or_incomplete_transport_never_qualifies", transport)
         self.assertIn("private_settlement_committee_proof_v1", harness)
         self.assertIn("impl Drop for ProcessResourceSampler", harness)
         self.assertIn("impl Drop for TransparentControlAtomicityObserver", harness)

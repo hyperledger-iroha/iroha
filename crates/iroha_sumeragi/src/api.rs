@@ -4,6 +4,8 @@
 
 use core::fmt;
 
+use iroha_schema::IntoSchema;
+
 use crate::{
     availability::{AvailabilitySource, AvailableBody, PayloadBytes},
     message::{BlockHeader, Evidence, Qc, WireMessage},
@@ -13,7 +15,7 @@ use crate::{
 
 /// Complete view-independent application-control source for the next proposal height.
 /// Every field must be revalidated against the same applied parent by the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode, IntoSchema)]
 pub struct ApplicationControlContext {
     /// Exact consensus instance.
     pub instance: Hash32,

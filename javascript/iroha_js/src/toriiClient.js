@@ -6348,6 +6348,9 @@ export class ToriiClient {
 
   /**
    * Fetch pipeline preflight diagnostics (`GET /v1/pipeline/preflight`).
+   * The body must carry exactly the fields Torii serves; the returned
+   * `stallThresholdMs` is derived from `sumeragi.block_cadence_ms`
+   * (twenty target block cadences) and drives `isStatusStalled`.
    * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<ToriiPipelinePreflight>}
    */
@@ -18310,6 +18313,13 @@ function computeStatusMetrics(previous, current) {
   return metrics;
 }
 
+/**
+ * Milliseconds since the peer last committed a non-empty block
+ * (`time_since_last_non_empty_block_ms`), or since its last block
+ * (`time_since_last_block_ms`) while it has not reported a non-empty one.
+ * @param {ToriiStatusPayload | Record<string, unknown>} status `/status` payload.
+ * @returns {number}
+ */
 export function statusLivenessElapsedMs(status) {
   const record = ensureRecord(status, "status");
   const nonEmptyElapsed = coerceStatusInt(
@@ -18325,6 +18335,16 @@ export function statusLivenessElapsedMs(status) {
   );
 }
 
+/**
+ * Report a queue stall: the peer tracks queued work (`queue_size > 0`) and
+ * `statusLivenessElapsedMs(status)` exceeds `stallThresholdMs`.
+ * `ToriiPipelinePreflight.isStatusStalled` applies the threshold derived from
+ * the served `sumeragi.block_cadence_ms`; pass an explicit threshold here when
+ * the deployment's local consensus timers are known.
+ * @param {ToriiStatusPayload | Record<string, unknown>} status `/status` payload.
+ * @param {number | string | bigint} stallThresholdMs Threshold in milliseconds.
+ * @returns {boolean}
+ */
 export function isStatusQueueStalled(status, stallThresholdMs) {
   const record = ensureRecord(status, "status");
   const queueSize = coerceStatusInt(record.queue_size, "status.queue_size");
@@ -26870,27 +26890,44 @@ function classifyPipelineTransactionStatusResolution(
   return { kind, resolvedFrom };
 }
 
-function requirePipelinePreflightUnsigned(
-  mapping,
-  key,
-  context,
-  { positive = false } = {},
-) {
-  const record = ensureRecord(mapping, context);
-  const numeric = requireNonNegativeIntegerLike(record[key], `${context}.${key}`);
-  if (positive && numeric === 0) {
-    rejectRange(`${context}.${key} must be positive`);
-  }
-  return numeric;
-}
+/**
+ * Target block cadences a peer with queued work may go without committing a
+ * non-empty block before `ToriiPipelinePreflight.isStatusStalled` reports a stall.
+ *
+ * `GET /v1/pipeline/preflight` serves one consensus timing value,
+ * `sumeragi.block_cadence_ms` (the signed-genesis target block time), so the
+ * stall threshold is `PIPELINE_STALL_BLOCK_CADENCES * block_cadence_ms`. With
+ * work queued a healthy chain commits about once per cadence. At the Sumeragi
+ * defaults (1 s block time, 5 s payload retry, 2-3 s base view timer) one
+ * crashed leader delays the next commit by roughly 11-14 s plus execution
+ * (`specs/sumeragi.md` §8.2 P4, §9.3); twenty cadences keep such a single view
+ * change from being reported as a stall. Callers that know their deployment's
+ * local timers pass their own threshold to `isStatusQueueStalled`.
+ */
+const PIPELINE_STALL_BLOCK_CADENCES = 20;
 
-function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
-  const record = ensureRecord(payload ?? {}, context);
-  const sumeragi = ensureRecord(record.sumeragi, `${context}.sumeragi`);
-  const admission = ensureRecord(record.admission, `${context}.admission`);
-  const block = ensureRecord(record.block, `${context}.block`);
-  const pipeline = ensureRecord(record.pipeline, `${context}.pipeline`);
-  const allowedPipelineFields = new Set([
+/** Exact field sets of the `GET /v1/pipeline/preflight` JSON body (Torii `PipelinePreflightResponse`). */
+const PIPELINE_PREFLIGHT_FIELDS = Object.freeze({
+  root: Object.freeze([
+    "schema_version",
+    "chain_height",
+    "sumeragi",
+    "admission",
+    "block",
+    "pipeline",
+    "queue",
+    "fees",
+  ]),
+  sumeragi: Object.freeze(["block_cadence_ms"]),
+  admission: Object.freeze([
+    "max_signatures",
+    "max_instructions",
+    "max_tx_bytes",
+    "max_decompressed_bytes",
+    "max_metadata_depth",
+  ]),
+  block: Object.freeze(["max_transactions"]),
+  pipeline: Object.freeze([
     "signature_batch_max_ed25519",
     "signature_batch_max_secp256k1",
     "signature_batch_max_pqc",
@@ -26899,15 +26936,120 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
     "ivm_max_cycles_upper_bound",
     "ivm_admission_cycle_limit",
     "ivm_max_decoded_instructions",
-  ]);
-  const unknownPipelineField = Object.keys(pipeline).find(
-    (field) => !allowedPipelineFields.has(field),
-  );
-  if (unknownPipelineField !== undefined) {
-    rejectType(`${context}.pipeline contains unknown field ${unknownPipelineField}`);
+  ]),
+  queue: Object.freeze(["size", "queued", "inflight"]),
+  fees: Object.freeze([
+    "fee_asset_id",
+    "fee_sink_account_id",
+    "base_fee",
+    "per_byte_fee",
+    "per_instruction_fee",
+    "per_gas_unit_fee",
+    "sponsor_vault_custody_account_id",
+    "settlement_mode",
+    "successful_claim_fee_exempt_authorities",
+  ]),
+});
+
+const PIPELINE_PREFLIGHT_SETTLEMENT_MODES = Object.freeze(["direct", "lane_relay_burn"]);
+
+/** Require `mapping` to be an object that carries no field outside `allowed`. */
+function requirePipelinePreflightRecord(mapping, allowed, context) {
+  const record = ensureRecord(mapping, context);
+  const unknownField = Object.keys(record).find((field) => !allowed.includes(field));
+  if (unknownField !== undefined) {
+    rejectType(`${context} contains unknown field ${unknownField}`);
   }
-  const queue = ensureRecord(record.queue, `${context}.queue`);
-  const fees = ensureRecord(record.fees, `${context}.fees`);
+  return record;
+}
+
+/** Require a JSON integer (never a numeric string) that fits a safe `u64` range. */
+function requirePipelinePreflightUnsigned(
+  mapping,
+  key,
+  context,
+  { positive = false } = {},
+) {
+  const record = ensureRecord(mapping, context);
+  const value = record[key];
+  if (value === undefined || value === null) {
+    rejectType(`${context}.${key} is required`);
+  }
+  if (typeof value !== JS_TYPE_NUMBER && typeof value !== JS_TYPE_BIGINT) {
+    rejectType(`${context}.${key} must be an integer`);
+  }
+  const numeric = requireNonNegativeIntegerLike(value, `${context}.${key}`);
+  if (positive && numeric === 0) {
+    rejectRange(`${context}.${key} must be positive`);
+  }
+  return numeric;
+}
+
+function requirePipelinePreflightString(mapping, key, context) {
+  const value = mapping[key];
+  if (typeof value !== JS_TYPE_STRING || value.length === 0) {
+    rejectType(`${context}.${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requirePipelinePreflightSettlementMode(fees, context) {
+  const mode = requirePipelinePreflightString(fees, "settlement_mode", context);
+  if (!PIPELINE_PREFLIGHT_SETTLEMENT_MODES.includes(mode)) {
+    rejectType(
+      `${context}.settlement_mode must be one of: ${PIPELINE_PREFLIGHT_SETTLEMENT_MODES.join(", ")}`,
+    );
+  }
+  return mode;
+}
+
+function requirePipelinePreflightArray(mapping, key, context) {
+  const value = mapping[key];
+  if (!Array.isArray(value)) {
+    rejectType(`${context}.${key} must be an array of strings`);
+  }
+  return value;
+}
+
+/**
+ * Stall threshold derived from the served target block time: the product of
+ * `PIPELINE_STALL_BLOCK_CADENCES` and `block_cadence_ms`, saturated at
+ * `Number.MAX_SAFE_INTEGER`.
+ */
+function pipelineStallThresholdMs(blockCadenceMs) {
+  return Math.min(
+    blockCadenceMs * PIPELINE_STALL_BLOCK_CADENCES,
+    Number.MAX_SAFE_INTEGER,
+  );
+}
+
+/**
+ * Parse the exact `GET /v1/pipeline/preflight` JSON body. Every object is
+ * closed: a field Torii does not serve is rejected as protocol drift.
+ */
+function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
+  const fields = PIPELINE_PREFLIGHT_FIELDS;
+  const record = requirePipelinePreflightRecord(payload ?? {}, fields.root, context);
+  const sumeragi = requirePipelinePreflightRecord(
+    record.sumeragi,
+    fields.sumeragi,
+    `${context}.sumeragi`,
+  );
+  const admission = requirePipelinePreflightRecord(
+    record.admission,
+    fields.admission,
+    `${context}.admission`,
+  );
+  const block = requirePipelinePreflightRecord(record.block, fields.block, `${context}.block`);
+  const pipeline = requirePipelinePreflightRecord(
+    record.pipeline,
+    fields.pipeline,
+    `${context}.pipeline`,
+  );
+  const queue = requirePipelinePreflightRecord(record.queue, fields.queue, `${context}.queue`);
+  const fees = requirePipelinePreflightRecord(record.fees, fields.fees, `${context}.fees`);
+  // Object literal properties evaluate in order, so validation follows Torii's
+  // field order and the fee accounts are decoded last.
   const normalized = {
     schema_version: requirePipelinePreflightUnsigned(
       record,
@@ -26917,20 +27059,11 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
     ),
     chain_height: requirePipelinePreflightUnsigned(record, "chain_height", context),
     sumeragi: {
-      block_time_ms: requirePipelinePreflightUnsigned(
+      block_cadence_ms: requirePipelinePreflightUnsigned(
         sumeragi,
-        "block_time_ms",
+        "block_cadence_ms",
         `${context}.sumeragi`,
-      ),
-      commit_time_ms: requirePipelinePreflightUnsigned(
-        sumeragi,
-        "commit_time_ms",
-        `${context}.sumeragi`,
-      ),
-      stall_threshold_ms: requirePipelinePreflightUnsigned(
-        sumeragi,
-        "stall_threshold_ms",
-        `${context}.sumeragi`,
+        { positive: true },
       ),
     },
     admission: {
@@ -27017,28 +27150,34 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       inflight: requirePipelinePreflightUnsigned(queue, "inflight", `${context}.queue`),
     },
     fees: {
-      fee_asset_id:
-        fees.fee_asset_id === undefined || fees.fee_asset_id === null
-          ? ""
-          : String(fees.fee_asset_id),
+      fee_asset_id: requirePipelinePreflightString(fees, "fee_asset_id", `${context}.fees`),
       fee_sink_account_id: requireExactAccountId(
         fees.fee_sink_account_id,
         `${context}.fees.fee_sink_account_id`,
       ),
-      base_fee: fees.base_fee,
-      per_byte_fee: fees.per_byte_fee,
-      per_instruction_fee: fees.per_instruction_fee,
-      per_gas_unit_fee: fees.per_gas_unit_fee,
+      base_fee: requirePipelinePreflightString(fees, "base_fee", `${context}.fees`),
+      per_byte_fee: requirePipelinePreflightString(fees, "per_byte_fee", `${context}.fees`),
+      per_instruction_fee: requirePipelinePreflightString(
+        fees,
+        "per_instruction_fee",
+        `${context}.fees`,
+      ),
+      per_gas_unit_fee: requirePipelinePreflightString(
+        fees,
+        "per_gas_unit_fee",
+        `${context}.fees`,
+      ),
       sponsor_vault_custody_account_id: requireExactAccountId(
         fees.sponsor_vault_custody_account_id,
         `${context}.fees.sponsor_vault_custody_account_id`,
       ),
-      settlement_mode:
-        fees.settlement_mode === undefined || fees.settlement_mode === null
-          ? ""
-          : String(fees.settlement_mode),
+      settlement_mode: requirePipelinePreflightSettlementMode(fees, `${context}.fees`),
       successful_claim_fee_exempt_authorities: parseStringArray(
-        fees.successful_claim_fee_exempt_authorities,
+        requirePipelinePreflightArray(
+          fees,
+          "successful_claim_fee_exempt_authorities",
+          `${context}.fees`,
+        ),
         `${context}.fees.successful_claim_fee_exempt_authorities`,
       ).map((authority, index) =>
         requireExactAccountId(
@@ -27048,13 +27187,12 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
     },
     raw: Object.freeze({ ...record }),
   };
+  const stallThresholdMs = pipelineStallThresholdMs(normalized.sumeragi.block_cadence_ms);
   return Object.freeze({
     ...normalized,
+    stallThresholdMs,
     isStatusStalled(status) {
-      return isStatusQueueStalled(
-        status,
-        normalized.sumeragi.stall_threshold_ms,
-      );
+      return isStatusQueueStalled(status, stallThresholdMs);
     },
   });
 }

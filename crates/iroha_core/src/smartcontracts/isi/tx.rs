@@ -1574,7 +1574,9 @@ pub(crate) mod tests {
     fn install_query_outputs(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
         let fragments =
             u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-        let proposal = block.canonical_resultless_proposal();
+        let proposal = block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection");
         block
             .set_execution_outputs(
                 outputs,
@@ -1586,7 +1588,12 @@ pub(crate) mod tests {
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();
-        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(
+            block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection"),
+            proposal
+        );
     }
     /// Two signed Network inputs with explicit full typed output rows; no merge sidecar.
     pub(crate) fn canonical_query_carrier(
@@ -2186,8 +2193,12 @@ pub(crate) mod tests {
         changed.validate_output_merkle_cache().unwrap();
         assert_eq!(changed.hash(), original.hash());
         assert_eq!(
-            changed.canonical_resultless_proposal(),
-            original.canonical_resultless_proposal()
+            changed
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection"),
+            original
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
         );
         assert_ne!(
             changed.output_merkle_commitment(),

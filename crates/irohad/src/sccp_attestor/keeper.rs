@@ -39,7 +39,7 @@ impl Keeper {
     ///
     /// The HTTP transports own blocking `reqwest` clients. Building one starts the client's
     /// internal runtime thread and blocks until it runs, which must never happen on an async
-    /// worker thread: debug builds panic there and release builds stall the worker. A panic
+    /// worker thread: debug builds panic there and release builds block the worker. A panic
     /// while building leaves the keeper idle, because the node never aborts over SCCP.
     pub(super) async fn build(config: SccpLightClientKeeper) -> Self {
         let idle = SccpLightClientKeeper {
@@ -327,6 +327,12 @@ mod tests {
         assert_default_keeper_serves_every_chain(&mut keeper);
         // The keeper, like the attestor that owns it, is dropped on an async worker.
         drop(keeper);
+    }
+
+    // TEMPORARY(startup-bugs): reproduces the pre-fix startup path; removed before hand-off.
+    #[tokio::test]
+    async fn tmp_prefix_direct_new_on_async_worker() {
+        let _keeper = Keeper::new(SccpLightClientKeeper::default());
     }
 
     #[tokio::test]

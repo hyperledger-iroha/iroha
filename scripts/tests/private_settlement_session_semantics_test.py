@@ -29,7 +29,7 @@ class SemanticControls(unittest.TestCase):
         self.vector = self.fixture.result()
         self.result = {**{key: self.request[key] for key in ('version', 'protocol', 'request_id',
             'invocation_nonce', 'commit', 'participants')}, 'request_sha256': self.row['request']['sha256'],
-            'mandatory_signed_rs16_da_rbc': True, 'authenticated_private_settlement_route_control': True,
+            'mandatory_signed_rs16_da': True, 'authenticated_private_settlement_route_control': True,
             'signed_rs16_da_observations': semantics.runner.minimum_signed_rs16_da_observations(self.request['participants']),
             'process_inventory': [], 'payload': {
                 'economic_vector_sha256': self.vector['economic_vector_sha256'],
@@ -101,7 +101,7 @@ class SemanticControls(unittest.TestCase):
                        lambda x: x['payload']['stages_ms'].update(proof_generation=True),
                        lambda x: x['payload']['stages_ms'].update(proof_generation=float('nan')),
                        lambda x: x.update(signed_rs16_da_observations=1),
-                       lambda x: x.update(mandatory_signed_rs16_da_rbc=False),
+                       lambda x: x.update(mandatory_signed_rs16_da=False),
                        lambda x: x.update(process_inventory=[{'extra': True}])):
             changed = copy.deepcopy(self.result); mutate(changed)
             with self.assertRaises(control.SessionProtocolError):

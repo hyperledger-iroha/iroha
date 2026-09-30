@@ -121,7 +121,12 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         // Test fresh execution of the signed inputs under the invalid config.
         // Replaying the successful output claim would instead correctly reject
         // its committed fragment count before recording the new rejection.
-        let proposal = GenesisBlock(genesis.0.canonical_resultless_proposal());
+        let proposal = GenesisBlock(
+            genesis
+                .0
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+        );
         assert!(proposal.0.is_resultless_proposal());
         assert_eq!(proposal.0.header(), genesis.0.header());
         assert_eq!(proposal.0.hash(), genesis.0.hash());

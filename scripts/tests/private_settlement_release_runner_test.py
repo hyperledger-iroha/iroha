@@ -1288,7 +1288,7 @@ def response(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         "configuration_sha256": job["configuration_sha256"],
         "participants": job["participants"],
         "passed": True,
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "signed_rs16_da_observations": (
             MODULE.minimum_signed_rs16_da_observations(job["participants"])
         ),
@@ -2049,10 +2049,10 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             self.assertEqual(len(controls), 13)
             self.assertEqual(payload["crash_recoveries"], [])
             MODULE.validate_fault_control_records(controls, participants=3, seed=7, run=2)
-            for retired in ("consensus_carrier", "persistence_cut"):
-                with self.subTest(retired=retired):
+            for unsupported in ("consensus_carrier", "persistence_cut"):
+                with self.subTest(unsupported=unsupported):
                     changed = copy.deepcopy(controls)
-                    changed[0]["controls"][0]["control_type"] = retired
+                    changed[0]["controls"][0]["control_type"] = unsupported
                     with self.assertRaisesRegex(MODULE.RunnerError, "unknown type"):
                         MODULE.validate_fault_control_records(
                             changed, participants=3, seed=7, run=2
@@ -3111,10 +3111,15 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             warmups=5,
             measured=30,
         )
-        self.assertTrue(
-            configuration["consensus"]["mandatory_signed_rs16_da_rbc"]
+        self.assertEqual(
+            configuration["consensus"],
+            {
+                "mandatory_signed_rs16_da": True,
+                "minimum_signed_rs16_da_observations_per_run": 16,
+                "authenticated_private_settlement_route_control": True,
+                "maximum_simultaneously_unavailable_per_committee": 1,
+            },
         )
-        self.assertFalse(configuration["consensus"]["legacy_rbc_bypass_permitted"])
         self.assertTrue(
             configuration["fault_matrix"]["prepare_qc_normalization"][
                 "accept_equivalent_subsets_only_for_identical_body"

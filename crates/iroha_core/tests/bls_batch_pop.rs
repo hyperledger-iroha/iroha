@@ -115,7 +115,8 @@ fn bls_batch_block_rejects_missing_proof_policies() {
     builder.push_transaction(tx);
     let proposal = builder
         .build_with_signature(0, kp.private_key())
-        .canonical_resultless_proposal();
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let error = native_validation::validate(&chain, proposal)
         .expect_err("mandatory DA policy must reject before batching");
     assert!(

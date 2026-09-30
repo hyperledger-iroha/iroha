@@ -287,8 +287,12 @@ fn checked_changed_rows_preserve_proposal_but_fail_complete_output_parity() {
         changed.validate_output_merkle_cache().unwrap();
         assert_eq!(changed.header(), original.header());
         assert_eq!(
-            changed.canonical_resultless_proposal(),
-            original.canonical_resultless_proposal()
+            changed
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection"),
+            original
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
         );
         assert_eq!(changed.hash(), original.hash());
         assert_ne!(
@@ -393,8 +397,22 @@ fn diagnostics_separate_internal_failures_from_explicit_sealed_network_join() {
     assert!(diagnostics[1].starts_with("output#2 pipeline "));
     assert!(diagnostics[2].starts_with("output#3 time#0 "));
     log_replayed_signed_sources(2, &block).unwrap();
-    assert!(replay_validation_output_errors(&block.canonical_resultless_proposal()).is_empty());
-    assert!(replayed_signed_sources(&block.canonical_resultless_proposal()).is_err());
+    assert!(
+        replay_validation_output_errors(
+            &block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
+        )
+        .is_empty()
+    );
+    assert!(
+        replayed_signed_sources(
+            &block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
+        )
+        .is_err()
+    );
 }
 
 #[test]

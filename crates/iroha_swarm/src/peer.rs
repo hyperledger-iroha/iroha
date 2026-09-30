@@ -12,11 +12,17 @@ pub struct PeerInfo {
     pub ports: P2pApiPorts,
     pub key_pair: ExposedKeyPair,
     pub soranet_transport_key_pair: ExposedKeyPair,
+    /// Dedicated Ed25519 streaming identity rendered into the development environment.
+    ///
+    /// Prepared validators carry the streaming identity admitted with their runtime config, so
+    /// Compose never renders one for them.
+    pub streaming_identity_key_pair: Option<ExposedKeyPair>,
     pub pop: PeerPop,
 }
 pub const SERVICE_NAME: &str = "irohad";
 type Result<T> = std::result::Result<T, iroha_crypto::Error>;
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:swarm:soranet-transport:v1|";
+const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:swarm:streaming-identity:v1|";
 /// Peer overrides supplied by higher-level tooling.
 #[derive(Clone, Debug)]
 pub struct PeerOverride {
@@ -65,14 +71,17 @@ pub fn generate_bls_key_pair(
         pop,
     ))
 }
-pub fn generate_soranet_transport_key_pair(
+/// Derive a domain-separated Ed25519 key pair from `base_seed ‖ seed_domain ‖ extra_seed`,
+/// or draw a random one without a base seed.
+fn generate_ed25519_key_pair(
     base_seed: Option<&[u8]>,
+    seed_domain: &[u8],
     extra_seed: &[u8],
 ) -> Result<ExposedKeyPair> {
     let key_pair = match base_seed {
         Some(seed) => iroha_crypto::KeyPair::try_from_seed(
             seed.iter()
-                .chain(SORANET_TRANSPORT_SEED_DOMAIN)
+                .chain(seed_domain)
                 .chain(extra_seed)
                 .copied()
                 .collect::<Vec<_>>(),
@@ -86,6 +95,22 @@ pub fn generate_soranet_transport_key_pair(
         Some(iroha_crypto::ExposedPrivateKey(private_key)),
     ))
 }
+pub fn generate_soranet_transport_key_pair(
+    base_seed: Option<&[u8]>,
+    extra_seed: &[u8],
+) -> Result<ExposedKeyPair> {
+    generate_ed25519_key_pair(base_seed, SORANET_TRANSPORT_SEED_DOMAIN, extra_seed)
+}
+/// Derive the dedicated Ed25519 streaming identity of one development validator.
+///
+/// The seed domain differs from the `SoraNet` transport domain, so the two identities of a
+/// validator are independent keys.
+pub fn generate_streaming_identity_key_pair(
+    base_seed: Option<&[u8]>,
+    extra_seed: &[u8],
+) -> Result<ExposedKeyPair> {
+    generate_ed25519_key_pair(base_seed, STREAMING_IDENTITY_SEED_DOMAIN, extra_seed)
+}
 pub fn network(
     count: u16,
     key_seed: Option<&[u8]>,
@@ -97,6 +122,8 @@ pub fn network(
             let (key_pair, pop) = generate_bls_key_pair(key_seed, &nth.to_be_bytes())?;
             let soranet_transport_key_pair =
                 generate_soranet_transport_key_pair(key_seed, &nth.to_be_bytes())?;
+            let streaming_identity_key_pair =
+                generate_streaming_identity_key_pair(key_seed, &nth.to_be_bytes())?;
             Ok((
                 nth,
                 PeerInfo {
@@ -104,6 +131,7 @@ pub fn network(
                     ports,
                     key_pair,
                     soranet_transport_key_pair,
+                    streaming_identity_key_pair: Some(streaming_identity_key_pair),
                     pop,
                 },
             ))

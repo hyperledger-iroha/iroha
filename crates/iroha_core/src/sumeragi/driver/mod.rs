@@ -86,6 +86,7 @@ use iroha_sumeragi::{
         Signature,
     },
 };
+use iroha_telemetry::metrics::sumeragi::InstanceSeries;
 use parking_lot::Mutex;
 
 use self::{
@@ -99,6 +100,7 @@ use self::{
         PublicationError, RecordStore, SendOutcome,
     },
 };
+use super::metrics::InstanceMetrics;
 
 /// Longest idle wait of the event loop before it re-reads the clock.
 const MAX_IDLE_WAIT_MS: Millis = 1_000;
@@ -309,6 +311,8 @@ pub struct Kernel {
     frame_limit: u64,
     /// Local time of the latest call that told it.
     now: Millis,
+    /// Prometheus telemetry of the instance (never read back by the kernel).
+    metrics: Option<InstanceMetrics>,
 }
 
 impl Kernel {
@@ -350,9 +354,23 @@ impl Kernel {
             out: VecDeque::new(),
             frame_limit: config.frame_limit,
             now: start.now,
+            metrics: None,
         };
         kernel.route(actions.clone());
         Ok((kernel, actions))
+    }
+
+    /// Record the instance's telemetry from now on: its routed actions, applied blocks and
+    /// [`Kernel::observe`]d snapshots.
+    pub fn attach_metrics(&mut self, metrics: InstanceMetrics) {
+        self.metrics = Some(metrics);
+    }
+
+    /// A status snapshot and the queues of the same step, as the driver publishes them.
+    pub fn observe(&mut self, status: &CoreStatus, backlog: &Backlog) {
+        if let Some(metrics) = self.metrics.as_mut() {
+            metrics.observe(status, backlog);
+        }
     }
 
     /// The core (read-only).
@@ -421,6 +439,9 @@ impl Kernel {
     /// scheduler, the rest through the barrier (O1, O2).
     pub fn route(&mut self, actions: Vec<Action>) {
         for action in actions {
+            if let Some(metrics) = self.metrics.as_mut() {
+                metrics.action(self.now, &action);
+            }
             match action {
                 Action::PersistSafety(record) => {
                     let (seq, superseded) = self.persist.push_record(record);
@@ -540,6 +561,9 @@ impl Kernel {
                 continue;
             }
             if let Event::BlockApplied { height, config, .. } = &event {
+                if let Some(metrics) = self.metrics.as_mut() {
+                    metrics.applied(self.now, *height);
+                }
                 for exceeded in applied_frame_limits(self.frame_limit, *height, config)
                     .into_iter()
                     .flatten()
@@ -854,6 +878,8 @@ struct Shared {
     alive: AtomicBool,
     /// The thread whose end stopped the instance, if one did.
     stopped: Mutex<Option<Worker>>,
+    /// The instance's telemetry series, flagged when a stopped thread stops the instance.
+    metrics: Option<InstanceSeries>,
 }
 
 impl Shared {
@@ -886,9 +912,12 @@ impl Shared {
         )
     }
 
-    fn publish(&self, kernel: &Kernel) {
-        *self.status.lock() = Some(kernel.core().status());
-        *self.backlog.lock() = kernel.backlog();
+    fn publish(&self, kernel: &mut Kernel) {
+        let status = kernel.core().status();
+        let backlog = kernel.backlog();
+        kernel.observe(&status, &backlog);
+        *self.status.lock() = Some(status);
+        *self.backlog.lock() = backlog;
     }
 }
 
@@ -906,6 +935,9 @@ fn stop(shared: &Shared, observer: &dyn Observer, worker: Worker) {
         "sumeragi driver thread stopped; the instance stops"
     );
     shared.stopped.lock().get_or_insert(worker);
+    if let Some(series) = &shared.metrics {
+        InstanceMetrics::stopped(series);
+    }
     contained("observer", || observer.stopped(worker));
 }
 
@@ -1114,6 +1146,8 @@ pub struct Driver<N, R, B, K, C, E> {
     pub executor: E,
     /// Reports.
     pub observer: Arc<dyn Observer>,
+    /// Prometheus telemetry of the instance, if the node records it.
+    pub metrics: Option<InstanceMetrics>,
 }
 
 impl<N, R, B, K, C, E> Driver<N, R, B, K, C, E>
@@ -1143,7 +1177,15 @@ where
             clock,
             executor,
             observer,
+            metrics: None,
         }
+    }
+
+    /// Record the instance's telemetry with `metrics` (`None`: telemetry is disabled).
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Option<InstanceMetrics>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// Start the instance: checks the frame limit (O10), spawns the persistence, executor and
@@ -1170,6 +1212,7 @@ where
             .map(|(k, _, _)| k.clone())
             .collect();
         let ingress = Arc::new(Mutex::new(Ingress::new(config.ingress)));
+        let metrics = self.metrics;
         let shared = Arc::new(Shared {
             node_gate: Arc::clone(&start.node_gate),
             allocation_budget: start.allocation_budget.clone(),
@@ -1183,6 +1226,7 @@ where
             wake_pending: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             stopped: Mutex::new(None),
+            metrics: metrics.as_ref().map(|metrics| metrics.series().clone()),
         });
         let net: Arc<dyn Net> = Arc::new(NodeNet {
             net: Arc::clone(&self.net),
@@ -1317,8 +1361,11 @@ where
                     });
                     drop(startup);
                     match kernel {
-                        Ok((kernel, _)) => {
-                            shared.publish(&kernel);
+                        Ok((mut kernel, _)) => {
+                            if let Some(metrics) = metrics {
+                                kernel.attach_metrics(metrics);
+                            }
+                            shared.publish(&mut kernel);
                             let _ = ready_tx.send(Ok(()));
                             if let Err(worker) = run_loop(kernel, &rx, &shared, &*clock, &workers) {
                                 stop(&shared, &*workers.observer, worker);
@@ -1618,14 +1665,14 @@ fn run_loop(
             let operations = kernel.poll(clock.now());
             drop(operation);
             workers.dispatch(operations)?;
-            shared.publish(&kernel);
+            shared.publish(&mut kernel);
             continue;
         }
         drop(operation);
         if kernel.has_output() {
             continue;
         }
-        shared.publish(&kernel);
+        shared.publish(&mut kernel);
         let wait = kernel
             .next_wakeup()
             .saturating_sub(clock.now())

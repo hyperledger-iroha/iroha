@@ -72,6 +72,7 @@ fn resign_result(
     let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let header = certificate.consensus_header().to_vec();
+    let availability = certificate.availability().to_vec();
     let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     qc.result = commitment.result().unwrap();
     qc.view = decision_view;
@@ -97,6 +98,7 @@ fn resign_result(
         header,
         norito::encode_canonical(&qc).unwrap(),
         commitment.preimage().unwrap(),
+        availability,
     )));
     let mut proof = proof.clone();
     proof.block_wire = block.encode_wire().unwrap();
@@ -265,6 +267,7 @@ fn native_finality_refuses_unsigned_genesis_result_and_corrupt_original_certific
         certificate.consensus_header().to_vec(),
         norito::encode_canonical(&qc).unwrap(),
         certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
     )));
     finality.finality_proof.block_wire = block.encode_wire().unwrap();
     assert!(finality.validate_against(&anchor).is_err());

@@ -4,6 +4,16 @@
   "automatic_directions": 318,
   "build_report_sha256": "59eba87ce5e6758e8ecfc2c1e53f6e6de09f0d41b65e34cbeabc94db7a63c95c",
   "build_warnings": 0,
+  "current_recaptures": [
+    {
+      "codec_fixture_sha256": "628a195ec60f164d6aa8e50abbb63adc9f8bd6ad0141c10950867d46057ed4b7",
+      "compiled_shared_library_sha256": "5c2aa5320194c8f711878904ad8389c5778e148359b8cffbe1ce26cd7d9d184d",
+      "owner": "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
+      "qualification_report_sha256": "09a4e00904221b60417dee8e03d195c0a852177738356113a9faf2fd73121bd7",
+      "scope": "Only the two named owner directions were recaptured for the current first-release DTO; preceding top-level capture provenance describes the unchanged historical owners. Standalone and enclosing Status wire frames were regenerated with the actual compiled codec.",
+      "source_sha256": "dfbe6c44b5fb2b661e92c2968f41f5ac02d1cd24f0daf57c37ce9af6bc0e2b6f"
+    }
+  ],
   "features": [
     "default"
   ],
@@ -4232,42 +4242,30 @@
       "source_sha256": "ab3725698dd4483ac123dc2395625c0bf806ffd7503b8a409e5e889b9d48542d"
     },
     {
-      "column": 5,
       "direction": "deserialize",
-      "explicit_root": true,
+      "explicit_root": false,
       "file": "crates/iroha_torii_shared/src/status/consensus.rs",
       "identifier": "SumeragiConsensusStatus",
-      "item_end": 4554,
-      "item_sha256": "18fc689242c0ece62fe2806d625f1fa47c27345daf9e2e4afbd3249b2f3c7f99",
-      "item_start": 602,
-      "kind": "capture",
-      "line": 12,
+      "kind": "current-codec-capture",
       "module": "iroha_torii_shared::status::consensus",
       "nominal": "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
-      "original_source_sha256": "2a6b443bf0be7d470297ead6d943f559333da8db2c7febf6dc0bd5483a550394",
-      "root_hint": "iroha_telemetry::metrics::SumeragiConsensusStatus",
+      "root_hint": "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
       "root_matches": true,
-      "schema_hash": "bd2865cf79ab861464ba45fed6120f8d",
-      "source_sha256": "2a6b443bf0be7d470297ead6d943f559333da8db2c7febf6dc0bd5483a550394"
+      "schema_hash": "ea8ba925aaedc64fc4d6e20b76f58fcc",
+      "source_sha256": "dfbe6c44b5fb2b661e92c2968f41f5ac02d1cd24f0daf57c37ce9af6bc0e2b6f"
     },
     {
-      "column": 5,
       "direction": "serialize",
-      "explicit_root": true,
+      "explicit_root": false,
       "file": "crates/iroha_torii_shared/src/status/consensus.rs",
       "identifier": "SumeragiConsensusStatus",
-      "item_end": 4554,
-      "item_sha256": "18fc689242c0ece62fe2806d625f1fa47c27345daf9e2e4afbd3249b2f3c7f99",
-      "item_start": 602,
-      "kind": "capture",
-      "line": 11,
+      "kind": "current-codec-capture",
       "module": "iroha_torii_shared::status::consensus",
       "nominal": "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
-      "original_source_sha256": "2a6b443bf0be7d470297ead6d943f559333da8db2c7febf6dc0bd5483a550394",
-      "root_hint": "iroha_telemetry::metrics::SumeragiConsensusStatus",
+      "root_hint": "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
       "root_matches": true,
-      "schema_hash": "bd2865cf79ab861464ba45fed6120f8d",
-      "source_sha256": "2a6b443bf0be7d470297ead6d943f559333da8db2c7febf6dc0bd5483a550394"
+      "schema_hash": "ea8ba925aaedc64fc4d6e20b76f58fcc",
+      "source_sha256": "dfbe6c44b5fb2b661e92c2968f41f5ac02d1cd24f0daf57c37ce9af6bc0e2b6f"
     },
     {
       "column": 5,
