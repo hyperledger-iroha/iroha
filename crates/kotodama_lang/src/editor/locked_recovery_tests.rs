@@ -3,7 +3,7 @@ use super::*;
 use crate::linker::{SourceModuleUnit, SourcePackageUnit};
 
 fn request(member: &str, ty: &str) -> SourceLinkRequest {
-    SourceLinkRequest {
+    SourceLinkRequest { sources: Vec::new(),
         root: SourceModuleUnit {
             source_name: "app.ko".into(),
             source: format!("誓約 App {{ view fn read(rows::{ty} row) -> int {{ row.{member} }} }}"),
@@ -12,11 +12,11 @@ fn request(member: &str, ty: &str) -> SourceLinkRequest {
             alias: "rows".into(),
             package: "local/rows@1".into(),
         }],
-        packages: vec![SourcePackageUnit {
+        packages: vec![SourcePackageUnit { sources: Vec::new(),
             identity: "local/rows@1".into(),
             modules: vec![SourceModuleUnit {
                 source_name: "model.ko".into(),
-                source: "module Rows { struct Row { int amount; string memo; } struct Hidden { int secret; } }".into(),
+                source: "module Rows { export struct Row { int amount; string memo; } struct Hidden { int secret; } }".into(),
             }],
             exports: BTreeSet::from(["Row".into()]),
             imports: vec![],
@@ -103,11 +103,12 @@ fn incomplete_package_receivers_use_their_own_imports_and_source_identity() {
             package: "local/adapter@1".into(),
         }];
         request.packages.push(SourcePackageUnit {
+            sources: Vec::new(),
             identity: "local/adapter@1".into(),
             modules: vec![SourceModuleUnit {
                 source_name: "model.ko".into(),
                 source: format!(
-                    "module Adapter {{ fn inspect(rows::Row row) -> int {{ row.{member} }} }}"
+                    "module Adapter {{ export fn inspect(rows::Row row) -> int {{ row.{member} }} }}"
                 ),
             }],
             exports: BTreeSet::from(["inspect".into()]),
@@ -131,4 +132,28 @@ fn incomplete_receivers_do_not_reveal_unexported_package_types() {
     let offset = source.text().find("row.").unwrap() as u32 + 4;
     assert!(snapshot.completions(source.id(), offset).is_empty());
     assert!(!snapshot.is_complete());
+}
+
+#[test]
+fn incomplete_recovery_uses_tagged_package_source_keys() {
+    let mut request = request("", "Row");
+    request.imports[0].package = "zz/vendor@1".into();
+    request.packages[0].identity = "zz/vendor@1".into();
+    assert_receiver_fields(&request, None, "app.ko");
+}
+
+#[test]
+fn incomplete_recovery_prunes_unreachable_inventory_before_source_ids() {
+    let mut request = request("", "Row");
+    request.sources.push(SourceModuleUnit {
+        source_name: "000_unused.ko".into(),
+        source: "module Unused { fn hidden() {} }".into(),
+    });
+    assert_receiver_fields(&request, None, "app.ko");
+    let snapshot = EditorSnapshot::project(&request, false);
+    assert!(
+        snapshot
+            .sources()
+            .all(|file| file.name() != "000_unused.ko")
+    );
 }

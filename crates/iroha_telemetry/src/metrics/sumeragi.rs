@@ -120,6 +120,10 @@ const fn halt_reason_index(reason: SumeragiHaltReason) -> usize {
 
 /// Gauge values of one instance, taken from one status snapshot of its core.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent Prometheus gauges mirror simultaneous Core status observations"
+)]
 pub struct InstanceGauges {
     /// Height of the current round.
     pub round_height: u64,

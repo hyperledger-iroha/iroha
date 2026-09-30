@@ -772,47 +772,47 @@ mod terminal_body_commitment_tests {
         let expected = baseline
             .canonical_commitment()
             .expect("baseline terminal body");
-        let mut changes = Vec::new();
+        let mut mutations = Vec::new();
         let mut changed = baseline;
         changed.candidate_envelope_digest[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.lifecycle_binding_digest[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.transition_nullifier[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.outbox_reservation_commitment[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.commit_evidence =
             KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
                 time_evidence_commitment: [11; 32],
             });
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.commit_evidence =
             KagemushaCommitEvidenceV1::MonotonicLease(KagemushaMonotonicLeaseV1 {
                 lease_evidence_commitment: [5; 32],
             });
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.hardware_profile_id[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.policy_epoch += 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.private_successor_commitment[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.private_journal_commitment[0] ^= 1;
-        changes.push(changed);
+        mutations.push(changed);
         let mut changed = baseline;
         changed.private_recovery_commitment[0] ^= 1;
-        changes.push(changed);
-        for (index, changed) in changes.into_iter().enumerate() {
+        mutations.push(changed);
+        for (index, changed) in mutations.into_iter().enumerate() {
             assert_ne!(
                 changed.canonical_commitment().expect("valid changed body"),
                 expected,

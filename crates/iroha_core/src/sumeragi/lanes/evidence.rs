@@ -4,6 +4,9 @@
 //! advance a Byzantine-certified malformed batch without effect (§4.3), while an evidence
 //! consumer claiming a valid lane execution must reproduce admission and its certified result.
 
+mod ancestry;
+pub use ancestry::{LaneAncestry, LaneAncestryError};
+
 use iroha_data_model::{
     NetworkId,
     sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneRecord},

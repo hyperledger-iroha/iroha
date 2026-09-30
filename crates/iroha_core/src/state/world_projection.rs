@@ -333,5 +333,5 @@ impl WorldBlock<'_> {
 mod tests;
 
 #[path = "world_state_accumulator.rs"]
-mod world_state_accumulator;
+pub(crate) mod world_state_accumulator;
 pub(crate) use world_state_accumulator::WorldStateAccumulator;

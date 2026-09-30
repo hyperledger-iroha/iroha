@@ -110,7 +110,7 @@ pub enum Op {
     },
     /// Quarantine the transactions of a rejected block (no completion).
     Reject {
-        /// AvailableBody hash.
+        /// `AvailableBody` hash.
         block_hash: Hash32,
     },
     /// An externally visible effect the host's barrier released — `Send`, `Broadcast`,
@@ -166,7 +166,7 @@ pub enum Done {
 pub struct Backlog {
     /// Effects held behind a pending record (O2).
     pub held: usize,
-    /// AvailableBody payload bytes of the held effects.
+    /// `AvailableBody` payload bytes of the held effects.
     pub held_bytes: u64,
     /// Safety records queued and not yet handed to the write device.
     pub records: usize,
@@ -189,7 +189,7 @@ pub struct Backlog {
 pub struct BacklogBound {
     /// Held effects.
     pub held: usize,
-    /// AvailableBody payload bytes of the held effects.
+    /// `AvailableBody` payload bytes of the held effects.
     pub held_bytes: u64,
     /// Queued safety records.
     pub records: usize,
@@ -206,7 +206,7 @@ pub struct BacklogBound {
 impl BacklogBound {
     /// Held effects of a host.
     pub const HELD: usize = 4_096;
-    /// AvailableBody payload bytes of a host's held effects.
+    /// `AvailableBody` payload bytes of a host's held effects.
     pub const HELD_BYTES: u64 = 64 << 20;
     /// Queued executor operations of a host other than `Execute`s.
     pub const EXEC_OPS: usize = 128;
@@ -678,7 +678,7 @@ mod tests {
                     parent_result,
                     payload_hash: payload_hash(&crypto, &payload),
                     availability_digest: crate::types::Hash32::ZERO,
-                    payload_len: payload.len() as u32,
+                    payload_len: u32::try_from(payload.len()).unwrap(),
                     proposer: 0,
                     skipped_leaders: Vec::new(),
                     attest: false,

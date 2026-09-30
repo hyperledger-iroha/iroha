@@ -1,4 +1,4 @@
-kotodama-diagnostic-explanations-v1	247
+kotodama-diagnostic-explanations-v1	253
 code	phase	summary	help
 E_ACCESS_INCOMPLETE	Semantic	the compiler could not prove a complete access set	The runtime must serialize conservatively; remove dynamic or opaque access if parallel execution is required.
 E_AMBIGUOUS_EXPORT	Resolve	multiple modules define the same declared package export	Keep exactly one module definition for each exported function.
@@ -30,6 +30,7 @@ E_DUPLICATE_STRUCT_FIELD	Parse	a struct literal field is repeated	Supply each de
 E_DUPLICATE_STRUCT_PATTERN_FIELD	Parse	a struct pattern names the same field more than once	Bind each struct field once; aliases must also use distinct local names.
 E_EMPTY_PACKAGE	Resolve	a locked package contains no Kotodama modules	Add at least one module source or remove the empty package from the locked graph.
 E_EMPTY_PACKAGE_GRAPH	Resolve	typed linking produced no root or reusable module program	Provide one seiyaku root and every explicitly imported non-empty module package.
+E_ERROR_MESSAGE	Semantic	an error message violates the static message contract	Use one nonblank static UTF-8 message between 1 and 4096 bytes on each annotated error variant.
 E_ERROR_SCHEMA	Semantic	an error type has an invalid nominal schema	Declare one error enum identity with unique names and nonzero u32 variant codes.
 E_EXACT_DIVISION_SCALE_OVERFLOW	Semantic	an exact terminating quotient needs more than 28 fractional digits	Use `div_round` with an explicit representable scale, or change the operands.
 E_FORBIDDEN_SOURCE_IDENTIFIER	Parse	source uses an identifier spelling forbidden in every Kotodama V1 context	Choose a domain-specific identifier; lowercase `amount` remains an ordinary business identifier.
@@ -39,6 +40,7 @@ E_IF_EXPRESSION_ELSE	Semantic	an expression-valued if omits its else branch	Add 
 E_IF_LET_EXPRESSION_ELSE	Semantic	an expression-valued if let omits its else branch	Add an else block, or use if let as a statement when no value is needed.
 E_IMMUTABLE_ASSIGNMENT	Semantic	an immutable binding was assigned after declaration	Declare a mutable local with `var`, or compute the final immutable value before binding it.
 E_IMPLICIT_NUMERIC_CONVERSION	Semantic	runtime int and decimal values were mixed without a named conversion	Convert the int with decimal::from_int(value) before decimal arithmetic or comparison. Exact numeric literals may still infer their type contextually at compile time.
+E_INCLUDE_CYCLE	Resolve	source includes form a cycle	Remove an include edge so every fragment expands through an acyclic include graph.
 E_INEXACT_CONVERSION	Semantic	an exact numeric conversion would discard a fractional part	Use an explicitly truncating or rounded conversion when loss of precision is intentional.
 E_INTERNAL_BUILTIN	Semantic	source attempted to call a compiler-internal raw capability	Use the typed namespaced source API; allocation, pointers, raw syscalls, and opaque instructions are unavailable.
 E_INTERNAL_NUMERIC_MATRIX	Semantic	typed numeric operands violated the compiler's canonical operator matrix	Report this compiler defect with a minimal source reproducer; no artifact is emitted from inconsistent typed HIR.
@@ -78,6 +80,7 @@ E_LIST_TAKE_CONST	Semantic	List.take received a dynamic limit	Pass a compile-tim
 E_LIST_TAKE_LIMIT	Semantic	List.take received a limit outside its source capacity	Use a constant limit from 0 through the source List capacity.
 E_LIST_TYPE_ARITY	Semantic	List has an invalid number of type arguments	Declare List<T, N> with one element type and one capacity constant.
 E_LIST_UNSAFE_INDEX	Semantic	source attempted an unchecked List index operation	Use get(index) for reads and try_set(index, value) for writes.
+E_LOCAL_IMPORT_CYCLE	Resolve	local module imports form a cycle	Remove an import edge so local modules have an acyclic dependency graph.
 E_LOCAL_SHADOWING	Resolve	a local binding duplicates or shadows another visible symbol	Rename the binding so every local and source-unit declaration remains unambiguous.
 E_MALFORMED_CALL	Semantic	resolved call metadata was internally inconsistent	Report this compiler defect with a minimal source reproducer; malformed resolved calls never produce artifacts.
 E_MAP_BOUNDS	Semantic	a StateMap operation lacked a compiler-proven deterministic bound	Use direct keyed access or canonical StateMap iteration with the fixed 64-item cap.
@@ -158,6 +161,9 @@ E_SECRET_STATE_TYPE	Semantic	durable state was declared with a secret-bearing ty
 E_SECRET_STATE_WRITE	Semantic	a secret value flowed directly into durable state	Persist only an approved commitment or proof output.
 E_SECRET_UNAPPROVED_OPERATION	Semantic	secret data reached an operation without an approved flow specification	Use an operation explicitly listed by the V1 secret-flow policy.
 E_SECRET_UNKNOWN_CALL	Semantic	secret data was passed through a call whose flow behavior is unknown	Pass secrets only to compiler-known proof and commitment functions with declared flow behavior.
+E_SOURCE_NOT_FOUND	Resolve	a declared source dependency is absent	Supply the referenced file inside the explicit source bundle and use its canonical relative path.
+E_SOURCE_OWNERSHIP	Resolve	one fragment is assigned to multiple source units	Give each fragment a single owning contract or module; use exported module declarations for shared dependencies.
+E_SOURCE_UNIT_KIND	Resolve	a source dependency has the wrong unit kind	Use a bare declaration fragment for include, a module for import, and a seiyaku as the contract entry file.
 E_STATE_HAJIMARI_INCOMPLETE	Semantic	scalar durable state is not initialized on every normal `hajimari`/`始まり` path	Assign every reported scalar state on all branches and before every early return; loop-only and short-circuited writes are not definite.
 E_STATE_HAJIMARI_REQUIRED	Semantic	scalar durable state was declared without a hajimari/始まり hook	Declare hajimari/始まり and initialize every scalar state value before any normal return or fallthrough.
 E_STATE_MAP_ALIAS	Semantic	a StateMap was treated as an in-memory first-class value	Access the declared StateMap directly through get, set, remove, or bounded iteration.

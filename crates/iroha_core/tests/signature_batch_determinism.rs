@@ -6,20 +6,15 @@
 #[path = "common/native_validation.rs"]
 mod native_validation;
 use iroha_core::{
-    block::{BlockValidationError as BErr, ValidBlock},
+    block::BlockValidationError as BErr,
     prelude::*,
     state::{State, StateReadOnly},
     tx::AcceptTransactionFail as AF,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
-use iroha_data_model::{
-    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
-    prelude::*,
-};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
+use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use nonzero_ext::nonzero;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     let kura = Kura::blank_kura_for_testing();
@@ -30,7 +25,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state =
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();

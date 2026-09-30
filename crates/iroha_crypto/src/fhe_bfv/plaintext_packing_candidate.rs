@@ -175,15 +175,16 @@ impl SparsePlaintext {
 }
 
 fn add(a: u16, b: u16) -> u16 {
-    ((u32::from(a) + u32::from(b)) % u32::from(MODULUS)) as u16
+    u16::try_from((u32::from(a) + u32::from(b)) % u32::from(MODULUS)).expect("reduced F257 element")
 }
 
 fn sub(a: u16, b: u16) -> u16 {
-    ((u32::from(a) + u32::from(MODULUS) - u32::from(b)) % u32::from(MODULUS)) as u16
+    u16::try_from((u32::from(a) + u32::from(MODULUS) - u32::from(b)) % u32::from(MODULUS))
+        .expect("reduced F257 element")
 }
 
 fn mul(a: u16, b: u16) -> u16 {
-    ((u32::from(a) * u32::from(b)) % u32::from(MODULUS)) as u16
+    u16::try_from((u32::from(a) * u32::from(b)) % u32::from(MODULUS)).expect("reduced F257 element")
 }
 
 /// Only used with public transform bases and indices, never secret exponents.
@@ -230,7 +231,7 @@ mod tests {
             Self
         }
 
-        fn assert_cleared(&self, expected: usize) {
+        fn assert_cleared(expected: usize) {
             WIPE_OBSERVATIONS.with_borrow(|log| {
                 let log = log.as_ref().unwrap();
                 assert_eq!(log.len(), expected);
@@ -247,7 +248,7 @@ mod tests {
 
     #[test]
     fn canonical_owners_reject_length_and_late_invalid_values() {
-        let observer = WipeObserver::start();
+        let _observer = WipeObserver::start();
         assert!(matches!(
             ScalarSlots::copy_canonical(&[0; SLOTS - 1]),
             Err(PackingError::Length)
@@ -256,7 +257,7 @@ mod tests {
             SparsePlaintext::copy_canonical(&[0; SLOTS + 1]),
             Err(PackingError::Length)
         ));
-        observer.assert_cleared(0);
+        WipeObserver::assert_cleared(0);
         let mut input = [256; SLOTS];
         input[SLOTS - 1] = 257;
         assert!(matches!(
@@ -268,7 +269,7 @@ mod tests {
             SparsePlaintext::copy_canonical(&input),
             Err(PackingError::NonCanonical { index: 0 })
         ));
-        observer.assert_cleared(2);
+        WipeObserver::assert_cleared(2);
         assert_eq!(input[SLOTS - 1], 257, "borrowed caller input is not erased");
     }
 
@@ -325,7 +326,7 @@ mod tests {
             7, 48, 35, 34, 203, 202, 151, 237, 117, 155, 192, 60, 11, 81, 177, 121, 158, 175, 131,
             45, 178, 26, 196, 248, 32, 129, 76, 215, 24, 213, 149, 205, 162, 183, 96,
         ];
-        let input = core::array::from_fn::<_, SLOTS, _>(|j| j as u16);
+        let input = core::array::from_fn::<_, SLOTS, _>(|j| u16::try_from(j).unwrap());
         let encoded = SparsePlaintext::encode(&ScalarSlots::copy_canonical(&input).unwrap());
         assert_eq!(*encoded.0.0, expected);
         assert_eq!(
@@ -342,9 +343,12 @@ mod tests {
     fn products_and_complete_selection_preserve_all_scalar_values() {
         let one = SparsePlaintext::encode(&ScalarSlots::copy_canonical(&[1; SLOTS]).unwrap());
         for offset in [0, 128, 256] {
-            let condition = core::array::from_fn::<_, SLOTS, _>(|j| ((j + offset) % 257) as u16);
-            let zero = core::array::from_fn::<_, SLOTS, _>(|j| ((7 * j + 2) % 257) as u16);
-            let nonzero = core::array::from_fn::<_, SLOTS, _>(|j| ((j * j + 9) % 257) as u16);
+            let condition =
+                core::array::from_fn::<_, SLOTS, _>(|j| u16::try_from((j + offset) % 257).unwrap());
+            let zero =
+                core::array::from_fn::<_, SLOTS, _>(|j| u16::try_from((7 * j + 2) % 257).unwrap());
+            let nonzero =
+                core::array::from_fn::<_, SLOTS, _>(|j| u16::try_from((j * j + 9) % 257).unwrap());
             let a = SparsePlaintext::encode(&ScalarSlots::copy_canonical(&zero).unwrap());
             let b = SparsePlaintext::encode(&ScalarSlots::copy_canonical(&nonzero).unwrap());
             assert_eq!(
@@ -403,7 +407,7 @@ mod tests {
 
     #[test]
     fn output_mask_clears_every_undeclared_slot() {
-        let input = core::array::from_fn::<_, SLOTS, _>(|j| ((13 * j) % 257) as u16);
+        let input = core::array::from_fn::<_, SLOTS, _>(|j| u16::try_from((13 * j) % 257).unwrap());
         let mask = core::array::from_fn::<_, SLOTS, _>(|j| u16::from(j < 64));
         let output = SparsePlaintext::encode(&ScalarSlots::copy_canonical(&input).unwrap())
             .multiply(&SparsePlaintext::encode(
@@ -417,19 +421,19 @@ mod tests {
 
     #[test]
     fn owners_clear_live_cells_before_deallocation_on_success_and_unwind() {
-        let observer = WipeObserver::start();
+        let _observer = WipeObserver::start();
         {
             let values = ScalarSlots::copy_canonical(&[256; SLOTS]).unwrap();
             let encoded = SparsePlaintext::encode(&values);
             assert!(!format!("{values:?} {encoded:?}").contains("256"));
             assert!(format!("{values:?}").contains("REDACTED"));
         }
-        observer.assert_cleared(2);
+        WipeObserver::assert_cleared(2);
         let result = std::panic::catch_unwind(|| {
             let _owned = SparsePlaintext::copy_canonical(&[123; SLOTS]).unwrap();
             panic!("public fixture unwind");
         });
         assert!(result.is_err());
-        observer.assert_cleared(3);
+        WipeObserver::assert_cleared(3);
     }
 }

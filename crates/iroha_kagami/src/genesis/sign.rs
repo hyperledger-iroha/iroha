@@ -1145,11 +1145,8 @@ fn staged_sumeragi_context_hashes_on_bounded_stack(
         provisional,
     ) {
         Ok(staged) => Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash)),
-        // Staging wraps the boxed validation error exactly as core returns it.
-        Err(error) => match error
-            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
-            .map(Box::as_ref)
-        {
+        // Staging preserves the concrete validation error through its report context.
+        Err(error) => match error.downcast_ref::<iroha_core::block::BlockValidationError>() {
             Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                 actual_execution,
                 actual_nexus,
@@ -1202,6 +1199,9 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .unpack(|_| {})
     .map_err(|(block, error)| {
+        // Preserve the validator's concrete error through the report context. Only the
+        // unpublished signing draft may consume its exact derived policy commitments.
+        let error = *error;
         let transaction_errors = block
             .execution_outputs()
             .iter()
@@ -2878,6 +2878,25 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             creation_time_ms,
         )
         .expect("sign the exact unbound provisional genesis");
+        let provisional_error =
+            restage_signed_sumeragi_context_hashes(&raw, Some(&config), &provisional.0)
+                .err()
+                .expect("the original unbound draft must report its exact policy mismatch");
+        assert!(
+            matches!(
+                provisional_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
+                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                    expected_execution,
+                    actual_execution,
+                    expected_nexus,
+                    actual_nexus,
+                }) if *expected_execution == Hash::prehashed(unbound_parameters.execution_policy_hash)
+                    && *expected_nexus == Hash::prehashed(unbound_parameters.nexus_amx_context_hash)
+                    && actual_execution != expected_execution
+                    && actual_nexus != expected_nexus
+            ),
+            "the report must retain the validator's concrete draft mismatch: {provisional_error:#}"
+        );
         let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &genesis_key_pair,
@@ -2971,9 +2990,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual_execution,
             expected_nexus,
             actual_nexus,
-        }) = nexus_error
-            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
-            .map(Box::as_ref)
+        }) = nexus_error.downcast_ref::<iroha_core::block::BlockValidationError>()
         else {
             panic!("unexpected Nexus/AMX tamper error: {nexus_error:#}");
         };
@@ -3009,9 +3026,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual_execution,
             expected_nexus,
             actual_nexus,
-        }) = execution_error
-            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
-            .map(Box::as_ref)
+        }) = execution_error.downcast_ref::<iroha_core::block::BlockValidationError>()
         else {
             panic!("unexpected execution-policy tamper error: {execution_error:#}");
         };

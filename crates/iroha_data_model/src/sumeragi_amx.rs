@@ -35,7 +35,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use participant::{
-    AmxEscrow, AmxHeldDecisionV1, AmxParticipantStateV1, AmxPreparedEntryV1, AmxSettleOutcome,
+    AmxEscrow, AmxHeldDecisionV1, AmxParticipantError, AmxParticipantStateV1, AmxPreparedEntryV1,
+    AmxSettleOutcome,
 };
 pub use proof::{
     AmxCertifiedBlockV1, AmxHandoffProofV1, AmxRecordProofV1, AmxWriteProofV1,

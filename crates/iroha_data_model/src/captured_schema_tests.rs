@@ -12,7 +12,7 @@ use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 use sha2::{Digest, Sha256};
 
 /// Bounded, explicitly requested capture of the current typed identity inventory.
-pub(crate) mod native_capture;
+pub mod native_capture;
 
 mod current_release_capture;
 

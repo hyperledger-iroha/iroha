@@ -76,6 +76,10 @@ fn layout<T>(count: usize) -> Result<Layout, CodecAllocationError> {
         .map_err(|_| CodecAllocationError::Admission(AllocationRefusal::DemandOverflow))
 }
 /// Total exact requested backing bytes, excluding the input and existing process tables.
+///
+/// # Errors
+/// Returns [`CodecAllocationError::Admission`] if a buffer layout or the sum of
+/// all required layouts exceeds the host's address space.
 pub fn required_backing_bytes(
     shape: CompactShape,
     reconstruct: bool,
@@ -97,11 +101,13 @@ pub fn required_backing_bytes(
             ))
     })
 }
+type JobBuffers = (ChargedBuffer<u8>, ChargedBuffer<u8>, ChargedBuffer<u16>);
+
 fn buffers(
     shape: CompactShape,
     reconstruct: bool,
     budget: &AllocationBudget,
-) -> Result<(ChargedBuffer<u8>, ChargedBuffer<u8>, ChargedBuffer<u16>), CodecAllocationError> {
+) -> Result<JobBuffers, CodecAllocationError> {
     let mut reservation = budget
         .try_reserve_bytes(required_backing_bytes(shape, reconstruct)?)
         .map_err(CodecAllocationError::Admission)?;
@@ -130,6 +136,11 @@ fn buffers(
     Ok((codeword, payload, workspace))
 }
 /// Encode into one original-funded move-only byte owner; scratch drops before return.
+///
+/// # Errors
+/// Returns a resource error when the exact backing cannot be reserved or allocated,
+/// or [`CodecAllocationError::Codec`] when the payload does not fit the shape or
+/// the encoding matrix cannot be inverted.
 pub fn encode_funded(
     shape: CompactShape,
     payload: &[u8],
@@ -142,6 +153,11 @@ pub fn encode_funded(
     Ok(Encoded { shape, codeword })
 }
 /// Recover, compare all original chunk commitments and canonical padding before exposing owners.
+///
+/// # Errors
+/// Returns a resource error when the exact backing cannot be reserved or allocated,
+/// or [`CodecAllocationError::Codec`] when rows are missing, malformed, inconsistent,
+/// rejected by the commitment predicate, or reconstruct noncanonical padding.
 pub fn reconstruct_funded(
     shape: CompactShape,
     received: &[Option<&[u8]>],

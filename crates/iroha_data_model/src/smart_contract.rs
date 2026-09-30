@@ -1447,6 +1447,9 @@ pub mod manifest {
         /// Exact nominal error type identities and variant schemas advertised by the compiler.
         #[norito(default)]
         pub error_types: Option<Vec<ContractErrorTypeDescriptor>>,
+        /// Authenticated presentation text, separate from nominal error schemas.
+        #[norito(default)]
+        pub error_messages: Option<Vec<ContractErrorMessage>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1741,6 +1744,52 @@ pub mod manifest {
         /// Explicit non-zero numeric code returned on abort.
         pub code: u32,
     }
+    /// Maximum UTF-8 bytes in a static contract error message.
+    pub const MAX_CONTRACT_ERROR_MESSAGE_BYTES: usize = 4096;
+
+    /// Authenticated presentation text for one nominal error variant.
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json, deny_unknown_fields)]
+    pub struct ContractErrorMessage {
+        /// Exact nominal identity in the contract's error type catalog.
+        pub error_type: String,
+        /// Declared nonzero enum-local variant code.
+        pub code: u32,
+        /// Static UTF-8 presentation text, without interpolation or localization.
+        pub message: String,
+    }
+
+    /// Validate sorted, unique presentation entries against an exact error catalog.
+    #[must_use]
+    pub fn validate_contract_error_messages(
+        errors: &[ContractErrorTypeDescriptor],
+        messages: &[ContractErrorMessage],
+    ) -> bool {
+        messages.len() <= 256 * 256
+            && messages.windows(2).all(|pair| {
+                (&pair[0].error_type, pair[0].code) < (&pair[1].error_type, pair[1].code)
+            })
+            && messages.iter().all(|entry| {
+                !entry.message.trim().is_empty()
+                    && entry.message.len() <= MAX_CONTRACT_ERROR_MESSAGE_BYTES
+                    && errors.iter().any(|error| {
+                        error.identity == entry.error_type && error.variant(entry.code).is_some()
+                    })
+            })
+    }
     /// Exact nominal identity and finite variant schema of one Kotodama error type.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(decode_from_slice)]
@@ -1979,6 +2028,9 @@ pub mod manifest {
         /// Exact nominal error type identities and variant schemas advertised by the compiler.
         #[norito(default)]
         pub error_types: Option<Vec<ContractErrorTypeDescriptor>>,
+        /// Authenticated presentation text, separate from nominal error schemas.
+        #[norito(default)]
+        pub error_messages: Option<Vec<ContractErrorMessage>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1995,6 +2047,7 @@ pub mod manifest {
                 entrypoints: manifest.entrypoints.clone(),
                 states: manifest.states.clone(),
                 error_types: manifest.error_types.clone(),
+                error_messages: manifest.error_messages.clone(),
                 kotoba: manifest.kotoba.clone(),
             }
         }
@@ -2036,6 +2089,47 @@ pub mod manifest {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn error_message_catalog_is_bounded_and_separate_from_nominal_schema() {
+            let descriptor = ContractErrorTypeDescriptor {
+                identity: "example/Vault::Failure".into(),
+                variants: vec![ContractErrorVariantDescriptor {
+                    name: "Missing".into(),
+                    code: 1,
+                }],
+            };
+            let hash = descriptor.schema_hash();
+            let catalog = [descriptor];
+            let mut messages = vec![ContractErrorMessage {
+                error_type: catalog[0].identity.clone(),
+                code: 1,
+                message: "残高が不足しています".into(),
+            }];
+            assert!(validate_contract_error_messages(&catalog, &messages));
+            let bytes = norito::codec::Encode::encode(&messages);
+            let decoded: Vec<ContractErrorMessage> =
+                norito::codec::DecodeAll::decode_all(&mut bytes.as_slice()).unwrap();
+            assert_eq!(decoded, messages);
+            let json = norito::json::to_json(&messages).unwrap();
+            assert_eq!(
+                norito::json::from_str::<Vec<ContractErrorMessage>>(&json).unwrap(),
+                messages
+            );
+            messages[0].message = "A revised explanation".into();
+            assert_eq!(catalog[0].schema_hash(), hash);
+            messages[0].message = "é".repeat(2048);
+            assert!(validate_contract_error_messages(&catalog, &messages));
+            messages[0].message.push('a');
+            assert!(!validate_contract_error_messages(&catalog, &messages));
+            messages[0].message = " \n\t".into();
+            assert!(!validate_contract_error_messages(&catalog, &messages));
+            messages[0].message = "Missing".into();
+            messages[0].code = 2;
+            assert!(!validate_contract_error_messages(&catalog, &messages));
+            messages[0].code = 1;
+            messages.push(messages[0].clone());
+            assert!(!validate_contract_error_messages(&catalog, &messages));
+        }
         #[test]
         fn shared_sdk_fixture_preserves_nominal_errors_and_cursor_page_schemas() {
             let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -2288,6 +2382,7 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: Some(vec![ContractErrorTypeDescriptor {
                     identity: "PaymentError".to_owned(),
                     variants: vec![ContractErrorVariantDescriptor {
@@ -2319,6 +2414,34 @@ pub mod manifest {
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
+            manifest.error_messages = Some(vec![ContractErrorMessage {
+                error_type: "PaymentError".into(),
+                code: 1001,
+                message: "Permission denied".into(),
+            }]);
+            assert!(
+                signature
+                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .is_err(),
+                "manifest provenance must bind static presentation text"
+            );
+            let explained = manifest
+                .clone()
+                .try_signed(&kp)
+                .expect("sign explained manifest");
+            let explained_signature = &explained.provenance.as_ref().expect("signature").signature;
+            explained_signature
+                .verify(kp.public_key(), &explained.signature_payload_bytes())
+                .expect("explained manifest signature must verify");
+            manifest.error_messages.as_mut().expect("messages")[0].message =
+                "Revised explanation".into();
+            assert!(
+                explained_signature
+                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .is_err(),
+                "changing only presentation text must invalidate provenance"
+            );
+            manifest.error_messages = None;
             manifest.error_types.as_mut().expect("error types")[0].variants[0].code = 1002;
             assert!(
                 signature
@@ -2340,6 +2463,7 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             };

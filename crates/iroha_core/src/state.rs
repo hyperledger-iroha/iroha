@@ -320,6 +320,7 @@ mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
 mod canonical_history;
+mod committed_execution_read;
 pub(crate) mod native_execution_tip;
 pub use native_execution_tip::NativeExecutionTip;
 mod carrier_da_effects;
@@ -12045,6 +12046,8 @@ pub struct State {
     pub(crate) canonical_runtime: Cell<SnapshotNexusRuntime>,
     /// Original native execution identity, atomically published outside World.
     pub(crate) native_execution_tip: native_execution_tip::TipCell,
+    /// Current original certified pre-tail cut; absent after decoded snapshot restoration.
+    native_world_cut: parking_lot::Mutex<Option<iroha_allocation::ChargedShared<world_state_accumulator::world_state_cut::CutCapsule>>>,
     /// Whether the effective Nexus runtime catalog came from the loaded WSV snapshot.
     nexus_runtime_restored_from_snapshot: bool,
     /// Last block height where Nexus storage budget enforcement ran.
@@ -12426,6 +12429,7 @@ struct PendingPublicLaneSlashObservability {
 /// The original fields stay in one retirement owner throughout execution.
 pub struct StateBlock<'state> {
     fields: Option<StateBlockFields<'state>>,
+    world_cut_capture: Option<world_state_accumulator::world_state_cut::JournalCapture>,
     publication: Option<publication::StatePublication<'state>>,
 }
 
@@ -12681,6 +12685,7 @@ impl<'state> StateBlock<'state> {
     fn from_fields(fields: StateBlockFields<'state>) -> Self {
         Self {
             fields: Some(fields),
+            world_cut_capture: None,
             publication: None,
         }
     }
@@ -27534,6 +27539,7 @@ impl State {
         let native_execution_tip = native_execution_tip::empty_cell(&execution_budget)?;
         let mut s = Self {
             native_execution_tip,
+            native_world_cut: parking_lot::Mutex::new(None),
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
                 .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
@@ -33503,7 +33509,7 @@ impl State {
         if !self.should_enforce_nexus_storage_budget(block_height, interval_blocks) {
             return;
         }
-        let mut kura_used = match self.kura.disk_usage_bytes() {
+        let kura_used = match self.kura.disk_usage_bytes() {
             Ok(bytes) => bytes,
             Err(err) => {
                 warn!(?err, "nexus storage eviction: failed to measure Kura usage");
@@ -38189,13 +38195,9 @@ mod state_view_lock_tests {
 #[cfg(all(test, feature = "zk-preverify"))]
 mod state_preverify_backend_admission_tests;
 #[cfg(test)]
-mod musubi_replication_shortfall_state_tests {
-    use super::*;
-}
+mod musubi_replication_shortfall_state_tests {}
 #[cfg(test)]
-mod soracloud_sequence_watermark_state_tests {
-    use super::*;
-}
+mod soracloud_sequence_watermark_state_tests {}
 #[cfg(test)]
 mod public_lane_slash_observability_staging_tests {
     use super::*;
@@ -38509,7 +38511,7 @@ mod musubi_replication_shortfall_telemetry_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::block::BlockHeader;
-    use mv::cell::Cell;
+
     use std::sync::Arc;
     fn replication_shortfall_gauge(metrics: &crate::telemetry::Metrics) -> u64 {
         metrics

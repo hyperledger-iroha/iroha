@@ -2449,6 +2449,7 @@ fn soracloud_contract_artifact_with_words(entrypoints: &[&str], code_words: &[u3
                 soracloud_entrypoint(name, entry_pc)
             })
             .collect(),
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

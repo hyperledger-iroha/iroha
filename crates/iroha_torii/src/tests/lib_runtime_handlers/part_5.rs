@@ -1,4 +1,5 @@
 include!("part_5_pipeline_cache.rs");
+include!("part_5_committed_retry.rs");
 async fn pipeline_status_response(
     app: SharedAppState,
     hash: String,

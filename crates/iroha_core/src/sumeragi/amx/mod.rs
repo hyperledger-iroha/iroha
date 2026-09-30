@@ -21,19 +21,27 @@
 //! of the block's certified result `R` commits it and a participant verifies it with a record
 //! proof, without any change to `R`'s layout. Instruction writes land in the transaction's
 //! witness overlay and roll back with a rejected transaction.
+//! The mandatory native context archive persists each original complete write set under its
+//! exact carrier. [`amx_record_proof`] authenticates that carrier and its complete write root
+//! before constructing a historical record proof, including after deadline pruning and replay.
 //!
 //! **Participants.** The participant side ([`iroha_data_model::sumeragi_amx::AmxParticipantStateV1`]
-//! over an [`iroha_data_model::sumeragi_amx::AmxEscrow`]) is complete and tested over an
-//! in-memory dataspace. The node does not host a dataspace instance with its own state yet (lane
+//! over an [`iroha_data_model::sumeragi_amx::AmxEscrow`]) is tested over an in-memory
+//! dataspace. Escrow reports host failures separately from protocol rejection: a refused
+//! prepare records no vote, and a refused apply/release keeps the original unsettled entry
+//! and global-height cursor for retry. Native participant graph funding remains open.
+//! The node does not host a dataspace instance with its own state yet (lane
 //! instances share `G`'s state, `specs/sumeragi_lanes.md` §0). TODO(S6): hosting one needs
 //! (1) a per-dataspace World with an `AmxParticipantStateV1` cell anchored at `G`'s genesis
 //! context, (2) native `PrepareAmx`/`SettleAmx`/`RelayGlobalHandoff` instructions of that
 //! instance that call `prepare`/`settle`/`handoff` and record the returned `Prepared` record into
 //! the instance's execution witness exactly as `G` does here, (3) an `AmxEscrow` implementation
-//! that locks, applies and releases the leg's World effects, (4) retained per-height write sets
-//! (the execution witness is not persisted today) so that relayers can build record proofs with
-//! `AmxRecordProofV1::from_writes`, and (5) relayers — the payload builders of each instance's
-//! validators — that include pending proofs (§11.4).
+//! that locks, applies and releases the leg's World effects, (4) the same original archive
+//! ownership for each dataspace executor, and (5) relayers — the payload builders of each
+//! instance's validators — that include pending proofs (§11.4). The existing historical reader
+//! still shares the native receipt proof-graph and tree-scratch resource qualification gap.
+
+pub use crate::query::native_receipts::amx_record_proof;
 
 use iroha_data_model::{
     account::AccountId,
@@ -216,5 +224,7 @@ impl StateBlock<'_> {
     }
 }
 
+#[cfg(test)]
+mod proof_tests;
 #[cfg(test)]
 mod tests;

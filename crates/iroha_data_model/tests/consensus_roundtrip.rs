@@ -9,7 +9,7 @@ use iroha_data_model::{
             EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord, ExecKv, ExecWitness,
             ExecWitnessMsg, NposGenesisParams,
         },
-        consensus::{SumeragiGenesisContextParameters, ValidationError, ValidatorPower},
+        consensus::{SumeragiGenesisContextParameters, ValidatorPower},
     },
     isi::kagemusha_v1::{
         BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
@@ -503,8 +503,14 @@ fn consensus_persistence_norito_roundtrip() {
         epoch: 2,
         witness: exec_witness.clone(),
     };
+    assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
+    let mut rng = DeterministicRng::new(0xE1D3_0003);
+    for _ in 0..32 {
+        let evidence = rng_evidence(&mut rng);
+        assert_roundtrip(&rng_evidence_record(&mut rng, evidence));
+    }
 }
 #[test]
 fn evidence_record_rejects_shortened_pre_release_binary_layouts() {

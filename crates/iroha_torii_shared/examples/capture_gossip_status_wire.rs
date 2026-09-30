@@ -41,7 +41,7 @@ where
     let hash = hex::encode(norito::schema::identity::frame_hash::<T>());
     record.insert("serialize_schema_hash".into(), Value::String(hash.clone()));
     record.insert("deserialize_schema_hash".into(), Value::String(hash));
-    record.insert("schema_name".into(), Value::String(T::frame_name().into()));
+    record.insert("schema_name".into(), Value::String(T::frame_name()));
     Ok(())
 }
 

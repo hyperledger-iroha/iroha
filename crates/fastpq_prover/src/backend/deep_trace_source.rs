@@ -22,7 +22,7 @@ impl OwnedTraceSource {
     fn zeroed(cells: usize) -> Result<Self> {
         cells
             .checked_mul(size_of::<u64>())
-            .filter(|bytes| *bytes <= isize::MAX as usize)
+            .filter(|bytes| isize::try_from(*bytes).is_ok())
             .ok_or_else(|| invalid("physical source allocation overflows"))?;
         let mut values = Vec::new();
         values
@@ -239,9 +239,7 @@ mod tests {
                     OwnedTraceSource::zeroed(17).unwrap()
                 };
                 source.values[0] = 123;
-                if mode == 2 {
-                    panic!("synthetic source owner unwind");
-                }
+                assert_ne!(mode, 2, "synthetic source owner unwind");
                 let mut rng = CountedRng::new();
                 if mode == 1 {
                     rng.fail_after = Some(7);

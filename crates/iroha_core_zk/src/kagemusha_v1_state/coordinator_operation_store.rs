@@ -244,9 +244,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         &self,
         record: &KagemushaOutgoingOperationRecordV1,
     ) -> Result<()> {
-        record
-            .validate_terminal_release_state()
-            .map_err(|_| Error::CoreMismatch)?;
+        record.validate().map_err(|_| Error::CoreMismatch)?;
         if record.phase != KagemushaOutgoingOperationPhaseV1::Released
             || encode(&Record::RetireSender(Box::new(record.clone())))?.len() > RETIREMENT_MAX_BYTES
         {

@@ -97,17 +97,17 @@ fn account(replies: Vec<Reply>) -> (AccountClient, Arc<AsyncOnlyTransport>) {
         .expect("compatibility") = DataModelCompatibility::SubmitCompatible;
     (client.account_client().expect("account binding"), transport)
 }
-fn response(value: QueryResponse) -> Reply {
+fn response(value: &QueryResponse) -> Reply {
     Reply::Response(
         http::Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, APPLICATION_NORITO)
-            .body(norito::to_bytes(&value).expect("query response"))
+            .body(norito::to_bytes(value).expect("query response"))
             .expect("response"),
     )
 }
 fn batch(names: &[&str], cursor: Option<u64>) -> Reply {
-    response(QueryResponse::Iterable(QueryOutput {
+    response(&QueryResponse::Iterable(QueryOutput {
         batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(
             names
                 .iter()
@@ -133,14 +133,14 @@ fn batch(names: &[&str], cursor: Option<u64>) -> Reply {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority() {
+    fn assert_send<T: Send>(future: T) -> T {
+        future
+    }
     let (account, transport) = account(vec![
         batch(&[], Some(1)),
         batch(&[], Some(2)),
         batch(&["wonderland"], None),
     ]);
-    fn assert_send<T: Send>(future: T) -> T {
-        future
-    }
     let rows = assert_send(
         account
             .query(FindDomains)
@@ -247,7 +247,7 @@ async fn start_failure_is_dispatched_once_for_transport_and_decode_errors() {
 async fn malformed_and_lost_continuations_terminally_consume_the_cursor() {
     for reply in [
         Reply::Lost,
-        response(QueryResponse::Iterable(QueryOutput {
+        response(&QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![
                 "hostile".to_owned(),
             ])),

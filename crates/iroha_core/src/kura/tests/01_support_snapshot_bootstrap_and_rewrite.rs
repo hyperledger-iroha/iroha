@@ -19,25 +19,21 @@ use iroha_config::{
     },
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
+    Algorithm, Hash, HashOf,
 };
 use iroha_data_model::{
     Level,
-    asset::AssetDefinitionId,
-    block::{BlockHeader, BlockSignature},
-    isi::{InstructionBox, Log, Upgrade},
+    block::BlockHeader,
+    isi::Log,
     nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
-    prelude::{Executor, IvmBytecode},
     transaction::{
-        Executable, TransactionBuilder,
-        signed::{TransactionEntrypoint, TransactionResult, TransactionResultInner},
+        TransactionBuilder,
+        signed::{TransactionEntrypoint, TransactionResult},
     },
     trigger::DataTriggerSequence,
 };
 use iroha_model_base::{
     chain::ChainId,
-    domain::DomainId,
-    peer::PeerId,
     topology::{DataSpaceId, LaneId},
 };
 use iroha_telemetry::metrics::Metrics;
@@ -46,7 +42,6 @@ use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
-    cell::Cell,
     collections::BTreeMap,
     fs,
     io::{Read, Seek, SeekFrom, Write},

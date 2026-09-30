@@ -1,7 +1,7 @@
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
-import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
+import { normalizeContractErrorMessagesV1, normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { timingSafeEqual } from "node:crypto";
 import { JS_TYPE_BIGINT, JS_TYPE_FUNCTION, JS_TYPE_NUMBER, JS_TYPE_OBJECT, JS_TYPE_STRING, KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
@@ -19292,6 +19292,7 @@ function assertExactManifestResponseShape(value, context) {
       "entrypoints",
       "states",
       "error_types",
+      "error_messages",
       "kotoba",
       "provenance",
     ],
@@ -19466,6 +19467,8 @@ function normalizeManifestPayload(manifest, context) {
     "states",
     "error_types",
     "errorTypes",
+    "error_messages",
+    "errorMessages",
     "kotoba",
     "provenance",
   ]);
@@ -19494,6 +19497,7 @@ function normalizeManifestPayload(manifest, context) {
     entrypoints: null,
     states: null,
     error_types: null,
+    error_messages: null,
     kotoba: null,
     provenance: null,
   };
@@ -19577,6 +19581,7 @@ function normalizeManifestPayload(manifest, context) {
         ? null
         : normalizeManifestErrorTypesPayload(errorTypes, `${context}.error_types`);
   }
+  normalized.error_messages = normalizeContractErrorMessagesV1(getField("error_messages", "errorMessages"), normalized.error_types, `${context}.error_messages`);
   if (hasField("kotoba")) {
     const kotoba = getField("kotoba");
     normalized.kotoba =

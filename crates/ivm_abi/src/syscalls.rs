@@ -2885,7 +2885,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
     let durable_state = AbiDurableStateSurface {
         semantics_version: 6,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
-        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_types);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
+        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,callables,states,error_types,error_messages);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
         contract_interface_schema_hash: norito::schema::identity::frame_hash::<
             crate::metadata::EmbeddedContractInterfaceV1,

@@ -526,13 +526,22 @@ impl Core {
             max_bytes: request.max_bytes.min(self.local.sync_max_bytes),
         });
     }
-    pub(super) fn on_manifest_rejected(&mut self, manifest: PayloadManifest) {
+    pub(super) fn on_manifest_rejected(&mut self, manifest: &PayloadManifest) {
+        // Rejected unsigned carrier bytes do not prove a signed leader defect (SR35).
+        #[cfg(sumeragi_mutation = "MS35")]
+        if self
+            .proposal
+            .as_ref()
+            .is_some_and(|held| held.bh == manifest.hash(&*self.crypto) && held.p.view == self.view)
+        {
+            self.sign_timeout(self.view);
+        }
         let height = manifest.header.height;
         if self
             .sync
             .buffer
             .get(&height)
-            .is_some_and(|entry| entry.manifest == manifest)
+            .is_some_and(|entry| &entry.manifest == manifest)
         {
             let removed = self
                 .sync

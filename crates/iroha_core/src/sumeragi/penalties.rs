@@ -1,4 +1,8 @@
 //! Deterministic `NPoS` consensus-evidence slashing.
+//!
+//! Parent validator locators retain exact original-pool backing and nested key custody.
+//! TODO(S8): evidence/history graphs, stake-index quantities and penalty-action arithmetic
+//! still need complete original-pool owners; this locator owner does not fund those graphs.
 #[cfg(test)]
 use crate::state::StateBlock;
 #[cfg(feature = "telemetry")]
@@ -15,8 +19,11 @@ use crate::{
     },
 };
 use eyre::{Result, WrapErr, eyre};
-use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
-use iroha_crypto::{Hash, PublicKey};
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
+    ChargedBufferFromChargeError, PrepaidBufferError,
+};
+use iroha_crypto::{ChargedPublicKey, Hash, PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     block::{
         BlockHeader,
@@ -32,9 +39,9 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
+use std::alloc::Layout;
 #[cfg(test)]
-use std::collections::BTreeSet;
-use std::{alloc::Layout, collections::BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Debug, Default)]
 /// Result of applying one exact finalized penalty bundle.
 pub struct PenaltyOutcome {
@@ -50,16 +57,256 @@ enum EffectsApplicationMode {
     ValidateOnly,
 }
 struct ValidatorLocator {
+    peer_key: ChargedPublicKey,
     lane_id: LaneId,
     validator: AccountId,
-    slashable_exposure: Quantity,
     activation_height: u64,
     deactivation_height: Option<u64>,
 }
+/// Immutable flat lookup. Concrete keys/accounts cannot unwind during destruction;
+/// row destruction releases every account before the final nested-charge ledger.
+struct ValidatorMap {
+    rows: ChargedBuffer<ValidatorLocator>,
+    _account_charges: ChargedBuffer<AllocationCharge>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ValidatorMapDemand {
+    rows: usize,
+    account_charges: usize,
+    nested_bytes: usize,
+}
+
+impl ValidatorMapDemand {
+    fn from_world(view: &StateView<'_>) -> Result<Self> {
+        let mut demand = Self::default();
+        let mut current_lane = None;
+        let mut lane_count = 0_u32;
+        // The World cursor is ordered by (lane, account); no per-lane map is needed.
+        for (key, record) in view.world().public_lane_validators().iter() {
+            if !public_lane_validator_record_matches_key(key, record) {
+                continue;
+            }
+            if current_lane != Some(key.0) {
+                current_lane = Some(key.0);
+                lane_count = 0;
+            }
+            lane_count = lane_count
+                .checked_add(1)
+                .ok_or_else(|| eyre!("public-lane validator count overflows u32"))?;
+            if lane_count > view.nexus.staking.max_validators.get() {
+                return Err(eyre!(
+                    "public lane {} exceeds retained validator capacity",
+                    key.0
+                ));
+            }
+            if !view.is_lane_active_for_authority(key.0)
+                || view.staking_authority_lane(key.0) != Some(key.0)
+            {
+                continue;
+            }
+            validator_tenure_contains_height(record, record.activation_height)
+                .wrap_err("retained public-lane validator tenure is non-canonical")?;
+            demand.add(record.peer_id.public_key(), &key.1)?;
+        }
+        Ok(demand)
+    }
+
+    fn add(
+        &mut self,
+        peer: &PublicKey,
+        account: &AccountId,
+    ) -> Result<(), EvidencePreparationError> {
+        let overflow = || EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow);
+        self.rows = self.rows.checked_add(1).ok_or(overflow())?;
+        self.nested_bytes = self
+            .nested_bytes
+            .checked_add(peer.retained_allocation_layout().size())
+            .ok_or(overflow())?;
+        let mut failed = false;
+        account
+            .for_each_admission_clone_layout(|layout| {
+                if let (Some(bytes), Some(charges)) = (
+                    self.nested_bytes.checked_add(layout.size()),
+                    self.account_charges.checked_add(1),
+                ) {
+                    self.nested_bytes = bytes;
+                    self.account_charges = charges;
+                } else {
+                    failed = true;
+                }
+            })
+            .map_err(|_| EvidencePreparationError::Invariant)?;
+        if failed {
+            return Err(overflow());
+        }
+        Ok(())
+    }
+
+    fn retained_bytes(self) -> Result<usize, EvidencePreparationError> {
+        let overflow = || EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow);
+        let rows = Layout::array::<ValidatorLocator>(self.rows).map_err(|_| overflow())?;
+        let ledger =
+            Layout::array::<AllocationCharge>(self.account_charges).map_err(|_| overflow())?;
+        rows.size()
+            .checked_add(ledger.size())
+            .and_then(|bytes| bytes.checked_add(self.nested_bytes))
+            .ok_or(overflow())
+    }
+}
+
+impl ValidatorMap {
+    fn from_world(
+        view: &StateView<'_>,
+        index: &PublicLaneStakeIndex,
+        budget: &AllocationBudget,
+    ) -> Result<Self> {
+        let demand = ValidatorMapDemand::from_world(view)?;
+        let reservation = budget
+            .try_reserve_bytes(demand.retained_bytes()?)
+            .map_err(EvidencePreparationError::Admission)?;
+        Self::from_reservation(view, index, demand, budget, reservation)
+    }
+
+    fn from_reservation(
+        view: &StateView<'_>,
+        index: &PublicLaneStakeIndex,
+        demand: ValidatorMapDemand,
+        budget: &AllocationBudget,
+        mut reservation: AllocationReservation,
+    ) -> Result<Self> {
+        if !reservation.belongs_to(budget)
+            || reservation.remaining_bytes() != demand.retained_bytes()?
+        {
+            return Err(EvidencePreparationError::Invariant.into());
+        }
+        // Declare the ledger first: every partial row/account is destroyed before its
+        // charges on refusal or unwind. A completed map preserves that field order.
+        let mut account_charges =
+            ChargedBuffer::from_reservation(demand.account_charges, &mut reservation)
+                .map_err(validator_map_buffer_error)?;
+        let mut rows = ChargedBuffer::from_reservation(demand.rows, &mut reservation)
+            .map_err(validator_map_buffer_error)?;
+        for (key, record) in view.world().public_lane_validators().iter() {
+            if !public_lane_validator_record_matches_key(key, record)
+                || !view.is_lane_active_for_authority(key.0)
+                || view.staking_authority_lane(key.0) != Some(key.0)
+            {
+                continue;
+            }
+            // Preserve validation even when no pending proof will use this locator.
+            // Quantity arithmetic remains an explicit stake-index resource obligation.
+            original_slashable_exposure(index, key.0, &key.1)?;
+            let peer = record.peer_id.public_key();
+            let charge = reservation
+                .try_split(peer.retained_allocation_layout())
+                .map_err(|_| EvidencePreparationError::Invariant)?;
+            let peer_key = peer
+                .try_clone_from_charge(budget, charge)
+                .map_err(|(_, error)| match error {
+                    PublicKeyAllocationError::Allocation(
+                        ChargedBufferFromChargeError::Allocator { layout },
+                    ) => EvidencePreparationError::Allocator {
+                        requested_bytes: layout.size(),
+                    },
+                    _ => EvidencePreparationError::Invariant,
+                })?;
+            let validator = clone_locator_account(&key.1, &mut reservation, &mut account_charges)?;
+            rows.try_push(ValidatorLocator {
+                peer_key,
+                lane_id: key.0,
+                validator,
+                activation_height: record.activation_height,
+                deactivation_height: record.deactivation_height,
+            })
+            .map_err(|_| EvidencePreparationError::Invariant)?;
+        }
+        if rows.as_slice().len() != demand.rows
+            || account_charges.as_slice().len() != demand.account_charges
+            || reservation.remaining_bytes() != 0
+        {
+            return Err(EvidencePreparationError::Invariant.into());
+        }
+        rows.as_mut_slice().sort_unstable_by(|left, right| {
+            left.peer_key
+                .get()
+                .cmp(right.peer_key.get())
+                .then_with(|| left.lane_id.cmp(&right.lane_id))
+                .then_with(|| left.validator.cmp(&right.validator))
+        });
+        Ok(Self {
+            rows,
+            _account_charges: account_charges,
+        })
+    }
+
+    fn get(&self, peer: &PublicKey) -> Option<&[ValidatorLocator]> {
+        let rows = self.rows.as_slice();
+        let first = rows.partition_point(|row| row.peer_key.get() < peer);
+        let count = rows[first..].partition_point(|row| row.peer_key.get() == peer);
+        (count != 0).then_some(&rows[first..first + count])
+    }
+}
+
+fn validator_map_buffer_error(error: PrepaidBufferError) -> EvidencePreparationError {
+    match error {
+        PrepaidBufferError::Allocation(error) => error.into(),
+        PrepaidBufferError::Reservation(_) => EvidencePreparationError::Invariant,
+    }
+}
+
+fn clone_locator_account(
+    account: &AccountId,
+    reservation: &mut AllocationReservation,
+    charges: &mut ChargedBuffer<AllocationCharge>,
+) -> Result<AccountId, EvidencePreparationError> {
+    let mut failed = false;
+    account
+        .for_each_admission_clone_layout(|layout| {
+            if failed {
+                return;
+            }
+            match reservation.try_split(layout) {
+                Ok(charge) => failed = charges.try_push(charge).is_err(),
+                Err(_) => failed = true,
+            }
+        })
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    if failed {
+        return Err(EvidencePreparationError::Invariant);
+    }
+    account
+        .try_clone_for_admission()
+        .map_err(|error| match error {
+            norito::core::Error::AllocationFailed { bytes } => {
+                EvidencePreparationError::Allocator {
+                    requested_bytes: usize::try_from(bytes).unwrap_or(usize::MAX),
+                }
+            }
+            norito::core::Error::TotalAllocationExceeded { attempted, limit } => {
+                EvidencePreparationError::DecodeScope {
+                    attempted_bytes: attempted,
+                    limit_bytes: limit,
+                }
+            }
+            _ => EvidencePreparationError::Invariant,
+        })
+}
+
+fn original_slashable_exposure(
+    index: &PublicLaneStakeIndex,
+    lane: LaneId,
+    validator: &AccountId,
+) -> Result<Quantity> {
+    index
+        .total_exposure(lane, validator)
+        .map_err(|error| eyre!("invalid slashable stake exposure for {validator}: {error}"))
+}
+
 struct ParentPenaltySnapshot {
     pending: ChargedBuffer<PendingPenaltyEvidence>,
     max_slash_bps: u16,
-    validator_map: BTreeMap<PublicKey, Vec<ValidatorLocator>>,
+    validator_map: ValidatorMap,
     stake_index: PublicLaneStakeIndex,
     #[cfg(test)]
     stake_share_row_visits: usize,
@@ -176,52 +423,7 @@ impl<'a> PenaltyApplier<'a> {
             stake_budget,
         )
         .wrap_err("failed to index slashable public-lane stake exposure")?;
-        let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
-        let mut validator_counts = BTreeMap::<LaneId, u32>::new();
-        for (key, record) in world.public_lane_validators().iter() {
-            if !public_lane_validator_record_matches_key(key, record) {
-                continue;
-            }
-            let (lane_id, validator_id) = key;
-            let validator_count = validator_counts.entry(*lane_id).or_default();
-            *validator_count = validator_count
-                .checked_add(1)
-                .ok_or_else(|| eyre!("public-lane validator count overflows u32"))?;
-            if *validator_count > view.nexus.staking.max_validators.get() {
-                return Err(eyre!(
-                    "public lane {lane_id} exceeds retained validator capacity"
-                ));
-            }
-            if !view.is_lane_active_for_authority(*lane_id)
-                || view.staking_authority_lane(*lane_id) != Some(*lane_id)
-            {
-                continue;
-            }
-            let activation_height = record.activation_height;
-            validator_tenure_contains_height(record, activation_height)
-                .wrap_err("retained public-lane validator tenure is non-canonical")?;
-            candidates_map
-                .entry(record.peer_id.public_key().clone())
-                .or_default()
-                .push(ValidatorLocator {
-                    lane_id: *lane_id,
-                    validator: validator_id.clone(),
-                    slashable_exposure: exposure_index
-                        .total_exposure(*lane_id, validator_id)
-                        .map_err(|error| {
-                            eyre!("invalid slashable stake exposure for {validator_id}: {error}")
-                        })?,
-                    activation_height,
-                    deactivation_height: record.deactivation_height,
-                });
-        }
-        for locators in candidates_map.values_mut() {
-            locators.sort_by(|lhs, rhs| {
-                lhs.lane_id
-                    .cmp(&rhs.lane_id)
-                    .then_with(|| lhs.validator.cmp(&rhs.validator))
-            });
-        }
+        let candidates_map = ValidatorMap::from_world(view, &exposure_index, budget)?;
         for (key, record) in world.consensus_evidence().iter() {
             if !due(record) {
                 continue;
@@ -387,7 +589,12 @@ impl<'a> PenaltyApplier<'a> {
                                 locator.validator, locator.lane_id
                             )
                         })?;
-                        if current_exposure > locator.slashable_exposure {
+                        let original_exposure = original_slashable_exposure(
+                            &snapshot.stake_index,
+                            locator.lane_id,
+                            &locator.validator,
+                        )?;
+                        if current_exposure > original_exposure {
                             return Err(eyre!(
                                 "slashable exposure increased while planning one penalty bundle"
                             ));
@@ -933,19 +1140,18 @@ pub(crate) fn seed_penalty_validator_for_tests(
 mod tests {
     use super::*;
     use crate::{
-        block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::isi::staking::apply_slash_to_validator_without_observability,
         state::{State, StateBlock, World},
         sumeragi::evidence::evidence_key,
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
         asset::{AssetDefinitionId, AssetId},
         block::{
-            BlockHeader, SignedBlock,
+            BlockHeader,
             consensus::{Evidence, EvidenceRecord},
         },
         nexus::{
@@ -958,10 +1164,7 @@ mod tests {
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
-    use std::{
-        num::{NonZeroU32, NonZeroU64},
-        sync::Arc,
-    };
+    use std::num::{NonZeroU32, NonZeroU64};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("penalty fixture key generation should succeed")
     }
@@ -982,24 +1185,15 @@ mod tests {
     /// Component evidence below remains explicit fixture prestate; no retired sidecar
     /// substitutes for the native committed authority required by monetary execution.
     fn native_penalty_state() -> State {
-        use crate::sumeragi::{startup, test_chain::signed_genesis_fixture};
+        use crate::sumeragi::{startup, test_chain::signed_genesis_fixture_for_state};
         use iroha_data_model::{
             IntoKeyValue as _, Registrable as _, account::Account, domain::Domain,
             parameter::system::ConsensusMode,
         };
         use iroha_model_base::chain::ChainId;
 
-        let seed = fresh_state();
-        let nexus = seed.nexus_snapshot();
-        let mut world = seed.world;
         let key = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519).unwrap();
         let authority = AccountId::new(key.public_key().clone());
-        let domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
-        world.insert_domain_for_testing(domain.clone(), Domain::new(domain).build(&authority));
-        let (id, account) = Account::new(authority.clone())
-            .build(&authority)
-            .into_key_value();
-        world.accounts.insert(id, account);
         let chain_id = ChainId::from("native-penalty-custody-fixture");
         let validators = roster_keys()
             .iter()
@@ -1010,29 +1204,53 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let genesis = signed_genesis_fixture(
+        let (genesis, state) = signed_genesis_fixture_for_state(
             &chain_id,
             &key,
             &validators,
             Vec::new(),
             1,
-            ConsensusMode::Npos,
             Some(SumeragiNposParameters {
                 slashing_delay_blocks: 1,
                 ..SumeragiNposParameters::default()
             }),
+            |network| {
+                let seed = fresh_state();
+                let nexus = seed.nexus_snapshot();
+                let mut world = seed.world;
+                let domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+                world.insert_domain_for_testing(
+                    domain.clone(),
+                    Domain::new(domain).build(&authority),
+                );
+                let (id, account) = Account::new(authority.clone())
+                    .build(&authority)
+                    .into_key_value();
+                world.accounts.insert(id, account);
+                let mut state = State::new_with_chain_and_network_id_for_testing(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                    chain_id.clone(),
+                    network,
+                );
+                state
+                    .set_nexus(nexus)
+                    .expect("exact network XOR custody configuration");
+                state
+            },
         )
-        .expect("signed native NPoS genesis");
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            chain_id,
-            NetworkId::from_genesis_hash(genesis.hash()),
+        .expect("signed native NPoS genesis binds its original staking custody policies");
+        assert_eq!(
+            state.view().height(),
+            0,
+            "policy derivation must not publish"
         );
-        state
-            .set_nexus(nexus)
-            .expect("exact network XOR custody configuration");
+        assert_eq!(
+            state.network_id_ref(),
+            &NetworkId::from_genesis_hash(genesis.hash()),
+            "the final State belongs to the policy-bound original signed genesis"
+        );
         startup::apply_genesis(&state, genesis, &authority, ConsensusMode::Npos, None)
             .expect("original executed native genesis and authority");
         assert_eq!(state.view().height(), 1);
@@ -1350,7 +1568,15 @@ mod tests {
             .and_then(|locators| locators.first())
             .expect("first validator indexed");
         assert_eq!(first_locator.validator, first);
-        assert_eq!(first_locator.slashable_exposure, Quantity::from(13_000_u64));
+        assert_eq!(
+            original_slashable_exposure(
+                &snapshot.stake_index,
+                first_locator.lane_id,
+                &first_locator.validator
+            )
+            .unwrap(),
+            Quantity::from(13_000_u64)
+        );
         let second_locator = snapshot
             .validator_map
             .get(peers[1].public_key())
@@ -1358,7 +1584,12 @@ mod tests {
             .expect("second validator indexed");
         assert_eq!(second_locator.validator, second);
         assert_eq!(
-            second_locator.slashable_exposure,
+            original_slashable_exposure(
+                &snapshot.stake_index,
+                second_locator.lane_id,
+                &second_locator.validator
+            )
+            .unwrap(),
             Quantity::from(10_000_u64)
         );
         assert_eq!(
@@ -1896,6 +2127,454 @@ mod tests {
         }));
     }
     #[test]
+    fn validator_map_exact_pool_refusal_retry_move_drop_and_unwind_preserve_source() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let state = fresh_state();
+        let peers = roster();
+        let validator = add_validator_record(&state, &peers[0]);
+        let view = state.view();
+        let key = (LaneId::SINGLE, validator.clone());
+        let original = view.world.public_lane_validators().get(&key).unwrap();
+        let original_peer = original
+            .peer_id
+            .public_key()
+            .try_to_bytes()
+            .unwrap()
+            .1
+            .as_ptr();
+        let original_account = validator
+            .expect_single_signatory()
+            .try_to_bytes()
+            .unwrap()
+            .1
+            .as_ptr();
+        let index =
+            PublicLaneStakeIndex::from_world(view.world(), 16, 16, state.stake_index_budget())
+                .unwrap();
+        let demand = ValidatorMapDemand::from_world(&view).unwrap();
+        assert_eq!(demand.rows, 1);
+        assert_eq!(demand.account_charges, 1);
+        let required = demand.retained_bytes().unwrap();
+        assert_eq!(
+            required,
+            std::mem::size_of::<ValidatorLocator>()
+                + std::mem::size_of::<AllocationCharge>()
+                + original
+                    .peer_id
+                    .public_key()
+                    .retained_allocation_layout()
+                    .size()
+                + validator
+                    .expect_single_signatory()
+                    .retained_allocation_layout()
+                    .size()
+        );
+        let budget = AllocationBudget::new(required);
+        let held = budget.try_reserve_bytes(1).unwrap();
+        let error = ValidatorMap::from_world(&view, &index, &budget)
+            .err()
+            .unwrap();
+        assert!(matches!(error.downcast_ref::<EvidencePreparationError>(),
+            Some(EvidencePreparationError::Admission(AllocationRefusal::Capacity { requested_bytes, .. }))
+                if *requested_bytes == required));
+        assert!(
+            error
+                .downcast_ref::<EvidencePreparationError>()
+                .unwrap()
+                .release_wait()
+                .is_some()
+        );
+        assert_eq!(budget.reserved_bytes(), 1);
+        assert_eq!(
+            view.world.public_lane_validators().get(&key),
+            Some(original)
+        );
+        assert_eq!(
+            original
+                .peer_id
+                .public_key()
+                .try_to_bytes()
+                .unwrap()
+                .1
+                .as_ptr(),
+            original_peer
+        );
+        assert_eq!(
+            validator
+                .expect_single_signatory()
+                .try_to_bytes()
+                .unwrap()
+                .1
+                .as_ptr(),
+            original_account
+        );
+        drop(held);
+        let map = ValidatorMap::from_world(&view, &index, &budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), required);
+        let rows = map.rows.as_slice().as_ptr();
+        let peer = map.get(peers[0].public_key()).unwrap()[0]
+            .peer_key
+            .get()
+            .try_to_bytes()
+            .unwrap()
+            .1
+            .as_ptr();
+        assert_ne!(peer, original_peer);
+        let moved = std::hint::black_box(map);
+        assert_eq!(moved.rows.as_slice().as_ptr(), rows);
+        assert_eq!(
+            moved.get(peers[0].public_key()).unwrap()[0]
+                .peer_key
+                .get()
+                .try_to_bytes()
+                .unwrap()
+                .1
+                .as_ptr(),
+            peer
+        );
+        assert_eq!(
+            moved.get(peers[0].public_key()).unwrap()[0].validator,
+            validator
+        );
+        assert!(moved.get(peers[1].public_key()).is_none());
+        assert_eq!(budget.reserved_bytes(), required);
+        drop(moved);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _map = ValidatorMap::from_world(&view, &index, &budget).unwrap();
+                assert_eq!(budget.reserved_bytes(), required);
+                panic!("abandon the original locator plan");
+            }))
+            .is_err()
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            view.world.public_lane_validators().get(&key),
+            Some(original)
+        );
+    }
+
+    #[test]
+    fn validator_map_refusal_preserves_due_evidence_and_committed_escrow_until_retry() {
+        let state = native_penalty_state();
+        install_one_block_delay_npos(&state);
+        let peer = roster().remove(1);
+        let validator = add_validator_record(&state, &peer);
+        let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
+        let original = state
+            .world
+            .consensus_evidence
+            .view()
+            .get(&due)
+            .unwrap()
+            .clone();
+        let (definition, escrow, _) = penalty_staking_ids();
+        let asset = AssetId::new(definition, escrow);
+        let before = state
+            .world
+            .assets
+            .view()
+            .get(&asset)
+            .unwrap()
+            .as_ref()
+            .clone();
+        let map_bytes = ValidatorMapDemand::from_world(&state.view())
+            .unwrap()
+            .retained_bytes()
+            .unwrap();
+        let pending_bytes = std::mem::size_of::<PendingPenaltyEvidence>()
+            + pending_peer_key_layout(&peer).unwrap().size();
+        let budget = state.evidence_preparation_budget();
+        let held_bytes = budget.limit_bytes() - pending_bytes - map_bytes + 1;
+        let held = budget.try_reserve_bytes(held_bytes).unwrap();
+        let applier = PenaltyApplier::new(&state, None);
+        let error = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .err()
+            .unwrap();
+        assert!(matches!(error.downcast_ref::<EvidencePreparationError>(),
+            Some(EvidencePreparationError::Admission(AllocationRefusal::Capacity { requested_bytes, .. }))
+                if *requested_bytes == map_bytes));
+        assert!(
+            error
+                .downcast_ref::<EvidencePreparationError>()
+                .unwrap()
+                .release_wait()
+                .is_some()
+        );
+        assert_eq!(budget.reserved_bytes(), held_bytes);
+        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original)
+        );
+        assert_eq!(
+            state.world.assets.view().get(&asset).unwrap().as_ref(),
+            &before
+        );
+        drop(held);
+        let (actions, index) = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .unwrap();
+        assert!(actions.iter().any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(slash)
+            if slash.evidence_key == due && slash.validator == validator && slash.amount == Quantity::from(10_000_u64))));
+        assert!(actions.iter().any(
+            |action| matches!(action, NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
+            if mark.evidence_key == due && mark.height == 2)
+        ));
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original)
+        );
+        assert_eq!(
+            state.world.assets.view().get(&asset).unwrap().as_ref(),
+            &before
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+        drop(index);
+        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn validator_map_rejects_foreign_or_incomplete_prepaid_backing() {
+        let state = fresh_state();
+        let peers = roster();
+        add_validator_record(&state, &peers[0]);
+        let view = state.view();
+        let index =
+            PublicLaneStakeIndex::from_world(view.world(), 16, 16, state.stake_index_budget())
+                .unwrap();
+        let demand = ValidatorMapDemand::from_world(&view).unwrap();
+        let required = demand.retained_bytes().unwrap();
+        let budget = AllocationBudget::new(required);
+        let foreign = AllocationBudget::new(required);
+        for reservation in [
+            foreign.try_reserve_bytes(required).unwrap(),
+            budget.try_reserve_bytes(required - 1).unwrap(),
+        ] {
+            let error = ValidatorMap::from_reservation(&view, &index, demand, &budget, reservation)
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error.downcast_ref::<EvidencePreparationError>(),
+                Some(EvidencePreparationError::Invariant)
+            ));
+        }
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(foreign.reserved_bytes(), 0);
+        let map = ValidatorMap::from_world(&view, &index, &budget).unwrap();
+        assert_eq!(map.get(peers[0].public_key()).unwrap().len(), 1);
+        drop(map);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn validator_map_multisig_partial_clone_refusal_preserves_exact_nested_custody() {
+        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+
+        let first = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519).unwrap();
+        let second = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519).unwrap();
+        let account = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(first.public_key().clone(), 1).unwrap(),
+                    MultisigMember::new(second.public_key().clone(), 1).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        let source_members = account.multisig_policy().unwrap().members().as_ptr();
+        let mut demand = ValidatorMapDemand::default();
+        demand.add(first.public_key(), &account).unwrap();
+        assert_eq!(demand.account_charges, 3);
+        let account_bytes =
+            demand.nested_bytes - first.public_key().retained_allocation_layout().size();
+        let ledger_bytes = Layout::array::<AllocationCharge>(demand.account_charges)
+            .unwrap()
+            .size();
+        let budget = AllocationBudget::new(account_bytes + ledger_bytes);
+        let mut reservation = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+        let mut charges =
+            ChargedBuffer::from_reservation(demand.account_charges, &mut reservation).unwrap();
+        // The members backing and first key exist before the second key's active
+        // decoder scope refuses. All matching original credit remains in the ledger.
+        let limits =
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 33, usize::MAX);
+        let error = norito::core::with_decode_limits_scope(limits, || {
+            clone_locator_account(&account, &mut reservation, &mut charges)
+        })
+        .err()
+        .unwrap();
+        assert!(matches!(
+            error,
+            EvidencePreparationError::DecodeScope {
+                attempted_bytes: 66,
+                limit_bytes: 33
+            }
+        ));
+        assert_eq!(
+            account.multisig_policy().unwrap().members().as_ptr(),
+            source_members
+        );
+        assert_eq!(charges.as_slice().len(), demand.account_charges);
+        assert_eq!(reservation.remaining_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(charges);
+        drop(reservation);
+        assert_eq!(budget.reserved_bytes(), 0);
+        let mut reservation = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+        let mut charges =
+            ChargedBuffer::from_reservation(demand.account_charges, &mut reservation).unwrap();
+        let cloned = clone_locator_account(&account, &mut reservation, &mut charges).unwrap();
+        assert_eq!(cloned, account);
+        assert_ne!(
+            cloned.multisig_policy().unwrap().members().as_ptr(),
+            source_members
+        );
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(cloned);
+        drop(charges);
+        drop(reservation);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn validator_map_flat_lookup_matches_peer_lane_account_order_and_per_lane_caps() {
+        use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
+        use iroha_model_base::topology::DataSpaceId;
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).unwrap(),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "second-owner".into(),
+                    dataspace_id: DataSpaceId::new(1),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .unwrap();
+        nexus.dataspace_catalog = DataSpaceCatalog::new(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| DataSpaceMetadata {
+                    id: lane.dataspace_id,
+                    alias: format!("owner-{}", lane.id.as_u32()),
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect(),
+        )
+        .unwrap();
+        let mut state = State::new_with_nexus_for_testing(
+            World::default(),
+            nexus,
+            LiveQueryStore::start_test(),
+        );
+        configure_penalty_staking_state_for_tests(&mut state);
+        state.nexus.get_mut().staking.max_validators = NonZeroU32::new(2).unwrap();
+        let peers = roster();
+        let first = add_validator_record_on_lane(&state, LaneId::SINGLE, &peers[1]);
+        let second = add_validator_record_on_lane(&state, LaneId::SINGLE, &peers[0]);
+        add_validator_record_on_lane(&state, LaneId::new(1), &peers[0]);
+        {
+            let key = (LaneId::SINGLE, first.clone());
+            let mut records = state.world.public_lane_validators.block();
+            let mut row = records.get(&key).unwrap().clone();
+            row.peer_id = peers[0].clone();
+            records.insert(key, row);
+            records.commit();
+        }
+        let view = state.view();
+        let index =
+            PublicLaneStakeIndex::from_world(view.world(), 16, 16, state.stake_index_budget())
+                .unwrap();
+        let map =
+            ValidatorMap::from_world(&view, &index, state.evidence_preparation_budget()).unwrap();
+        let mut reference = BTreeMap::<PublicKey, Vec<(LaneId, AccountId)>>::new();
+        for ((lane, account), row) in view.world.public_lane_validators().iter() {
+            reference
+                .entry(row.peer_id.public_key().clone())
+                .or_default()
+                .push((*lane, account.clone()));
+        }
+        for (peer, expected) in &mut reference {
+            expected.sort();
+            let actual = map
+                .get(peer)
+                .unwrap()
+                .iter()
+                .map(|row| (row.lane_id, row.validator.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.as_slice(), expected.as_slice());
+        }
+        let locators = map.get(peers[0].public_key()).unwrap();
+        assert_eq!(
+            locators.len(),
+            3,
+            "the lane count resets at the next authoritative lane"
+        );
+        assert_eq!(locators[2].lane_id, LaneId::new(1));
+        assert_eq!(locators[2].validator, second);
+        assert!(locators[..2].iter().any(|row| row.validator == first));
+        for row in locators {
+            assert_eq!(
+                original_slashable_exposure(&index, row.lane_id, &row.validator).unwrap(),
+                Quantity::from(10_000_u64)
+            );
+        }
+        assert!(map.get(peers[1].public_key()).is_none());
+        drop(map);
+        assert_eq!(state.evidence_preparation_budget().reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn validator_map_demand_detects_row_ledger_and_nested_overflow() {
+        let peer = roster().remove(0);
+        let account = AccountId::new(peer.public_key().clone());
+        for mut demand in [
+            ValidatorMapDemand {
+                rows: usize::MAX,
+                ..ValidatorMapDemand::default()
+            },
+            ValidatorMapDemand {
+                account_charges: usize::MAX,
+                ..ValidatorMapDemand::default()
+            },
+            ValidatorMapDemand {
+                nested_bytes: usize::MAX,
+                ..ValidatorMapDemand::default()
+            },
+        ] {
+            assert!(matches!(
+                demand.add(peer.public_key(), &account),
+                Err(EvidencePreparationError::Admission(
+                    AllocationRefusal::DemandOverflow
+                ))
+            ));
+        }
+        assert!(matches!(
+            ValidatorMapDemand {
+                rows: usize::MAX,
+                ..ValidatorMapDemand::default()
+            }
+            .retained_bytes(),
+            Err(EvidencePreparationError::Admission(
+                AllocationRefusal::DemandOverflow
+            ))
+        ));
+    }
+
+    #[test]
     fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
         use iroha_allocation::AllocationRefusal;
 
@@ -2067,10 +2746,16 @@ mod tests {
                 .expect("active validator tenure is indexed by its frozen-roster key");
             assert_eq!(locators.len(), 1);
             assert_eq!(locators[0].activation_height, 1);
-            assert_eq!(locators[0].slashable_exposure, Quantity::from(10_000_u64));
+            let exposure = original_slashable_exposure(
+                &snapshot.stake_index,
+                locators[0].lane_id,
+                &locators[0].validator,
+            )
+            .unwrap();
+            assert_eq!(exposure, Quantity::from(10_000_u64));
             assert_eq!(snapshot.max_slash_bps, 10_000);
             assert_eq!(
-                max_slash_amount(&locators[0].slashable_exposure, snapshot.max_slash_bps)
+                max_slash_amount(&exposure, snapshot.max_slash_bps)
                     .expect("canonical slash amount"),
                 Quantity::from(10_000_u64)
             );

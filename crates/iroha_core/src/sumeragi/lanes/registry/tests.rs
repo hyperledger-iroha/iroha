@@ -4,6 +4,10 @@ use super::*;
 use crate::sumeragi::{crypto::KeyPairSigner, lanes::record::tests::fixture};
 use iroha_allocation::ChargedBuffer;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_data_model::sumeragi_lanes::{
+    SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLaneRecord,
+};
+use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody, PayloadAuthoring, PayloadBytes},
     crypto::{NoAttestation, Signer},
@@ -168,6 +172,38 @@ impl Fixture {
             .append(&self.body, &self.qc)
             .unwrap();
     }
+
+    fn lane_state(&self) -> SumeragiLaneState {
+        let mut committee: Vec<_> = (1..=4)
+            .map(|seed| {
+                let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                SumeragiLaneMember {
+                    peer: PeerId::new(pair.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(pair.private_key()).unwrap(),
+                }
+            })
+            .collect();
+        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+        SumeragiLaneState {
+            lanes: vec![SumeragiLaneRecord {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+                lane: LANE,
+                dataspace: DataSpaceId::new(0),
+                incarnation: INCARNATION,
+                params: Default::default(),
+                committee,
+                created_at: 1,
+                active_from: 3,
+                closing: None,
+                anchor_freshness: 4,
+                merged: SumeragiLaneFrontier::default(),
+                merged_at: 3,
+                rescued: 0,
+            }],
+            incarnations: 1,
+            ..SumeragiLaneState::default()
+        }
+    }
 }
 
 #[test]
@@ -263,7 +299,7 @@ fn registry_retains_opening_lock_and_exact_charges_across_refusal() {
     assert_eq!(f.stores.budget.reserved_bytes(), baseline + raw);
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Opening(_))
+        Some(StoreSlot::Opening(..))
     ));
     let calls = f.authorities.calls.load(Ordering::SeqCst);
     f.authorities.corrupt.store(true, Ordering::SeqCst);
@@ -293,8 +329,93 @@ fn registry_retains_opening_lock_and_exact_charges_across_refusal() {
     assert_eq!(f.stores.budget.reserved_bytes(), baseline);
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Ready(_))
+        Some(StoreSlot::Ready(..))
     ));
+}
+
+#[test]
+fn retired_failed_openings_release_original_funding_and_lock_but_keep_replay_frames() {
+    for recreated in [false, true] {
+        let f = Fixture::new(true);
+        f.publish();
+        let original = fs::read(f.path()).unwrap();
+        f.stores.release(LANE, &INCARNATION);
+        let baseline = f.stores.budget.reserved_bytes();
+        f.stores.budget.set_limit_bytes(baseline + original.len());
+        assert_eq!(
+            f.stores
+                .runtime_store(LANE, &INCARNATION)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        let mut lanes = f.lane_state();
+        f.stores.release_retired(&lanes);
+        assert_eq!(f.stores.budget.reserved_bytes(), baseline + original.len());
+        assert!(matches!(
+            f.stores.stores.lock().get(&(LANE, INCARNATION)),
+            Some(StoreSlot::Opening(..))
+        ));
+        if recreated {
+            lanes.lanes[0].incarnation = [0x46; 32];
+        } else {
+            lanes.lanes.clear();
+        }
+        f.stores.release_retired(&lanes);
+        assert!(f.stores.stores.lock().is_empty());
+        assert_eq!(f.stores.budget.reserved_bytes(), baseline);
+        assert_eq!(fs::read(f.path()).unwrap(), original);
+        // A historical reader reopening this retired incarnation owns its retry. Later
+        // runner reconciliations must not discard its funded prefix or exclusive lock.
+        assert_eq!(
+            f.stores.store(LANE, &INCARNATION).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        f.stores.release_retired(&lanes);
+        assert_eq!(f.stores.budget.reserved_bytes(), baseline + original.len());
+        assert!(matches!(
+            f.stores.stores.lock().get(&(LANE, INCARNATION)),
+            Some(StoreSlot::Opening(_, false))
+        ));
+        f.stores.budget.set_limit_bytes(1 << 25);
+        assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+        f.stores.release_retired(&lanes);
+        assert!(matches!(
+            f.stores.stores.lock().get(&(LANE, INCARNATION)),
+            Some(StoreSlot::Ready(_, false))
+        ));
+        assert!(f.stores.block(LANE, &INCARNATION, 1).unwrap().is_some());
+    }
+}
+
+#[test]
+fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
+    let f = Fixture::new(true);
+    f.publish();
+    let reader = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+    f.stores.release_retired(&f.lane_state());
+    assert!(Arc::ptr_eq(
+        &reader,
+        &f.stores.store(LANE, &INCARNATION).unwrap()
+    ));
+    f.stores.release_retired(&SumeragiLaneState::default());
+    assert!(f.stores.stores.lock().is_empty());
+    assert!(reader.committed_body(1).unwrap().is_some());
+    assert!(
+        FileLaneBlockStore::begin_open(
+            f.dir.path(),
+            &f.source.instance(),
+            f.stores.crypto.clone(),
+            f.stores.budget.clone(),
+            f.authorities.schedule.clone(),
+            Arc::new(NoAttestation)
+        )
+        .is_err(),
+        "retirement must not revoke an outstanding authenticated reader's lock"
+    );
+    drop(reader);
+    assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+    assert!(f.stores.block(LANE, &INCARNATION, 1).unwrap().is_some());
 }
 
 #[test]
@@ -320,6 +441,6 @@ fn storage_corruption_is_repeated_error_not_missing_block_or_recovered_tip() {
     }
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Opening(_))
+        Some(StoreSlot::Opening(..))
     ));
 }

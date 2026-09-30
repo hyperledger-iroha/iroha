@@ -327,7 +327,7 @@ fn game(open: bool) -> GameSessionEventV1 {
         session_id,
         records: resources.clone(),
     }
-    .validate_for_owners(&[owner.clone()])
+    .validate_for_owners(std::slice::from_ref(&owner))
     .expect("valid populated resource record geometry");
     GameSessionEventV1 {
         session_id,
@@ -564,7 +564,7 @@ fn capture_values() -> Vec<Value> {
         Duration::from_millis(17),
         Duration::from_millis(23),
     )));
-    let events = vec![
+    let events = [
         time,
         EventBox::Data(DataEvent::GameSession(open).into()),
         EventBox::Data(DataEvent::GameSession(terminal).into()),

@@ -125,6 +125,7 @@ pub struct KuraMembershipStorage {
 }
 /// File-configured FASTPQ content-store policy with explicit byte/count units.
 #[derive(Debug, Clone, Copy, ReadConfig)]
+#[expect(clippy::struct_field_names, reason = "operator-facing config keys consistently identify maximum resource limits")]
 pub struct KuraFastpqArtifacts {
     /// Maximum complete artifact bytes, including the encoded wrapper.
     #[config(default = "defaults::kura::FASTPQ_ARTIFACT_MAX_BYTES")]

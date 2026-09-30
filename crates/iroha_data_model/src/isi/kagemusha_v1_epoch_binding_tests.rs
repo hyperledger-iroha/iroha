@@ -160,7 +160,7 @@ fn epoch_authorization_binding_keeps_fixed_width_identity() {
         ),
     ] {
         let digest = authorization.authorization_id().unwrap();
-        let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let actual = hex::encode(digest);
         assert_eq!(actual, expected);
         let bytes = authorization.encode();
         let decoded: KagemushaMintFinalityEpochAuthorizationV1 =

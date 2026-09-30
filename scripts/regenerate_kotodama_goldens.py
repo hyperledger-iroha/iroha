@@ -904,7 +904,7 @@ def validate_additional_test_sources(
             continue  # The canonical runner acceptance suite executes this below.
         command = [koto, "test", "run", "--jobs", "2", "--seed", "0", "--format", "json"]
         if source != template:
-            run([*command, source], root)
+            run([*command, "--source-root", root, source], root)
             continue
         # Musubi installs this exact pair under contracts/ and tests/, preserving
         # the template's relative koto_test target without rewriting its source.
@@ -916,7 +916,7 @@ def validate_additional_test_sources(
             test.parent.mkdir()
             contract.write_bytes((root / "crates/musubi/templates/contract.ko").read_bytes())
             test.write_bytes((root / source).read_bytes())
-            run([*command, test], stage)
+            run([*command, "--source-root", stage, test], stage)
 
 
 def contract_test_commands(

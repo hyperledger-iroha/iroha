@@ -342,9 +342,29 @@ mod tests {
             let authenticated = source.authenticated_execution(height).unwrap();
             assert_eq!(authenticated.committed().height(), height);
             let original = source.committed(height).unwrap();
-            assert!(Arc::ptr_eq(authenticated.block(), original.block()));
+            assert_eq!(
+                authenticated.block().encode_wire().unwrap(),
+                original.block().encode_wire().unwrap(),
+                "independent source reads retain the same exact certified frame"
+            );
             assert_eq!(authenticated.committed().result(), original.result());
         }
+        // Consuming each verification receipt must retain its original graph. Separate
+        // physical reads above need not share one allocation or a process-local cache.
+        let genesis = Arc::clone(chain.committed(1).block());
+        let successor = Arc::clone(chain.committed(2).block());
+        let mut prefix =
+            CertifiedPrefix::new(view.chain_id(), *view.network_id(), Arc::clone(&genesis))
+                .unwrap();
+        let (certified, anchored) = prefix.push(Arc::clone(&successor)).unwrap().into_parts();
+        assert!(Arc::ptr_eq(
+            certified.into_authenticated_execution().unwrap().block(),
+            &successor,
+        ));
+        assert!(Arc::ptr_eq(
+            anchored.unwrap().into_authenticated_execution().block(),
+            &genesis,
+        ));
     }
     #[test]
     fn bounded_native_source_authenticates_original_h1_and_h2_frames() {

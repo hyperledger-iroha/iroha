@@ -13,6 +13,26 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class ContractManifestTest {
     @Test
+    fun staticErrorMessagesBindDeclaredVariants() {
+        fun decode(code: Int = 1, message: String = "残高が不足しています", duplicate: Boolean = false): ContractManifest {
+            val entry = """{"error_type":"Vault::Failure","code":$code,"message":"$message"}"""
+            val messages = if (duplicate) "$entry,$entry" else entry
+            return ContractJsonParser.parseManifestRecord(
+                """{"manifest":{"error_types":[{"identity":"Vault::Failure","variants":[{"name":"Missing","code":1}]}],"error_messages":[$messages]}}""".toByteArray(StandardCharsets.UTF_8),
+            ).manifest
+        }
+        assertEquals("残高が不足しています", decode().errorMessages!!.single().message)
+        assertEquals("\u001c", decode(message = "\\u001c").errorMessages!!.single().message)
+        assertEquals(" 😀 ", decode(message = " 😀 ").errorMessages!!.single().message)
+        assertFailsWith<IllegalStateException> { decode(message = "\u0085\u00a0") }
+        assertFailsWith<IllegalStateException> { decode(message = "\\ud800") }
+        assertFailsWith<IllegalStateException> { decode(code = 2) }
+        assertFailsWith<IllegalStateException> { decode(message = " ") }
+        assertFailsWith<IllegalStateException> { decode(message = "é".repeat(2049)) }
+        assertFailsWith<IllegalStateException> { decode(duplicate = true) }
+    }
+
+    @Test
     fun durableEmptyProductsPreserveNominalNamesAndExactGrammar() {
         fun decode(typeName: String) = ContractJsonParser.parseManifestRecord(
             """{"manifest":{"states":[{"name":"Stored","type_name":"$typeName"}]}}"""

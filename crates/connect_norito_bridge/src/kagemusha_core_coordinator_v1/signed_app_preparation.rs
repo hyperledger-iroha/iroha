@@ -37,7 +37,7 @@ pub struct SignedAppPreparationPinsV1<'a> {
     pub account_id: &'a AccountId,
     /// Governed platform class of the selected hardware profile.
     pub platform_class: KagemushaHardwarePlatformClassV1,
-    /// Provisional App Attest key ID retained before raw attestation; Android uses zero.
+    /// App Attest or qualified eSE key ID retained before raw attestation; KeyMint uses zero.
     /// A later signed certificate and governed qualification must bind this selection.
     pub selected_attested_key_id: [u8; 32],
     /// Nonzero native nonce retained at selection.
@@ -67,7 +67,7 @@ pub struct VerifiedSignedAppPreparationV1 {
     pub release_id: [u8; 32],
     /// Governed hardware profile ID.
     pub profile_id: [u8; 32],
-    /// Apple App Attest key ID or Android zero sentinel.
+    /// App Attest/qualified eSE key ID, or ordinary KeyMint zero sentinel.
     pub attested_key_id: [u8; 32],
     /// Native-selected lane ID.
     pub lane_id: [u8; 32],
@@ -78,7 +78,10 @@ pub struct VerifiedSignedAppPreparationV1 {
 /// The Apple key ID is selected before attestation and becomes authoritative only
 /// after a signed verifier certificate binds it to the attested point and a later
 /// governed qualification. Android's preparatory key ID is exactly zero because
-/// KeyMint creates its key after this challenge. This verifier grants no authority.
+/// KeyMint creates its key after this challenge. Qualified custom hardware must instead
+/// retain its authenticated op1 credential first and select its exact nonzero point ID.
+/// The later governed certificate and native possession proof must bind that same point.
+/// This verifier grants no hardware or monetary authority.
 pub fn verify_signed_app_preparation_v1(
     token: &[u8],
     pins: SignedAppPreparationPinsV1<'_>,
@@ -110,6 +113,14 @@ pub fn verify_signed_app_preparation_v1(
             if pins.selected_attested_key_id == [0; 32] =>
         {
             [0; 32]
+        }
+        KagemushaHardwarePlatformClassV1::AndroidOemService
+        | KagemushaHardwarePlatformClassV1::AppleOemService
+        | KagemushaHardwarePlatformClassV1::DedicatedSecureElement
+        | KagemushaHardwarePlatformClassV1::OtherQualified
+            if pins.selected_attested_key_id != [0; 32] =>
+        {
+            pins.selected_attested_key_id
         }
         _ => return Err(SignedAppPreparationErrorV1::Binding),
     };
@@ -171,3 +182,7 @@ pub fn verify_signed_app_preparation_v1(
         .map_err(|_| SignedAppPreparationErrorV1::Authority)?;
     Ok(preparation)
 }
+
+#[cfg(test)]
+#[path = "signed_app_preparation_tests.rs"]
+mod tests;

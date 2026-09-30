@@ -134,6 +134,8 @@ fn verified_from_parts(
         states: Some(manifest_state_descriptors(&contract_interface.states)),
         error_types: (!contract_interface.error_types.is_empty())
             .then_some(contract_interface.error_types.clone()),
+        error_messages: (!contract_interface.error_messages.is_empty())
+            .then_some(contract_interface.error_messages.clone()),
         kotoba: (!contract_interface.kotoba.is_empty())
             .then_some(contract_interface.kotoba.clone()),
         provenance: None,
@@ -709,6 +711,7 @@ mod tests {
                 name: "deep_state".to_owned(),
                 ty,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
         };
         let mut artifact = ProgramMetadata::default().encode();

@@ -48,6 +48,7 @@ fn manifest_pointer_roundtrip() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_messages: None,
         error_types: None,
         provenance: None,
     };

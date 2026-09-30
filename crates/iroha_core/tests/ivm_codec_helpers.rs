@@ -71,6 +71,7 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
                 value: Box::new(EmbeddedStateType::Bytes),
             },
         }],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
     };
     let mut artifact = ProgramMetadata::default().encode();

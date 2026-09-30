@@ -202,6 +202,15 @@ fn new_and_init_scaffolds_check_and_build_with_exact_exports() {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(functions, expected.iter().copied().collect::<Vec<_>>());
+            assert_eq!(
+                program
+                    .exports
+                    .iter()
+                    .map(|export| export.name.as_str())
+                    .collect::<Vec<_>>(),
+                functions,
+                "the generated source must explicitly expose its manifest exports",
+            );
             let manifest = parse_manifest(
                 &fs::read_to_string(root.join(MANIFEST_FILE_NAME)).expect("scaffold manifest"),
             )
@@ -290,7 +299,7 @@ fn init_preserves_existing_type_exports_and_custom_source_directory() {
     let temp = TempDir::new().expect("existing library directory");
     let root = temp.path().join("demo");
     fs::create_dir_all(root.join("library")).expect("custom source directory");
-    let source = "module Existing { struct Receipt { int value; } struct assert { int value; } }\n";
+    let source = "module Existing { export struct Receipt { int value; } export struct assert { int value; } }\n";
     assert!(kotodama_surface::source_policy::is_reserved_source_declaration("assert", true));
     assert!(!kotodama_surface::source_policy::is_reserved_source_type_declaration("assert"));
     let library = root.join("library/lib.ko");

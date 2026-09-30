@@ -11,6 +11,8 @@ mod cst_structure;
 mod documentation_fences;
 #[path = "frontend_budgets.rs"]
 mod frontend_budgets;
+#[path = "multifile_syntax.rs"]
+mod multifile_syntax;
 #[path = "parser_recovery.rs"]
 mod parser_recovery;
 #[path = "secret_security_diagnostics.rs"]

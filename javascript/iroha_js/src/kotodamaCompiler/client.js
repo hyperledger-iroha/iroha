@@ -3,7 +3,7 @@ import { normalizeCompilerResult } from "./normalize.js";
 const DEFAULT_COMPILE_PATH = "/v1/kotodama/compile";
 const DEFAULT_COMPILER_TIMEOUT_MS = 30_000;
 const MAX_COMPILER_TIMEOUT_MS = 120_000;
-const COMPILER_REQUEST_OPTION_NAMES = new Set(["sourceName", "zk"]);
+const COMPILER_REQUEST_OPTION_NAMES = new Set(["sourceName", "sources", "imports", "packages", "zk"]);
 const COMPILER_CALL_OPTION_NAMES = new Set([
   ...COMPILER_REQUEST_OPTION_NAMES,
   "signal",
@@ -193,7 +193,97 @@ function validateCompilerRequestFields(options) {
   if (Object.hasOwn(options, "zk") && typeof options.zk !== "boolean") {
     throw new TypeError("zk must be a boolean");
   }
+  if (["sources", "imports", "packages"].some((key) => Object.hasOwn(options, key))) {
+    if (options.sourceName === undefined) throw new TypeError("sourceName is required when sources are supplied");
+    const names = new Set([canonicalSourcePath(options.sourceName)]);
+    if (Object.hasOwn(options, "sources")) options.sources = canonicalSourceFiles(options.sources, names);
+    if (Object.hasOwn(options, "imports")) options.imports = canonicalSourceImports(options.imports);
+    if (Object.hasOwn(options, "packages")) {
+      const identities = new Set();
+      options.packages = canonicalDataArray(options.packages, "packages").map((value) => {
+        const pkg = canonicalizeCompilerOptions(value, new Set(["identity", "modules", "sources", "exports", "imports"]));
+        validateGraphIdentifier(pkg.identity, "package identity");
+        if (identities.has(pkg.identity)) throw new TypeError("duplicate package identity");
+        identities.add(pkg.identity);
+        const paths = new Set();
+        const modules = canonicalSourceFiles(pkg.modules, paths);
+        const sources = canonicalSourceFiles(pkg.sources ?? [], paths);
+        const exports = canonicalDataArray(pkg.exports, "exports");
+        const exported = new Set();
+        for (const name of exports) {
+          validateGraphIdentifier(name, "package export");
+          if (exported.has(name)) throw new TypeError("duplicate package export");
+          exported.add(name);
+        }
+        return { identity: pkg.identity, modules, sources, exports, imports: canonicalSourceImports(pkg.imports ?? []) };
+      });
+    }
+    const count = 1 + (options.sources?.length ?? 0) + (options.packages ?? []).reduce((total, pkg) => total + pkg.modules.length + pkg.sources.length, 0);
+    if (count > 512) throw new RangeError("a Kotodama source set permits at most 512 files including its root");
+  }
   return options;
+}
+
+function canonicalDataArray(value, label) {
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  if (value.length > 512) throw new RangeError(`${label} exceeds the 512-item limit`);
+  const result = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new TypeError(`${label} must contain inert data entries`);
+    result.push(descriptor.value);
+  }
+  return result;
+}
+
+function validateGraphIdentifier(value, label) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || !validateUnicodeScalarString(value) || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    throw new TypeError(`${label} must be a bounded nonempty string`);
+  }
+}
+
+function canonicalSourceFiles(files, names) {
+  return canonicalDataArray(files, "sources").map((source) => {
+    const file = canonicalizeCompilerOptions(source, new Set(["sourceName", "source"]));
+    if (file.sourceName === undefined) throw new TypeError("each source file requires sourceName");
+    validateCompilerRequestFields({ sourceName: file.sourceName });
+    validateCompilerSource(file.source);
+    const name = canonicalSourcePath(file.sourceName);
+    if (names.has(name)) throw new TypeError(`duplicate Kotodama source path '${name}'`);
+    names.add(name);
+    return { sourceName: name, source: file.source };
+  });
+}
+
+function canonicalSourceImports(imports) {
+  const aliases = new Set();
+  return canonicalDataArray(imports, "imports").map((value) => {
+    const binding = canonicalizeCompilerOptions(value, new Set(["alias", "package"]));
+    validateGraphIdentifier(binding.alias, "import alias");
+    validateGraphIdentifier(binding.package, "import package");
+    if (aliases.has(binding.alias)) throw new TypeError("duplicate import alias");
+    aliases.add(binding.alias);
+    return { alias: binding.alias, package: binding.package };
+  });
+}
+
+function canonicalSourcePath(name) {
+  if (/^(?:[\\/]|[A-Za-z]:)/u.test(name) || name.includes(":")) {
+    throw new TypeError("source paths must be relative to the source-set root");
+  }
+  const parts = [];
+  for (const part of name.replaceAll("\\", "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (parts.length === 0) throw new TypeError("source path escapes the source-set root");
+      parts.pop();
+    } else {
+      if (/^\.+$/u.test(part)) throw new TypeError("source path contains a nonportable component");
+      parts.push(part);
+    }
+  }
+  if (parts.length === 0) throw new TypeError("source path must name a file");
+  return parts.join("/");
 }
 
 function validateCompilerRequestOptions(options) {
@@ -264,6 +354,18 @@ export function buildCompilerRequest(source, options = {}) {
   const request = { source, zk: options.zk ?? false };
   if (options.sourceName !== undefined) {
     request.sourceName = options.sourceName;
+  }
+  if (["sources", "imports", "packages"].some((key) => options[key] !== undefined)) {
+    const files = [...(options.sources ?? []), ...(options.packages ?? []).flatMap((pkg) => [...pkg.modules, ...pkg.sources])];
+    const bytes = [source, ...files.map((file) => file.source)].reduce(
+      (total, text) => total + Reflect.apply(textEncoderEncode, new TextEncoderIntrinsic(), [text]).length,
+      0,
+    );
+    if (bytes > 16 * 1024 * 1024) throw new RangeError("Kotodama source set exceeds the 16777216-byte limit");
+    request.sourceName = canonicalSourcePath(request.sourceName);
+    for (const key of ["sources", "imports", "packages"]) {
+      if (options[key] !== undefined) request[key] = options[key];
+    }
   }
   return request;
 }

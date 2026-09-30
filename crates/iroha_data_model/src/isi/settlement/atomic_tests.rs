@@ -71,6 +71,8 @@ fn atomic_settlement_canonical_roundtrips_minimum_and_maximum() {
 
 #[test]
 fn atomic_settlement_rejects_noncanonical_keys_and_invalid_movements() {
+    #[derive(Encode)]
+    struct Forged(Vec<AtomicSettlementMovement>);
     let valid = instruction(3).movements.as_slice().to_vec();
     let mut cases = vec![vec![], valid[..1].to_vec(), vec![valid[0].clone(); 256]];
     let mut reversed = valid.clone();
@@ -93,8 +95,6 @@ fn atomic_settlement_rejects_noncanonical_keys_and_invalid_movements() {
         assert!(AtomicSettlementMovements::try_from(values.clone()).is_err());
         let json = json::to_json(&values).expect("untrusted JSON");
         assert!(json::from_str::<AtomicSettlementMovements>(&json).is_err());
-        #[derive(Encode)]
-        struct Forged(Vec<AtomicSettlementMovement>);
         let payload = Forged(values).encode();
         assert!(AtomicSettlementMovements::decode_from_slice(&payload).is_err());
         let frame = ncore::frame_bare_with_header_flags::<AtomicSettlementMovements>(

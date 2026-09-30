@@ -15,7 +15,7 @@ pub fn format_source(
     source: &SourceFile,
     budget: FrontendBudget,
 ) -> Result<String, DiagnosticBundle> {
-    let parsed = crate::syntax::parse_program(source, budget);
+    let parsed = crate::syntax::parse_source_or_fragment(source, budget);
     let crate::syntax::ProgramParseOutput {
         tree,
         program,
@@ -872,6 +872,10 @@ const fn is_word(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwIn
             | SyntaxKind::KwSeiyaku
             | SyntaxKind::KwModule
+            | SyntaxKind::KwInclude
+            | SyntaxKind::KwImport
+            | SyntaxKind::KwAs
+            | SyntaxKind::KwExport
             | SyntaxKind::KwKotoage
             | SyntaxKind::KwHajimari
             | SyntaxKind::KwKaizen
@@ -1125,6 +1129,25 @@ mod tests {
                 "            count,\n",
                 "            active: true,\n",
                 "        };",
+            )),
+            "{formatted}"
+        );
+        assert!(formatted.contains("let Remote::Record {\n"), "{formatted}");
+        assert_eq!(format(&formatted), formatted);
+    }
+    #[test]
+    fn formats_fragment_imports_exports_and_record_braces_idempotently() {
+        let formatted = format(
+            "import\"./record.ko\"as Remote;export fn make(int count)->Remote::Record{return Remote::Record{count,active:true};}fn read(Remote::Record record)->int{let Remote::Record{count,active:_}=record;count}",
+        );
+        assert!(formatted.starts_with("import \"./record.ko\" as Remote;\n"));
+        assert!(formatted.contains("export fn make(int count) -> Remote::Record {\n"));
+        assert!(
+            formatted.contains(concat!(
+                "return Remote::Record {\n",
+                "        count,\n",
+                "        active: true,\n",
+                "    };",
             )),
             "{formatted}"
         );

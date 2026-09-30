@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_empty_boundary_pasta_is_source_complete_and_subset_independent() {
+    fn actual_boundary_pasta_is_source_complete_and_subset_independent() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let view = chain.state().view();
@@ -712,7 +712,17 @@ mod tests {
         let certified = reader.certified(10).unwrap();
         let header = certified.header().unwrap();
         assert!(header.attest);
-        assert_eq!(header.payload_len, 0);
+        // Empty refers to the mint result; the boundary still executes original signed work.
+        assert!(header.payload_len > 0, "the boundary carries actual work");
+        assert_eq!(certified.block().external_transactions().len(), 1);
+        assert_eq!(certified.commitment().execution.kagemusha_top_up_count, 0);
+        assert!(
+            certified
+                .commitment()
+                .execution
+                .kagemusha_top_up_root
+                .is_none()
+        );
         let qc = certified.commit_qc().unwrap();
         let current = &certified.commitment().schedule.current;
         let config = super::super::schedule::ScheduledConfig {

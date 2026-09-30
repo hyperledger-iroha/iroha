@@ -6,18 +6,22 @@ use super::*;
 fn governed_request_cap_fits_the_three_message_exchange() {
     assert_eq!(KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1, 1_024);
     assert_eq!(KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1, 1_371);
-    assert!(
-        KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1
-            + KAGEMUSHA_PAYMENT_MAX_BYTES_V1
-            + KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1
-            <= KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1
-    );
-    assert!(
-        KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1
-            + KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1
-            + KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1
-            <= KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1
-    );
+    const {
+        assert!(
+            KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1
+                + KAGEMUSHA_PAYMENT_MAX_BYTES_V1
+                + KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1
+                <= KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1
+        );
+    }
+    const {
+        assert!(
+            KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1
+                + KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1
+                + KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1
+                <= KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1
+        );
+    }
 }
 
 #[test]

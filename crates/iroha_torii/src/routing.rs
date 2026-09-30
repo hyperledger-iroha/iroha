@@ -10381,6 +10381,7 @@ mod contract_manifest_response_tests {
                 name: "Balances".to_owned(),
                 type_name: "StateMap<AccountId, quantity>".to_owned(),
             }]),
+            error_messages: None,
             error_types: Some(vec![ContractErrorTypeDescriptor { identity: "TreasuryError".to_owned(), variants: vec![iroha_data_model::smart_contract::manifest::ContractErrorVariantDescriptor { name: "InsufficientFunds".to_owned(), code: 7 }] }]),
             kotoba: Some(vec![KotobaTranslationEntry {
                 msg_id: "insufficient_funds".to_owned(),
@@ -18943,6 +18944,7 @@ mod multisig_contract_call_tests {
             entrypoints,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -19683,6 +19685,7 @@ mod multisig_contract_call_tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         };
@@ -19796,6 +19799,7 @@ mod contract_entrypoint_validation_tests {
             entrypoints,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -20780,6 +20784,7 @@ mod multisig_selector_tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -44537,6 +44542,7 @@ mod validation_fee_torii_ingress_tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -44598,6 +44604,7 @@ mod validation_fee_torii_ingress_tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };

@@ -3259,7 +3259,7 @@ mod tests {
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
     use norito::core::SerializePayload;
-    use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
+    use std::{borrow::Cow, sync::Arc};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("query fixture key generation should succeed")
     }

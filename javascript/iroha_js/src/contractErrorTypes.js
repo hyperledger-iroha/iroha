@@ -55,6 +55,7 @@ export function normalizeContractErrorTypesV1(value, context = "error_types") {
 
 /** Require public error schemas and durable state identities to match the signed nominal catalog. */
 export function validateManifestErrorTypeBindingsV1(manifest, context = "manifest") {
+  normalizeContractErrorMessagesV1(manifest.error_messages, manifest.error_types, `${context}.error_messages`);
   const catalog = new Map((normalizeContractErrorTypesV1(manifest.error_types, `${context}.error_types`) ?? [])
     .map((error) => [error.identity, JSON.stringify(error)]));
   for (const state of manifest.states ?? []) {
@@ -70,4 +71,35 @@ export function validateManifestErrorTypeBindingsV1(manifest, context = "manifes
       }
     }
   }
+}
+
+/** Validate authenticated presentation text without changing nominal error schemas. */
+export function normalizeContractErrorMessagesV1(value, errorTypes, context = "error_messages") {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length > 65_536) throw new TypeError(`${context} must be a bounded array`);
+  const catalog = new Map((normalizeContractErrorTypesV1(errorTypes) ?? []).map((error) => [error.identity, error]));
+  const utf8 = new TextEncoder();
+  let previous = null;
+  return Array.from(value, (entry, index) => {
+    const label = `${context}[${index}]`;
+    exactKeys(entry, ["error_type", "code", "message"], label);
+    const descriptor = catalog.get(entry.error_type);
+    if (!descriptor || !Number.isSafeInteger(entry.code) || !descriptor.variants.some((variant) => variant.code === entry.code)) {
+      throw new TypeError(`${label} must reference a declared nominal error variant`);
+    }
+    if (typeof entry.message !== "string" || /^\p{White_Space}*$/u.test(entry.message) || /[\uD800-\uDFFF]/u.test(entry.message) || utf8.encode(entry.message).length > 4096) {
+      throw new TypeError(`${label}.message must contain 1..4096 UTF-8 bytes of nonblank text`);
+    }
+    const identity = utf8.encode(entry.error_type);
+    if (previous) {
+      let order = 0;
+      for (let offset = 0; offset < Math.min(previous.identity.length, identity.length); offset += 1) {
+        if (previous.identity[offset] !== identity[offset]) { order = previous.identity[offset] - identity[offset]; break; }
+      }
+      if (order === 0) order = previous.identity.length - identity.length;
+      if (order > 0 || (order === 0 && previous.code >= entry.code)) throw new TypeError(`${context} must be sorted and unique by identity and code`);
+    }
+    previous = { identity, code: entry.code };
+    return { error_type: entry.error_type, code: entry.code, message: entry.message };
+  });
 }

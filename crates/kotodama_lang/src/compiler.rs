@@ -3149,12 +3149,22 @@ impl Compiler {
         &self,
         path: P,
     ) -> Result<Vec<u8>, String> {
-        let path_str = path.as_ref().display().to_string();
-        let src = crate::source::read_source_file(&path).map_err(|e| {
-            i18n::translate(self.lang, Message::ReadFile(&path_str, &e.to_string()))
-        })?;
-        self.compile_source_output(&src, Some(&path_str))
-            .map(|output| output.artifact)
+        let path = path.as_ref();
+        let root = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let loaded =
+            crate::driver::load_source_project(path, root, &std::collections::BTreeMap::new())
+                .map_err(|error| error.to_string())?;
+        let source_name = loaded.graph.root.source_name.clone();
+        crate::driver::BuildDriver::new(
+            crate::session::CompilerSession::new(self.opts.clone()),
+            COMPILER_FINGERPRINT,
+        )
+        .compile_project(loaded.graph, &source_name)
+        .map(|output| output.artifact)
+        .map_err(|error| error.to_string())
     }
     /// Compile a KOTODAMA source string into IVM bytecode.
     pub fn compile_source(&self, src: &str) -> Result<Vec<u8>, String> {
@@ -8669,6 +8679,7 @@ impl Compiler {
             kotoba: message_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
             error_types: typed.error_types.clone(),
+            error_messages: typed.error_messages.clone(),
             states: state_descriptors,
         };
         // Compute the indexed literal table and patch LDLIT/LDI64 words.
@@ -8912,6 +8923,8 @@ impl Compiler {
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_types: (!contract_interface.error_types.is_empty())
                 .then_some(contract_interface.error_types.clone()),
+            error_messages: (!contract_interface.error_messages.is_empty())
+                .then_some(contract_interface.error_messages.clone()),
             kotoba: (!contract_interface.kotoba.is_empty())
                 .then_some(contract_interface.kotoba.clone()),
             provenance: None,

@@ -462,7 +462,7 @@ impl Core {
             } => self.on_executed(block_hash, req, &outcome),
             Event::BodyAvailable { block } => self.on_body(block),
             Event::PayloadAuthored { req, body } => self.on_payload_authored(req, body),
-            Event::ManifestRejected { manifest } => self.on_manifest_rejected(manifest),
+            Event::ManifestRejected { manifest } => self.on_manifest_rejected(&manifest),
             Event::BlockApplied {
                 height,
                 block_hash,

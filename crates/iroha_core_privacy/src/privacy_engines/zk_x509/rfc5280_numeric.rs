@@ -85,6 +85,7 @@ pub(super) enum NumericOperandV1 {
     },
 }
 
+#[cfg(test)]
 impl NumericOperandV1 {
     /// A private operand query removes its public affine offset before lookup.
     /// Public operands are bound directly to verifier-generated fixed cells.

@@ -82,8 +82,8 @@ only after the global chain has applied `active_from`.
 ### 2.1 Lifecycle record
 
 World holds one `SumeragiLaneState` cell: the lane records (lanes ascending), the autoscale
-samples (§6.1), the height of the last autoscale transition and the incarnation counter. A lane
-record is
+samples (§6.1), the height of the last autoscale transition, the incarnation counter and the
+original staking obligations below. A lane record is
 
 ```text
 SumeragiLaneRecord {
@@ -103,6 +103,49 @@ SumeragiLaneRecord {
 The state is committed by the `G` block that writes it. A fixed lane is created when the policy
 lists it (genesis, or the first block after a `SetParameter` that adds it); an elastic lane by
 autoscale (§6). Lane `0` has no record.
+
+#### Original staking obligations
+
+On an NPoS chain, creation also pins a `SumeragiLaneCustody` row to the exact native
+instance and incarnation. Its sparse, strictly increasing signer indices support the native
+core representation of up to 1024 members, with indices `0..n-1`. This representation does not relax the separate
+authenticated lane-state committee-size and canonical-order checks. Each monetary
+binding commits the original canonical staking owner, universal account, activation height,
+peer and exact retained escrow asset. It never resolves a later registration by public key.
+Missing positive custody makes that original signer forensic-only. Elastic lanes pin global
+validator custody; fixed lanes pin the canonical staking owner selected for their physical
+dataspace at creation. A fixed committee alone grants no authority over a reused global key.
+
+The row uses global creation and retirement heights; native lane heights are not global
+occurrence heights. Live incarnations retain their original registration and pending-unbond
+custody. Retirement at `r = c + A + 1` admits reports through `r + evidence_horizon`
+inclusively, and releases custody only after the mandatory penalty phase at
+`r + evidence_horizon + slashing_delay`. Existing obligations keep the maximum authenticated
+policy fences encountered; a same-block policy extension applies before withdrawal. Unresolved
+committed evidence retains the monetary obligation. All retained evidence records, including
+terminal replay fences, keep the provenance row until record pruning; terminal records alone
+do not extend monetary withdrawal fences. No later account/key registration inherits it.
+
+The row also retains the last globally merged native `(height, hash, R)` frontier. The final
+merge in the retirement carrier is captured before removing the live lane record. A retained
+frontier cannot regress or change hash/result at the same native height. Monetary attribution
+must authenticate every required parent and demotion header backwards from that exact global
+anchor; an independently certified local fork cannot select its own branch. Native subjects
+whose parent is beyond the retained frontier remain pending or forensic-only until independent
+anchored coverage exists. This coverage rule supplies no global occurrence height.
+
+At most 4096 original incarnation rows are retained. Exhaustion defers new lane creation while
+existing closing, retirement and ordinary block execution continue. Expired rows are reclaimed
+before creation, and the complete table is included in the ordinary lane-state commitment.
+
+**Open H3 boundary:** the custody ledger, withdrawal fences and reverse branch cursor are
+prerequisites. `LaneAncestry` checks exact signed-RS16 source, native QC, hash/result and every
+parent link from a separately authenticated frontier without cloning source owners. Its caller
+must still authenticate the original global creation/current context, retain complete demotion
+headers through resource refusal, and install native-scope attribution and exact original
+custody penalty effects. Raw lane heights must never enter the global verifier or slashing
+clock. The sparse ledger backing and World clones also still require complete original-pool
+allocation ownership. This slice does not qualify lane offences or resource accounting.
 
 ### 2.2 States
 
@@ -284,6 +327,13 @@ storage identity). A `G` frame is committed only after the lane frames it merges
 node syncs each lane instance alongside `G` and executes a `G` block once its lanes reach the
 merged tips; lane frames of retired incarnations are kept while any retained `G` block references
 them and pruned with those `G` blocks.
+
+Retirement releases the node's registry owners after stopping the driver and its recovery
+job, including failed store openings that never started a driver. Their original funded
+buffers and exclusive locks are released; outstanding authenticated readers keep their
+ready-store ownership until finished. Historical openings after retirement keep their own
+recovery progress across subsequent lifecycle checks. This owner cleanup does not delete
+certified frames.
 
 ## 5. Routing and the queue
 

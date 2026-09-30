@@ -18,18 +18,22 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
-| IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
-| SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, Torii test include paths, matched daemon/harness, provider resilience and L1/L2 promotion. |
+| IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
+| SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
 | KAGEMUSHA | Bounded bootstrap/startup, request-bound native finality and signed top-up boundaries have component implementations. | Durable hardware authority, recursive monetary proofs, reserve settlement, provisioning and physical-device evidence. |
 
 ## Immediate blockers
 
-The current Nexus happy-day workload exposed an execution-expanded proposal
-publication defect. Checked projection and retained per-peer client context have
-component coverage; telemetry/status wire retirement is applied. The successor
-build, real workload and repeated accepted settlements remain pending. Restricted
-native-lane gossip also needs fresh daemon/harness qualification with disjoint
-global and participant committees.
+Exact finalized-carrier retries now authenticate the original execution and
+acknowledge admission without requeueing or charging again. The rebuilt local
+Nexus happy-day and smoke workloads complete financial, signed RS16 finality and
+exact-retry checks across all 16 peers; smoke also preserves the funded settlement
+through all 16 validator restarts. The measured smoke settlement takes 45.17 seconds.
+Repeated accepted settlements remain unqualified on one fixed source candidate.
+A fresh disjoint-committee run exposed an applied-body pruning race that stops
+the availability worker during an in-flight file read; its correction awaits
+rebuilt node qualification. Restricted native-lane gossip also needs fresh
+daemon/harness qualification with disjoint global and participant committees.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
@@ -38,8 +42,8 @@ establish one retained execution through finality and restart.
 
 Remaining SoraFS Node failures concern fixture permissions, hedged-encryption
 randomness assumptions and cumulative quarantine decode budgets. The Core
-selection has scoped coverage; the combined build is blocked by Torii test include
-paths. Full Node and production qualification remain open under the
+selection has scoped coverage and Torii's unit-test target compiles. Full Node
+and production qualification remain open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
 

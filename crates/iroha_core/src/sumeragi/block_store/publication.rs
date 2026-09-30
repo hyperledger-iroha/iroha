@@ -29,7 +29,7 @@ impl KuraBlockStore {
             let (stored, original_qc) = self
                 .committed_body(height)?
                 .ok_or_else(|| invalid("committed retry has no original frame"))?;
-            if stored != *body || original_qc.result != qc.result {
+            if stored != *body || original_qc != *qc {
                 return Err(invalid("another committed decision is already stored"));
             }
             return Ok(());

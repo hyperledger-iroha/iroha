@@ -11,4 +11,7 @@ pub mod parser;
 pub use cst::{GreenElement, GreenNode, GreenToken, SyntaxTree};
 pub use kind::SyntaxKind;
 pub use lexer::{Lexed, lex};
-pub use parser::{ParseOutput, ProgramParseOutput, parse, parse_program};
+pub use parser::{
+    ParseOutput, ProgramParseOutput, parse, parse_fragment_program, parse_program,
+    parse_source_or_fragment,
+};

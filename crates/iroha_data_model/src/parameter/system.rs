@@ -2892,10 +2892,12 @@ mod tests {
             parsed.demotion_window,
             defaults::sumeragi::demotion_window()
         );
-        let mut custom = SumeragiParameters::default();
-        custom.payload_retry_interval_ms = NonZeroU64::new(9_000).unwrap();
-        custom.max_block_bytes = NonZeroU32::new(1_024).unwrap();
-        custom.demotion_window = NonZeroU64::new(512).unwrap();
+        let custom = SumeragiParameters {
+            payload_retry_interval_ms: NonZeroU64::new(9_000).unwrap(),
+            max_block_bytes: NonZeroU32::new(1_024).unwrap(),
+            demotion_window: NonZeroU64::new(512).unwrap(),
+            ..SumeragiParameters::default()
+        };
         let json = norito::json::to_json(&custom).expect("json");
         for field in [
             "\"payload_retry_interval_ms\":9000",

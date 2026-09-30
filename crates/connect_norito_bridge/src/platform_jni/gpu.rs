@@ -5,7 +5,7 @@ mod bn254;
 #[path = "gpu/poseidon.rs"]
 mod poseidon;
 
-use super::{catch_unwind_to_java, throw_java_illegal_argument, throw_java_illegal_state};
+use super::{catch_unwind_to_java, throw_java_illegal_argument};
 
 /// Return whether the native CUDA implementation is available.
 ///

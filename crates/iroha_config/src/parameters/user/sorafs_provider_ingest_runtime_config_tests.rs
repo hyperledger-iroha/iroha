@@ -720,8 +720,8 @@ fn native_completion_credential_is_explicit_absolute_and_disabled_configs_reject
         config.native_completion_credential = Some(PathBuf::from(path));
         let mut emitter = Emitter::new();
         let result = config.parse(true, Some(&provider), &mut emitter);
-        let emitted = emitter.into_result();
-        assert_eq!(result.is_some() && emitted.is_ok(), accepted);
+        let diagnostics = emitter.into_result();
+        assert_eq!(result.is_some() && diagnostics.is_ok(), accepted);
     }
     let mut config = SorafsProviderIngestRuntimeConfig::default();
     config.native_completion_credential = Some(PathBuf::from("/runtime/credentials/completion"));

@@ -27,6 +27,10 @@ pub struct CompactShape {
 impl CompactShape {
     /// Calculate exact geometry and caller-owned scratch without allocating.
     /// All final data padding is zero; the terminal row is 2*ceil(remaining/(2*k)).
+    ///
+    /// # Errors
+    /// Returns [`Rs16Error`] for an empty payload, invalid row or shard counts,
+    /// or geometry whose backing sizes overflow the host's address space.
     pub fn new(payload: usize, k: usize, m: usize, maximum_row: usize) -> Result<Self, Rs16Error> {
         let n = k.checked_add(m).ok_or(Rs16Error)?;
         if payload == 0
@@ -122,6 +126,10 @@ impl CompactShape {
         }
     }
     /// Encode exact canonical bytes without allocating any per-job backing.
+    ///
+    /// # Errors
+    /// Returns [`Rs16Error`] when input or output lengths differ from this shape,
+    /// workspace is too short, or the encoding matrix cannot be inverted.
     pub fn encode_into(
         self,
         payload: &[u8],
@@ -165,6 +173,11 @@ impl CompactShape {
     /// commitment predicate. This predicate must bind the original manifest;
     /// this codec does not authenticate a manifest or choose an authority.
     /// On error, destinations may be partly written and must not be treated as output.
+    ///
+    /// # Errors
+    /// Returns [`Rs16Error`] for incorrect buffer or row lengths, insufficient or
+    /// inconsistent received rows, a singular decoding matrix, nonzero padding,
+    /// or a regenerated row rejected by `verify_original_row`.
     pub fn reconstruct_into(
         self,
         received: &[Option<&[u8]>],
@@ -213,7 +226,7 @@ impl CompactShape {
                     return Err(Rs16Error);
                 }
                 if selected < self.k {
-                    work.indices[selected] = index as u16;
+                    work.indices[selected] = u16::try_from(index).map_err(|_| Rs16Error)?;
                     for (position, pair) in row.chunks_exact(2).enumerate() {
                         work.selected[selected * symbols + position] =
                             u16::from_le_bytes([pair[0], pair[1]]);
@@ -259,7 +272,7 @@ impl CompactShape {
             let offset = stripe * self.k * self.maximum_row;
             let remaining = (self.payload - offset).min(self.k * row_bytes);
             for position in 0..self.k * row_bytes {
-                let byte = (work.rows[position / 2] >> (8 * (position % 2))) as u8;
+                let byte = work.rows[position / 2].to_le_bytes()[position % 2];
                 if position < remaining {
                     payload[offset + position] = byte;
                 } else if byte != 0 {
@@ -404,7 +417,7 @@ mod tests {
             for length in [1, 7, 8, 9, 63, 64, 65, 255, 256, 257, 4093] {
                 let shape = CompactShape::new(length, k, m, 64).unwrap();
                 let payload = (0..length)
-                    .map(|i| (i.wrapping_mul(17) % 251) as u8)
+                    .map(|i| u8::try_from(i.wrapping_mul(17) % 251).unwrap())
                     .collect::<Vec<_>>();
                 let mut out = vec![0; shape.encoded_bytes()];
                 let mut workspace = vec![0; shape.workspace_words()];
@@ -441,7 +454,9 @@ mod tests {
         for (k, m) in [(1, 1), (4, 2), (16, 16)] {
             for length in [1, 7, 9, 63, 65, 255, 257, 4093, 23572] {
                 let shape = CompactShape::new(length, k, m, 256 * 1024).unwrap();
-                let original = (0..length).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+                let original = (0..length)
+                    .map(|i| u8::try_from(i % 251).unwrap())
+                    .collect::<Vec<_>>();
                 let mut scalar = vec![0; shape.encoded_bytes()];
                 let mut host = scalar.clone();
                 let mut work = vec![0; shape.workspace_words()];

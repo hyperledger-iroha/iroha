@@ -499,7 +499,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
 }
 #[test]
 fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
-    use iroha_core::block::{BlockBuilder, ValidBlock};
+    use iroha_core::block::BlockBuilder;
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
     let (custody_id, _custody_kp) = gen_account_in("wonderland");
@@ -710,7 +710,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
 }
 #[test]
 fn genesis_overlay_pipeline_transactions_remain_fee_free() {
-    use iroha_core::block::ValidBlock;
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =

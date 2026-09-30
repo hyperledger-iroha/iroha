@@ -11796,6 +11796,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
     ]
     // BEGIN GENERATED: kotodama-v1-validator-policy
     private static let reservedIdentifiers: Set<String> = [
+        "as",
         "authorize",
         "break",
         "const",
@@ -11803,13 +11804,16 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "else",
         "enum",
         "error",
+        "export",
         "false",
         "fn",
         "for",
         "hajimari",
         "始まり",
         "if",
+        "import",
         "in",
+        "include",
         "kaizen",
         "改善",
         "kotoage",
@@ -11998,6 +12002,12 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
               value.utf8.allSatisfy({ $0 < 128 }),
               !value.contains("__kotodama_link_") else { return false }
         let parts = value.components(separatedBy: "::")
+        if parts.count == 4 && parts[0] == "local" {
+            return parts[1].utf8.count == 64
+                && parts[1].utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+                && isCanonicalTypeDeclarationIdentifier(parts[2])
+                && isCanonicalTypeDeclarationIdentifier(parts[3])
+        }
         guard parts.count == 3,
               isCanonicalTypeDeclarationIdentifier(parts[1]),
               isCanonicalTypeDeclarationIdentifier(parts[2]) else { return false }
@@ -13215,6 +13225,45 @@ public struct ToriiContractErrorTypeDescriptor: Codable, Sendable, Equatable {
     }
 }
 
+/// Authenticated static presentation text for one declared nominal error variant.
+public struct ToriiContractErrorMessage: Codable, Sendable, Equatable {
+    public var errorType: String
+    public var code: UInt32
+    public var message: String
+    public init(errorType: String, code: UInt32, message: String) {
+        self.errorType = errorType
+        self.code = code
+        self.message = message
+    }
+    private enum CodingKeys: String, CodingKey {
+        case errorType = "error_type"
+        case code, message
+    }
+    fileprivate var isCanonical: Bool {
+        ToriiContractErrorTypeDescriptor.isCanonicalIdentity(errorType) && code != 0
+            && message.unicodeScalars.contains { !$0.properties.isWhitespace } && message.utf8.count <= 4096
+    }
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(from: decoder, allowed: ["error_type", "code", "message"], context: "error message")
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        errorType = try container.decode(String.self, forKey: .errorType)
+        code = try container.decode(UInt32.self, forKey: .code)
+        message = try container.decode(String.self, forKey: .message)
+        guard isCanonical else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "invalid bounded static error message"))
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription: "invalid bounded static error message"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(errorType, forKey: .errorType)
+        try container.encode(code, forKey: .code)
+        try container.encode(message, forKey: .message)
+    }
+}
+
 public struct ToriiContractKotobaTranslation: Codable, Sendable, Equatable {
     public var language: String
     public var text: String
@@ -13379,6 +13428,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
     public var entrypoints: [ToriiContractEntrypointDescriptor]?
     public var states: [ToriiContractStateDescriptor]?
     public var errorTypes: [ToriiContractErrorTypeDescriptor]?
+    public var errorMessages: [ToriiContractErrorMessage]?
     public var kotoba: [ToriiContractKotobaTranslationEntry]?
     public var provenance: ToriiContractManifestProvenance?
 
@@ -13391,6 +13441,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 entrypoints: [ToriiContractEntrypointDescriptor]? = nil,
                 states: [ToriiContractStateDescriptor]? = nil,
                 errorTypes: [ToriiContractErrorTypeDescriptor]? = nil,
+                errorMessages: [ToriiContractErrorMessage]? = nil,
                 kotoba: [ToriiContractKotobaTranslationEntry]? = nil,
                 provenance: ToriiContractManifestProvenance? = nil) {
         self.seiyakuName = seiyakuName
@@ -13402,6 +13453,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         self.entrypoints = entrypoints
         self.states = states
         self.errorTypes = errorTypes
+        self.errorMessages = errorMessages
         self.kotoba = kotoba
         self.provenance = provenance
     }
@@ -13416,6 +13468,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         case entrypoints
         case states
         case errorTypes = "error_types"
+        case errorMessages = "error_messages"
         case kotoba
         case provenance
     }
@@ -13514,6 +13567,19 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 }
             }
         }
+        var previousMessage: ToriiContractErrorMessage?
+        for entry in errorMessages ?? [] {
+            guard entry.isCanonical, let error = catalog[entry.errorType],
+                  error.variants.contains(where: { $0.code == entry.code }) else {
+                return "error message must reference a declared variant and contain bounded text"
+            }
+            if let previous = previousMessage {
+                let ordered = previous.errorType.utf8.lexicographicallyPrecedes(entry.errorType.utf8)
+                    || (previous.errorType.utf8.elementsEqual(entry.errorType.utf8) && previous.code < entry.code)
+                if !ordered { return "error messages must be sorted and unique by identity and code" }
+            }
+            previousMessage = entry
+        }
         if let kotoba, Set(kotoba.map(\.messageId)).count != kotoba.count {
             return "kotoba message ids must be unique"
         }
@@ -13526,7 +13592,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
             allowed: [
                 "seiyaku_name", "code_hash", "abi_hash", "compiler_fingerprint",
                 "features_bitmap", "access_set_hints", "entrypoints", "states",
-                "error_types", "kotoba", "provenance",
+                "error_types", "error_messages", "kotoba", "provenance",
             ],
             context: "contract manifest"
         )
@@ -13586,6 +13652,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
             [ToriiContractErrorTypeDescriptor].self,
             forKey: .errorTypes
         )
+        errorMessages = try container.decodeIfPresent([ToriiContractErrorMessage].self, forKey: .errorMessages)
         kotoba = try container.decodeIfPresent(
             [ToriiContractKotobaTranslationEntry].self,
             forKey: .kotoba
@@ -13655,6 +13722,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         try container.encode(entrypoints, forKey: .entrypoints)
         try container.encode(states, forKey: .states)
         try container.encode(errorTypes, forKey: .errorTypes)
+        try container.encode(errorMessages, forKey: .errorMessages)
         try container.encode(kotoba, forKey: .kotoba)
         try container.encode(provenance, forKey: .provenance)
     }

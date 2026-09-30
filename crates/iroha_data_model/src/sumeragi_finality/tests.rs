@@ -12,7 +12,7 @@ use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub(super) genesis: SignedBlock,
     pub(crate) first: SumeragiFinalityProof,
     pub(crate) second: SumeragiFinalityProof,
@@ -189,20 +189,6 @@ pub(super) fn certify_successor(
 
 impl Fixture {
     pub(crate) fn new() -> Self {
-        let mut keys: Vec<_> = (1..=4)
-            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-            .collect();
-        keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
-        let validators: Vec<_> = keys
-            .iter()
-            .map(|key| FinalityValidator {
-                public_key: key.public_key().clone(),
-                proof_of_possession: bls_normal_pop_prove(key.private_key()).unwrap(),
-            })
-            .collect();
-        let (crypto, _) = ProofCrypto::new(&validators).unwrap();
-        let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
-        let account = AccountId::new(authority.public_key().clone());
         use crate::{
             block::consensus::SumeragiGenesisContextParameters,
             isi::{
@@ -220,6 +206,20 @@ impl Fixture {
                 },
             },
         };
+        let mut keys: Vec<_> = (1..=4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect();
+        keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+        let validators: Vec<_> = keys
+            .iter()
+            .map(|key| FinalityValidator {
+                public_key: key.public_key().clone(),
+                proof_of_possession: bls_normal_pop_prove(key.private_key()).unwrap(),
+            })
+            .collect();
+        let (crypto, _) = ProofCrypto::new(&validators).unwrap();
+        let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
+        let account = AccountId::new(authority.public_key().clone());
         let epoch_fixture = crate::sumeragi::epoch::tests::fixture(4);
         let metadata = ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
@@ -269,8 +269,7 @@ impl Fixture {
             0,
         );
         let mut first_block = genesis.clone();
-        output_test_support::install_network(&mut first_block, vec![Ok(Default::default())])
-            .unwrap();
+        output_test_support::install_network(&mut first_block, vec![Ok(Vec::default())]).unwrap();
         let first_result = result(&first_block, &epoch);
         // Genesis is result-only: no consensus header, CommitQC or availability frame.
         first_block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
@@ -297,7 +296,7 @@ impl Fixture {
         ));
         builder.push_transaction(tx);
         let mut block = builder.build(BTreeSet::new());
-        output_test_support::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        output_test_support::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         let result = result(&block, &epoch);
         let parent = first.decode_checked().unwrap();
         let second = certify_successor(&keys, &validators, instance, &parent, block, &result);
@@ -357,20 +356,20 @@ fn current_proofs_roundtrip_and_verify_successful_exact_execution() {
     let mut verifier = fixture.verifier();
     assert!(verifier.verify(&fixture.second).is_err(), "no gaps");
     verifier.verify(&fixture.first).unwrap();
-    let verified = verifier.verify(&fixture.second).unwrap();
-    let committed = output_test_support::committed(verified.block(), 0);
-    verified
+    let authenticated = verifier.verify(&fixture.second).unwrap();
+    let committed = output_test_support::committed(authenticated.block(), 0);
+    authenticated
         .verify_committed_transaction(&fixture.network, &committed)
         .unwrap();
     let foreign =
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
     assert!(
-        verified
+        authenticated
             .verify_committed_transaction(&foreign, &committed)
             .is_err()
     );
     assert!(
-        decode_versioned_signed_block(&verified.canonical_executed_wire().unwrap())
+        decode_versioned_signed_block(&authenticated.canonical_executed_wire().unwrap())
             .unwrap()
             .commit_certificate()
             .is_none()
@@ -487,7 +486,7 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
             unanchored: false,
             abstaining: false,
             halted: None,
-            footprint: Default::default(),
+            footprint: crate::sumeragi::SumeragiFootprint::default(),
         },
         finality_proof: fixture.second,
     };
@@ -533,10 +532,6 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
 
 #[test]
 fn complete_result_roundtrip_rejects_retired_scalar_schedule_layout() {
-    let fixture = Fixture::new();
-    let value = fixture.second.decode_checked().unwrap().commitment;
-    let bytes = value.preimage().unwrap();
-    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
     #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
     struct RetiredResult {
@@ -544,6 +539,10 @@ fn complete_result_roundtrip_rejects_retired_scalar_schedule_layout() {
         next_committee_digest: [u8; 32],
         next_params: ChainParamsRecord,
     }
+    let fixture = Fixture::new();
+    let value = fixture.second.decode_checked().unwrap().commitment;
+    let bytes = value.preimage().unwrap();
+    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
     let retired = RetiredResult {
         execution: value.execution,
         next_committee_digest: [3; 32],

@@ -1241,8 +1241,13 @@ pub mod kagemusha {
     .with_cors_options(true);
     /// Data-only complete World publication; clients independently select finality authority.
     pub const AUTHORITY_STATE: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.authority_state", HttpMethod::Get, AUTHORITY_STATE_PATH,
-        ApiSurface::Public, Listener::Torii, RouteEffect::ReadOnly, AdmissionPolicy::Public,
+        "kagemusha.authority_state",
+        HttpMethod::Get,
+        AUTHORITY_STATE_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)

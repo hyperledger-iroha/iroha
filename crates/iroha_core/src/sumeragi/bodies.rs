@@ -18,7 +18,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use iroha_allocation::AllocationBudget;
@@ -65,6 +68,7 @@ pub struct FileBodyStore {
     instance: Hash32,
     execution_budget: AllocationBudget,
     pending_write: Mutex<Option<PreparedBodyWrite>>,
+    retirement_through: AtomicU64,
 }
 
 impl core::fmt::Debug for FileBodyStore {
@@ -194,6 +198,7 @@ impl FileBodyStore {
             instance: *instance,
             execution_budget,
             pending_write: Mutex::new(None),
+            retirement_through: AtomicU64::new(0),
         })
     }
 
@@ -309,6 +314,10 @@ impl BodyStore for FileBodyStore {
 
     fn prune_through(&self, height: u64) -> io::Result<()> {
         let _guard = lock_store(&self.dir)?;
+        // Publish local applied-height authority before removing any path. An open
+        // read may race with removal, but must still verify the same source again
+        // in committed storage. This frontier is never inferred from disk absence.
+        self.retirement_through.fetch_max(height, Ordering::Release);
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let Some(h) = parse_height(&entry.file_name().to_string_lossy()) else {
@@ -327,6 +336,10 @@ impl BodyStore for FileBodyStore {
             fs::remove_dir_all(entry.path())?;
         }
         sync_dir(&*self.faults, &self.dir)
+    }
+
+    fn retirement_authorized(&self, height: u64) -> bool {
+        height > 0 && height <= self.retirement_through.load(Ordering::Acquire)
     }
 }
 

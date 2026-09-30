@@ -44,10 +44,9 @@ pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoi
 mod world_state;
 pub use world_state::{
     MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
-    VerifiedWorldStateSnapshotV1, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
-    WorldStateSnapshotV1, WORLD_STATE_ACCUMULATOR_LANES_V1,
-    world_state_element_v1, world_state_path_hash_v1, world_state_root_from_accumulator_v1,
-    world_state_value_hash_v1,
+    VerifiedWorldStateSnapshotV1, WORLD_STATE_ACCUMULATOR_LANES_V1, WorldStateElementKindV1,
+    WorldStateSnapshotEntryV1, WorldStateSnapshotV1, world_state_element_v1,
+    world_state_path_hash_v1, world_state_root_from_accumulator_v1, world_state_value_hash_v1,
 };
 
 use std::collections::BTreeMap;
@@ -650,7 +649,7 @@ impl SumeragiFinalityVerifier {
             result: value.result,
             committee_digest: value.committee_digest,
             schedule: value.commitment.schedule.clone(),
-            beacon: value.commitment.beacon.clone(),
+            beacon: value.commitment.beacon,
             executed_hash: value.commitment.execution.executed_block_wire_hash,
             executed_len: value.commitment.execution.executed_block_wire_len,
         }

@@ -360,7 +360,7 @@ impl Barrier {
 /// One execution request.
 #[derive(Clone, Debug)]
 pub struct Job {
-    /// AvailableBody hash.
+    /// `AvailableBody` hash.
     pub bh: Hash32,
     /// Request id of the `Execute`.
     pub req: u64,
@@ -530,12 +530,12 @@ pub fn block_exec(
     if block.header().epoch != epoch.id
         || !epoch.contains(block.header().height)
         || block.header().attest
-            != (payload_mints(&block.payload().as_slice())
+            != (payload_mints(block.payload().as_slice())
                 || block.header().height == epoch.last_height)
     {
         return ExecOutcome::Invalid;
     }
-    reference_exec(parent_result, &block.payload().as_slice())
+    reference_exec(parent_result, block.payload().as_slice())
 }
 
 /// The deterministic reference execution `R = H(parent_R ‖ payload)`; `Invalid` iff the
@@ -561,6 +561,30 @@ pub fn divergent_exec(parent_result: &Hash32, payload: &[u8], block_hash: &Hash3
         }
         other => other,
     }
+}
+
+#[cfg(test)]
+pub(super) fn fixture_body(
+    mut header: crate::message::BlockHeader,
+    payload: &[u8],
+) -> AvailableBody {
+    let keys = crate::testing::FakeValidators::new(4, 7, None);
+    let config = crate::types::HeightConfig {
+        epoch: Box::new(crate::testing::TEST_EPOCH),
+        committee: keys.committee.clone(),
+        params: crate::types::ChainParams::default(),
+    };
+    header.payload_hash = crate::preimage::payload_hash(&keys.crypto, payload);
+    header.payload_len = u32::try_from(payload.len()).unwrap();
+    let signer = keys.signer(header.proposer);
+    crate::testing::author_body(
+        header,
+        payload,
+        &config,
+        &iroha_allocation::AllocationBudget::new(1 << 24),
+        &keys.crypto,
+        signer,
+    )
 }
 
 #[cfg(test)]
@@ -762,28 +786,4 @@ mod tests {
             ExecOutcome::Valid(_)
         ));
     }
-}
-
-#[cfg(test)]
-pub(super) fn fixture_body(
-    mut header: crate::message::BlockHeader,
-    payload: &[u8],
-) -> AvailableBody {
-    let keys = crate::testing::FakeValidators::new(4, 7, None);
-    let config = crate::types::HeightConfig {
-        epoch: Box::new(crate::testing::TEST_EPOCH),
-        committee: keys.committee.clone(),
-        params: crate::types::ChainParams::default(),
-    };
-    header.payload_hash = crate::preimage::payload_hash(&keys.crypto, payload);
-    header.payload_len = payload.len() as u32;
-    let signer = keys.signer(header.proposer);
-    crate::testing::author_body(
-        header,
-        payload,
-        &config,
-        &iroha_allocation::AllocationBudget::new(1 << 24),
-        &keys.crypto,
-        signer,
-    )
 }

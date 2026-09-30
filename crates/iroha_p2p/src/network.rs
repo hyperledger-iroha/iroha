@@ -795,9 +795,9 @@ pub fn data_frame_wire_len_from_payload_len<T>(
 }
 type WireMessage<T> = RelayMessage<T>;
 fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
-    ncore::validate_header_flags(flags)?;
     const FIELD_COUNT: usize = 5;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
+    ncore::validate_header_flags(flags)?;
     let mut remaining = payload;
     for index in 0..FIELD_COUNT {
         let (field_len, prefix_len) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
@@ -3269,10 +3269,10 @@ impl ActorProgressClass {
         }
     }
     fn for_payload<T: message::ClassifyTopic>(payload: &T) -> Option<Self> {
+        use message::TransportAdmissionClass as Class;
         if !is_reliable_progress_route(payload.topic(), payload.subscriber_route()) {
             return None;
         }
-        use message::TransportAdmissionClass as Class;
         match payload.admission_class() {
             Class::Safety => Some(Self::Safety),
             Class::Lane => Some(Self::Lane),
@@ -10209,6 +10209,23 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn tls_listener_requires_exact_p2p_alpn_and_propagates_frame_cap() {
+        async fn connect_with_alpn(
+            addr: std::net::SocketAddr,
+            alpn_protocols: Vec<Vec<u8>>,
+        ) -> std::io::Result<()> {
+            let tcp = tokio::net::TcpStream::connect(addr).await?;
+            let mut client_cfg =
+                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+                    .with_no_client_auth();
+            client_cfg.alpn_protocols = alpn_protocols;
+            let connector = TlsConnector::from(Arc::new(client_cfg));
+            let server_name = rustls::pki_types::ServerName::try_from("iroha-tls")
+                .unwrap()
+                .to_owned();
+            connector.connect(server_name, tcp).await.map(|_| ())
+        }
         use std::sync::Arc;
         use tokio::sync::mpsc;
         use tokio_rustls::{
@@ -10283,23 +10300,6 @@ mod accept_stream_tests {
         )
         .await
         .expect("start_tls_listener");
-        async fn connect_with_alpn(
-            addr: std::net::SocketAddr,
-            alpn_protocols: Vec<Vec<u8>>,
-        ) -> std::io::Result<()> {
-            let tcp = tokio::net::TcpStream::connect(addr).await?;
-            let mut client_cfg =
-                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-                    .with_no_client_auth();
-            client_cfg.alpn_protocols = alpn_protocols;
-            let connector = TlsConnector::from(Arc::new(client_cfg));
-            let server_name = rustls::pki_types::ServerName::try_from("iroha-tls")
-                .unwrap()
-                .to_owned();
-            connector.connect(server_name, tcp).await.map(|_| ())
-        }
 
         if let Ok(mut raw) = tokio::net::TcpStream::connect(addr).await {
             use tokio::io::AsyncWriteExt as _;

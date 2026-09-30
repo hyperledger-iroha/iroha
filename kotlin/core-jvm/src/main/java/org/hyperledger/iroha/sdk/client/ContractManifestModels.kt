@@ -199,6 +199,13 @@ class ContractErrorTypeDescriptor(
         Collections.unmodifiableList(ArrayList(variants))
 }
 
+/** Authenticated static presentation text for a declared nominal error variant. */
+class ContractErrorMessage(
+    @JvmField val errorType: String,
+    @JvmField val code: Long,
+    @JvmField val message: String,
+)
+
 /** One localized text in a `kotoba` manifest table. */
 class ContractKotobaTranslation(
     @JvmField val language: String,
@@ -231,6 +238,7 @@ class ContractManifest(
     entrypoints: List<ContractEntrypointDescriptor>?,
     states: List<ContractStateDescriptor>?,
     errorTypes: List<ContractErrorTypeDescriptor>?,
+    errorMessages: List<ContractErrorMessage>?,
     kotoba: List<ContractKotobaTranslationEntry>?,
     @JvmField val provenance: ContractManifestProvenance?,
 ) {
@@ -241,6 +249,9 @@ class ContractManifest(
         Collections.unmodifiableList(ArrayList(it))
     }
     @JvmField val errorTypes: List<ContractErrorTypeDescriptor>? = errorTypes?.let {
+        Collections.unmodifiableList(ArrayList(it))
+    }
+    @JvmField val errorMessages: List<ContractErrorMessage>? = errorMessages?.let {
         Collections.unmodifiableList(ArrayList(it))
     }
     @JvmField val kotoba: List<ContractKotobaTranslationEntry>? = kotoba?.let {
@@ -262,6 +273,7 @@ object ContractManifestJsonParser {
     private val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     // BEGIN GENERATED: kotodama-v1-validator-policy
     private val reservedIdentifiers = setOf(
+        "as",
         "authorize",
         "break",
         "const",
@@ -269,13 +281,16 @@ object ContractManifestJsonParser {
         "else",
         "enum",
         "error",
+        "export",
         "false",
         "fn",
         "for",
         "hajimari",
         "始まり",
         "if",
+        "import",
         "in",
+        "include",
         "kaizen",
         "改善",
         "kotoage",
@@ -456,7 +471,7 @@ object ContractManifestJsonParser {
             setOf(
                 "seiyaku_name", "code_hash", "abi_hash", "compiler_fingerprint",
                 "features_bitmap", "access_set_hints", "entrypoints", "states", "error_types",
-                "kotoba", "provenance",
+                "error_messages", "kotoba", "provenance",
             ),
             "manifest",
         )
@@ -486,6 +501,7 @@ object ContractManifestJsonParser {
         val entrypoints = optionalObjectList(root, "entrypoints", "manifest.entrypoints", ::parseEntrypoint)
         val states = optionalObjectList(root, "states", "manifest.states", ::parseState)
         val errorTypes = optionalObjectList(root, "error_types", "manifest.error_types", ::parseErrorType)
+        val errorMessages = optionalObjectList(root, "error_messages", "manifest.error_messages", ::parseErrorMessage)
         val kotoba = optionalObjectList(root, "kotoba", "manifest.kotoba", ::parseKotobaEntry)
         val provenance = optionalObject(root, "provenance", "manifest.provenance")?.let(::parseProvenance)
 
@@ -532,6 +548,27 @@ object ContractManifestJsonParser {
                 }
             }
         }
+        var previousMessage: ContractErrorMessage? = null
+        for (entry in errorMessages.orEmpty()) {
+            val error = errorTypes.orEmpty().find { it.identity == entry.errorType }
+            check(error != null && error.variants.any { it.code == entry.code }) {
+                "error message must reference a declared nominal error variant"
+            }
+            previousMessage?.let { previous ->
+                val left = previous.errorType.toByteArray(StandardCharsets.UTF_8)
+                val right = entry.errorType.toByteArray(StandardCharsets.UTF_8)
+                var order = 0
+                for (index in 0 until minOf(left.size, right.size)) {
+                    order = (left[index].toInt() and 255) - (right[index].toInt() and 255)
+                    if (order != 0) break
+                }
+                if (order == 0) order = left.size - right.size
+                check(order < 0 || (order == 0 && previous.code < entry.code)) {
+                    "error messages must be sorted and unique by identity and code"
+                }
+            }
+            previousMessage = entry
+        }
         kotoba?.let { requireUnique(it.map { entry -> entry.messageId }, "manifest.kotoba") }
 
         return ContractManifest(
@@ -544,6 +581,7 @@ object ContractManifestJsonParser {
             entrypoints,
             states,
             errorTypes,
+            errorMessages,
             kotoba,
             provenance,
         )
@@ -1213,6 +1251,26 @@ object ContractManifestJsonParser {
         return ContractErrorTypeDescriptor(identity, variants)
     }
 
+    // Unicode White_Space, matching Rust str::trim rather than JVM isWhitespace.
+    private fun isErrorMessageWhitespace(character: Char): Boolean =
+        character in '\u0009'..'\u000d' || character == '\u0020' || character == '\u0085'
+            || character == '\u00a0' || character == '\u1680' || character in '\u2000'..'\u200a'
+            || character == '\u2028' || character == '\u2029' || character == '\u202f'
+            || character == '\u205f' || character == '\u3000'
+
+    private fun parseErrorMessage(root: Map<String, Any?>): ContractErrorMessage {
+        exactKeys(root, setOf("error_type", "code", "message"), "error message")
+        val identity = exactString(required(root, "error_type", "error message"), "error message.error_type")
+        val code = unsignedInteger(required(root, "code", "error message"), BigInteger.valueOf(0xffff_ffffL), "error message.code").longValueExact()
+        val message = required(root, "message", "error message")
+        check(code > 0 && message is String && message.any { !isErrorMessageWhitespace(it) }
+            && StandardCharsets.UTF_8.newEncoder().canEncode(message)
+            && message.toByteArray(StandardCharsets.UTF_8).size <= 4096) {
+            "error message requires a nonzero u32 and 1..4096 UTF-8 bytes of nonblank text"
+        }
+        return ContractErrorMessage(identity, code, message)
+    }
+
     private fun parseKotobaEntry(root: Map<String, Any?>): ContractKotobaTranslationEntry {
         exactKeys(root, setOf("msg_id", "translations"), "kotoba translation entry")
         val messageId = exactString(required(root, "msg_id", "kotoba translation entry"), "kotoba translation entry.msg_id")
@@ -1400,6 +1458,10 @@ object ContractManifestJsonParser {
     private fun canonicalQualifiedStructIdentifier(value: String): Boolean {
         if (value.length > 1024 || value.any { it.code > 127 } || value.contains("__kotodama_link_")) return false
         val parts = value.split("::")
+        if (parts.size == 4 && parts[0] == "local") {
+            return parts[1].length == 64 && parts[1].all { it in '0'..'9' || it in 'a'..'f' } &&
+                canonicalTypeDeclarationIdentifier(parts[2]) && canonicalTypeDeclarationIdentifier(parts[3])
+        }
         if (parts.size != 3 || !canonicalTypeDeclarationIdentifier(parts[1]) || !canonicalTypeDeclarationIdentifier(parts[2])) return false
         fun component(part: String): Boolean = part.isNotEmpty() &&
             (part[0] in 'A'..'Z' || part[0] in 'a'..'z' || part[0] in '0'..'9' || part[0] == '_') &&

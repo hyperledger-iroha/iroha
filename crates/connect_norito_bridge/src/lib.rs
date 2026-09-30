@@ -428,7 +428,7 @@ const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
 /// The frame stores this value in a `u32`, while the governed hardware profile
 /// and its circuit-visible credential use the same complete lower sixteen bits.
 pub const CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1: u32 =
-    iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32;
+    iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1;
 
 /// Frozen IPM1 lifecycle kind tags in their only accepted session order.
 pub const CONNECT_NORITO_KAGEMUSHA_IPM1_MESSAGE_KIND_TAGS_V1: [u8; 3] = [

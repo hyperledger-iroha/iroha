@@ -95,6 +95,7 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: embedded_entrypoints,
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };

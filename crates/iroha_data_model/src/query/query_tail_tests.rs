@@ -7,8 +7,8 @@ mod canonical_output_inclusion_tests {
     fn execution_fixture() -> (SignedBlock, CommittedTransaction) {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            fixture::network(0, Ok(Default::default())),
-            fixture::network(1, Ok(Default::default())),
+            fixture::network(0, Ok(Vec::default())),
+            fixture::network(1, Ok(Vec::default())),
             fixture::simple_time(&block, 0),
         ];
         fixture::install(&mut block, rows, 3).unwrap();
@@ -356,12 +356,6 @@ mod canonical_output_inclusion_tests {
     }
     #[test]
     fn committed_query_rejects_retired_parallel_result_and_merge_wire() {
-        let (_, committed) = execution_fixture();
-        let mut json = norito::json::to_value(&committed).unwrap();
-        json.as_object_mut()
-            .unwrap()
-            .insert("merge_inclusion".into(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
         #[derive(norito::codec::Encode)]
         struct RetiredCommitted {
             block_hash: HashOf<crate::block::BlockHeader>,
@@ -373,6 +367,12 @@ mod canonical_output_inclusion_tests {
             result: crate::transaction::TransactionResult,
             merge_inclusion: Option<()>,
         }
+        let (_, committed) = execution_fixture();
+        let mut json = norito::json::to_value(&committed).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("merge_inclusion".into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
         let result = committed.result().clone();
         let old = RetiredCommitted {
             block_hash: committed.block_hash,
@@ -408,7 +408,7 @@ mod fault_injection_tests {
             )
             .sign(key.private_key()),
         );
-        let output = crate::block::output_test_support::network(0, Ok(Default::default()));
+        let output = crate::block::output_test_support::network(0, Ok(Vec::default()));
         CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fault carrier")),
             entrypoint_hash: entrypoint.hash(),

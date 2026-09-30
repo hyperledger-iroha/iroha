@@ -513,6 +513,16 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
+An exact still-live signed carrier retry is acknowledged by Torii after fresh
+ingress authentication and bounded authentication of the original complete native
+execution. The membership hash alone is insufficient: the authorization proof and
+entire entrypoint must match the original carrier. Acknowledgment neither queues
+the carrier nor charges another fee or repeats its effects. Unavailable or changed
+history fails closed. A newly signed intent remains a new transaction subject to
+current fees and the WSV replay rules.
+This acknowledgment does not waive instruction-specific current admission policy:
+for example, threshold-key lifecycle certificates still require their exact next-height slot.
+
 When participant transactions travel on a lane, the lane only certifies their
 admission; the global block that merges the lane block executes them against
 the world state in its one canonical order

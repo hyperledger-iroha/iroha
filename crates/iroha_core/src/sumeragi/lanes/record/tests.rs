@@ -297,3 +297,32 @@ fn context_mismatches_and_foreign_witness_never_prepare_an_output() {
         Err(LaneRecordError::Context)
     ));
 }
+
+#[test]
+fn prepared_lane_parts_move_original_metadata_and_bulk_owners_without_readmission() {
+    let (body, qc, _source, budget, _crypto) = fixture(1025, Some(257));
+    let payload = body.payload().as_slice().as_ptr();
+    let availability = body.availability().as_slice().as_ptr();
+    let epoch = std::ptr::from_ref(&*body.source().config().epoch);
+    let attestations = qc.attestations.as_ptr();
+    let witness = qc.attestation_witness.as_ref().unwrap().as_slice().as_ptr();
+    let mut prepared = PreparedLaneWrite::new(body, qc);
+    let retained = budget.reserved_bytes();
+    let output_len = prepared.prepare(&budget).unwrap().len();
+    assert_eq!(budget.reserved_bytes(), retained + output_len);
+    budget.set_limit_bytes(0);
+    let (body, qc) = prepared.into_parts();
+    assert_eq!(body.payload().as_slice().as_ptr(), payload);
+    assert_eq!(body.availability().as_slice().as_ptr(), availability);
+    assert_eq!(std::ptr::from_ref(&*body.source().config().epoch), epoch);
+    assert_eq!(qc.attestations.as_ptr(), attestations);
+    assert_eq!(
+        qc.attestation_witness.as_ref().unwrap().as_slice().as_ptr(),
+        witness
+    );
+    assert!(body.admitted_to(&budget));
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(body);
+    drop(qc);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

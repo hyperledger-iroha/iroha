@@ -1152,6 +1152,18 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
+/// States unused across every native file assembled into one source unit.
+pub(crate) fn unused_state_names(program: &Program) -> HashSet<String> {
+    let mut warnings = Vec::new();
+    lint_unused_state(program, &mut warnings);
+    warnings
+        .into_iter()
+        .filter_map(|warning| match warning.message {
+            LintMessage::UnusedState { name } => Some(name),
+            _ => None,
+        })
+        .collect()
+}
 fn lint_state_shadowing(program: &Program, warnings: &mut Vec<LintWarning>) {
     let state_names: HashSet<String> = program
         .items

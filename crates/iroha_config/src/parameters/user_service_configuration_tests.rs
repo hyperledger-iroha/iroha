@@ -37,14 +37,14 @@ pin_torii_urls = [
     let actual = load_root(table);
     let publish = actual.torii.sorafs_discovery.publish;
     assert_eq!(
-        publish.gateway_base_url.as_ref().map(|url| url.as_str()),
+        publish.gateway_base_url.as_ref().map(actual::SorafsPublishBaseUrl::as_str),
         Some("https://taira.sora.org")
     );
     assert_eq!(
         publish
             .pin_torii_urls
             .iter()
-            .map(|url| url.as_str())
+            .map(actual::SorafsPublishBaseUrl::as_str)
             .collect::<Vec<_>>(),
         [
             "https://taira-validator-1.sora.org",

@@ -239,7 +239,7 @@ fn l14_check(seed: u64) {
         world.run_until(next);
         for rep in &world.replicas {
             for (bh, block) in &rep.bodies {
-                if poison_blocks.contains_key(bh) || !has_poison(&block.payload().as_slice()) {
+                if poison_blocks.contains_key(bh) || !has_poison(block.payload().as_slice()) {
                     continue;
                 }
                 let h = block.header().height;
@@ -248,7 +248,7 @@ fn l14_check(seed: u64) {
                     .get(block.header().proposer)
                     .expect("the proposer is a member");
                 let proposer = world.key_owner[key];
-                let honest: Vec<u64> = decode_txs(&block.payload().as_slice())
+                let honest: Vec<u64> = decode_txs(block.payload().as_slice())
                     .into_iter()
                     .filter(|(id, _)| *id != POISON)
                     .map(|(id, _)| id)

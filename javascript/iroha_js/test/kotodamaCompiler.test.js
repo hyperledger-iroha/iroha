@@ -298,6 +298,7 @@ function compilerArtifactFixture({
   entrypoints = 1,
   states = 0,
   errorTypes = 0,
+  errorMessages = [],
   callables = Array.from({ length: entrypoints }, (_, index) => callableFixture({ entryPc: index * 4 })),
   omitCallables = false,
   interfaceAbiByte = 0x23,
@@ -318,6 +319,7 @@ function compilerArtifactFixture({
     ...(omitCallables ? [] : [field(concatBytes(u64Le(callables.length), ...callables.map(field)))]),
     field(vector(states)),
     field(vector(errorTypes)),
+    field(concatBytes(u64Le(errorMessages.length), ...errorMessages.map((entry) => field(concatBytes(field(stringField(entry.error_type)), field(u32Le(entry.code)), field(stringField(entry.message))))))),
   );
   const frame = concatBytes(
     new TextEncoder().encode("NRT0"),
@@ -461,6 +463,7 @@ const SERVICE_OUTPUT = {
     ],
     states: [],
     error_types: null,
+    error_messages: null,
     kotoba: null,
     provenance: null,
   }),
@@ -2725,4 +2728,22 @@ test("loopback development compiler services may use HTTP", async () => {
     assert.equal(result.ok, true);
     assert.equal(calls.length, 1);
   }
+});
+
+
+test("compiler output authenticates static error messages against embedded bytes", async () => {
+  const error = { identity: "Demo::Failure", variants: [{ name: "Rejected", code: 7 }] };
+  const message = { error_type: error.identity, code: 7, message: "残高が不足しています" };
+  const artifact = compilerArtifactFixture({ errorTypes: 1, errorMessages: [message] });
+  const response = serviceSuccessWithArtifact(artifact, (manifest) => {
+    manifest.error_types = [error];
+    manifest.error_messages = [message];
+  });
+  const native = { async compileKotodama() { return response; } };
+  const result = await compileKotodamaWithNativeBinding(native, "seiyaku Demo {}");
+  assert.deepEqual(result.output.manifest.error_messages, [message]);
+  const forged = JSON.parse(response.output.manifestJson);
+  forged.error_messages[0].message = "Forged explanation";
+  response.output.manifestJson = JSON.stringify(forged);
+  await assert.rejects(compileKotodamaWithNativeBinding(native, "seiyaku Demo {}"), /error_messages do not match/u);
 });

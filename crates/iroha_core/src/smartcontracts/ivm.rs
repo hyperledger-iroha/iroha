@@ -339,6 +339,7 @@ pub fn map_vm_error_with_context_to_validation(
         error_type,
         schema_hash,
         code,
+        message,
     } = err.as_unmetered()
     {
         // The host authenticated these fields against the originating signed CNTR. Carrying
@@ -349,6 +350,7 @@ pub fn map_vm_error_with_context_to_validation(
             schema_hash: *schema_hash,
             name: name.clone(),
             code: *code,
+            message: message.clone(),
         });
     }
     if let Some(diag) = vm.last_diagnostic() {
@@ -380,6 +382,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -705,21 +708,23 @@ mod tests {
         assert_eq!(
             error,
             ivm::VMError::ContractAbort {
-                contract: "LiquidityPolicy".to_owned(),
+                contract: "LiquidityPolicy".into(),
                 name: "BelowMinimum".to_owned(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
-                code: 18
+                code: 18,
+                message: None,
             }
         );
         assert_eq!(
             map_vm_error_with_context_to_validation(&vm, &error),
             ValidationFail::ContractRejected(ContractRejection {
-                contract: "LiquidityPolicy".to_owned(),
+                contract: "LiquidityPolicy".into(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
                 name: "BelowMinimum".to_owned(),
                 code: 18,
+                message: None,
             })
         );
     }

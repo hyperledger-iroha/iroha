@@ -6025,6 +6025,7 @@ class GovernanceUnlockStats:
 # BEGIN GENERATED: kotodama-v1-validator-policy
 _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
     {
+        "as",
         "authorize",
         "break",
         "const",
@@ -6032,13 +6033,16 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
         "else",
         "enum",
         "error",
+        "export",
         "false",
         "fn",
         "for",
         "hajimari",
         "始まり",
         "if",
+        "import",
         "in",
+        "include",
         "kaizen",
         "改善",
         "kotoage",
@@ -6296,6 +6300,9 @@ def _canonical_kotodama_struct_name(value: str) -> bool:
     if "__kotodama_link_" in value:
         return False
     parts = value.split("::")
+    if len(parts) == 4 and parts[0] == "local":
+        return (re.fullmatch(r"[0-9a-f]{64}", parts[1]) is not None
+                and all(_canonical_kotodama_identifier(part, type_declaration=True) for part in parts[2:]))
     if len(parts) != 3 or not all(_canonical_kotodama_identifier(part, type_declaration=True) for part in parts[1:]):
         return False
     package = parts[0].split("@")
@@ -7631,6 +7638,34 @@ class ContractKotobaTranslationEntry:
 
 
 @dataclass(frozen=True)
+class ContractErrorMessage:
+    """Authenticated static presentation text for one nominal error variant."""
+
+    error_type: str
+    code: int
+    message: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractErrorMessage":
+        obj = _contract_object(payload, "error message")
+        _contract_exact_fields(obj, ("error_type", "code", "message"), "error message")
+        identity = _contract_required_string(obj.get("error_type"), "error message.error_type")
+        code = obj.get("code")
+        message = obj.get("message")
+        if isinstance(code, bool) or not isinstance(code, int) or not 1 <= code <= 0xFFFFFFFF:
+            raise TypeError("error message.code must be a nonzero u32")
+        if not isinstance(message, str) or not message.strip("\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"):
+            raise TypeError("error message.message must contain 1..4096 UTF-8 bytes of nonblank text")
+        try:
+            message_bytes = message.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise TypeError("error message.message must contain valid Unicode scalar values") from exc
+        if len(message_bytes) > 4096:
+            raise TypeError("error message.message must contain 1..4096 UTF-8 bytes of nonblank text")
+        return cls(identity, code, message)
+
+
+@dataclass(frozen=True)
 class ContractManifest:
     """On-chain contract manifest metadata with its exact V1 public interface."""
 
@@ -7643,6 +7678,7 @@ class ContractManifest:
     entrypoints: Optional[Tuple[ContractEntrypointDescriptor, ...]]
     states: Optional[Tuple[ContractStateDescriptor, ...]]
     error_types: Optional[Tuple[ContractErrorTypeDescriptor, ...]]
+    error_messages: Optional[Tuple[ContractErrorMessage, ...]]
     kotoba: Optional[Tuple[ContractKotobaTranslationEntry, ...]]
     provenance: Optional[Mapping[str, Any]]
 
@@ -7668,6 +7704,7 @@ class ContractManifest:
             "entrypoints",
             "states",
             "error_types",
+            "error_messages",
             "kotoba",
             "provenance",
         }
@@ -7748,6 +7785,7 @@ class ContractManifest:
         entrypoints = optional_descriptors("entrypoints", ContractEntrypointDescriptor.from_payload)
         states = optional_descriptors("states", ContractStateDescriptor.from_payload)
         error_types = optional_descriptors("error_types", ContractErrorTypeDescriptor.from_payload)
+        error_messages = optional_descriptors("error_messages", ContractErrorMessage.from_payload)
         kotoba = optional_descriptors("kotoba", ContractKotobaTranslationEntry.from_payload)
 
         if entrypoints is not None:
@@ -7788,6 +7826,15 @@ class ContractManifest:
         catalog = {error.identity: error for error in error_types or ()}
         if len(catalog) != len(error_types or ()) or len(catalog) > 256:
             raise TypeError("manifest error_types must contain at most 256 unique identities")
+        previous_message = None
+        for entry in error_messages or ():
+            key = (entry.error_type.encode("utf-8"), entry.code)
+            error = catalog.get(entry.error_type)
+            if error is None or not any(variant.code == entry.code for variant in error.variants):
+                raise TypeError("error message must reference a declared nominal error variant")
+            if previous_message is not None and previous_message >= key:
+                raise TypeError("error messages must be sorted and unique by identity and code")
+            previous_message = key
         for state in states or ():
             if not _canonical_kotodama_state_type_name(state.type_name, set(catalog)):
                 raise TypeError("state nominal error identity is not declared in the error_types catalog")
@@ -7818,6 +7865,7 @@ class ContractManifest:
             entrypoints=entrypoints,
             states=states,
             error_types=error_types,
+            error_messages=error_messages,
             kotoba=kotoba,
             provenance=provenance,
         )

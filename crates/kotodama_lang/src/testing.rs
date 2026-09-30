@@ -161,8 +161,9 @@ mod tests {
             code,
         };
         let error = ivm_abi::VMError::ContractAbort {
-            contract: "test".to_owned(),
+            contract: "test".into(),
             name: "Failure".to_owned(),
+            message: None,
             error_type: descriptor.identity.clone(),
             schema_hash: descriptor.schema_hash(),
             code,
@@ -176,21 +177,24 @@ mod tests {
             Some(VmTrapKind::ContractAbort)
         ));
         let wrong_type = ivm_abi::VMError::ContractAbort {
-            contract: "test".to_owned(),
+            message: None,
+            contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: "Other".to_owned(),
             schema_hash: descriptor.schema_hash(),
             code,
         };
         let wrong_schema = ivm_abi::VMError::ContractAbort {
-            contract: "test".to_owned(),
+            message: None,
+            contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: descriptor.identity.clone(),
             schema_hash: [0; 32],
             code,
         };
         let wrong_code = ivm_abi::VMError::ContractAbort {
-            contract: "test".to_owned(),
+            message: None,
+            contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: descriptor.identity.clone(),
             schema_hash: descriptor.schema_hash(),

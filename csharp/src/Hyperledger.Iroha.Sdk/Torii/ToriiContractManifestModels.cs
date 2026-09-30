@@ -311,6 +311,14 @@ public sealed record class ToriiContractErrorTypeDescriptor
     }
 }
 
+/// <summary>Authenticated static presentation text for one declared nominal error variant.</summary>
+public sealed record class ToriiContractErrorMessage
+{
+    public string ErrorType { get; init; } = string.Empty;
+    public uint Code { get; init; }
+    public string Message { get; init; } = string.Empty;
+}
+
 /// <summary>One localized text in a <c>kotoba</c> table.</summary>
 public sealed record class ToriiContractKotobaTranslation
 {
@@ -351,6 +359,7 @@ public sealed record class ToriiContractManifest
     private ToriiContractEntrypointDescriptor[]? entrypoints;
     private ToriiContractStateDescriptor[]? states;
     private ToriiContractErrorTypeDescriptor[]? errorTypes;
+    private ToriiContractErrorMessage[]? errorMessages;
     private ToriiContractKotobaTranslationEntry[]? kotoba;
 
     public string? SeiyakuName { get; init; }
@@ -393,6 +402,12 @@ public sealed record class ToriiContractManifest
         init => errorTypes = value is null
             ? null
             : ToriiListSnapshots.CopyNonNullItems(value, nameof(ErrorTypes));
+    }
+
+    public IReadOnlyList<ToriiContractErrorMessage>? ErrorMessages
+    {
+        get => errorMessages is null ? null : ToriiListSnapshots.CopyRequired(errorMessages);
+        init => errorMessages = value is null ? null : ToriiListSnapshots.CopyNonNullItems(value, nameof(ErrorMessages));
     }
 
     public IReadOnlyList<ToriiContractKotobaTranslationEntry>? Kotoba

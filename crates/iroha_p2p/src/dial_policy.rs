@@ -127,7 +127,7 @@ fn canonical_ip(address: IpAddr) -> IpAddr {
 }
 
 fn normalize_dns_name(raw: &str) -> io::Result<String> {
-    let name = raw.trim().strip_suffix('.').unwrap_or(raw.trim());
+    let name = raw.trim().strip_suffix('.').unwrap_or_else(|| raw.trim());
     if name.is_empty() || name.len() > 253 || !name.is_ascii() {
         return Err(invalid_input(
             "outbound dial DNS name is empty, non-ASCII, or too long",
@@ -150,7 +150,7 @@ fn normalize_dns_name(raw: &str) -> io::Result<String> {
 }
 
 fn normalize_dns_suffix(raw: &str) -> io::Result<String> {
-    normalize_dns_name(raw.trim().strip_prefix('.').unwrap_or(raw.trim()))
+    normalize_dns_name(raw.trim().strip_prefix('.').unwrap_or_else(|| raw.trim()))
 }
 
 fn dns_suffix_matches(name: &str, suffix: &str) -> bool {
@@ -484,7 +484,7 @@ mod tests {
         let policy = policy(&[], &[], &[], &[]);
         let answers = (0..=MAX_OUTBOUND_DNS_ANSWERS).map(|index| {
             StdSocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(192, 0, 2, (index % 255) as u8)),
+                IpAddr::V4(Ipv4Addr::new(192, 0, 2, u8::try_from(index % 255).unwrap())),
                 1337,
             )
         });

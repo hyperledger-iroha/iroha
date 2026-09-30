@@ -542,6 +542,7 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
         access_set_hints: None,
         entrypoints: None,
         states: None,
+        error_messages: None,
         error_types: None,
         kotoba: None,
         provenance: None,

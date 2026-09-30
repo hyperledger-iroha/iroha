@@ -148,7 +148,7 @@ pub enum ScheduleError {
     /// The chain parameters fail §9.4 validation.
     #[error("invalid chain parameters: {0}")]
     Params(ConfigError),
-    /// The signed NPoS policy contradicts the current consensus epoch authority.
+    /// The signed `NPoS` policy contradicts the current consensus epoch authority.
     #[error("NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks")]
     EpochPolicyMismatch,
     /// The stored schedule is not empty or three consecutive heights.
@@ -184,6 +184,10 @@ pub enum ScheduleError {
 /// Construct a global committee under the first-release voting geometry. This boundary is
 /// shared by live scheduling, signed genesis, and historical certificate verification; the
 /// generic consensus core's wider committee domain cannot broaden global authority.
+///
+/// # Errors
+/// Rejects a size outside the exact first-release global committee geometry, duplicate
+/// keys, or malformed consensus keys.
 pub fn global_committee(keys: Vec<PublicKey>) -> Result<Committee, ScheduleError> {
     if !is_valid_committee_size(keys.len()) {
         return Err(ScheduleError::InvalidCommitteeSize {

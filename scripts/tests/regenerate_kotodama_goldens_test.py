@@ -441,6 +441,7 @@ class TestModuleValidationTests(unittest.TestCase):
 
             def execute(command, cwd):
                 self.assertEqual(command[1:3], ["test", "run"])
+                self.assertEqual(command[-3:-1], ["--source-root", cwd])
                 if Path(command[-1]).is_absolute():
                     staged = Path(command[-1])
                     self.assertEqual(staged.read_bytes(), (root / template).read_bytes())

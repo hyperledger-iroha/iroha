@@ -193,6 +193,7 @@ fn contract_artifact_with_mode_and_code(
         access_set_hints,
         kotoba: Vec::new(),
         entrypoints,
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };
@@ -204,6 +205,12 @@ fn contract_artifact_with_mode_and_code(
     bytes
 }
 fn contract_artifact_with_error_types(error_types: Vec<ContractErrorTypeDescriptor>) -> Vec<u8> {
+    contract_artifact_with_error_messages(error_types, Vec::new())
+}
+fn contract_artifact_with_error_messages(
+    error_types: Vec<ContractErrorTypeDescriptor>,
+    error_messages: Vec<iroha_data_model::smart_contract::manifest::ContractErrorMessage>,
+) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -221,6 +228,7 @@ fn contract_artifact_with_error_types(error_types: Vec<ContractErrorTypeDescript
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        error_messages,
         error_types,
         states: Vec::new(),
     };
@@ -255,6 +263,7 @@ fn contract_artifact_with_access_hints_and_states(
         access_set_hints,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states,
     };
@@ -283,6 +292,7 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("run", EntryPointKind::Kotoage, 0)],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };
@@ -311,6 +321,7 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("inspect", EntryPointKind::View, 0)],
+        error_messages: Vec::new(),
         error_types: Vec::new(),
         states: Vec::new(),
     };
@@ -2081,4 +2092,46 @@ fn verify_rejects_unsupported_abi_version() {
         err.to_string()
             .contains("unsupported IVM program ABI version 2")
     );
+}
+
+#[test]
+fn admission_authenticates_bounded_static_error_messages() {
+    use iroha_data_model::smart_contract::manifest::ContractErrorMessage;
+    let error = ivm_abi::error_types::list_error_type();
+    let message = ContractErrorMessage {
+        error_type: error.identity.clone(),
+        code: error.variants[0].code,
+        message: "The index is outside the list".into(),
+    };
+    let artifact =
+        contract_artifact_with_error_messages(vec![error.clone()], vec![message.clone()]);
+    let verified = ivm::verify_contract_artifact(&artifact).unwrap();
+    assert_eq!(
+        verified.manifest.error_messages,
+        Some(vec![message.clone()])
+    );
+    for invalid in [
+        ContractErrorMessage {
+            error_type: "Undeclared::Error".into(),
+            ..message.clone()
+        },
+        ContractErrorMessage {
+            code: u32::MAX,
+            ..message.clone()
+        },
+        ContractErrorMessage {
+            message: "é".repeat(2049),
+            ..message.clone()
+        },
+        ContractErrorMessage {
+            message: " ".into(),
+            ..message.clone()
+        },
+    ] {
+        let artifact = contract_artifact_with_error_messages(vec![error.clone()], vec![invalid]);
+        assert!(ivm::verify_contract_artifact(&artifact).is_err());
+    }
+    let duplicate =
+        contract_artifact_with_error_messages(vec![error], vec![message.clone(), message]);
+    assert!(ivm::verify_contract_artifact(&duplicate).is_err());
 }

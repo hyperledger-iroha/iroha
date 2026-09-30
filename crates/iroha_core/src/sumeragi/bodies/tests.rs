@@ -58,6 +58,20 @@ fn durable_record_restores_through_actual_signature_and_rs16_verification() {
 }
 
 #[test]
+fn retirement_authority_is_local_monotonic_and_never_inferred_from_absence() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, source, budget) = fixture(1025);
+    let store = open(root.path(), &source, &budget);
+    assert!(!store.retirement_authorized(source.height()));
+    store.prune_through(source.height()).unwrap();
+    store.prune_through(source.height() - 1).unwrap();
+    assert!(store.retirement_authorized(source.height()));
+    assert!(!store.retirement_authorized(0));
+    assert!(!store.retirement_authorized(source.height() + 1));
+    assert!(!open(root.path(), &source, &budget).retirement_authorized(source.height()));
+}
+
+#[test]
 fn read_refusal_keeps_source_and_foreign_pool_is_rejected_before_allocation() {
     let root = tempfile::tempdir().unwrap();
     let (body, source, budget) = fixture(1025);

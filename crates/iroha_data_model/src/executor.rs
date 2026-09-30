@@ -153,7 +153,6 @@ mod model {
     /// Manifest-authenticated application error returned by a contract.
     #[derive(
         Debug,
-        derive_more::Display,
         Clone,
         PartialEq,
         Eq,
@@ -162,13 +161,14 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
+        crate::DeriveJsonSerialize,
+        crate::DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
-    #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
-    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
-        pub contract: String,
+        pub contract: Box<str>,
         /// Stable nominal error type identity.
         pub error_type: String,
         /// Hash of the exact declared variant schema.
@@ -177,6 +177,22 @@ mod model {
         pub name: String,
         /// Explicit stable non-zero application error code.
         pub code: u32,
+        /// Static presentation text authenticated by the originating contract interface.
+        /// Immutable text avoids retaining spare string capacity in every validation result.
+        pub message: Option<Box<str>>,
+    }
+    impl core::fmt::Display for ContractRejection {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(
+                f,
+                "Seiyaku {} rejected with {}::{} ({})",
+                self.contract, self.error_type, self.name, self.code
+            )?;
+            if let Some(message) = &self.message {
+                write!(f, ": {message}")?;
+            }
+            Ok(())
+        }
     }
     /// Structured reasons for IVM admission/static validation failure.
     #[derive(
@@ -475,12 +491,14 @@ mod tests {
     use norito::codec::{DecodeAll, Encode};
     #[test]
     fn nominal_contract_rejection_roundtrips_without_losing_callee_identity() {
+        assert!(core::mem::size_of::<ValidationFail>() < 128);
         let rejection = ContractRejection {
             contract: "金庫".into(),
             error_type: "example/vault@1::金庫::拒否".into(),
             schema_hash: [7; 32],
             name: "不足".into(),
             code: 1,
+            message: None,
         };
         let encoded = norito::encode_canonical(&rejection).unwrap();
         let decoded = norito::decode_canonical::<ContractRejection>(&encoded).unwrap();
@@ -494,6 +512,25 @@ mod tests {
         assert_eq!(decoded, rejection);
         assert!(json.contains("error_type") && json.contains("schema_hash"));
         assert!(!json.contains("namespace"));
+        let explained = ContractRejection {
+            message: Some("残高が不足しています".into()),
+            ..rejection
+        };
+        // Compact immutable storage must retain the canonical string wire representation.
+        assert_eq!(
+            explained.contract.encode(),
+            explained.contract.to_string().encode()
+        );
+        assert_eq!(
+            explained.message.encode(),
+            explained.message.as_deref().map(str::to_owned).encode()
+        );
+        assert!(explained.to_string().ends_with(": 残高が不足しています"));
+        let encoded = norito::encode_canonical(&explained).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ContractRejection>(&encoded).unwrap(),
+            explained
+        );
     }
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {

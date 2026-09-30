@@ -168,8 +168,17 @@ MUTATIONS = [
       ["det_s18_non_leader_proposal_dropped"], ["f18"]),
     m("MS19", "on_proposal steps 5-6: parent_qc/parent_hash/parent_result checks deleted",
       ["det_s19_wrong_parent_rejected"], ["f05"]),
-    m("MS20", "body_ok always true",
-      ["det_s20_forged_body_under_real_header"], ["f26"]),
+    m("MS20", "actual received-row digest equality skipped (shape retained)",
+      ["acquisition_rejects_corrupt_actual_row_before_counting_custody"], ["f26"]),
+    m("MS20b", "acquisition/restoration independent source identity checks skipped",
+      ["source_bound_storage_job_never_confuses_refusal_with_absence_or_rebinds_source"]),
+    m("MS20c", "actual payload hash equality skipped (length retained)",
+      ["signed_inconsistent_codeword_and_payload_commitments_are_rejected"]),
+    m("MS20d", "reconstructed codeword row commitments skipped (shape retained)",
+      ["signed_inconsistent_codeword_and_payload_commitments_are_rejected"]),
+    m("MS20e", "complete re-encoded codeword row commitments skipped (shape retained)",
+      ["stored_body_restoration_checks_actual_codeword_without_resigning_or_copying_payload",
+       "signed_inconsistent_codeword_and_payload_commitments_are_rejected"]),
     m("MS21", "commit_height: no verification for Status / parent_qc CommitQCs",
       ["det_s21_forged_commitqc_via_status", "det_s21_forged_commitqc_via_parent_qc"],
       ["f18"]),
@@ -216,7 +225,7 @@ MUTATIONS = [
       ["det_s33d_installation_log_rollback"], ["f24"]),
     m("MS34", "fake driver apply: commitment comparison skipped",
       ["det_s34_apply_divergence_halts_strong"], ["f21h"]),
-    m("MS35", "on_proposal step 8: body_ok failure treated as a signed defect",
+    m("MS35", "on_manifest_rejected: unsigned carrier rejection times out the held proposal",
       ["det_s35_relay_tamper_no_evidence"], ["f25"]),
     m("MS36a", "on_executed step 3: certified mismatch handled like uncertified Invalid",
       ["det_s36_certified_mismatch_is_local"], ["f21"]),
@@ -662,7 +671,8 @@ def main():
     report_path.write_text(json.dumps(report, indent=1))
     print(json.dumps(summary, indent=1))
     print(f"report: {report_path}")
-    failed = (summary["baseline"] == "fail" or summary["survived"] or summary["error"]
+    failed = (summary["baseline"] not in ("pass", "skipped")
+              or summary["survived"] or summary["error"]
               or (args.strict and summary["killed_by_scenario_only"]))
     return 1 if failed else 0
 

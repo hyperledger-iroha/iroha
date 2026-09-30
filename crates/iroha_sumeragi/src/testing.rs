@@ -960,6 +960,25 @@ impl FakeValidators {
     }
 }
 
+/// Construct fixture custody through the real signed RS16 author worker.
+/// Invalid carrier tests must mutate the untrusted wire record, never this opaque output.
+pub fn author_body(
+    header: crate::message::BlockHeader,
+    payload: &[u8],
+    config: &crate::types::HeightConfig,
+    budget: &iroha_allocation::AllocationBudget,
+    crypto: &dyn crate::crypto::Crypto,
+    signer: &dyn crate::crypto::Signer,
+) -> crate::availability::AvailableBody {
+    let mut bytes = crate::availability::PayloadBytes::from_untrusted(payload.to_vec()).unwrap();
+    bytes.admit(budget).unwrap();
+    let instance = header.instance;
+    crate::availability::PayloadAuthoring::new(header, bytes)
+        .complete(instance, config, budget, crypto, signer)
+        .unwrap_or_else(|(_, error)| panic!("fixture authoring failed: {error:?}"))
+        .body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,7 +1022,9 @@ mod tests {
     fn chunked_hash_preserves_every_split_and_empty_chunk() {
         let crypto = FakeCrypto::new();
         for len in [0, 1, 15, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 257] {
-            let bytes: Vec<_> = (0..len).map(|i| (i * 37) as u8).collect();
+            let bytes: Vec<_> = (0..len)
+                .map(|i| u8::try_from((i * 37) % 256).unwrap())
+                .collect();
             let expected = crypto.hash(&bytes);
             for split in 0..=len {
                 assert_eq!(
@@ -1130,23 +1151,4 @@ mod tests {
         };
         assert!(!log.tc_provenance_ok(&v.committee, &bad_index));
     }
-}
-
-/// Construct fixture custody through the real signed RS16 author worker.
-/// Invalid carrier tests must mutate the untrusted wire record, never this opaque output.
-pub fn author_body(
-    header: crate::message::BlockHeader,
-    payload: &[u8],
-    config: &crate::types::HeightConfig,
-    budget: &iroha_allocation::AllocationBudget,
-    crypto: &dyn crate::crypto::Crypto,
-    signer: &dyn crate::crypto::Signer,
-) -> crate::availability::AvailableBody {
-    let mut bytes = crate::availability::PayloadBytes::from_untrusted(payload.to_vec()).unwrap();
-    bytes.admit(budget).unwrap();
-    let instance = header.instance;
-    crate::availability::PayloadAuthoring::new(header, bytes)
-        .complete(instance, config, budget, crypto, signer)
-        .unwrap_or_else(|(_, error)| panic!("fixture authoring failed: {error:?}"))
-        .body
 }

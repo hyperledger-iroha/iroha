@@ -2634,6 +2634,7 @@ mod tests {
             access_set_hints,
             kotoba: Vec::new(),
             entrypoints: embedded_entrypoints,
+            error_messages: Vec::new(),
             error_types: Vec::new(),
             states: Vec::new(),
         };
@@ -3140,6 +3141,7 @@ mod tests {
                 entrypoints: Some(vec![entrypoint]),
                 states: None,
                 kotoba: None,
+                error_messages: None,
                 error_types: None,
                 provenance: None,
             };
@@ -3211,6 +3213,7 @@ mod tests {
                     entrypoints: None,
                     states: None,
                     kotoba: None,
+                    error_messages: None,
                     error_types: None,
                     provenance: None,
                 };
@@ -4666,6 +4669,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -4702,6 +4706,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -4748,6 +4753,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -4847,6 +4853,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -4931,6 +4938,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }
@@ -5017,6 +5025,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
+            error_messages: None,
             error_types: None,
             provenance: None,
         }

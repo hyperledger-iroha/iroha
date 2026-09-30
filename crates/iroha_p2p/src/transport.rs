@@ -1185,7 +1185,7 @@ impl std::fmt::Debug for TcpConnectOptions {
             )
             .field("tcp_nodelay", &self.tcp_nodelay)
             .field("tcp_keepalive", &self.tcp_keepalive)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl Default for TcpConnectOptions {

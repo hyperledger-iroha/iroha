@@ -1351,11 +1351,11 @@ where
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_inbound_listener_smoke() {
+    const PEER_COUNT: usize = 4;
     setup_logger();
     if super::skip_if_no_tcp_bind() {
         return;
     }
-    const PEER_COUNT: usize = 4;
     let idle_timeout = Duration::from_secs(30);
     let chain_id = super::test_network_id("test_chain");
     let mut networks = Vec::with_capacity(PEER_COUNT);
@@ -1381,7 +1381,7 @@ async fn tls_inbound_listener_smoke() {
         let (network, child) = match NetworkHandle::<TestMessage>::start(
             super::p2p_identity_keys(key_pair),
             config,
-            chain_id.clone(),
+            chain_id,
             None,
             None,
             ShutdownSignal::new(),
@@ -1520,10 +1520,9 @@ async fn four_peer_crossed_dials_and_restart_progress_with_old_delivered_owner()
     let mut retained = None;
     for round in 0_u32..2 {
         arbitration_mesh_online(&mut nodes).await;
-        for source in 0..4 {
+        for (source, node) in nodes.iter().enumerate() {
             let target = (source + 1) % 4;
-            nodes[source]
-                .as_ref()
+            node.as_ref()
                 .unwrap()
                 .network
                 .post_recoverable(
@@ -1536,15 +1535,13 @@ async fn four_peer_crossed_dials_and_restart_progress_with_old_delivered_owner()
                 )
                 .expect("one exact retained consensus post per sender");
         }
-        for target in 0..4 {
+        for (target, node) in nodes.iter_mut().enumerate() {
             let source = (target + 3) % 4;
-            let message = tokio::time::timeout(
-                Duration::from_secs(20),
-                nodes[target].as_mut().unwrap().inbox.recv(),
-            )
-            .await
-            .expect("exact ring delivery must progress")
-            .expect("subscriber remains open");
+            let message =
+                tokio::time::timeout(Duration::from_secs(20), node.as_mut().unwrap().inbox.recv())
+                    .await
+                    .expect("exact ring delivery must progress")
+                    .expect("subscriber remains open");
             assert_eq!(message.peer.id(), peers[source].id());
             assert_eq!(
                 message.payload.0,

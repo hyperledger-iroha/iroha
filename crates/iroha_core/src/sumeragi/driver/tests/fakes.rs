@@ -252,6 +252,13 @@ fn take(counter: &Mutex<u32>) -> bool {
 }
 
 impl BlockStore for FakeBlocks {
+    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+        self.entry(height)?;
+        Ok(height
+            .checked_sub(1)
+            .and_then(|height| usize::try_from(height).ok())
+            .and_then(|index| self.entries.lock().get(index).cloned()))
+    }
     fn height(&self) -> u64 {
         u64::try_from(self.entries.lock().len()).unwrap_or(u64::MAX)
     }

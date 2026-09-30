@@ -954,6 +954,10 @@ fn admission_expiry_between_issuer_verification_and_possession_start_is_rejected
 
 #[test]
 fn fresh_admission_rechecks_original_deadline_at_handoff() {
+    use crate::kagemusha_core_coordinator_v1::startup_qualification::{
+        NativeStartupQualificationOwnerV1, ObservationErrorV1,
+    };
+
     let f = Fixture::new();
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
@@ -965,10 +969,6 @@ fn fresh_admission_rechecks_original_deadline_at_handoff() {
             &f.verified_app(&proof.challenge),
         )
         .unwrap();
-
-    use crate::kagemusha_core_coordinator_v1::startup_qualification::{
-        NativeStartupQualificationOwnerV1, ObservationErrorV1,
-    };
 
     assert_eq!(admission.require_live(), Ok(()));
     // Startup pinning consumes the same admission freshness contract, without projecting

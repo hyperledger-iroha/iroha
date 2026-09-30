@@ -29,7 +29,7 @@ impl<T: Write> RunArgs<T> for Args {
         let parameters =
             load_kagemusha_mint_finality_parameters(&self.kagemusha_mint_finality_parameters)?;
         let manifest = GenesisSourceTemplate::from_path(&self.template_file)?
-            .materialize(parameters, self.xor_asset_definition_id)
+            .materialize(&parameters, self.xor_asset_definition_id)
             .wrap_err("materialize complete genesis manifest")?;
         super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)?;
         let topology = manifest

@@ -20,6 +20,7 @@ use iroha_data_model::{
     },
 };
 use std::alloc::Layout;
+use super::world_state_cut::CutCapsule;
 
 /// Private move-only snapshot owner; payload fields drop before their exact charges.
 pub(super) struct SnapshotCollector<'a> {
@@ -158,6 +159,48 @@ fn capture(
         .finish(index.schema)
 }
 
+// Complete reconstruction uses only private native journal preimages. The
+// stored complete World is first independently cold-checked by `capture`.
+fn reconstruct(captured:&CapturedSnapshot,cut:&CutCapsule,budget:&AllocationBudget)->Result<CapturedSnapshot,String> {
+    let index=field_index().as_ref().map_err(Clone::clone)?;
+    let count=usize::try_from(cut.entries).map_err(|e|e.to_string())?;
+    let mut collector=SnapshotCollector::new(budget,count,0)?;
+    let mut seen=ChargedBuffer::new(cut.changes().len(),budget).map_err(|e|e.to_string())?;
+    for _ in 0..cut.changes().len() {seen.push_reserved(false);}
+    for entry in &captured.snapshot.entries {
+        let value=if let Some((position,before,after))=cut.change_for(&entry.field_id,entry.kind,entry.key_hash) {
+            if seen.as_slice()[position] || after!=Some(entry.value_hash) {
+                return Err("World cut tail differs from the complete applied preimage".into());
+            }
+            seen.as_mut_slice()[position]=true;
+            before
+        } else {Some(entry.value_hash)};
+        if let Some(value)=value {collector.push(&entry.field_id,entry.kind,entry.key_hash,value)?;}
+    }
+    for (position,(id,kind,key,before,after)) in cut.changes().enumerate() {
+        match after {
+            Some(_) if !seen.as_slice()[position] => return Err("World cut tail omits a complete applied element".into()),
+            None if seen.as_slice()[position] => return Err("World cut absent tail appears in the applied World".into()),
+            None => if let Some(value)=before {collector.push(id,kind,key,value)?;},
+            Some(_) => {},
+        }
+    }
+    let reconstructed=collector.finish(index.schema)?;
+    if reconstructed.snapshot.root().map_err(|e|e.to_string())?!=cut.root {
+        return Err("World cut complete preimages do not reconstruct certified R".into());
+    }
+    Ok(reconstructed)
+}
+
+fn require_target(snapshot:&WorldStateSnapshotV1,id:&str,kind:WorldStateElementKindV1,key:Option<Hash>,value:Hash)->Result<(),String> {
+    let row=snapshot.entries.binary_search_by(|entry| (entry.field_id.as_str(),entry.kind,entry.key_hash).cmp(&(id,kind,key)))
+        .ok().and_then(|index|snapshot.entries.get(index));
+    if row.is_none_or(|entry|entry.value_hash!=value) {
+        return Err(format!("World cut exact typed target {id} differs from certified execution"));
+    }
+    Ok(())
+}
+
 fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), String> {
     let native = view
         .native_execution_tip()
@@ -172,7 +215,6 @@ fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), String>
         || native.result() != tip.result()
         || native.creation_time_ms() != tip.block_time_ms()
         || tip.commitment().height != tip.height()
-        || view.world.state_accumulator.get().root()? != tip.commitment().execution.world_state_root
     {
         return Err(
             "World snapshot certified execution differs from the current applied cut".into(),
@@ -219,6 +261,14 @@ impl State {
                 .ok_or("World snapshot publication is busy or changed")?;
             require_cut(&view, tip)?;
         }
+        let cut = self.native_world_cut.lock().as_ref().cloned()
+            .ok_or("World snapshot has no original certified pre-tail capture; restored state requires native replay")?;
+        if cut.generation!=generation || cut.tip.height()!=tip.height()
+            || cut.tip.iroha_hash()!=tip.block_hash() || cut.tip.core_hash()!=tip.core_hash()
+            || cut.tip.result()!=tip.result() || cut.tip.creation_time_ms()!=tip.block_time_ms()
+            || cut.root!=tip.commitment().execution.world_state_root {
+            return Err("World snapshot original journal belongs to another certified generation".into());
+        }
         let result = {
             // Acquire only storage overlays, under the caller's original pool.
             // State::block would also initialize height-bound execution state.
@@ -227,8 +277,8 @@ impl State {
                 .try_block(budget)
                 .map_err(|error| error.to_string())?;
             let expected = world.state_accumulator.get();
-            if expected.root()? != tip.commitment().execution.world_state_root {
-                return Err("World snapshot acquired another applied World".into());
+            if expected.root()? != cut.applied_root || expected.entries()!=cut.applied_entries {
+                return Err("World snapshot acquired another complete applied World".into());
             }
             let definition = world
                 .asset_definitions
@@ -239,8 +289,15 @@ impl State {
                 .get(asset_id)
                 .ok_or("World snapshot exact asset incarnation is absent")?;
             let captured = capture(&world, expected, budget)?;
+            let certified = reconstruct(&captured,&cut,budget)?;
+            require_target(&certified.snapshot,"world.asset_definitions",WorldStateElementKindV1::Table,
+                Some(hash_value(asset_id)?),hash_value(definition)?)?;
+            require_target(&certified.snapshot,"world.axt_asset_incarnations",WorldStateElementKindV1::Table,
+                Some(hash_value(asset_id)?),hash_value(incarnation)?)?;
+            require_target(&certified.snapshot,"world.kagemusha_verifier_registry",WorldStateElementKindV1::Cell,
+                None,hash_value(world.kagemusha_verifier_registry.get())?)?;
             consume(
-                &captured.snapshot,
+                &certified.snapshot,
                 definition,
                 incarnation,
                 world.kagemusha_verifier_registry.get(),

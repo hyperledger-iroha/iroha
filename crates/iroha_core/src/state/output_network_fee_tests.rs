@@ -493,7 +493,6 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
 
 #[test]
 fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry() {
-    use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();

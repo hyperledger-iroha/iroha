@@ -14,8 +14,8 @@ mod archives;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
-mod qualified_enrollment_delegate;
 mod pre_enrollment_qualification;
+mod qualified_enrollment_delegate;
 pub use pre_enrollment_qualification::{
     KagemushaPreEnrollmentQualificationOwnerV1, KagemushaVerifiedPreEnrollmentQualificationV1,
 };
@@ -133,7 +133,7 @@ pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 12] = [
     KagemushaQualifiedHelperCircuitV1::ALL.len() as u32,
     KagemushaDeviceLifecycleOperationV1::ALL.len() as u32,
     KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1.len() as u32,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32,
+    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
     1, // Required native close/revocation lifecycle.
     KagemushaCoreCoordinatorMethodV1::ALL.len() as u32,
 ];

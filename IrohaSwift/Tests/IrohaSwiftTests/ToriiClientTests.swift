@@ -209,6 +209,12 @@ func tcBodyJSON(from request: URLRequest) -> [String: Any] {
 }
 
 final class ToriiClientTests: XCTestCase {
+    func testRamLfeEncryptionRefusalDoesNotImplyUncertainAssetTransferSubmission() {
+        XCTAssertNil(ToriiClient.uncertainDetachedAssetTransferPostCause(
+            ToriiClientError.ramLfeEncryptionUnavailable
+        ))
+    }
+
     private static let operatorSigningContext: ToriiOperatorSigningContext = {
         let signingKey = try! SigningKey.ed25519(
             privateKey: Data(repeating: 0x5A, count: 32)
@@ -15521,9 +15527,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertTrue(snapshot.isSigning)
         XCTAssertFalse(snapshot.isHalted)
 
+        XCTAssertEqual(payload.first, 0x7B, "Rust fixture begins with its root object")
+        var duplicateProtocolVersion = Data(#"{"protocol_version":1,"#.utf8)
+        duplicateProtocolVersion.append(payload.dropFirst())
         var invalidResponses: [(Data, Int, [String: String], String)] = [
             (
-                duplicateSumeragiRootField(#"{"protocol_version":4,"#, in: payload),
+                duplicateProtocolVersion,
                 200, ["Content-Type": "application/json"], #"invalidField("json.duplicateKey")"#
             ),
             (Data([0xff]), 200, ["Content-Type": "application/json"], #"invalidField("json")"#),
@@ -15577,7 +15586,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         ]
         let exactSnapshot = try await makeClient().getSumeragiStatus()
         XCTAssertEqual(exactSnapshot.height, 15)
-        XCTAssertEqual(exactSnapshot.view, UInt64.max)
+        XCTAssertEqual(exactSnapshot, snapshot)
     }
 
     func testGetSumeragiLanesParsesRustLaneCorpusAsync() async throws {
@@ -16868,6 +16877,27 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifest.self, from: invalid), "invalid \(removed)-independent identity: \(name)")
             }
         }
+    }
+
+    func testStaticErrorMessagesBindDeclaredVariants() throws {
+        let error = ToriiContractErrorTypeDescriptor(identity: "Vault::Failure", variants: [ToriiContractErrorVariantDescriptor(name: "Missing", code: 1)])
+        let message = ToriiContractErrorMessage(errorType: error.identity, code: 1, message: "残高が不足しています")
+        var manifest = ToriiContractManifest(errorTypes: [error], errorMessages: [message])
+        let encoded = try JSONEncoder().encode(manifest)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), manifest)
+        for text in [" \n explanation \t", "\u{001c}", "😀"] {
+            manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: text)]
+            let data = try JSONEncoder().encode(manifest)
+            XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: data).errorMessages?.first?.message, text)
+        }
+        manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: "\u{0085}\u{00a0}")]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [message, message]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [.init(errorType: error.identity, code: 2, message: "Undeclared")]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
+        manifest.errorMessages = [.init(errorType: error.identity, code: 1, message: String(repeating: "é", count: 2049))]
+        XCTAssertThrowsError(try JSONEncoder().encode(manifest))
     }
 
     func testNominalErrorSharedFixturePreservesJapaneseIdentityAndUnit() throws {

@@ -420,7 +420,7 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false).expect("dispatch");
+        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("dispatch");
         let output = messages(output);
         assert_eq!(output.len(), 2);
         assert_eq!(
@@ -459,7 +459,7 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false).expect("shutdown");
+        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("shutdown");
         inbox.close();
         let output = messages(output);
         assert_eq!(output.len(), 2);
@@ -501,7 +501,7 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false).expect("dispatch");
+        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("dispatch");
         let output = messages(output);
         let old = output
             .iter()

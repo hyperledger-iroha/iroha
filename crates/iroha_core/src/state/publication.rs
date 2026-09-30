@@ -35,6 +35,8 @@ pub(super) struct StatePublication<'state> {
     lifecycle_index_releases: LaneLifecycleReleases<'state>,
     publication_notice: StateViewPublication<'state>,
     world_effects: Option<world_commit::PreparedWorldEffects>,
+    world_cut: Option<iroha_allocation::ChargedShared<world_state_accumulator::world_state_cut::CutCapsule>>,
+    world_cut_prepared: bool,
     tiered_snapshot: Option<tiered_publication::PreparedTieredSnapshot>,
     da_effects: Option<carrier_da_effects::PreparedDaCommitmentEffects>,
     lifecycle_effects: Option<carrier_lifecycle_effects::PreparedLaneLifecycleEffects>,
@@ -63,6 +65,8 @@ impl<'state> StatePublication<'state> {
             lifecycle_index_releases: LaneLifecycleReleases::new(state),
             publication_notice: state.state_view_publication(),
             world_effects: None,
+            world_cut: None,
+            world_cut_prepared: false,
             tiered_snapshot: None,
             da_effects: None,
             lifecycle_effects: None,
@@ -184,6 +188,8 @@ impl<'state> StateBlock<'state> {
             lifecycle_index_releases,
             publication_notice,
             world_effects,
+            world_cut,
+            world_cut_prepared,
             tiered_snapshot,
             da_effects,
             lifecycle_effects,
@@ -263,6 +269,7 @@ impl<'state> StateBlock<'state> {
             .map_err(|_| TransactionsBlockError::WorldCommitPreparation)?;
         // Borrow disjoint fields; the original State keeps its complete inventory
         // armed through every refusal, preparation and publication unwind.
+        let world_cut_capture = this.world_cut_capture.as_ref();
         let StateBlockFields {
             local_storage_refusal: _,
             read_releases,
@@ -447,6 +454,27 @@ impl<'state> StateBlock<'state> {
             prev_committed_topology.finish_freeze();
             committed_topology.finish_freeze();
             *fields_frozen = true;
+        }
+        if !*world_cut_prepared {
+            // Frozen journals retain exact preimages on resource refusal; never
+            // rerun tail writes or capture a replacement overlay during retry.
+            *world_cut = match world_cut_capture {
+                Some(capture) => {
+                    let tip = native_execution_tip.get().ok_or(TransactionsBlockError::WorldCommitPreparation)?;
+                    let generation = current_generation.checked_add(2)
+                        .ok_or(TransactionsBlockError::SnapshotObservationChanged)?;
+                    Some(capture.prepare(world, tip, generation, &state_ref.ivm_execution_budget())
+                        .map_err(|error| match error {
+                            world_state_accumulator::world_state_cut::CutError::Deferred(reason) => TransactionsBlockError::ExecutionDeferred(reason),
+                            world_state_accumulator::world_state_cut::CutError::Invalid(reason) => {
+                                error!(block_height, %reason, "original World cut does not reconstruct certified R");
+                                TransactionsBlockError::WorldCommitPreparation
+                            }
+                        })?)
+                }
+                None => None,
+            };
+            *world_cut_prepared = true;
         }
         world_commit::PreparedWorldCommit::validate_prepared_overlay(
             world,
@@ -639,6 +667,10 @@ impl<'state> StateBlock<'state> {
             let world_hold = world_start.elapsed();
             let block_hashes_start = Instant::now();
             block_hashes.publish_prepared();
+            // Original capsule is visible only with the same tip, World and
+            // block-hash publication. Raw/non-native commits retire authority;
+            // decoded restores start absent and must replay genuine execution.
+            *state_ref.native_world_cut.lock() = world_cut.take();
             let block_hashes_hold = block_hashes_start.elapsed();
             world_effects
                 .take()

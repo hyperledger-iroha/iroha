@@ -30,6 +30,7 @@ grammar rather than in this rendered copy or an editor grammar.
 <!-- BEGIN GENERATED: kotodama-v1-keywords -->
 | Spelling | Token |
 | --- | --- |
+| `as` | `As` |
 | `authorize` | `Authorize` |
 | `break` | `Break` |
 | `const` | `Const` |
@@ -37,13 +38,16 @@ grammar rather than in this rendered copy or an editor grammar.
 | `else` | `Else` |
 | `enum` | `Enum` |
 | `error` | `Error` |
+| `export` | `Export` |
 | `false` | `False` |
 | `fn` | `Fn` |
 | `for` | `For` |
 | `hajimari` | `Hajimari` |
 | `始まり` | `Hajimari` |
 | `if` | `If` |
+| `import` | `Import` |
 | `in` | `In` |
+| `include` | `Include` |
 | `kaizen` | `Kaizen` |
 | `改善` | `Kaizen` |
 | `kotoage` | `Kotoage` |
@@ -156,13 +160,49 @@ A deployable file contains exactly one named `seiyaku`/`誓約`. A reusable file
 
 ```ebnf
 source          = seiyaku | module ;
+fragment        = (seiyaku-item | exported-item)* ;
 seiyaku         = seiyaku-keyword identifier "{" seiyaku-item* "}" ;
 seiyaku-keyword = "seiyaku" | "誓約" ;
 module          = "module" identifier "{" module-item* "}" ;
 
 seiyaku-item    = struct | error-enum | constant | state | function | kotoage
-                | view | hajimari | kaizen | trigger ;
-module-item     = struct | error-enum | constant | function ;
+                | view | hajimari | kaizen | trigger | include | import ;
+module-item     = exported-item | include | import ;
+exported-item   = "export"? (struct | error-enum | constant | function) ;
+include         = "include" string-literal ";" ;
+import          = "import" string-literal "as" identifier ";" ;
+```
+
+A source unit may include bare declaration fragments with `include "./state.ko";`.
+Includes expand declarations at the directive position and share the owning
+contract or module's functions, types, constants and state. Each fragment has one
+owner. Include cycles and duplicate declarations are errors. A fragment has no
+`seiyaku` or `module` wrapper and is parsed only through an explicit include or
+fragment-formatting operation. Fragment declarations must be valid for the owner;
+module fragments cannot introduce contract state or entrypoints.
+
+`import "./math.ko" as arithmetic;` imports a named local module. Only declarations
+marked `export` are accessible through `arithmetic::name`; functions remain ordinary
+private functions for runtime-entrypoint purposes. Types, error enums and constants
+can also be exported. A published package additionally requires each externally
+visible declaration in its manifest export allowlist. Local import cycles fail.
+Paths resolve relative to the declaring file within the supplied source root;
+absolute paths and escaping that root are rejected. The compiler consumes the
+explicit source bundle and preserves every file's native source ranges.
+
+For example, these three files form one contract source bundle:
+
+```kotodama bundle
+// file: app.ko
+seiyaku App {
+    include "./helpers.ko";
+    import "./math.ko" as arithmetic;
+    view fn answer() -> int { twice(arithmetic::SCALE) }
+}
+// file: helpers.ko
+fn twice(int _ value) -> int { value + value }
+// file: math.ko
+module Math { export const int SCALE = 21; }
 ```
 
 Seiyaku identity is the declared name; the compiler must preserve it through CST, AST, HIR, diagnostics, interfaces, and documentation. Modules are linked at typed HIR. Textual AST rewriting and wildcard imports are not part of V1.
@@ -185,7 +225,8 @@ field           = type identifier ;
 error-enum      = "error" "enum" identifier "{"
                   error-variant (("," | ";") error-variant)* ("," | ";")?
                   "}" ;
-error-variant   = identifier "=" integer-literal ;
+error-variant   = error-message? identifier "=" integer-literal ;
+error-message   = "#[" "message" "(" string-literal ")" "]" ;
 
 constant        = "const" type identifier "=" expression ";" ;
 state           = "state" type identifier ";" ;
@@ -220,6 +261,14 @@ data-filter     = "data" ("any" | identifier identifier "{" data-matcher* "}") ;
 data-matcher    = identifier (identifier | string-literal) ";" ;
 pipeline-filter = "pipeline" ("transaction" | "block") "approved"? ;
 ```
+
+An optional `#[message("Permission required")]` before an error variant provides
+static presentation text. The decoded string must contain 1 through 4096 UTF-8
+bytes and at least one non-whitespace character. Duplicate message attributes,
+computed expressions and attributes on the enum itself are rejected. Messages
+are included in contract metadata and editor hover/completion; they do not alter
+the enum's numeric codes or nominal identity.
+
 
 Every parameter, field, constant, and state declaration has an explicit type.
 Ordinary function parameters accept positional values or their declared names.
@@ -1208,8 +1257,19 @@ interpreted as version ranges. Exported structs carry
 is at most 1024 ASCII bytes, and both declaration components must be canonical
 unreserved source type names. Aliases never enter this identity. Qualified
 identities containing the compiler-private `__kotodama_link_` substring are
-invalid. Local structs keep their declared name. Schema hashes bind the exact
-name and field schema, so changing a locked package identity changes the schema.
+invalid. Contract-owned structs keep their declared name, including declarations
+in fragments. Root-local module structs carry
+`local::<64 lowercase hexadecimal digits>::SourceUnit::Struct`. The digest binds
+the root contract owner and the canonical project-relative module path, excluding
+absolute paths, consumer aliases and source contents. Compute it with `Hash::new`
+over the domain bytes `iroha:kotodama:local-module:v1\0`, followed by the UTF-8
+fields `root`, the root seiyaku name, and the canonical relative module path;
+each field has a preceding unsigned 64-bit little-endian byte length. Encode the
+32-byte digest as lowercase hexadecimal. The same owner prefix applies to local
+module error enums. Package-owned local modules
+retain their package identity even when reached through a path import. Schema
+hashes bind the exact name and field schema, so changing a locked package identity
+changes the schema.
 
 Diagnostic spans keep package identity separate from the logical source path,
 so two locked packages may both own `src/lib.ko` without ambiguous JSON, SARIF,

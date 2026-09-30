@@ -292,11 +292,13 @@ fn f36_late_leaders() {
     // `(n, peak start level)` → honest replicas.
     let mut levels = std::collections::BTreeMap::<(usize, u32), usize>::new();
     sweep("F36", scenarios::f36, |world| {
-        // §9.2: a late but valid proposal or body never raises an honest start level (from
-        // the anchor or the proposal's acceptance, every late turn would raise it by one).
+        // §9.2: a late but valid proposal or body never raises an honest start level before
+        // the deliberate crash. A crash during the next certificate exchange may extend
+        // actual body-to-commit latency and legitimately raise it; O-PERF still checks
+        // every subsequent commit gap.
         let n = world.instances[0].committee(1).n();
         for r in world.honest() {
-            let peak = world.oracle.reps[r].max_start_level;
+            let peak = world.oracle.reps[r].max_start_level_before_heal;
             assert!(
                 peak == 0,
                 "seed {}: replica {r} start level peaked at {peak}",
@@ -306,6 +308,32 @@ fn f36_late_leaders() {
         }
     });
     eprintln!("F36 start levels (n, peak) → replicas: {levels:?}");
+}
+
+#[test]
+fn det_l30_crashed_proxy_latency_is_not_late_body_latency() {
+    let world = run(scenarios::f36(1813)).expect("crashed proxy recovery stays within O-PERF");
+    for replica in world.honest() {
+        assert_eq!(
+            world.oracle.reps[replica].max_start_level_before_heal, 0,
+            "late body delivery alone must not raise replica {replica}'s start level"
+        );
+    }
+    // Replica 1 gets the body at 60013 ms, after machine 5 crashes at 60000 ms.
+    // Retrying votes through the stage ladder delays CommitQC to 61136 ms: this
+    // genuinely exceeds T(0)/2 and §9.2 must continue to adapt to that latency.
+    assert_eq!(world.oracle.reps[1].max_start_level, 1);
+}
+
+#[test]
+fn det_l30_late_rows_resume_service_after_release() {
+    let world = run(scenarios::f36(70)).expect("released rows remain fetchable");
+    for replica in world.honest() {
+        assert_eq!(
+            world.oracle.reps[replica].max_start_level, 0,
+            "replica {replica}: F36 delays row release but does not withhold later fetches"
+        );
+    }
 }
 
 /// §7.4 (Restart), §13.1: every `Init` carries a fresh nonce drawn from the seeded PRNG.
@@ -332,8 +360,34 @@ fn f30_max_size_blocks() {
 }
 
 #[test]
-fn f31_independent_finality() {
+fn f31_amx_two_phase_commit() {
     sweep("F31", scenarios::f31, |world| {
+        let amx = world.amx.as_ref().expect("F31 runs the AMX application");
+        assert!(!amx.seen.begun.is_empty(), "AMX begin coverage");
+        assert!(!amx.seen.votes.is_empty(), "AMX prepare coverage");
+        assert!(
+            amx.seen
+                .decided
+                .values()
+                .any(|(outcome, _, _)| *outcome == super::amx::Outcome::Commit),
+            "AMX commit coverage"
+        );
+        assert!(
+            amx.seen
+                .decided
+                .values()
+                .any(|(outcome, _, _)| *outcome == super::amx::Outcome::Abort),
+            "AMX abort coverage"
+        );
+        assert!(!amx.seen.settled.is_empty(), "AMX settlement coverage");
+        let expected_handoffs = 4 * (world.instances.len() - 1);
+        assert_eq!(
+            amx.seen.handoffs,
+            u64::try_from(expected_handoffs).unwrap(),
+            "each dataspace and G authenticate both foreign epoch handoffs"
+        );
+        assert_eq!(world.machines[0].crashes, 1);
+        assert!(world.machines[0].up);
         // While one instance stalls, the other keeps committing.
         for (inst, (from, until)) in [(1usize, (10_000, 30_000)), (0, (40_000, 60_000))] {
             let during = world.oracle.refs[inst]

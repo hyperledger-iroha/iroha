@@ -29,7 +29,7 @@ use iroha::{
             ValidatorCommitteeCredentialsV1, ValidatorCommitteeOperationV1,
             ValidatorCommitteePreparationV1, ValidatorCommitteeSeatReadinessV1,
         },
-        parameter::system::SumeragiNposParameters,
+        parameter::system::{SumeragiNposParameters, SumeragiParameter},
         prelude::*,
         sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
         transaction::FeePaymentIntent,
@@ -1562,6 +1562,9 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .with_npos_consensus()
         .with_disposable_mint_finality_custody()
         .with_npos_genesis_bootstrap(1_000_u64.into())
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::EpochLengthBlocks(NonZeroU64::new(EPOCH).expect("nonzero epoch")),
+        )))
         .with_committee_validator_p2p_bootstrap(CommitteeValidatorP2pBootstrap::new(
             supplementary,
         )?)?

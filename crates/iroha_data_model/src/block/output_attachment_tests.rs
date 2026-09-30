@@ -5,7 +5,7 @@ use execution_output::ExecutionOutputV1;
 use norito::codec::Encode;
 fn rows(block: &SignedBlock) -> Vec<ExecutionOutputV1> {
     vec![
-        fixture::network(0, Ok(Default::default())),
+        fixture::network(0, Ok(Vec::default())),
         fixture::simple_time(block, 0),
     ]
 }
@@ -85,10 +85,10 @@ fn full_output_setter_rejects_size_shape_and_policy_without_mutation() {
             .set_execution_outputs(
                 bad,
                 3,
-                Default::default(),
+                std::collections::BTreeMap::default(),
                 vec![],
-                Default::default(),
-                Default::default(),
+                crate::nexus::AxtPolicySnapshot::default(),
+                std::collections::BTreeSet::default(),
                 &limits,
             )
             .unwrap_err();
@@ -107,10 +107,10 @@ fn full_output_setter_rejects_size_shape_and_policy_without_mutation() {
         .set_execution_outputs(
             outputs,
             3,
-            Default::default(),
+            std::collections::BTreeMap::default(),
             vec![],
-            Default::default(),
-            Default::default(),
+            crate::nexus::AxtPolicySnapshot::default(),
+            std::collections::BTreeSet::default(),
             &exact,
         )
         .unwrap();

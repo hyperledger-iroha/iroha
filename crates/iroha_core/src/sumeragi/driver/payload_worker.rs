@@ -159,6 +159,7 @@ struct Read {
     purpose: ReadPurpose,
     job: Option<StoredAcquisition>,
     committed: bool,
+    retired: bool,
     remote_ready: bool,
     delivery: Option<super::serve::DeliveryBatch>,
 }
@@ -495,6 +496,7 @@ impl PayloadWorker {
                     purpose: ReadPurpose::Fetch(peers),
                     job: None,
                     committed: false,
+                    retired: false,
                     remote_ready: false,
                     delivery: None,
                 });
@@ -566,6 +568,7 @@ impl PayloadWorker {
                     purpose: ReadPurpose::Serve(to),
                     job: None,
                     committed: false,
+                    retired: false,
                     remote_ready: false,
                     delivery: None,
                 });
@@ -733,10 +736,11 @@ impl PayloadWorker {
             }
             return Ok(());
         }
+        if read.committed {
+            return self.read_committed(read, blocks, progress);
+        }
         if read.job.is_none() {
-            let reader: &dyn crate::sumeragi::durable_artifact::BodyReader =
-                if read.committed { blocks } else { bodies };
-            match StoredAcquisition::begin(reader, read.source.clone()) {
+            match StoredAcquisition::begin(bodies, read.source.clone()) {
                 Ok(job) => read.job = Some(job),
                 Err(error) if read_refusal(&error) => {
                     self.reads.push_back(read);
@@ -753,36 +757,30 @@ impl PayloadWorker {
             .expect("retained original storage job")
             .poll(&self.budget, &*self.crypto)
         {
-            Ok(StoredProgress::Available(block)) => match read.purpose {
-                ReadPurpose::Fetch(_) => progress.events.push(Event::BodyAvailable { block }),
-                ReadPurpose::Serve(to) => {
-                    self.make_outgoing_room(true);
-                    self.outgoing.push_back(Outgoing {
-                        source: read.source.clone(),
-                        peers: VecDeque::from([RecipientStream::new(to)]),
-                        job: PayloadDissemination::new(read.source, block, None),
-                        manifest_frame: None,
-                        row_frame: None,
-                        active: true,
-                        metered: true,
-                    });
-                }
-            },
-            Ok(StoredProgress::Absent) if !read.committed => {
+            Ok(StoredProgress::Available(block)) => self.read_available(read, block, progress),
+            Ok(StoredProgress::Absent) => {
                 read.committed = true;
                 read.job = None;
                 self.reads.push_back(read);
-            }
-            Ok(StoredProgress::Absent) => {
-                if matches!(read.purpose, ReadPurpose::Fetch(_)) {
-                    read.remote_ready = true;
-                    self.reads.push_back(read);
-                }
             }
             Ok(StoredProgress::Pending(_)) => {
                 self.reads.push_back(read);
                 progress.retry = true;
                 progress.refused = true;
+            }
+            Err(StoredError::Read(BodyReadError::Io(ref error)))
+                if error.kind() == io::ErrorKind::NotFound
+                    && !read.committed
+                    && bodies.retirement_authorized(read.source.height()) =>
+            {
+                // The persistence worker applied and retired this height while the
+                // original file read was in flight. Preserve immutable authority,
+                // but reacquire and verify all bytes from committed storage. Other
+                // path changes, corruption and refusals remain errors or exact retries.
+                read.committed = true;
+                read.retired = true;
+                read.job = None;
+                self.reads.push_back(read);
             }
             Err(error) if read_refusal(&error) => {
                 self.reads.push_back(read);
@@ -792,6 +790,74 @@ impl PayloadWorker {
             Err(error) => return Err(fault(error)),
         }
         Ok(())
+    }
+
+    fn read_committed(
+        &mut self,
+        mut read: Read,
+        blocks: &dyn BlockStore,
+        progress: &mut PayloadProgress,
+    ) -> io::Result<()> {
+        match blocks.committed_body(read.source.height()) {
+            Ok(Some((block, _qc))) => {
+                let actual = block.source();
+                if actual.instance() != read.source.instance()
+                    || actual.height() != read.source.height()
+                    || actual.config() != read.source.config()
+                    || !block.admitted_to(&self.budget)
+                {
+                    return Err(fault(
+                        "committed lookup changed authority or allocation owner",
+                    ));
+                }
+                // A fully authenticated canonical block may supersede the requested
+                // proposal. Cancel only that stale lookup; never return the other
+                // block as custody for the requested hash. The same verified owner
+                // supplies a matching lookup without a second read or projection.
+                if actual.block_hash() == read.source.block_hash() {
+                    self.read_available(read, block, progress);
+                }
+            }
+            Ok(None) if read.retired => {
+                return Err(fault("retired body is missing from committed storage"));
+            }
+            Ok(None) => {
+                if matches!(read.purpose, ReadPurpose::Fetch(_)) {
+                    read.remote_ready = true;
+                    self.reads.push_back(read);
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                self.reads.push_back(read);
+                progress.retry = true;
+                progress.refused = true;
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+
+    fn read_available(&mut self, read: Read, block: AvailableBody, progress: &mut PayloadProgress) {
+        match read.purpose {
+            ReadPurpose::Fetch(_) => progress.events.push(Event::BodyAvailable { block }),
+            ReadPurpose::Serve(to) => {
+                self.make_outgoing_room(true);
+                self.outgoing.push_back(Outgoing {
+                    source: read.source.clone(),
+                    peers: VecDeque::from([RecipientStream::new(to)]),
+                    job: PayloadDissemination::new(read.source, block, None),
+                    manifest_frame: None,
+                    row_frame: None,
+                    active: true,
+                    metered: true,
+                });
+            }
+        }
     }
 
     fn send(&mut self, net: &dyn Net, progress: &mut PayloadProgress) -> io::Result<()> {

@@ -37,6 +37,14 @@ pub fn validate_manifest_schemas(manifest: &ContractManifest) -> CodecResult<()>
         ));
     }
     let mut catalog = BTreeMap::new();
+    if !iroha_data_model::smart_contract::manifest::validate_contract_error_messages(
+        manifest.error_types.as_deref().unwrap_or_default(),
+        manifest.error_messages.as_deref().unwrap_or_default(),
+    ) {
+        return Err(invalid(
+            "manifest.error_messages must be sorted, unique, bounded text for declared error variants",
+        ));
+    }
     for descriptor in manifest.error_types.as_deref().unwrap_or_default() {
         if !descriptor.validate()
             || catalog
@@ -163,6 +171,12 @@ mod tests {
         let mut manifest = base.get("manifest").expect("manifest").clone();
         if let Some(overlay) = overlay {
             let extra: Value = json::from_json(overlay).expect("shared nominal fixture");
+            // The overlay replaces nominal error identities; the base fixture's
+            // presentation catalog belongs only to the base error declarations.
+            manifest
+                .as_object_mut()
+                .expect("manifest object")
+                .insert("error_messages".into(), Value::Null);
             manifest.as_object_mut().expect("manifest object").extend(
                 extra
                     .get("manifest")

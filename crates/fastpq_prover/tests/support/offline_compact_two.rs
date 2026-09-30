@@ -161,7 +161,10 @@ fn verify_two(
         let mut changed = original.clone();
         match mutation {
             0 => changed.segments.swap(0, 1),
-            1 => changed.segments[1] = changed.segments[0].clone(),
+            1 => {
+                let (first, rest) = changed.segments.split_at_mut(1);
+                rest[0].clone_from(&first[0]);
+            }
             2 => changed.intermediate_roots[0][0] ^= 1,
             3 => {
                 changed.segments.pop();
@@ -356,7 +359,7 @@ pub(super) fn produce_fixture(
     assert!(limits.bundle.segment.max_proof_bytes <= 512 * 1024);
     assert!(bytes.len() <= limits.transport.max_wire_bytes);
     let started = std::time::Instant::now();
-    let verified = verify_two(&bytes, is_axt, &fixture);
+    let verified = verify_two(&bytes, is_axt, fixture);
     mark_controls_passed(&receipt, &format!("{:?}", verified.work())).unwrap();
     eprintln!(
         "two_public_verification={label}; controls={:?}; work={:?}",
@@ -387,15 +390,15 @@ fn replay_two(is_axt: bool) {
     } else {
         ("FASTPQ_TEST_ORDINARY_TWO_ARTIFACT", "ordinary")
     };
-    replay_fixture(is_axt, label, variable, fixture);
+    replay_fixture(is_axt, label, variable, &fixture);
 }
 
 /// Verify retained public bytes using fixture facts selected before artifact access.
-pub(super) fn replay_fixture(
+pub fn replay_fixture(
     is_axt: bool,
     label: &str,
     variable: &str,
-    fixture: capture::CaptureFixture,
+    fixture: &capture::CaptureFixture,
 ) {
     let path = PathBuf::from(std::env::var_os(variable).expect(variable));
     let bytes = read_addressed(
@@ -404,7 +407,7 @@ pub(super) fn replay_fixture(
         VerificationLimits::default().transport.max_wire_bytes,
     )
     .unwrap();
-    verify_two(&bytes, is_axt, &fixture);
+    verify_two(&bytes, is_axt, fixture);
 }
 
 #[test]

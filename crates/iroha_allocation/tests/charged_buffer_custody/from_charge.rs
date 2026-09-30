@@ -459,9 +459,10 @@ fn last_shared_reader_frees_header_before_buffered_payload_and_both_refunds() {
         }
     }
 
+    type Shell = Reserved<BufferedPayload, AllocationCharge>;
+
     let _serial = SERIAL.lock().unwrap();
     let _reset = ResetObservation;
-    type Shell = Reserved<BufferedPayload, AllocationCharge>;
     let backing = Layout::array::<u8>(239).unwrap();
     let header = Shell::layout();
     let total = backing.size().checked_add(header.size()).unwrap();

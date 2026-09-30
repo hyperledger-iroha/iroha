@@ -258,8 +258,8 @@ mod tests {
         assert!(built.execution_outputs().is_empty());
         let time = crate::block::output_test_support::simple_time(&built, 0);
         let rows = vec![
-            crate::block::output_test_support::network(0, Ok(Default::default())),
-            crate::block::output_test_support::network(1, Ok(Default::default())),
+            crate::block::output_test_support::network(0, Ok(Vec::default())),
+            crate::block::output_test_support::network(1, Ok(Vec::default())),
             time,
         ];
         crate::block::output_test_support::install(&mut built, rows.clone(), 3).unwrap();

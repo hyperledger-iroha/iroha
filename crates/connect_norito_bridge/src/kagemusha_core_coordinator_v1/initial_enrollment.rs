@@ -170,7 +170,7 @@ impl PendingIssuerEnrollmentV1 {
             || certificate.assertion.device_key_reference != credential.device_key_reference
             || certificate.assertion.attested_key_id != point_key_id
             || (app_policy.platform_class
-                == iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AppleAppAttest
+                != iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AndroidKeyMint
                 && prep.attested_key_id != point_key_id)
             || (app_policy.platform_class
                 == iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AndroidKeyMint

@@ -1,5 +1,6 @@
 // Normative machine-readable Kotodama V1 lexical grammar.
 // Records are tab-separated. This file generates compiler and tooling tables.
+keyword	as	As
 keyword	authorize	Authorize
 keyword	break	Break
 keyword	const	Const
@@ -7,13 +8,16 @@ keyword	continue	Continue
 keyword	else	Else
 keyword	enum	Enum
 keyword	error	Error
+keyword	export	Export
 keyword	false	False
 keyword	fn	Fn
 keyword	for	For
 keyword	hajimari	Hajimari
 keyword	始まり	Hajimari
 keyword	if	If
+keyword	import	Import
 keyword	in	In
+keyword	include	Include
 keyword	kaizen	Kaizen
 keyword	改善	Kaizen
 keyword	kotoage	Kotoage

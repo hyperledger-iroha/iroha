@@ -10,6 +10,13 @@
 //!
 //! This module provides the building blocks for a compiler that translates
 //! Kotodama source programs into IVM bytecode.
+//!
+//! Multi-file projects use [`linker::SourceLinkRequest`]: a deployable root, explicit companion
+//! sources, and optional locked packages. [`session::CompilerSession::build_source_bundle`]
+//! compiles that closed inventory without filesystem access. [`compiler::Compiler::compile_file`]
+//! loads the declared include/import closure within the entry file's parent directory; the build
+//! driver and CLI also accept an explicit source root. Declaration includes share their owner's
+//! scope, while imported modules expose only declarations marked `export`.
 mod abi_schema;
 pub mod ast;
 mod call_abi;

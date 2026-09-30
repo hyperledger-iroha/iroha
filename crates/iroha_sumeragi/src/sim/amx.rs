@@ -54,8 +54,9 @@ use super::{
 };
 use crate::{
     api::ExecOutcome,
+    availability::AvailableBody,
     crypto::{Crypto, Verifier},
-    message::{Block, BlockHeader, Qc},
+    message::{BlockHeader, Qc},
     preimage,
     testing::{FakeVerifier, sha256},
     types::{Committee, EpochConfig, Hash32, Millis},
@@ -1135,7 +1136,7 @@ impl AmxWorld {
         inst_config: &Inst,
         inst: usize,
         parent: &Hash32,
-        block: &Block,
+        block: &AvailableBody,
         base: ExecOutcome,
     ) -> ExecOutcome {
         let ExecOutcome::Valid(base) = base else {
@@ -1148,8 +1149,8 @@ impl AmxWorld {
             inst_config,
             inst,
             &parent.state,
-            &block.payload,
-            block.header.height,
+            block.payload().as_slice(),
+            block.header().height,
         );
         let result = bind(&base, &records);
         self.memo
@@ -1247,9 +1248,9 @@ impl AmxWorld {
 impl World {
     /// The execution of `block` of instance `inst` on the post-state certified by `parent`: the
     /// simulator's `block_exec` and, in an AMX world, the application's records bound into `R`.
-    pub fn app_exec(&self, inst: usize, parent: &Hash32, block: &Block) -> ExecOutcome {
+    pub fn app_exec(&self, inst: usize, parent: &Hash32, block: &AvailableBody) -> ExecOutcome {
         let config = &self.instances[inst];
-        let base = block_exec(parent, block, &config.config(block.header.height).epoch);
+        let base = block_exec(parent, block, &config.config(block.header().height).epoch);
         match &self.amx {
             Some(amx) => amx.execute(config, inst, parent, block, base),
             None => base,
@@ -1421,14 +1422,14 @@ impl World {
                             format!(
                                 "O-AMX: instance {inst} committed height {} without an \
                                  application execution",
-                                block.header.height
+                                block.header().height
                             )
                         });
                         continue;
                     };
                     for position in 0..exec.records.len() {
                         let proof = RecordProof {
-                            header: block.header.clone(),
+                            header: block.header().clone(),
                             qc: qc.clone(),
                             base: exec.base,
                             records: exec.records.clone(),
@@ -1679,12 +1680,21 @@ fn observe_dataspace(
             (Vote::Yes(_), Outcome::Abort) => Settlement::Released,
             (Vote::No, _) => Settlement::Closed,
         };
-        if seen.settled.insert((inst, *x), (outcome, kind)).is_some() {
+        // A decision may arrive before Begin. Preparing it later moves the
+        // already held decision into a No record without another monetary effect.
+        // Only this exact, unchanged Held -> Closed refinement is idempotent.
+        let completes_held = kind == Settlement::Closed
+            && !old.prepared.contains_key(x)
+            && old.held.get(x) == Some(&outcome)
+            && !new.held.contains_key(x)
+            && seen.settled.get(&(inst, *x)) == Some(&(outcome, Settlement::Held));
+        if seen.settled.contains_key(&(inst, *x)) && !completes_held {
             return Err(format!(
                 "O-AMX: dataspace {inst} settled {} twice",
                 short(x)
             ));
         }
+        seen.settled.insert((inst, *x), (outcome, kind));
         seen.settle_checks.push((inst, *x, outcome));
     }
     for (x, outcome) in &new.held {
