@@ -221,7 +221,7 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
                 if args.store.json {
                     write_json(
                         writer,
-                        &norito::json!({"name": args.name, "state": "reset"}),
+                        &norito::json!({"name": (args.name), "state": "reset"}),
                     )
                 } else {
                     writeln!(
@@ -241,7 +241,7 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
                 if args.named.store.json {
                     write_json(
                         writer,
-                        &norito::json!({"name": args.named.name, "log": logs}),
+                        &norito::json!({"name": (args.named.name), "log": logs}),
                     )
                 } else {
                     write!(writer, "{logs}")?;
@@ -350,9 +350,9 @@ impl<T: Write> RunArgs<T> for ContractCommand {
                 writer,
                 &norito::json!({
                     "status": "applied",
-                    "context": context.name,
-                    "receipt": deployed.receipt,
-                    "journal": deployed.journal,
+                    "context": (context.name),
+                    "receipt": (deployed.receipt),
+                    "journal": (deployed.journal),
                 }),
             )
         } else {

@@ -1,4 +1,30 @@
+//! Private temporary artifacts and canonical test client identities.
+
 use super::*;
+
+/// Temporary root whose generated-artifact child has native owner-only custody.
+pub(super) struct PrivateTempDir {
+    _temporary: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl PrivateTempDir {
+    /// Return the canonical private child used by generator fixtures.
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Create the same private artifact boundary used by a real managed generation.
+pub(super) fn private_tempdir() -> std::io::Result<PrivateTempDir> {
+    let temporary = tempfile::tempdir()?;
+    let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))?;
+    Ok(PrivateTempDir {
+        path: private.path().to_path_buf(),
+        _temporary: temporary,
+    })
+}
+
 pub(super) fn localnet_client_identity(
     base_seed: Option<&[u8]>,
     derive_from_seed: bool,

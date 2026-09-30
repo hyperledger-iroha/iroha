@@ -11,20 +11,22 @@ use crate::{
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::Algorithm;
+#[cfg(test)]
+use iroha_data_model::hijiri::HijiriParametersV1;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
     block::consensus::SumeragiGenesisContextParameters,
-    hijiri::HijiriParametersV1,
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::{
-        Parameter, Parameters,
+        Parameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
     prelude::*,
     sumeragi_lanes::SumeragiLanePolicy,
 };
 use iroha_deploy::genesis::{ConsensusPolicy, generate_default, validate_consensus_mode};
+#[cfg(test)]
 use iroha_executor_data_model::permission::{
     parameter::{CanSetHijiriParameters, CanSetParameters},
     query::CanReadAllLedgerData,
@@ -36,7 +38,6 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_primitives::json::Json;
 #[cfg(test)]
 use iroha_test_samples::ALICE_ID;
 use iroha_test_samples::gen_account_in;

@@ -380,7 +380,6 @@ function assertContractCallPayloadJson(body, expected, label) {
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
-    "contract_address",
     "contract_alias",
     "entrypoint",
   ]) {
@@ -397,21 +396,13 @@ function assertContractCallPayloadJson(body, expected, label) {
     `${label}.payload`,
     compactLength,
   );
-  assert.equal(payloadField.payload[0], 1);
-  const somePayload = readNoritoFieldPayload(
-    payloadField.payload,
-    1,
-    `${label}.payload.some`,
-    compactLength,
-  );
-  assert.equal(somePayload.offset, payloadField.payload.length);
   const jsonValue = readNoritoFieldPayload(
-    somePayload.payload,
+    payloadField.payload,
     0,
     `${label}.payload.json.value`,
     compactLength,
   );
-  assert.equal(jsonValue.offset, somePayload.payload.length);
+  assert.equal(jsonValue.offset, payloadField.payload.length);
   const jsonString = readNoritoFieldPayload(
     jsonValue.payload,
     0,
@@ -10758,23 +10749,11 @@ function replaceJsonStringPlaceholder(text, placeholder, integerToken) {
 
 
 
-test("autonomous diagnostics declarations expose provisional and optional identities", () => {
+test("diagnostics declarations exclude retired autonomous execution identities", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
-  const match = declarations.match(
-    /export interface ToriiSumeragiAutonomousLaneExecution \{([\s\S]*?)\n\}/u,
-  );
-  assert.ok(match, "missing ToriiSumeragiAutonomousLaneExecution declaration");
-  for (const field of [
-    "proposal_view: ToriiU64 | null;",
-    "reservation_owner_hash: string;",
-    "proposal_identity_hash: string;",
-    "reservation_group_hash: string;",
-    "proposal_hash: string | null;",
-    "descriptor_hash: string | null;",
-  ]) {
-    assert.ok(match[1].includes(field), `missing declaration: ${field}`);
-  }
-  assert.match(declarations, /\| "awaiting_executable_payload"/u);
+  assert.doesNotMatch(declarations, /\bToriiSumeragiAutonomousLaneExecution\b/u);
+  assert.doesNotMatch(declarations, /\bautonomous_lane_executions\b/u);
+  assert.doesNotMatch(declarations, /"awaiting_executable_payload"/u);
 });
 
 
@@ -19828,7 +19807,7 @@ test("proposeMultisig binds every unsigned payload to local caller intent", asyn
   );
   const replacedMetadata = draftWithReplacedTransactionField(
     trustedDraft,
-    8,
+    7,
     alternateMetadata,
   );
   await assert.rejects(

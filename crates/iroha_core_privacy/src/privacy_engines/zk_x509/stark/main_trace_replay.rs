@@ -692,7 +692,7 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
-    /// Extract each SHA run and bound arithmetic auxiliary run once, preserving
+    /// Extract each SHA run and arithmetic/value base or bound auxiliary run once, preserving
     /// public group/registration order and the closed base/bound phase.
     pub(super) fn native_columns_v1(
         &self,
@@ -717,7 +717,54 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         while first < columns.end {
             let (registration, local) =
                 registered_main_group_column_v1(layout, group, kind, first)?;
-            if registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic
+            let grouped_p256_aux = registration.segment.adapter
+                == SegmentAdapterIdV1::P256Arithmetic
+                || (registration.segment.adapter == SegmentAdapterIdV1::P256ValueBus
+                    && p256_instance_parts_v1(registration.segment.instance)
+                        .is_some_and(|(_, local)| local <= 1));
+            if grouped_p256_aux && matches!(kind, MainTraceColumnKindV1::Base) {
+                let end = columns.end.min(registration.base_end()?);
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let mut batch = (first..end)
+                    .map(|_| zeroed_main_trace_column_v1(registration.segment.trace_size()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                {
+                    let count = batch.len();
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    match self {
+                        Self::Base {
+                            assembly,
+                            sha,
+                            p256,
+                            ..
+                        } => {
+                            let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(
+                                layout, assembly, sha, p256,
+                            )?;
+                            let binding = source.p256_binding_v1(registration)?;
+                            p256.fill_base_columns_v1(binding.p256, local, &mut targets[..count])?;
+                        }
+                        Self::Bound { log19, .. } => {
+                            let binding = log19.p256_binding_v1(registration)?;
+                            log19.p256.fill_base_columns_v1(
+                                binding.p256,
+                                local,
+                                &mut targets[..count],
+                            )?;
+                        }
+                    }
+                }
+                output.extend(batch);
+                first = end;
+                continue;
+            }
+            if grouped_p256_aux
                 && matches!(kind, MainTraceColumnKindV1::Aux)
                 && let Self::Bound { log19, .. } = self
             {
@@ -736,11 +783,19 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                     for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
                         *target = &mut **column;
                     }
-                    log19.p256.fill_arithmetic_aux_columns_v1(
-                        binding.p256,
-                        local,
-                        &mut targets[..count],
-                    )?;
+                    if registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic {
+                        log19.p256.fill_arithmetic_aux_columns_v1(
+                            binding.p256,
+                            local,
+                            &mut targets[..count],
+                        )?;
+                    } else {
+                        log19.p256.fill_value_aux_columns_v1(
+                            binding.p256,
+                            local,
+                            &mut targets[..count],
+                        )?;
+                    }
                 }
                 output.extend(batch);
                 first = end;

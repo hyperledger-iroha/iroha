@@ -314,23 +314,24 @@ impl SigningAuthority {
     }
 }
 #[cfg(any(test, feature = "test"))]
-static DEVELOPMENT_AUTHORITIES: std::sync::LazyLock<Vec<SigningAuthority>> = std::sync::LazyLock::new(|| {
-    let all_permissions = InstructionPermission::all();
-    vec![
-        SigningAuthority::with_permissions(
-            "Alice (dev)",
-            ALICE_ID.clone(),
-            ALICE_KEYPAIR.clone(),
-            all_permissions.into_iter(),
-        ),
-        SigningAuthority::with_permissions(
-            "Bob (dev)",
-            BOB_ID.clone(),
-            BOB_KEYPAIR.clone(),
-            [InstructionPermission::TransferAsset].into_iter(),
-        ),
-    ]
-});
+static DEVELOPMENT_AUTHORITIES: std::sync::LazyLock<Vec<SigningAuthority>> =
+    std::sync::LazyLock::new(|| {
+        let all_permissions = InstructionPermission::all();
+        vec![
+            SigningAuthority::with_permissions(
+                "Alice (dev)",
+                ALICE_ID.clone(),
+                ALICE_KEYPAIR.clone(),
+                all_permissions.into_iter(),
+            ),
+            SigningAuthority::with_permissions(
+                "Bob (dev)",
+                BOB_ID.clone(),
+                BOB_KEYPAIR.clone(),
+                [InstructionPermission::TransferAsset].into_iter(),
+            ),
+        ]
+    });
 /// Deterministic mock authorities for tests; managed networks always generate their own keys.
 #[cfg(any(test, feature = "test"))]
 #[must_use]

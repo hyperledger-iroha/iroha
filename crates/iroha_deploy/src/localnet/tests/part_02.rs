@@ -3,7 +3,7 @@ include!("../profile_policy_tests.rs");
 #[allow(clippy::too_many_lines)]
 fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
     use std::collections::{BTreeMap, BTreeSet};
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
@@ -250,7 +250,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         }
     }
 
-    let parent = tempfile::tempdir().expect("create localnet validation parent");
+    let parent = crate::localnet::localnet_test_helpers::private_tempdir().expect("create localnet validation parent");
     let malformed_out = parent.path().join("malformed-chain");
     let malformed = options(malformed_out.clone());
     let _error =
@@ -304,7 +304,7 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
         }
     }
 
-    let parent = tempfile::tempdir().expect("create asset-validation parent");
+    let parent = crate::localnet::localnet_test_helpers::private_tempdir().expect("create asset-validation parent");
     let valid_id = localnet_sample_asset_literal();
     let cases = [
         ("invalid-id", vec![asset("not-an-id".to_owned(), None)]),
@@ -588,7 +588,7 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
         (SoraProfile::PrivateCbuae, "cbuae"),
         (SoraProfile::PrivateBpng, "bpng"),
     ] {
-        let temp = tempfile::tempdir().expect("tmp dir");
+        let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
         let manifest_directory =
             write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None, false)
                 .expect("write private lane manifest")
@@ -656,7 +656,7 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
 #[allow(clippy::too_many_lines)]
 fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
     use std::collections::{BTreeMap, BTreeSet};
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Dataspace),
@@ -882,7 +882,7 @@ fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
 }
 #[test]
 fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -924,7 +924,7 @@ fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
 }
 #[test]
 fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -966,7 +966,7 @@ fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
 }
 #[test]
 fn block_cadence_override_is_signed_into_genesis() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1017,7 +1017,7 @@ fn block_cadence_override_is_signed_into_genesis() {
 }
 #[test]
 fn npos_localnet_keeps_payload_for_fast_block_cadence() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1047,7 +1047,7 @@ fn npos_localnet_keeps_payload_for_fast_block_cadence() {
 }
 #[test]
 fn npos_localnet_keeps_genesis_under_transaction_cap() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1077,7 +1077,7 @@ fn npos_localnet_keeps_genesis_under_transaction_cap() {
 }
 #[test]
 fn client_config_selects_the_generated_identity_file_only() {
-    let tmp = tempfile::tempdir().expect("tmp dir");
+    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host =
@@ -1124,7 +1124,7 @@ fn client_config_selects_the_generated_identity_file_only() {
 }
 #[test]
 fn client_config_records_chain_discriminant_when_known() {
-    let tmp = tempfile::tempdir().expect("tmp dir");
+    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host =
@@ -1154,7 +1154,7 @@ fn client_config_records_chain_discriminant_when_known() {
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(369);
-    let temp = tempfile::tempdir().expect("temporary Taira directory");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("temporary Taira directory");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1247,7 +1247,7 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
 #[test]
 fn generated_permissioned_localnet_cannot_mint_additional_xor() {
     use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1319,7 +1319,7 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
 }
 #[test]
 fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1463,7 +1463,7 @@ fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
 }
 #[test]
 fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1561,7 +1561,7 @@ fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1721,7 +1721,7 @@ fn canonical_host_rejects_non_dns_names_and_injection_characters() {
 }
 #[test]
 fn client_config_renders_ipv6_torii_url() {
-    let tmp = tempfile::tempdir().expect("tmp dir");
+    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
@@ -1739,7 +1739,7 @@ fn client_config_renders_ipv6_torii_url() {
 }
 #[test]
 fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
-    let tmp = tempfile::tempdir().expect("tmp dir");
+    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
     let runtime_bundle = LocalnetRuntimeBundle {
         ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
@@ -1794,7 +1794,7 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
 }
 #[test]
 fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
-    let tmp = tempfile::tempdir().expect("tmp dir");
+    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
     let runtime_bundle = LocalnetRuntimeBundle {
         ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
@@ -1849,7 +1849,7 @@ fn omitted_seed_uses_independent_os_random_keys() {
 ))]
 #[test]
 fn localnet_refuses_to_mix_with_existing_output() {
-    let output = tempfile::tempdir().expect("localnet output");
+    let output = crate::localnet::localnet_test_helpers::private_tempdir().expect("localnet output");
     fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
         .expect("harden localnet output directory");
     let sentinel = output.path().join("keep.txt");
@@ -1900,7 +1900,7 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
             .public_key
     );
     assert_ne!(ledger.public_key, http.public_key);
-    let root = tempfile::tempdir().expect("runtime bundle parent");
+    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("runtime bundle parent");
     let bundle = write_localnet_runtime_bundle(root.path(), &ledger, &http, &onboarding)
         .expect("write separated runtime bundle");
     assert_eq!(
@@ -1933,7 +1933,7 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
         (&ledger, &http, &ledger),
         (&ledger, &http, &http),
     ] {
-        let rejected = tempfile::tempdir().expect("rejected bundle parent");
+        let rejected = crate::localnet::localnet_test_helpers::private_tempdir().expect("rejected bundle parent");
         assert!(write_localnet_runtime_bundle(rejected.path(), ledger, http, onboarding).is_err());
         assert!(!rejected.path().join(LOCALNET_RUNTIME_DIRECTORY).exists());
     }
@@ -1945,8 +1945,8 @@ fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         .expect("derive operator identity");
     let onboarding = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"onboarding-root")
         .expect("derive onboarding identity");
-    let first = tempfile::tempdir().expect("first runtime parent");
-    let second = tempfile::tempdir().expect("second runtime parent");
+    let first = crate::localnet::localnet_test_helpers::private_tempdir().expect("first runtime parent");
+    let second = crate::localnet::localnet_test_helpers::private_tempdir().expect("second runtime parent");
     let http_operator =
         localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"http-operator-root")
             .expect("derive HTTP operator identity");
@@ -1984,7 +1984,7 @@ fn mandatory_da_localnet_options(out_dir: PathBuf) -> LocalnetOptions {
     }
 }
 fn assert_da_is_protocol_invariant_not_configuration() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = mandatory_da_localnet_options(temp.path().to_path_buf());
     generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let peer_cfg: toml::Value = toml::from_str(
@@ -2250,7 +2250,7 @@ fn validate_localnet_options_allows_permissioned_localnet() {
 }
 #[test]
 fn permissioned_localnet_uses_mandatory_nexus_default() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2288,7 +2288,7 @@ fn permissioned_localnet_uses_mandatory_nexus_default() {
 #[test]
 #[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
 fn npos_without_sora_profile_uses_mandatory_nexus() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2500,7 +2500,7 @@ fn default_sorafs_telemetry_submitters_match_self_service_policy() {
 }
 #[test]
 fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2535,7 +2535,7 @@ include!("../path_and_script_tests.rs");
 #[cfg(unix)]
 #[test]
 fn start_script_includes_sora_flag_when_enabled() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let client_account_literal = localnet_client_account_literal(None);
     let fee_asset_definition_id = localnet_xor_asset_literal();
     write_scripts(
@@ -2613,7 +2613,7 @@ fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation
 }
 #[test]
 fn mint_finality_private_output_rejects_git_directory_and_worktree_pointer() {
-    let root = tempfile::tempdir().expect("private output test");
+    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("private output test");
     let output = root.path().join("future/runtime/output");
     require_taira_private_output_outside_git(&output).expect("outside checkout");
     fs::create_dir(root.path().join(".git")).expect("repository marker");

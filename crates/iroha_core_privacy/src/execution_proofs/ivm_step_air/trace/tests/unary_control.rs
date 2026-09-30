@@ -284,8 +284,8 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
     assert_eq!(segment.after.registers[6], i64::MIN as u64);
     assert_eq!(segment.after.registers[7], i64::MAX as u64);
     assert_eq!(segment.after.registers[20] - segment.after.registers[21], 6);
-    assert_eq!(segment.base_width_v1(), 1_305);
-    assert_eq!(segment.profile_constraint_count_v1(), 2_819);
+    assert_eq!(segment.base_width_v1(), 1_351);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_940);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xd7; 32],
@@ -309,7 +309,7 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
     .unwrap();
     assert_eq!(
         maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-        4_038_912
+        4_141_952
     );
 }
 

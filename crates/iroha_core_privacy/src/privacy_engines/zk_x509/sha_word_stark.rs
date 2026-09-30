@@ -213,6 +213,9 @@ const FIX_MEMORY_SORTED_WRITE: usize = 47;
 const FIX_CONTINUATION_PUBLIC: usize = 48;
 /// Raw fixed selector used by the capacity/call wrapper for digest rows.
 pub(crate) const SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1: usize = FIX_DIGEST;
+/// Final row-kind selector in the capacity wrapper's exhaustive public schedule.
+#[cfg(test)]
+pub(crate) const SHA_WORD_CAPACITY_MEMORY_SELECTOR_V1: usize = FIX_MEMORY;
 /// Fixed columns omitted from the zk-X509 preprocessed SHA oracle.
 ///
 /// These six columns carry no independent information under the canonical 29-call schedule. Three
@@ -3291,6 +3294,10 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polyn
     let next_active_blocks = next_aux[SHA_WORD_CAPACITY_ACTIVE_BLOCKS_V1];
     let call_first = fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1];
     let call_last = fixed[SHA_WORD_CAPACITY_CALL_LAST_V1];
+    // Every logical call row has one public operation selector, including
+    // privately inactive capacity rows. Physical padding has none. This linear
+    // gate keeps carries within a call and excludes the cyclic padding wrap.
+    let call_continue = local_compute.add(digest).add(memory).sub(call_last);
     residues.push(boolean_error(padding_phase));
     residues.push(call_first.mul(message_count));
     residues.push(call_first.mul(padding_phase));
@@ -3302,9 +3309,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polyn
             .mul(message_count.sub(fixed[SHA_WORD_CAPACITY_MAXIMUM_MESSAGE_LEN_V1])),
     );
     residues.push(
-        A::ONE
-            .sub(call_last)
-            .mul(next_active_blocks.sub(active_blocks.add(block_first.mul(row_active)))),
+        call_continue.mul(next_active_blocks.sub(active_blocks.add(block_first.mul(row_active)))),
     );
     let mut phase_after = padding_phase;
     let mut message_increment = A::ZERO;
@@ -3350,12 +3355,12 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polyn
             .mul(current[0].sub(message_count.mul(A::from_base(F(8))))),
     );
     residues.push(
-        A::ONE.sub(call_last).mul(
+        call_continue.mul(
             next_message_count
                 .sub(message_count.add(input_word.mul(row_active).mul(message_increment))),
         ),
     );
-    residues.push(A::ONE.sub(call_last).mul(
+    residues.push(call_continue.mul(
         next_padding_phase.sub(padding_phase.add(input_word.mul(row_active).mul(marker_increment))),
     ));
     residues.push(
@@ -3451,7 +3456,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polyn
             current_aux[MEMORY_SORT_AFTER + lane].sub(current_aux[GLOBAL_LOCAL_PRODUCT_END + lane]),
         ));
         residues.push(
-            A::ONE.sub(call_last).mul(
+            call_continue.mul(
                 next_aux[GLOBAL_LOCAL_PRODUCT_END + lane]
                     .sub(current_aux[GLOBAL_LOCAL_PRODUCT_END + lane]),
             ),

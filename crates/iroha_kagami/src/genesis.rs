@@ -281,25 +281,22 @@ mod npos;
 mod prepared;
 pub mod profile;
 mod sign;
-pub use iroha_deploy::genesis::staging::{
-    bind_and_sign_staged_sumeragi_context, staged_signed_sumeragi_context_hashes,
-};
-pub(crate) use iroha_deploy::genesis::staging::{
-    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
-};
+#[cfg(test)]
+pub use iroha_deploy::genesis::staging::bind_and_sign_staged_sumeragi_context;
+pub use iroha_deploy::genesis::staging::staged_signed_sumeragi_context_hashes;
 #[cfg(test)]
 pub(crate) use sign::prepared_native_test_chain;
 #[cfg(test)]
 pub(crate) use sign::tests::native_genesis_fixture_with_instructions;
 mod validate;
-pub use iroha_deploy::genesis::private_dataspace_reader_role_id;
-pub use iroha_deploy::genesis::{ConsensusPolicy, generate_default, validate_consensus_mode};
+#[cfg(test)]
+pub use iroha_deploy::genesis::generate_default;
+pub use iroha_deploy::genesis::{ConsensusPolicy, validate_consensus_mode};
 pub use npos::ensure_npos_parameters;
 pub use profile::{
     GenesisProfile, PUBLIC_NEXUS_CHAIN_ID, PUBLIC_XOR_ALIAS, ProfileDefaults,
     TAIRA_XOR_ASSET_DEFINITION_ID, parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
-    profile_uses_public_xor, public_xor_profile_for_chain_id, reject_retired_public_chain_id,
-    resolve_vrf_seed,
+    profile_uses_public_xor, reject_retired_public_chain_id, resolve_vrf_seed,
 };
 fn require_native_wire_protocol(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
     let expected = u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION);
@@ -338,6 +335,3 @@ impl<T: Write> RunArgs<T> for Args {
         }
     }
 }
-
-// Actual signed-genesis staging receipt shared with retained native evidence launchers.
-pub(crate) use iroha_deploy::genesis::staging::StagedNativeGenesis;

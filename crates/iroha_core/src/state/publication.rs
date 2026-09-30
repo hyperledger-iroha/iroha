@@ -35,7 +35,11 @@ pub(super) struct StatePublication<'state> {
     lifecycle_index_releases: LaneLifecycleReleases<'state>,
     publication_notice: StateViewPublication<'state>,
     world_effects: Option<world_commit::PreparedWorldEffects>,
-    world_cut: Option<iroha_allocation::ChargedShared<world_state_accumulator::world_state_cut::CutCapsule>>,
+    world_cut: Option<
+        iroha_allocation::ChargedShared<
+            world_projection::world_state_accumulator::world_state_cut::CutCapsule,
+        >,
+    >,
     world_cut_prepared: bool,
     tiered_snapshot: Option<tiered_publication::PreparedTieredSnapshot>,
     da_effects: Option<carrier_da_effects::PreparedDaCommitmentEffects>,
@@ -460,13 +464,16 @@ impl<'state> StateBlock<'state> {
             // rerun tail writes or capture a replacement overlay during retry.
             *world_cut = match world_cut_capture {
                 Some(capture) => {
-                    let tip = native_execution_tip.get().ok_or(TransactionsBlockError::WorldCommitPreparation)?;
-                    let generation = current_generation.checked_add(2)
+                    let tip = native_execution_tip
+                        .get()
+                        .ok_or(TransactionsBlockError::WorldCommitPreparation)?;
+                    let generation = current_generation
+                        .checked_add(2)
                         .ok_or(TransactionsBlockError::SnapshotObservationChanged)?;
                     Some(capture.prepare(world, tip, generation, &state_ref.ivm_execution_budget())
                         .map_err(|error| match error {
-                            world_state_accumulator::world_state_cut::CutError::Deferred(reason) => TransactionsBlockError::ExecutionDeferred(reason),
-                            world_state_accumulator::world_state_cut::CutError::Invalid(reason) => {
+                            world_projection::world_state_accumulator::world_state_cut::CutError::Deferred(reason) => TransactionsBlockError::ExecutionDeferred(reason),
+                            world_projection::world_state_accumulator::world_state_cut::CutError::Invalid(reason) => {
                                 error!(block_height, %reason, "original World cut does not reconstruct certified R");
                                 TransactionsBlockError::WorldCommitPreparation
                             }

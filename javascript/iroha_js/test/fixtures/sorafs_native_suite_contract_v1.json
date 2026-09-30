@@ -144,13 +144,13 @@
       "entrypoint_sha256": "4ef7de22811b4c8b93873f4ed7c6a9d35eb933a719d8bb7cc21eb03d8c053faf",
       "imports_sha256": "57f1709746dd7dd60c275d2834f4d96fb0d5da730b4974371e98141d980b3849",
       "prefix_sha256": "ef9e133697639a3cb30deb1472e09007e3838cf9d3e617c2b0b3fdd4ddfef0f6",
-      "body_sha256": "30f4ad3b832f834ba6bb83d65a59ee5491e68b8d5ad13428f4f6f685b4f70588",
+      "body_sha256": "ea5565bdb5cff07322722cd579f56403a3d646761b5e2e3bed40eb2d864b1f96",
       "assertion_count": 64,
       "assertions_sha256": "6a588a8ac900e8f1361a8c683d988f05891e9856a842b941800c6b3a9f4e2d8c",
       "cases": [
         {
           "name": "orderbook submit snapshots bytes and sends one exact authenticated Norito request",
-          "callback_sha256": "85cc158b1a5c5f1d803926e86195d59b7a91a50cc7d6f398c924d42980a76b4b"
+          "callback_sha256": "4013c380462c3277b07aa771271de702a13724609d57948917050d44190e7176"
         },
         {
           "name": "orderbook submit binds snapshotted native callables to their native receiver",
@@ -158,7 +158,7 @@
         },
         {
           "name": "orderbook submit keeps its original target and transport across validation",
-          "callback_sha256": "1f60f70fee269e6c8d5ef6050d608999da43a971f12018b214532cefc846d1ad"
+          "callback_sha256": "13a2e43c861529f607c7438cdb9dc5e7ca961fd925512883b6d33e8cd500a264"
         },
         {
           "name": "orderbook submit requires https unless insecure transport is explicit and reported",
@@ -190,11 +190,11 @@
         },
         {
           "name": "orderbook submit snapshots caller-owned fixed headers before validation",
-          "callback_sha256": "7ce93bb15800dbba4eac48032af8834b7c16deb1153bf811f0a3e4241275d5ab"
+          "callback_sha256": "edf8906cae7338c52badb542111d012ba71d5de28b69a1717fd2779b3fbff2ae"
         },
         {
           "name": "orderbook submit snapshots caller-owned credentials and benign headers",
-          "callback_sha256": "8f2997322480317cb16d1bcec33bb9ced31fa67dd20f5ff3659bcfcadf161708"
+          "callback_sha256": "c2600da88b4822e0ba0704b04ef5f114e7483c4c9e722aa323aee19dbb60ac7b"
         },
         {
           "name": "orderbook submit fails before HTTP without its signer and strict native verifier",

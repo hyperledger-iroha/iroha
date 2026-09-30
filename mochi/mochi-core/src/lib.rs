@@ -7,18 +7,20 @@ pub mod dashboard;
 pub mod developer;
 pub mod state;
 pub mod torii;
+#[cfg(any(test, feature = "test"))]
+pub use compose::development_signing_authorities;
 pub use compose::{
     ComposeError, InstructionDraft, InstructionPermission, SigningAuthority,
     TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
     drafts_from_json_str, drafts_to_pretty_json,
 };
-#[cfg(any(test, feature = "test"))]
-pub use compose::development_signing_authorities;
 pub use dashboard::{
     DashboardAccountCard, DashboardAccountInput, DashboardAssetBalance, DashboardRecentBlock,
     DashboardSnapshot, fetch_dashboard_snapshot,
 };
-pub use state::{StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query};
+pub use state::{
+    StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query,
+};
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,

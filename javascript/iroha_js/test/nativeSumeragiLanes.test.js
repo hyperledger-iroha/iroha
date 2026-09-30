@@ -38,7 +38,14 @@ const mutateRecord = (change) => mutate((lane) => change(lane.record));
 for (const [name, json] of Object.entries(laneRows)) {
   test(`current Rust lane corpus: ${name}`, () => {
     const lanes = parseSumeragiLanesJson(json);
-    assert.equal(stringifyStrictLosslessIntegerJson(lanes, "native lanes corpus"), json);
+    // JSON object member order is not semantic. Keep integer tokens lossless on
+    // both sides so the Rust corpus's u64 values cannot round through Number.
+    assert.deepEqual(
+      parseStrictLosslessIntegerJson(
+        stringifyStrictLosslessIntegerJson(lanes, "native lanes corpus"), "roundtripped lanes",
+      ),
+      parseStrictLosslessIntegerJson(json, "Rust lanes corpus"),
+    );
     assert.ok(Object.isFrozen(lanes));
     for (const lane of lanes) {
       assert.ok(Object.isFrozen(lane.record));

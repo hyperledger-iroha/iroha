@@ -1,45 +1,49 @@
 use super::require_native_wire_protocol;
-use crate::{
-    Outcome, RunArgs,
-    genesis::{PUBLIC_XOR_ALIAS, reject_retired_public_chain_id},
-    tui,
-};
+use crate::{Outcome, RunArgs, genesis::reject_retired_public_chain_id, tui};
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
-use iroha_config::{
-    base::toml::TomlSource,
-    parameters::{actual, defaults},
-};
-use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
+#[cfg(test)]
+use iroha_config::parameters::defaults;
+use iroha_config::{base::toml::TomlSource, parameters::actual};
+#[cfg(test)]
+use iroha_crypto::Hash;
+use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 #[cfg(test)]
 use iroha_data_model::account::address::ChainDiscriminantGuard;
 use iroha_data_model::{
-    asset::AssetDefinitionAlias, da::commitment::DaProofPolicyBundle,
-    isi::RegisterPublicLaneValidator, nexus::PublicLaneMonetaryPlanV1,
-    parameter::system::SumeragiConsensusMode, prelude::*, sumeragi::epoch::MAX_VALIDATORS,
+    da::commitment::DaProofPolicyBundle, isi::RegisterPublicLaneValidator,
+    nexus::PublicLaneMonetaryPlanV1, parameter::system::SumeragiConsensusMode, prelude::*,
+    sumeragi::epoch::MAX_VALIDATORS,
 };
 use iroha_deploy::genesis::staging::{
-    bind_and_sign_staged_sumeragi_context, build_signed_genesis, configured_initial_genesis_state,
-    configured_npos_bootstrap_stake_asset_id, ensure_peer_config_matches_manifest,
-    retired_synthetic_stake_asset_id, staged_default_account_literal, staged_default_nexus,
-    staged_default_pipeline, staged_genesis_chain_discriminant, staged_lane_manifest_registry,
+    bind_and_sign_staged_sumeragi_context, configured_npos_bootstrap_stake_asset_id,
+    ensure_peer_config_matches_manifest, staged_default_nexus, staged_genesis_chain_discriminant,
+};
+#[cfg(test)]
+use iroha_deploy::genesis::staging::{
+    build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
+    staged_default_account_literal, staged_default_pipeline, staged_lane_manifest_registry,
     staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
     staged_signed_sumeragi_context_hashes,
 };
+#[cfg(test)]
+use iroha_genesis::GenesisBlock;
 use iroha_genesis::{
-    GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
-    SIGNED_GENESIS_MAX_BYTES_V1, validate_genesis_manifest_json,
+    GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
+    validate_genesis_manifest_json,
 };
+#[cfg(test)]
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 /// Sign the genesis block

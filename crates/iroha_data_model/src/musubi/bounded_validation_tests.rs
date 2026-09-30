@@ -292,3 +292,54 @@ fn requirement_exact_scan_validates_nested_versions_before_comparing_them() {
         expected.reason(),
     );
 }
+
+// A serializer is deliberately invalid only in this test. Public Musubi
+// signing inputs continue to use their sole canonical derived serializers.
+struct FallibleSigningPayload {
+    calls: std::cell::Cell<usize>,
+    fail_at: usize,
+    grow_at: usize,
+}
+impl norito::core::SerializePayload for FallibleSigningPayload {
+    fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        let call = self.calls.get() + 1;
+        self.calls.set(call);
+        if call == self.fail_at {
+            return Err(norito::Error::LengthMismatch);
+        }
+        std::io::Write::write_all(encoder, &[1])?;
+        if call == self.grow_at {
+            std::io::Write::write_all(encoder, &[2])?;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn signing_hash_rejects_either_codec_pass_and_changed_lengths_without_partial_digest() {
+    for (fail_at, grow_at, expected_calls, expected) in [
+        (
+            1,
+            0,
+            1,
+            "Musubi signing hash has no canonical Norito encoding",
+        ),
+        (
+            2,
+            0,
+            2,
+            "Musubi signing hash has no canonical Norito encoding",
+        ),
+        (0, 2, 2, "Musubi signing-hash length changed between passes"),
+    ] {
+        let source = FallibleSigningPayload {
+            calls: std::cell::Cell::new(0),
+            fail_at,
+            grow_at,
+        };
+        let error = try_domain_signing_hash(b"musubi.fallible.test", &source).unwrap_err();
+        assert_eq!(error.reason(), expected);
+        assert_eq!(source.calls.get(), expected_calls);
+        assert!(!std::mem::needs_drop::<ParseError>());
+    }
+}

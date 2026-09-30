@@ -10,7 +10,7 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
         }
     }
 
-    let base = tempfile::tempdir().expect("tmp dir");
+    let base = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let previous = env::current_dir().expect("current dir");
     env::set_current_dir(base.path()).expect("chdir into temp");
     let _guard = DirGuard { prev: previous };
@@ -229,7 +229,7 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn start_and_stop_scripts_are_executable() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let client_account_literal = localnet_client_account_literal(None);
     let fee_asset_definition_id = localnet_xor_asset_literal();
     write_scripts(
@@ -397,7 +397,7 @@ fn start_and_stop_scripts_are_executable() {
 fn ordinary_localnet_mint_seed_launcher_consumes_fresh_children_on_two_starts() {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-    let root = tempfile::tempdir().expect("private localnet root");
+    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("private localnet root");
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
         .expect("protect localnet root");
     let signer_dir = root.path().join("runtime/mint-finality-signers");
@@ -485,7 +485,7 @@ finally:
 fn ordinary_localnet_mint_seed_launcher_removes_the_one_shot_path_only_once_it_is_empty() {
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
-    let root = tempfile::tempdir().expect("private localnet root");
+    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("private localnet root");
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
         .expect("protect localnet root");
     let signer_dir = root.path().join("runtime/mint-finality-signers");
@@ -650,7 +650,7 @@ for attempt, order in enumerate(("launcher-first", "daemon-check-first", "launch
 fn taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order() {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-    let root = tempfile::tempdir().expect("private localnet root");
+    let root = crate::localnet::localnet_test_helpers::private_tempdir().expect("private localnet root");
     let runtime = root.path().join("runtime");
     let signer_dir = runtime.join(TAIRA_RUNTIME_SIGNER_DIRECTORY);
     let seed_dir = runtime.join(MINT_FINALITY_SEED_DIRECTORY);
@@ -724,7 +724,7 @@ fn taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order() {
 #[cfg(unix)]
 #[test]
 fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,
@@ -807,7 +807,7 @@ fn shell_assignment_quoting_preserves_metacharacters_as_data() {
 #[cfg(unix)]
 #[test]
 fn start_script_preserves_explicit_faucet_allocation_without_minting() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,
@@ -827,7 +827,7 @@ fn start_script_preserves_explicit_faucet_allocation_without_minting() {
 #[cfg(unix)]
 #[test]
 fn lifecycle_scripts_enforce_exact_peer_selector_grammar() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,

@@ -237,6 +237,12 @@ WAVE_TWO_TARGETS = (
         modules=(("torii_streams", "torii_streams.rs"),),
     ),
     WaveTwoTarget(
+        package="mochi/mochi-integration",
+        target="readiness_smoke",
+        root="readiness_smoke.rs",
+        modules=(),
+    ),
+    WaveTwoTarget(
         package="crates/sorafs_node",
         target="pin_workflows",
         root="pin_workflows.rs",

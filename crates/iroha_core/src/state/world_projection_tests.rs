@@ -1,7 +1,7 @@
 //! Actual World net-delta controls, separate from complete State-root qualification.
 
 use super::*;
-use crate::state::World;
+use crate::state::{World, block_field::BlockField};
 use iroha_model_base::state_path::StatePath;
 use mv::{cell::Cell, storage::Storage};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -164,7 +164,7 @@ fn canonical_value_hash_stream_matches_fixed_v1_bytes_under_ambient_flags() {
 #[test]
 fn fields_and_presence_are_domain_separated_and_empty_fields_are_retained() {
     let storage: Storage<u64, Vec<u8>> = [(1, vec![1])].into_iter().collect();
-    let mut block = storage.block();
+    let mut block = BlockField::new(storage.block());
     block.insert(1, vec![2]);
     let mut first = WorldDeltaBuilder::new();
     first.append_storage_with("a", &block, hash_value).unwrap();
@@ -172,7 +172,7 @@ fn fields_and_presence_are_domain_separated_and_empty_fields_are_retained() {
     other.append_storage_with("b", &block, hash_value).unwrap();
     assert_ne!(first.finish().unwrap(), other.finish().unwrap());
     let cell = Cell::new(1_u64);
-    let block = cell.block();
+    let block = BlockField::new(cell.block());
     let mut empty_field = WorldDeltaBuilder::new();
     empty_field
         .append_cell_with("empty", &block, hash_value)
@@ -186,7 +186,7 @@ fn fields_and_presence_are_domain_separated_and_empty_fields_are_retained() {
 #[test]
 fn encoding_error_or_unwind_permanently_refuses_partial_projection() {
     let storage: Storage<u64, Vec<u8>> = Storage::new();
-    let mut block = storage.block();
+    let mut block = BlockField::new(storage.block());
     block.insert(1, vec![1]);
     let mut failed = WorldDeltaBuilder::new();
     assert!(

@@ -207,7 +207,7 @@ fn localnet_kagemusha_authority_matches_canonical_four_validator_topology() {
 
 #[test]
 fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
-    let temp = tempfile::tempdir().expect("temporary Taira directory");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("temporary Taira directory");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -1024,7 +1024,7 @@ fn genesis_parameters(manifest: &json::Value) -> Parameters {
 }
 #[test]
 fn generated_configs_parse_with_current_schema() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1112,7 +1112,7 @@ fn generated_configs_parse_with_current_schema() {
 }
 #[test]
 fn generated_configs_for_user_localnet_parse() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1478,7 +1478,7 @@ fn permissioned_localnet_genesis_deduplicates_kagemusha_reserve_grant() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn generated_localnet_needs_no_kagemusha_feature_switch() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     #[cfg(unix)]
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
         .expect("make localnet output directory owner-held");
@@ -1787,7 +1787,7 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
 }
 #[test]
 fn generated_peer_config_includes_required_addr_literals() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1914,7 +1914,7 @@ fn generated_peers_use_dedicated_deterministic_transport_and_streaming_identitie
 }
 #[test]
 fn generated_peer_config_allows_bls_signing_for_npos() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -1964,7 +1964,7 @@ fn generated_peer_config_allows_bls_signing_for_npos() {
 }
 #[test]
 fn generated_genesis_allows_bls_signing_for_npos() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2001,7 +2001,7 @@ fn generated_genesis_allows_bls_signing_for_npos() {
 }
 #[test]
 fn generated_peer_configs_include_peer_telemetry_urls() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2094,7 +2094,7 @@ fn generated_peer_configs_include_peer_telemetry_urls() {
 }
 #[test]
 fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
@@ -2171,7 +2171,7 @@ fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
 }
 #[test]
 fn generated_configs_use_strict_sumeragi_schema() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2293,7 +2293,7 @@ fn localnet_tx_gossip_overrides_follow_fast_pipeline() {
 }
 #[test]
 fn perf_profile_permissioned_applies_bounded_runtime_limits() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: Some(LocalnetPerfProfile::Throughput10kPermissioned),
@@ -2352,7 +2352,7 @@ fn perf_profile_permissioned_applies_bounded_runtime_limits() {
 }
 #[test]
 fn perf_profile_npos_applies_election_and_runtime_limits() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
@@ -2432,7 +2432,7 @@ fn extra_account_keys_are_unique_when_unseeded() {
 type ConsensusHandshakeMetaTest = iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
 #[test]
 fn generated_genesis_handshake_meta_decodes() {
-    let temp = tempfile::tempdir().expect("make temp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2490,7 +2490,7 @@ fn generated_genesis_handshake_meta_decodes() {
 }
 #[test]
 fn localnet_signed_genesis_uses_first_release_npos_context() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2513,7 +2513,7 @@ fn localnet_signed_genesis_uses_first_release_npos_context() {
 }
 #[test]
 fn default_block_cadence_is_injected_when_unset() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2540,7 +2540,7 @@ fn default_block_cadence_is_injected_when_unset() {
 }
 #[test]
 fn localnet_sets_block_max_transactions() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2570,7 +2570,7 @@ fn localnet_sets_block_max_transactions() {
 #[test]
 fn localnet_npos_bootstraps_public_lane_stake() {
     use std::collections::BTreeSet;
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2661,7 +2661,7 @@ fn localnet_npos_bootstraps_public_lane_stake() {
 #[test]
 fn permissioned_localnet_registers_support_accounts_without_staking() {
     use std::collections::BTreeSet;
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
         perf_profile: None,
@@ -2829,7 +2829,7 @@ fn assert_localnet_dataspace_catalog_quorum(out_dir: &Path, peer_count: NonZeroU
 #[test]
 fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
     use std::collections::BTreeSet;
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(7).expect("non-zero");
     let opts = LocalnetOptions {
         sora_profile: None,

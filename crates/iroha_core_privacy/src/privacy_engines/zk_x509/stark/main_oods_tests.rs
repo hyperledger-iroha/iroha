@@ -533,3 +533,198 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         .is_err()
     );
 }
+
+#[test]
+#[ignore = "maximum public fixture: all 49 production fixed polynomials at a non-base OOD point"]
+#[allow(clippy::too_many_lines)]
+fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
+        .expect("maximum signed public credential fixture");
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    assert_eq!(layout.registered_segments.len(), 49);
+
+    // Fixed-schedule parity needs one consistent bound native source, not a
+    // Merkle/FRI proof. These test roots never claim authenticated commitments.
+    let digest = |seed| PrivacyOuterDigestV1::from_bytes([seed; 48]);
+    let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+        [0x81; 32],
+        assembly.verifier_profile.compiled_profile_digest,
+        core::array::from_fn(|index| digest(index as u8 + 1)),
+    );
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        pre_aux,
+        digest(0x91),
+        digest(0xA1),
+        digest(0xB1),
+    )
+    .unwrap();
+    let sha = core::array::from_fn(|segment| {
+        ZkX509ShaBatchSegmentBaseSourceV1::new_v1(
+            &assembly.sha_schedule,
+            &assembly.sha_witnesses,
+            segment,
+        )
+        .unwrap()
+    });
+    let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
+    let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        &layout, &assembly, sha, p256, binding,
+    )
+    .unwrap();
+    let post_base = binding.main_post_base();
+    let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
+    let verifier_p256 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
+        &layout,
+        &fixed_source,
+        post_base,
+        bound.claims.p256,
+    )
+    .unwrap();
+    let projection = MainProjectionVerifierConstraintSourceV1::for_main_v1(
+        &layout,
+        &fixture.statement,
+        post_base,
+    )
+    .unwrap();
+    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &fixture.statement, post_base)
+        .unwrap();
+    let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
+        &layout,
+        &assembly.rfc_trace.statement,
+        post_base,
+        bound.claims,
+    )
+    .unwrap();
+    log19.prepare_complete_oods_fixed_v1().unwrap();
+    let point = E::canonical([13, 17, 19, 23]).unwrap();
+    assert!(
+        aggregate::deep_point_is_admissible_v1(
+            point,
+            AGGREGATE_PARAMETERS_V1,
+            &layout.as_shared().unwrap(),
+        )
+        .unwrap()
+    );
+    let prepared =
+        prepare_main_deep_fixed_v1(&layout, point, &verifier_p256, &projection, &io, &log19)
+            .unwrap();
+    let providers = [
+        MainProverConstraintProviderV1::Log5(
+            MainP256Log5ProverConstraintSourceV1::for_main_v1(&layout, &bound.p256).unwrap(),
+        ),
+        MainProverConstraintProviderV1::P256Scalar(
+            MainP256ScalarProverConstraintSourceV1::for_main_v1(&layout, &bound.p256).unwrap(),
+        ),
+        MainProverConstraintProviderV1::Projection(
+            MainProjectionProverConstraintSourceV1::for_main_v1(
+                &layout,
+                &fixture.statement,
+                post_base,
+            )
+            .unwrap(),
+        ),
+        MainProverConstraintProviderV1::Log16(
+            MainP256Log16ProverConstraintSourceV1::for_main_v1(&layout, &bound.p256).unwrap(),
+        ),
+        MainProverConstraintProviderV1::Io(
+            MainIoProverConstraintSourceV1::for_main_v1(
+                &layout,
+                &fixture.statement,
+                &assembly.io,
+                post_base,
+            )
+            .unwrap(),
+        ),
+        MainProverConstraintProviderV1::Log19(
+            MainLog19ProverConstraintSourceV1::for_main_v1(&layout, &bound).unwrap(),
+        ),
+    ];
+    let mut seen = vec![0_usize; layout.registered_segments.len()];
+    let mut columns_checked = 0;
+    let mut next_columns_checked = 0;
+    for provider in &providers {
+        let native_log = provider.native_trace_log2_v1();
+        let next = point.mul_base(goldilocks_primitive_root_v1(native_log).unwrap());
+        // Evaluate actual production coefficient vectors by scalar products
+        // with powers. The verifier independently uses Lagrange weights and
+        // algebraic schedules, so this is not a comparison to its own replay.
+        let powers =
+            main_deep_replay::MainDeepPointPowersV1::new_v1([point, next], 1_usize << native_log)
+                .unwrap();
+        stream_main_fixed_polynomial_sets_v1(provider, |set| {
+            let registration = set.registration;
+            let index = canonical_main_registration_index_v1(&layout, registration)?;
+            assert_eq!(registration.segment.trace_log2, native_log);
+            assert_eq!(set.columns.len(), prepared.rows[index].len());
+            for (column, coefficients) in set.columns.iter().enumerate() {
+                let [actual, shifted] = powers.evaluate_v1(coefficients)?;
+                assert_eq!(
+                    actual, prepared.rows[index][column],
+                    "fixed OOD mismatch: registration={registration:?}, column={column}"
+                );
+                let expected_next = match registration.segment.adapter {
+                    SegmentAdapterIdV1::StrictDer => Some(prepared.public[1].der[column]),
+                    SegmentAdapterIdV1::Sha256CallBus => {
+                        Some(prepared.sha_next[usize::from(registration.segment.instance)][column])
+                    }
+                    _ => None,
+                };
+                if let Some(expected) = expected_next {
+                    assert_eq!(
+                        shifted, expected,
+                        "fixed next OOD mismatch: registration={registration:?}, column={column}"
+                    );
+                    next_columns_checked += 1;
+                }
+                columns_checked += 1;
+            }
+            seen[index] += 1;
+            Ok(())
+        })
+        .unwrap();
+    }
+    assert!(seen.iter().all(|count| *count == 1), "{seen:?}");
+    assert_eq!(
+        columns_checked,
+        layout
+            .registered_segments
+            .iter()
+            .map(|row| row.segment.fixed_width)
+            .sum::<usize>()
+    );
+    assert_eq!(
+        next_columns_checked,
+        layout
+            .registered_segments
+            .iter()
+            .filter(|row| matches!(
+                row.segment.adapter,
+                SegmentAdapterIdV1::StrictDer | SegmentAdapterIdV1::Sha256CallBus
+            ))
+            .map(|row| row.segment.fixed_width)
+            .sum::<usize>()
+    );
+    eprintln!(
+        "fixed_oods_registrations=49 fixed_columns={columns_checked} shifted_columns={next_columns_checked}"
+    );
+}

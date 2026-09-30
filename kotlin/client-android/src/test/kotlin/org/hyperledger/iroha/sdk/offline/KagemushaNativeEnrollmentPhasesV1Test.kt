@@ -84,13 +84,22 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     @Test
     fun `substituted native verified issuer nonce revokes the original owner`() {
         val endpoint = Endpoint().apply { wrongPreparationNonce = true }
-        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint).initialEnrollment()
+        val native = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint)
+        val phases = native.initialEnrollment()
         val selected = phases.begin(account)
-        assertFailsWith<IllegalArgumentException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        val failure = assertFailsWith<IllegalArgumentException> {
+            phases.verifySignedPreparation(selected, preparation(selected))
+        }
+        assertEquals("native preparation verifier substituted issuer nonce", failure.message)
         assertEquals(1, endpoint.closeCalls)
-        val calls = endpoint.calls
+        val dispatched = endpoint.calls
         repeat(2) { assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) } }
-        assertEquals(calls, endpoint.calls)
+        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        assertEquals(dispatched, endpoint.calls)
+        assertEquals(1, endpoint.closeCalls)
+        native.close()
+        assertNull(phases.recoverExactSelection(account))
+        assertEquals(1, endpoint.closeCalls)
     }
 
     @Test

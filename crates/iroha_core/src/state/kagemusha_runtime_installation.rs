@@ -61,6 +61,10 @@ impl State {
         expected: KagemushaV1RuntimeReloadHead,
         verifier: crate::smartcontracts::isi::kagemusha::AuthenticatedKagemushaV1RuntimeVerifier,
     ) -> core::result::Result<(), String> {
+        // Bind all loaded release identities and their roles to the captured
+        // finalized registry. The locked install below still rechecks the exact
+        // original head after this preparation, so a concurrent commit wins.
+        let verifier = verifier.with_governed_lifecycle(expected.network_id, &expected.registry)?;
         self.install_kagemusha_v1_runtime_verifier_checked(expected, Arc::new(verifier))
     }
 

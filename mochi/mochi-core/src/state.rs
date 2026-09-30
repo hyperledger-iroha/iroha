@@ -588,6 +588,7 @@ pub enum StateQueryError {
 pub async fn run_state_query(
     client: ToriiClient,
     signer: &crate::SigningAuthority,
+    address_discriminant: u16,
     kind: StateQueryKind,
     cursor: Option<StateCursor>,
     fetch_size: Option<NonZeroU64>,
@@ -599,6 +600,9 @@ pub async fn run_state_query(
     };
     let signed = client.sign_query(request, signer.account_id().clone(), signer.key_pair())?;
     let output = client.execute_query(&signed).await?;
+    // A thread-local display profile must never be held across an await.
+    let _profile =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(address_discriminant);
     parse_iterable_output(kind, output)
 }
 fn parse_iterable_output(
@@ -820,9 +824,16 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let page = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Accounts, None, None)
-            .await
-            .expect("state page");
+        let page = run_state_query(
+            client,
+            &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
+            iroha_data_model::account::address::chain_discriminant(),
+            StateQueryKind::Accounts,
+            None,
+            None,
+        )
+        .await
+        .expect("state page");
         mock.assert();
         assert_eq!(page.entries.len(), 1);
         assert!(page.cursor.is_none());
@@ -850,9 +861,16 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let page = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Peers, None, None)
-            .await
-            .expect("state page");
+        let page = run_state_query(
+            client,
+            &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
+            iroha_data_model::account::address::chain_discriminant(),
+            StateQueryKind::Peers,
+            None,
+            None,
+        )
+        .await
+        .expect("state page");
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].subtitle, "Peer public key");
         mock.assert();
@@ -874,11 +892,56 @@ mod tests {
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
-        let err = run_state_query(client, &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()), StateQueryKind::Accounts, None, None)
-            .await
-            .expect_err("unexpected batch kind should error");
+        let err = run_state_query(
+            client,
+            &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
+            iroha_data_model::account::address::chain_discriminant(),
+            StateQueryKind::Accounts,
+            None,
+            None,
+        )
+        .await
+        .expect_err("unexpected batch kind should error");
         assert!(matches!(err, StateQueryError::UnexpectedBatch { .. }));
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn state_query_uses_explicit_selected_authority() {
+        use iroha_data_model::query::SignedQuery;
+        use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
+        use iroha_version::codec::DecodeVersioned as _;
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let output = QueryOutput::new(
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(Vec::new())),
+            0,
+            None,
+        );
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/v1/query").is_true(|request| {
+                SignedQuery::decode_all_versioned(request.body_ref()).is_ok_and(|query| {
+                    query.authority() == &*BOB_ID
+                        && query.network_id() == crate::torii::test_network_id()
+                })
+            });
+            then.status(200).body(to_bytes(&output).unwrap());
+        });
+        let client =
+            ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id()).unwrap();
+        let signer = crate::SigningAuthority::new("selected", BOB_ID.clone(), BOB_KEYPAIR.clone());
+        run_state_query(
+            client,
+            &signer,
+            iroha_data_model::account::address::chain_discriminant(),
+            StateQueryKind::Accounts,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mock.assert();
+    }
+
     #[test]
     fn state_entry_account_exposes_norito_payload() {
         let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);

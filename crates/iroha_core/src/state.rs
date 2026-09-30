@@ -1450,7 +1450,6 @@ mod world_commit;
 )]
 mod world_journals;
 pub(crate) mod world_projection;
-pub(crate) use world_projection::world_state_accumulator;
 
 /// Exercise actual World capture while retaining journals through a test observation.
 #[cfg(test)]
@@ -12048,7 +12047,13 @@ pub struct State {
     /// Original native execution identity, atomically published outside World.
     pub(crate) native_execution_tip: native_execution_tip::TipCell,
     /// Current original certified pre-tail cut; absent after decoded snapshot restoration.
-    native_world_cut: parking_lot::Mutex<Option<iroha_allocation::ChargedShared<world_state_accumulator::world_state_cut::CutCapsule>>>,
+    native_world_cut: parking_lot::Mutex<
+        Option<
+            iroha_allocation::ChargedShared<
+                world_projection::world_state_accumulator::world_state_cut::CutCapsule,
+            >,
+        >,
+    >,
     /// Whether the effective Nexus runtime catalog came from the loaded WSV snapshot.
     nexus_runtime_restored_from_snapshot: bool,
     /// Last block height where Nexus storage budget enforcement ran.
@@ -12430,7 +12435,8 @@ struct PendingPublicLaneSlashObservability {
 /// The original fields stay in one retirement owner throughout execution.
 pub struct StateBlock<'state> {
     fields: Option<StateBlockFields<'state>>,
-    world_cut_capture: Option<world_state_accumulator::world_state_cut::JournalCapture>,
+    world_cut_capture:
+        Option<world_projection::world_state_accumulator::world_state_cut::JournalCapture>,
     publication: Option<publication::StatePublication<'state>>,
 }
 

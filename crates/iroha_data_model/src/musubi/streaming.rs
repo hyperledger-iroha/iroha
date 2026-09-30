@@ -319,7 +319,7 @@ fn write_account_i105_json(
         AccountController::Single(key) => {
             canonical.push(0b0000_0010)?;
             let (algorithm, payload) = key
-                .try_to_bytes()
+                .borrowed_parts()
                 .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
             if let Ok(length) = u8::try_from(payload.len()) {
                 canonical.extend(&[0, musubi_curve_id(algorithm)?, length])?;
@@ -340,7 +340,7 @@ fn write_account_i105_json(
             for member in policy.members() {
                 let (algorithm, payload) = member
                     .public_key()
-                    .try_to_bytes()
+                    .borrowed_parts()
                     .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
                 let length = u16::try_from(payload.len())
                     .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;

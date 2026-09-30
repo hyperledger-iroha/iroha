@@ -36,7 +36,7 @@
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
-use super::{CellBlock, Hash, StorageBlock, WorldBlock, WorldProjection, hash_value};
+use super::{CellField, Hash, StorageField, WorldBlock, WorldProjection, hash_value};
 use crate::state::authority_registry::{Canonical, Field, Role, Schema, WORLD_FIELDS};
 use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
@@ -517,7 +517,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_archive_availability(
         &mut self,
-        storage: &StorageBlock<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
+        storage: &StorageField<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_archive_availability", storage, |row| {
             let anchor = crate::state::authority_registry::world::musubi_availability_policy::MusubiAvailabilityAuthorityV1::from_record(row);
@@ -527,7 +527,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_resolver_index(
         &mut self,
-        storage: &StorageBlock<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        storage: &StorageField<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_resolver_index", storage, |row| {
             let authority = crate::state::authority_registry::world::musubi_universal_policy::MusubiResolverAuthorityV1::from_record(row);
@@ -537,7 +537,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_public_directory(
         &mut self,
-        storage: &StorageBlock<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+        storage: &StorageField<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_public_directory", storage, |row| {
             let authority = crate::state::authority_registry::world::musubi_universal_policy::MusubiDirectoryAuthorityV1::from_record(row);
@@ -548,7 +548,7 @@ impl WorldProjection for Builder<'_> {
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         let Some(path) = self.field(name, TABLE)? else {
@@ -578,7 +578,7 @@ impl WorldProjection for Builder<'_> {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         let Some(path) = self.field(name, CELL)? else {

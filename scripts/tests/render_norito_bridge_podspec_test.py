@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -118,6 +119,12 @@ class NoritoBridgePodspecRendererTests(unittest.TestCase):
         )
         self.assertIn(f":sha256 => '{digest}'", rendered)
         self.assertIn("s.vendored_frameworks = 'NoritoBridge.xcframework'", rendered)
+        frameworks = re.search(r"s\.frameworks\s*=\s*\[([^]]+)\]", rendered)
+        self.assertIsNotNone(frameworks)
+        self.assertEqual(
+            re.findall(r"'([^']+)'", frameworks.group(1)),
+            ["Foundation", "Security", "Metal", "CoreGraphics", "Accelerate"],
+        )
         for placeholder in ("__VERSION__", "__SOURCE_URL__", "__ARCHIVE_SHA256__"):
             self.assertNotIn(placeholder, rendered)
 

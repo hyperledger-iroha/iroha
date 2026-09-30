@@ -294,7 +294,7 @@ test("multisig contract-call request builders reject noncanonical signatureB64",
         buildMultisigContractCallProposeRequest({
           multisigAccountAlias: "mintops@banka",
           signerAccountId: ALICE_ID,
-          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          contractAlias: "apps_mint_request::sbp",
           entrypoint: "execute",
           trigger: "staged_mint_request_hbl",
           args: { request_id: "req-signature" },

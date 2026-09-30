@@ -183,18 +183,18 @@ function readField(input, offset) {
 }
 
 function replacePayloadMetadata(payload, archive) {
-  return replacePayloadField(payload, 8, archive);
+  return replacePayloadField(payload, 7, archive);
 }
 
 function replacePayloadField(payload, fieldIndex, archive) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 9; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly ten fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly nine fields");
   fields[fieldIndex] = archive;
   return struct(fields);
 }
@@ -452,33 +452,48 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
   );
 });
 
-test("browser payload requires signature-bound Ordinary admission", () => {
+test("browser payload rejects retired admission fields bound to the signature", () => {
   const payload = buildBrowserTransferPayload(sampleInput());
+  const fields = [];
   let offset = 0;
-  for (let index = 0; index <= 7; index += 1) {
-    const fieldValue = readField(payload, offset);
-    offset = fieldValue.next;
-    if (index === 7) {
-      assert.deepEqual(fieldValue.value, u32(0));
-    }
+  for (let index = 0; index < 9; index += 1) {
+    const decoded = readField(payload, offset);
+    fields.push(decoded.value);
+    offset = decoded.next;
   }
+  assert.equal(offset, payload.length, "canonical payload has exactly nine fields");
+  assert.deepEqual(fields[8], Buffer.of(0), "canonical attachments are absent");
 
   const { hashHex, signature } = signPayload(payload);
   assert.equal(ed25519.verify(signature, Buffer.from(hashHex, "hex"), PUBLIC_KEY), true);
-  const retiredPayload = replacePayloadField(payload, 7, u32(1));
-  assert.equal(ed25519.verify(signature, Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"), PUBLIC_KEY), false);
-
-  expectCodecError(
-    () =>
-      validateBrowserTransferSignable({
-        networkPrefix: 753,
-        networkId: NETWORK_ID,
-        payloadBytes: replacePayloadField(payload, 7, u32(1)),
-        authority: AUTHORITY,
-        signingPublicKey: PUBLIC_KEY,
-      }),
-    "unsupported_payload",
-  );
+  for (const retiredAdmissionTag of [0, 1]) {
+    // The retired admission field was between fee payment and metadata. Neither
+    // old enum tag may survive as an accepted extra field in the current layout.
+    const retiredPayload = struct([
+      ...fields.slice(0, 7),
+      u32(retiredAdmissionTag),
+      ...fields.slice(7),
+    ]);
+    assert.equal(
+      ed25519.verify(
+        signature,
+        Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"),
+        PUBLIC_KEY,
+      ),
+      false,
+    );
+    expectCodecError(
+      () =>
+        validateBrowserTransferSignable({
+          networkPrefix: 753,
+          networkId: NETWORK_ID,
+          payloadBytes: retiredPayload,
+          authority: AUTHORITY,
+          signingPublicKey: PUBLIC_KEY,
+        }),
+      "malformed_payload",
+    );
+  }
 });
 
 test("browser finalizer matches the native N-API bytes and entrypoint hash", () => {

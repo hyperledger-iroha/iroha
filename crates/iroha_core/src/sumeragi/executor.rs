@@ -648,7 +648,8 @@ struct Finishing<'s> {
     encoding_refusal: Option<super::commitment::ResultPreimageError>,
     native_contexts: Option<PreparedNativeContext>,
     archive_refusal: Option<NativeContextArchiveError>,
-    world_cut_refusal: Option<crate::state::world_state_accumulator::world_state_cut::CutError>,
+    world_cut_refusal:
+        Option<crate::state::world_projection::world_state_accumulator::world_state_cut::CutError>,
 }
 
 /// The executed overlay of one block.
@@ -1263,10 +1264,15 @@ impl<'s> Worker<'s> {
         };
         // Retain only original journal-touched native hashes at precisely this R.
         // Local refusal leaves the same completed overlay and one-shot inputs live.
-        if let Err(error) = self.finishing.as_mut().unwrap().overlay
-            .capture_original_world_cut(transition.world_state_root) {
+        if let Err(error) = self
+            .finishing
+            .as_mut()
+            .unwrap()
+            .overlay
+            .capture_original_world_cut(transition.world_state_root)
+        {
             let reason = error.to_string();
-            if matches!(&error, crate::state::world_state_accumulator::world_state_cut::CutError::Invalid(_)) {
+            if matches!(&error, crate::state::world_projection::world_state_accumulator::world_state_cut::CutError::Invalid(_)) {
                 self.recovery = Some(format!("original World cut requires recovery: {reason}"));
             }
             self.finishing.as_mut().unwrap().world_cut_refusal = Some(error);

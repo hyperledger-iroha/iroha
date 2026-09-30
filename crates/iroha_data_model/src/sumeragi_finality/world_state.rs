@@ -74,7 +74,7 @@ impl WorldStateElementKindV1 {
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::WorldStateSnapshotEntryV1")]
 pub struct WorldStateSnapshotEntryV1 {
-    /// Full native registry identity, including `world.` and any owner path.
+    /// Exact native registry identity: `world.*` or trigger-owner `triggers.*`.
     pub field_id: String,
     /// Exact native registry kind.
     pub kind: WorldStateElementKindV1,
@@ -129,14 +129,17 @@ fn valid_hash(hash: Hash) -> bool {
 }
 
 /// Exact existing path hash; the kind is part of the field identity.
+/// World fields and the trigger owner's fields retain their registry namespaces.
 /// # Errors
 /// Invalid or unbounded canonical field identity.
 pub fn world_state_path_hash_v1(
     field_id: &str,
     kind: WorldStateElementKindV1,
 ) -> Result<Hash, FinalityError> {
-    if !field_id.starts_with("world.")
-        || field_id.len() <= 6
+    let field = field_id
+        .strip_prefix("world.")
+        .or_else(|| field_id.strip_prefix("triggers."));
+    if field.is_none_or(|field| field.split('.').any(str::is_empty))
         || field_id.len() > 192
         || !field_id
             .bytes()

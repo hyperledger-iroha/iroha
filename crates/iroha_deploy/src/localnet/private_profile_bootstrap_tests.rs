@@ -447,7 +447,7 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
         (SoraProfile::PrivateCbuae, "cbuae", 49_080, 53_337),
         (SoraProfile::PrivateBpng, "bpng", 29_080, 33_337),
     ] {
-        let temp = tempfile::tempdir().expect("create private-profile signing directory");
+        let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("create private-profile signing directory");
         let opts = LocalnetOptions {
             sora_profile: Some(profile),
             perf_profile: None,
@@ -530,7 +530,7 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
 
 #[test]
 fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
-    let temp = tempfile::tempdir().expect("create BPNG output parent");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("create BPNG output parent");
     let mut opts = LocalnetOptions {
         sora_profile: Some(SoraProfile::PrivateBpng),
         perf_profile: None,

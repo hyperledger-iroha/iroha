@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn artifact_publication_stays_private_and_refuses_reuse() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
         let root = prepare_empty_private_directory(&temporary.path().join("bundle")).unwrap();
         ensure_directory(&root.join("nested/deeper")).unwrap();
         create_directory(&root.join("new")).unwrap();

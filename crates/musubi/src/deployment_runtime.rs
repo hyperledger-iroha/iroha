@@ -43,22 +43,39 @@ pub enum ContractInput {
 
 impl ContractInput {
     /// Select source, bytecode or an explicit Musubi package from one user-supplied path.
+    /// This inexpensive filesystem check runs before provisioning; the build still authenticates
+    /// every input when it reads the source, artifact or package graph.
     ///
     /// # Errors
-    /// Rejects package selectors on standalone files and ambiguous or unsupported file names.
+    /// Rejects missing or nonregular inputs, missing package manifests, package selectors on
+    /// standalone files and unsupported file names.
     pub fn from_path(
         path: &Path,
         package: Option<String>,
         contract: Option<String>,
         locked: bool,
     ) -> Result<Self> {
-        if path.is_dir() {
+        let metadata = std::fs::symlink_metadata(path)
+            .wrap_err_with(|| format!("inspect contract input {}", path.display()))?;
+        if metadata.is_dir() && !input_is_redirected(&metadata) {
+            let manifest = path.join("Musubi.toml");
+            let manifest_metadata = std::fs::symlink_metadata(&manifest)
+                .wrap_err_with(|| format!("package directory requires {}", manifest.display()))?;
+            if !manifest_metadata.is_file() || input_is_redirected(&manifest_metadata) {
+                bail!(
+                    "package manifest must be a regular file: {}",
+                    manifest.display()
+                );
+            }
             return Ok(Self::Package {
-                manifest: path.join("Musubi.toml"),
+                manifest,
                 package,
                 contract,
                 locked,
             });
+        }
+        if !metadata.is_file() || input_is_redirected(&metadata) {
+            bail!("contract input must be a regular file or package directory");
         }
         match path.extension().and_then(|value| value.to_str()) {
             Some("ko" | "to") => {
@@ -81,6 +98,18 @@ impl ContractInput {
                 "contract input must be .ko source, .to bytecode, Musubi.toml or a package directory"
             ),
         }
+    }
+}
+
+fn input_is_redirected(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
     }
 }
 
@@ -352,6 +381,7 @@ impl DeploymentRuntime {
         review: &mut dyn FnMut(&DeploymentPreflight) -> Result<()>,
         progress: &mut dyn FnMut(DeploymentProgress),
     ) -> Result<DeploymentRun> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let root = self
             .journal_root
             .canonicalize()
@@ -538,38 +568,58 @@ mod tests {
     #[test]
     fn input_selection_is_explicit_and_rejects_ignored_options() -> Result<()> {
         let temp = TempDir::new()?;
+        let source = temp.path().join("x.ko");
+        let bytecode = temp.path().join("x.to");
+        let manifest = temp.path().join("Musubi.toml");
+        fs::write(&source, SOURCE)?;
+        fs::write(&bytecode, b"build validates the actual bytes")?;
+        assert!(ContractInput::from_path(temp.path(), None, None, false).is_err());
+        assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
+        fs::write(&manifest, "manifest-version = 1")?;
         assert!(matches!(
-            ContractInput::from_path(Path::new("x.ko"), None, None, false)?,
+            ContractInput::from_path(&source, None, None, false)?,
             ContractInput::Source(_)
         ));
         assert!(matches!(
-            ContractInput::from_path(Path::new("x.to"), None, None, false)?,
+            ContractInput::from_path(&bytecode, None, None, false)?,
             ContractInput::Bytecode(_)
         ));
         assert!(
             matches!(ContractInput::from_path(temp.path(), Some("demo/coffee".into()), Some("coffee".into()), true)?, ContractInput::Package { manifest, locked: true, .. } if manifest == temp.path().join("Musubi.toml"))
         );
         assert!(matches!(
-            ContractInput::from_path(Path::new("Musubi.toml"), None, None, false)?,
+            ContractInput::from_path(&manifest, None, None, false)?,
             ContractInput::Package { .. }
         ));
         let source_named_directory = temp.path().join("package.ko");
         fs::create_dir(&source_named_directory)?;
+        assert!(ContractInput::from_path(&source_named_directory, None, None, false).is_err());
+        fs::write(
+            source_named_directory.join("Musubi.toml"),
+            "manifest-version = 1",
+        )?;
         assert!(matches!(
             ContractInput::from_path(&source_named_directory, None, None, false)?,
             ContractInput::Package { .. }
         ));
         for path in ["other.toml", "unknown", "x.KO"] {
-            assert!(ContractInput::from_path(Path::new(path), None, None, false).is_err());
+            let path = temp.path().join(path);
+            fs::write(&path, b"existing unsupported input")?;
+            assert!(ContractInput::from_path(&path, None, None, false).is_err());
         }
         assert!(
-            ContractInput::from_path(Path::new("x.ko"), Some("demo".into()), None, false).is_err()
+            ContractInput::from_path(&temp.path().join("missing.ko"), None, None, false).is_err()
         );
-        assert!(
-            ContractInput::from_path(Path::new("x.to"), None, Some("target".into()), false)
-                .is_err()
-        );
-        assert!(ContractInput::from_path(Path::new("x.ko"), None, None, true).is_err());
+        assert!(ContractInput::from_path(&source, Some("demo".into()), None, false).is_err());
+        assert!(ContractInput::from_path(&bytecode, None, Some("target".into()), false).is_err());
+        assert!(ContractInput::from_path(&source, None, None, true).is_err());
+        #[cfg(unix)]
+        {
+            let link = temp.path().join("linked.ko");
+            std::os::unix::fs::symlink(&source, &link)?;
+            assert!(ContractInput::from_path(&link, None, None, false).is_err());
+            assert!(ContractInput::from_path(Path::new("/dev/null"), None, None, false).is_err());
+        }
         Ok(())
     }
 
@@ -740,6 +790,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
 
     #[test]
     fn invalid_source_and_foreign_journal_cannot_dispatch() -> Result<()> {
+        let _caller_profile = ChainDiscriminantGuard::enter(73);
         let temp = TempDir::new()?;
         let source = temp.path().join("invalid.ko");
         fs::write(&source, "not Kotodama")?;
@@ -782,6 +833,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
                 .to_string()
                 .contains("outside this runtime's journal slots")
         );
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 73);
         Ok(())
     }
 }

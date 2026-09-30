@@ -1,6 +1,6 @@
 #[test]
 fn private_dataspace_peer_configs_use_direct_fee_settlement() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     for (profile, label, base_port) in [
         (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
         (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),

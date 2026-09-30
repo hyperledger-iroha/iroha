@@ -168,7 +168,7 @@ fn coherent_wrong_product_halves_and_signedness_cannot_change_public_boundaries(
         assert_ne!(result, segment.after.registers[8]);
         let (changed, mut rows) = forged_result(&segment, &records, result);
         rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&digits);
-        rows[0][MULTIPLY..].copy_from_slice(&bank);
+        rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&bank);
         assert!(rejects(&changed, &rows));
     }
 }
@@ -196,7 +196,7 @@ fn omitted_signed_corrections_and_coherent_false_source_banks_fail_air() {
                 | (multiply::result_half(&bank, kind, 1).0 << 32);
             assert_ne!(result, segment.after.registers[8]);
             let (changed, mut rows) = forged_result(&segment, &records, result);
-            rows[0][MULTIPLY..].copy_from_slice(&bank);
+            rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&bank);
             assert!(rejects(&changed, &rows));
         }
     }
@@ -241,7 +241,7 @@ fn carries_final_product_and_workspace_ownership_reject_coherent_forgeries() {
         multiply::result_half(&bank, 1, 0).0 | (multiply::result_half(&bank, 1, 1).0 << 32);
     let (changed, mut forged) = forged_result(&segment, &records, result);
     forged[0][BIT_COUNT..MULTIPLY].copy_from_slice(&digits);
-    forged[0][MULTIPLY..].copy_from_slice(&bank);
+    forged[0][MULTIPLY..ABSOLUTE].copy_from_slice(&bank);
     assert!(rejects(&changed, &forged));
     // A local carry/product compensation preserves one convolution equation,
     // but requires a negative low limb and must fail canonical digit bounds.
@@ -266,7 +266,7 @@ fn carries_final_product_and_workspace_ownership_reject_coherent_forgeries() {
     let mut old_rows = old.witness_rows(&records).unwrap();
     let digits = multiply::product_digits(left, right);
     old_rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&digits);
-    old_rows[0][MULTIPLY..].copy_from_slice(&multiply::witness(left, right, &digits, false));
+    old_rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(left, right, &digits, false));
     assert!(
         rejects(&old, &old_rows),
         "multiply digits in nonmultiply workspace"
@@ -278,7 +278,7 @@ fn carries_final_product_and_workspace_ownership_reject_coherent_forgeries() {
     let mut forged = rows.clone();
     let prefixes = bit_count::witness(Sources::new(&forged[0][SOURCES..ALU]).bits(0), false);
     forged[0][BIT_COUNT..MULTIPLY].copy_from_slice(&prefixes);
-    forged[0][MULTIPLY..].copy_from_slice(&multiply::witness(left, right, &prefixes, true));
+    forged[0][MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(left, right, &prefixes, true));
     assert!(
         rejects(&segment, &forged),
         "count prefixes in multiply workspace"
@@ -415,8 +415,8 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
 fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope() {
     let (segment, records) = maximum_segment();
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-    assert_eq!(segment.base_width_v1(), 1_305);
-    assert_eq!(segment.profile_constraint_count_v1(), 2_819);
+    assert_eq!(segment.base_width_v1(), 1_351);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_940);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -434,8 +434,8 @@ fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope()
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_038_912);
-    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 155_392);
+    assert_eq!(bound, 4_141_952);
+    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xda; 32],
@@ -453,7 +453,7 @@ fn native_stark_proves_maximum_multiply_segment_and_binds_signedness_and_outputs
     let (segment, records) = maximum_segment();
     let columns = segment.columns(&records).unwrap();
     let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-    assert!(proof.len() <= 4_038_912);
+    assert!(proof.len() <= 4_141_952);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for register in [8, 9, 10, 11] {
         let mut after = segment.after;

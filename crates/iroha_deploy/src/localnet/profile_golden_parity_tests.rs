@@ -80,14 +80,15 @@ const GOVERNANCE_ACCOUNT_FIELDS: &[&str] = &[
 
 /// Today's canonical Taira localnet, generated with the profile's cadence.
 struct KagamiTaira {
-    dir: tempfile::TempDir,
+    dir: crate::localnet::localnet_test_helpers::PrivateTempDir,
     manifest: RawGenesisTransaction,
     signed: SignedBlock,
 }
 
 impl KagamiTaira {
     fn generate(block_cadence_ms: u64) -> Self {
-        let dir = tempfile::tempdir().expect("temporary Taira directory");
+        let dir = crate::localnet::localnet_test_helpers::private_tempdir()
+            .expect("temporary Taira directory");
         let opts = LocalnetOptions {
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,

@@ -629,13 +629,18 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.action.payload.future = null; },
     (proposal) => { proposal.payload.future = null; },
     (proposal) => { proposal.payload.action.future = null; },
+    (proposal) => { proposal.payload.authority_policy.future = null; },
+    (proposal) => { proposal.payload.manifest.future = null; },
+    (proposal) => { proposal.payload.expected_predecessor.future = null; },
   ];
-  for (const [index, canonical] of parliamentProposalFixtures().entries()) {
+  const fixtures = parliamentProposalFixtures();
+  assert.equal(mutations.length, fixtures.length, "every proposal variant needs a malformed nested fixture");
+  for (const [index, canonical] of fixtures.entries()) {
     const malformed = structuredClone(canonical);
     mutations[index](malformed);
     assert.throws(
       () => buildParliamentAttemptDraftRequestV1(malformed, 0),
-      /unsupported fields|exact one-field/u,
+      index >= 11 ? /has unknown field 'future'/u : /unsupported fields|exact one-field/u,
       canonical.kind,
     );
   }

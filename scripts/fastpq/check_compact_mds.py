@@ -10,7 +10,8 @@ import struct
 
 ROOT = Path(__file__).resolve().parents[2]
 P = 2**64 - 2**32 + 1
-FROZEN = 'd97552e693a324b96cc4149945aca538656dd14a6ba8500481ee3efff5fc6899'
+FROZEN = '3f81cae5f751595c7ab01108624ef51470da03a5ee0dfeccdf70b94a38573081'
+FROZEN_KECCAK = '8c9693d7e8ba9089af38c7411d8fcbc5a1d7c635a4f4b8ad51e0dbe8d92c5d1b'
 FROZEN_ASSET = '7b30fe50faeddb74a7433bc65a43b7c6b46484b36eab5a65869e08894166dfde'
 FROZEN_POSEIDON = '1cf89ff798f7b029462b278429aa44e36eb4cf61ef7032e8fb2813bed4dabb84'
 E0 = [1, 0, 0]
@@ -338,6 +339,8 @@ def main():
     args = parser.parse_args()
     digest = ROOT / 'crates/fastpq_isi/src/poseidon_digest384.rs'
     assert hashlib.sha256(digest.read_bytes()).hexdigest() == FROZEN
+    keccak = ROOT / 'crates/fastpq_isi/src/keccak256.rs'
+    assert hashlib.sha256(keccak.read_bytes()).hexdigest() == FROZEN_KECCAK
     asset = ROOT / 'crates/fastpq_isi/src/assets/poseidon_goldilocks_width3_v1.bin'
     assert hashlib.sha256(asset.read_bytes()).hexdigest() == FROZEN_ASSET
     poseidon = ROOT / 'crates/fastpq_isi/src/poseidon.rs'
@@ -352,7 +355,7 @@ def main():
     assert all(c['pass'] for c in result['active_invariant_screens_powers_1_to_12'])
     assert math.gcd(7, P-1) == 1 and P > 7
     tests = controls()
-    sources = [digest, asset, poseidon, Path(__file__)]
+    sources = [digest, keccak, asset, poseidon, Path(__file__)]
     # Optional retained primary-source copies enrich provenance; a repository
     # checkout does not depend on the local research downloads.
     for name in ['grs2021-linear.pdf', 'poseidon2021.pdf', 'poseidon2_rust_params.sage']:

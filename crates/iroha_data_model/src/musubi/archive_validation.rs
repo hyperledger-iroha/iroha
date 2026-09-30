@@ -453,7 +453,10 @@ impl MusubiSeedIngressReceiptV1 {
                 "Musubi seed-ingress receipt binding or validity window does not match",
             ));
         }
-        let signing_hash = self.payload.signing_hash();
+        let signing_hash = try_domain_signing_hash(
+            MUSUBI_SEED_INGRESS_RECEIPT_SIGNATURE_DOMAIN_V1,
+            &self.payload,
+        )?;
         match self.payload.binding.ingress_broker.controller() {
             AccountController::Single(public_key) => {
                 let [approval] = self.approvals.as_slice() else {
@@ -466,10 +469,12 @@ impl MusubiSeedIngressReceiptV1 {
                         "Musubi seed-ingress receipt approval is not a broker key",
                     ));
                 }
-                approval
-                    .signature
-                    .verify_hash(public_key, signing_hash)
-                    .map_err(|_| ParseError::new("Musubi seed-ingress receipt signature failed"))
+                iroha_crypto::verify_signature_borrowed(
+                    &approval.signature,
+                    public_key,
+                    signing_hash.as_ref(),
+                )
+                .map_err(|_| ParseError::new("Musubi seed-ingress receipt signature failed"))
             }
             AccountController::Multisig(policy) => {
                 let mut approved_weight = 0_u32;
@@ -483,12 +488,12 @@ impl MusubiSeedIngressReceiptV1 {
                             "Musubi seed-ingress receipt approval is not a broker key",
                         ));
                     };
-                    approval
-                        .signature
-                        .verify_hash(&approval.public_key, signing_hash)
-                        .map_err(|_| {
-                            ParseError::new("Musubi seed-ingress receipt signature failed")
-                        })?;
+                    iroha_crypto::verify_signature_borrowed(
+                        &approval.signature,
+                        &approval.public_key,
+                        signing_hash.as_ref(),
+                    )
+                    .map_err(|_| ParseError::new("Musubi seed-ingress receipt signature failed"))?;
                     approved_weight = approved_weight
                         .checked_add(u32::from(member.weight()))
                         .ok_or_else(|| {
@@ -641,7 +646,10 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                 "Musubi provider bundle verification binding does not match",
             ));
         }
-        let signing_hash = self.payload.signing_hash();
+        let signing_hash = try_domain_signing_hash(
+            MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            &self.payload,
+        )?;
         match self
             .payload
             .binding
@@ -660,10 +668,12 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                         "Musubi provider bundle approval is not a provider-owner key",
                     ));
                 }
-                approval
-                    .signature
-                    .verify_hash(public_key, signing_hash)
-                    .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))
+                iroha_crypto::verify_signature_borrowed(
+                    &approval.signature,
+                    public_key,
+                    signing_hash.as_ref(),
+                )
+                .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))
             }
             AccountController::Multisig(policy) => {
                 let mut approved_weight = 0_u32;
@@ -677,10 +687,12 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                             "Musubi provider bundle approval is not a provider-owner key",
                         ));
                     };
-                    approval
-                        .signature
-                        .verify_hash(&approval.public_key, signing_hash)
-                        .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))?;
+                    iroha_crypto::verify_signature_borrowed(
+                        &approval.signature,
+                        &approval.public_key,
+                        signing_hash.as_ref(),
+                    )
+                    .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))?;
                     approved_weight = approved_weight
                         .checked_add(u32::from(member.weight()))
                         .ok_or_else(|| {

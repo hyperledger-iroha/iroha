@@ -223,6 +223,28 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
             .is_err()
     );
     assert!(!called.get());
+    // Exercise callback invalidation while the original cut still owns this generation.
+    let callback_entered = Cell::new(false);
+    let error = state
+        .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
+            callback_entered.set(true);
+            let mut publication = state.state_view_publication();
+            let _writer = publication.begin();
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(callback_entered.get());
+    assert!(error.contains("generation changed"), "{error}");
+    assert_eq!(budget.reserved_bytes(), 0);
+    // Advancing publication cannot grant the old journal authority over a new generation.
+    let error = state
+        .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.contains("another certified generation"), "{error}");
+    assert!(!called.get());
     {
         let mut publication = state.state_view_publication();
         let _writer = publication.begin();
@@ -241,17 +263,6 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
         );
         assert!(!called.get());
     }
-    // A data callback's output cannot escape after its original generation changes.
-    assert!(
-        state
-            .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
-                let mut publication = state.state_view_publication();
-                let _writer = publication.begin();
-                Ok(())
-            })
-            .unwrap_err()
-            .contains("generation changed")
-    );
     assert_eq!(budget.reserved_bytes(), 0);
     chain.commit_at(3_000, Vec::new());
     assert!(

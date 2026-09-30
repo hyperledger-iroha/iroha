@@ -1,7 +1,7 @@
 // Generated-localnet rANS table copy, isolation, and path contract tests.
 #[test]
 fn copy_rans_tables_writes_seed_table() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let emitted_path = copy_rans_tables(temp.path()).expect("copy rANS tables");
     let seed_path = temp
         .path()
@@ -19,7 +19,7 @@ fn copy_rans_tables_writes_seed_table() {
 }
 #[test]
 fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
-    let temp = tempfile::tempdir().expect("tmp dir");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let profiles = [
         ("generic", None, SumeragiConsensusMode::Permissioned),
         (

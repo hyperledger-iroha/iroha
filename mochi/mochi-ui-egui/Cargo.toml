@@ -15,6 +15,7 @@ default = []
 gui = ["dep:eframe"]
 
 [dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 mochi-core = { path = "../mochi-core" }
 eframe = { version = "0.33.0", default-features = true, optional = true }
 tokio = { workspace = true, features = ["signal"] }

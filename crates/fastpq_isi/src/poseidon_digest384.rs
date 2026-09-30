@@ -568,148 +568,21 @@ struct LaneParametersV1 {
 static LANE_PARAMETERS_V1: OnceLock<[LaneParametersV1; GOLDILOCKS_DIGEST384_LANES_V1]> =
     OnceLock::new();
 
-const KECCAK_RATE_256_V1: usize = 136;
-const KECCAK_ROUND_CONSTANTS_V1: [u64; 24] = [
-    0x0000_0000_0000_0001,
-    0x0000_0000_0000_8082,
-    0x8000_0000_0000_808a,
-    0x8000_0000_8000_8000,
-    0x0000_0000_0000_808b,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8009,
-    0x0000_0000_0000_008a,
-    0x0000_0000_0000_0088,
-    0x0000_0000_8000_8009,
-    0x0000_0000_8000_000a,
-    0x0000_0000_8000_808b,
-    0x8000_0000_0000_008b,
-    0x8000_0000_0000_8089,
-    0x8000_0000_0000_8003,
-    0x8000_0000_0000_8002,
-    0x8000_0000_0000_0080,
-    0x0000_0000_0000_800a,
-    0x8000_0000_8000_000a,
-    0x8000_0000_8000_8081,
-    0x8000_0000_0000_8080,
-    0x0000_0000_8000_0001,
-    0x8000_0000_8000_8008,
-];
-const KECCAK_RHO_V1: [u32; 25] = [
-    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
-];
-
-#[derive(Clone)]
-struct Keccak256SpongeV1 {
-    state: [u64; 25],
-    position: usize,
-}
-
-impl Keccak256SpongeV1 {
-    fn new() -> Self {
-        Self {
-            state: [0; 25],
-            position: 0,
-        }
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            let lane = self.position / 8;
-            let shift = (self.position % 8) * 8;
-            self.state[lane] ^= u64::from(*byte) << shift;
-            self.position += 1;
-            if self.position == KECCAK_RATE_256_V1 {
-                keccak_f1600_v1(&mut self.state);
-                self.position = 0;
-            }
-        }
-    }
-
-    fn finalize(mut self, suffix: u8) -> Keccak256ReaderV1 {
-        let lane = self.position / 8;
-        let shift = (self.position % 8) * 8;
-        self.state[lane] ^= u64::from(suffix) << shift;
-        let terminal_position = KECCAK_RATE_256_V1 - 1;
-        self.state[terminal_position / 8] ^= 0x80_u64 << ((terminal_position % 8) * 8);
-        keccak_f1600_v1(&mut self.state);
-        Keccak256ReaderV1 {
-            state: self.state,
-            position: 0,
-        }
-    }
-}
-
-struct Keccak256ReaderV1 {
-    state: [u64; 25],
-    position: usize,
-}
-
-impl Keccak256ReaderV1 {
-    fn read(&mut self, output: &mut [u8]) {
-        for byte in output {
-            if self.position == KECCAK_RATE_256_V1 {
-                keccak_f1600_v1(&mut self.state);
-                self.position = 0;
-            }
-            let lane = self.position / 8;
-            let shift = (self.position % 8) * 8;
-            *byte = u8::try_from((self.state[lane] >> shift) & 0xff)
-                .expect("masked Keccak byte fits u8");
-            self.position += 1;
-        }
-    }
-}
-
-fn keccak_f1600_v1(state: &mut [u64; 25]) {
-    for round_constant in KECCAK_ROUND_CONSTANTS_V1 {
-        let mut parity = [0_u64; 5];
-        for x in 0..5 {
-            parity[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for x in 0..5 {
-            let adjustment = parity[(x + 4) % 5] ^ parity[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                state[x + 5 * y] ^= adjustment;
-            }
-        }
-        let mut permuted = [0_u64; 25];
-        for x in 0..5 {
-            for y in 0..5 {
-                let new_x = y;
-                let new_y = (2 * x + 3 * y) % 5;
-                permuted[new_x + 5 * new_y] =
-                    state[x + 5 * y].rotate_left(KECCAK_RHO_V1[x + 5 * y]);
-            }
-        }
-        for x in 0..5 {
-            for y in 0..5 {
-                state[x + 5 * y] = permuted[x + 5 * y]
-                    ^ ((!permuted[(x + 1) % 5 + 5 * y]) & permuted[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        state[0] ^= round_constant;
-    }
-}
-
-fn shake256_reader_v1(fields: &[&[u8]]) -> Keccak256ReaderV1 {
-    let mut sponge = Keccak256SpongeV1::new();
+fn shake256_reader_v1(fields: &[&[u8]]) -> crate::keccak256::Shake256ReaderV1 {
+    let mut sponge = crate::keccak256::Shake256V1::new();
     for field in fields {
         sponge.update(field);
     }
-    sponge.finalize(0x1f)
+    sponge.finalize()
 }
 
 #[cfg(test)]
 fn sha3_256_v1(fields: &[&[u8]]) -> [u8; 32] {
-    let mut sponge = Keccak256SpongeV1::new();
+    let mut sponge = crate::keccak256::Sha3_256V1::new();
     for field in fields {
         sponge.update(field);
     }
-    let mut reader = sponge.finalize(0x06);
-    let mut output = [0_u8; 32];
-    reader.read(&mut output);
-    output
+    sponge.finalize().into_bytes()
 }
 
 fn lane_parameters_v1() -> &'static [LaneParametersV1; GOLDILOCKS_DIGEST384_LANES_V1] {

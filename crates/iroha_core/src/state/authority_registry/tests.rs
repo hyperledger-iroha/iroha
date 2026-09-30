@@ -261,11 +261,18 @@ fn native_execution_tip_is_authenticated_history_without_a_snapshot_decoder() {
     assert!(!fields.contains_key("state.lane_consensus_contexts"));
     assert!(!fields.contains_key("state.merge_admission"));
     let witness = fields["state.native_world_cut"];
-    let Role::Local(reason) = witness.role else {
+    let Role::History {
+        source,
+        authentication,
+    } = witness.role
+    else {
         panic!("retained native journal custody cannot become independent snapshot authority");
     };
-    assert!(reason.contains("absent after decoded restore"));
-    assert_eq!(witness.disclosure, Disclosure::NotApplicable);
+    assert!(source.starts_with("Original pre-tail World"));
+    assert!(source.contains("native journal"));
+    assert!(authentication.contains("restoration must replay original execution"));
+    assert!(authentication.contains("rather than decode a caller-supplied cut"));
+    assert_eq!(witness.disclosure, Disclosure::CommitmentOnly);
 }
 
 #[test]

@@ -329,10 +329,14 @@ fn validate_release(release: &NetworkRelease) -> Result<()> {
     }
     let mut roots = std::collections::BTreeSet::new();
     for root in &release.torii_roots {
+        if root.len() > 2048 {
+            return Err(BootstrapError::Invalid(
+                "signed Torii root exceeds byte bound",
+            ));
+        }
         let url = url::Url::parse(root)
             .map_err(|_| BootstrapError::Invalid("invalid signed Torii root"))?;
-        if root.len() > 2048
-            || url.scheme() != "https"
+        if url.scheme() != "https"
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
