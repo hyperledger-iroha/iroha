@@ -332,14 +332,20 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertFalse(try XCTUnwrap(store.records.values.first { $0.operation == 19 }).acknowledged)
     XCTAssertNil(store.records.values.first { $0.operation == 19 }?.authenticatedSnapshotEvidence)
     rejectRetainedMutation = false
+    XCTAssertThrowsError(try restarted.recover(), "A rejected native reply permanently revokes this bridge") {
+      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    }
+    // Recreate the fixture's native process owner while retaining the original durable intent.
+    let afterRejection = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
     store.failAfterSave = true
-    XCTAssertThrowsError(try restarted.recover())
+    XCTAssertThrowsError(try afterRejection.recover())
     let interrupted = try XCTUnwrap(store.records.values.first { $0.operation == 19 })
     XCTAssertNotNil(interrupted.authenticatedSnapshotEvidence)
     XCTAssertFalse(interrupted.acknowledged, "Snapshot evidence must be durable before acknowledgement")
     store.failAfterSave = false
-    XCTAssertEqual(try restarted.recover().aggregateState, installed)
-    XCTAssertEqual(try restarted.recover().aggregateState, installed)
+    XCTAssertEqual(try afterRejection.recover().aggregateState, installed)
+    XCTAssertEqual(try afterRejection.recover().aggregateState, installed)
     XCTAssertEqual(Set(snapshots).count, 4)
     XCTAssertEqual(store.records.values.first { $0.operation == 19 }?.authenticatedSnapshotEvidence,
       interrupted.authenticatedSnapshotEvidence, "Retain original accepted historical evidence")
@@ -538,7 +544,12 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     let recreated = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
       core: try adapter(endpoint(seed: 80)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
     XCTAssertThrowsError(try recreated.recover(), "Prior-owner signature cannot satisfy the new nonce")
-    XCTAssertNil(try recreated.recover().aggregateState)
+    XCTAssertThrowsError(try recreated.recover(), "The rejected response revokes this native handle") {
+      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    }
+    let recovered = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+      core: try adapter(endpoint(seed: 120)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+    XCTAssertNil(try recovered.recover().aggregateState)
     XCTAssertEqual(Set(requests).count, 4)
     XCTAssertTrue(store.records.isEmpty)
   }

@@ -183,18 +183,23 @@ function readField(input, offset) {
 }
 
 function replacePayloadMetadata(payload, archive) {
-  return replacePayloadField(payload, 8, archive);
+  return replacePayloadField(payload, 7, archive);
 }
 
-function replacePayloadField(payload, fieldIndex, archive) {
+function payloadFields(payload) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 9; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly ten fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly nine fields");
+  return fields;
+}
+
+function replacePayloadField(payload, fieldIndex, archive) {
+  const fields = payloadFields(payload);
   fields[fieldIndex] = archive;
   return struct(fields);
 }
@@ -452,20 +457,13 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
   );
 });
 
-test("browser payload requires signature-bound Ordinary admission", () => {
+test("browser payload rejects the retired admission field and binds its exact layout", () => {
   const payload = buildBrowserTransferPayload(sampleInput());
-  let offset = 0;
-  for (let index = 0; index <= 7; index += 1) {
-    const fieldValue = readField(payload, offset);
-    offset = fieldValue.next;
-    if (index === 7) {
-      assert.deepEqual(fieldValue.value, u32(0));
-    }
-  }
-
   const { hashHex, signature } = signPayload(payload);
   assert.equal(ed25519.verify(signature, Buffer.from(hashHex, "hex"), PUBLIC_KEY), true);
-  const retiredPayload = replacePayloadField(payload, 7, u32(1));
+  const fields = payloadFields(payload);
+  fields.splice(7, 0, u32(0));
+  const retiredPayload = struct(fields);
   assert.equal(ed25519.verify(signature, Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"), PUBLIC_KEY), false);
 
   expectCodecError(
@@ -473,11 +471,11 @@ test("browser payload requires signature-bound Ordinary admission", () => {
       validateBrowserTransferSignable({
         networkPrefix: 753,
         networkId: NETWORK_ID,
-        payloadBytes: replacePayloadField(payload, 7, u32(1)),
+        payloadBytes: retiredPayload,
         authority: AUTHORITY,
         signingPublicKey: PUBLIC_KEY,
       }),
-    "unsupported_payload",
+    "malformed_payload",
   );
 });
 
@@ -535,7 +533,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   );
 });
 
-test("shared compact Android/native golden and browser agree on Ordinary admission", () => {
+test("shared compact Android/native golden and browser agree on canonical transaction identity", () => {
   const fixture = properties(FIXTURE_PATH);
   assert.equal(fixture["schema.version"], "2");
   assert.equal(fixture["source.fixture"], "transfer_asset");

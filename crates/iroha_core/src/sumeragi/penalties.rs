@@ -27,7 +27,7 @@ use iroha_crypto::{ChargedPublicKey, Hash, PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, ValidatorIndex},
+        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord},
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
@@ -1152,7 +1152,7 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         block::{
             BlockHeader,
-            consensus::{Evidence, EvidenceRecord},
+            consensus::{Evidence, EvidenceRecord, ValidatorIndex},
         },
         nexus::{
             LaneCatalog, LaneConfig, LaneVisibility, PublicLaneStakeShare, PublicLaneUnbonding,
@@ -2034,7 +2034,6 @@ mod tests {
     fn admitted_native_attribution_does_not_require_a_kura_reread() {
         let state = native_penalty_state();
         install_one_block_delay_npos(&state);
-        let frozen_roster = roster();
         let evidence = fixture_vote_evidence(1, 0);
         let key = insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::new(
@@ -2849,10 +2848,6 @@ mod tests {
     fn penalty_derivation_fails_closed_on_missing_staking_custody_definition() {
         let state = native_penalty_state();
         let frozen_roster = roster();
-        let source = state
-            .kura()
-            .get_block(core::num::NonZeroUsize::new(1).unwrap())
-            .unwrap();
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
         insert_evidence(&state, fixture_vote_evidence(1, 37), 1);

@@ -1159,7 +1159,10 @@ fn sumeragi_amx_participant_resource_refusal_never_votes_no_or_closes_escrow() {
             state.settle(&mut escrow, &corrupted_signature(&decision)),
             Err(AmxParticipantError::Protocol(AmxError::Proof(_)))
         ));
-        assert_eq!(escrow.calls, calls, "invalid signature cannot invoke escrow");
+        assert_eq!(
+            escrow.calls, calls,
+            "invalid signature cannot invoke escrow"
+        );
         assert_eq!(state, prepared_state);
         for _ in 0..2 {
             assert_eq!(

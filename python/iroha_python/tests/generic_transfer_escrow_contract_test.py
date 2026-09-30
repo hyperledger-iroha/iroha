@@ -690,6 +690,7 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
             "schema_hash": [7] * 32,
             "name": "BelowMinimum",
             "code": 18,
+            "message": "  支払額が不足しています。  ",
         },
         "batch_outcomes": [],
         "committed_transaction": {},
@@ -702,7 +703,15 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "schema_hash": (7,) * 32,
         "name": "BelowMinimum",
         "code": 18,
+        "message": "  支払額が不足しています。  ",
     }
+
+    without_message = {**payload, "contract_rejection": {**payload["contract_rejection"], "message": None}}
+    assert VerifiedCommittedTransaction.from_payload(without_message).contract_rejection["message"] is None
+    missing_message = {**payload["contract_rejection"]}
+    del missing_message["message"]
+    with pytest.raises(ValueError, match="must contain exactly"):
+        VerifiedCommittedTransaction.from_payload({**payload, "contract_rejection": missing_message})
 
     unknown_field = {**payload, "unverified_hint": "ignored"}
     with pytest.raises(ValueError, match="must contain exactly"):
@@ -749,6 +758,11 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         ("schema_hash", [7] * 31 + [6]),
         ("schema_hash", "07" * 32),
         ("name", "bad name"),
+        ("message", True),
+        ("message", ""),
+        ("message", "\u3000\n"),
+        ("message", "あ" * 1366),
+        ("message", "\ud800"),
     ):
         malformed = dict(payload)
         malformed["contract_rejection"] = {

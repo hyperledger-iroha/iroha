@@ -617,9 +617,12 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     _ = try await provider.assertTransition(
       keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0)
     let endpoint = AppAttestCommitEndpoint()
-    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
-      storagePath: "/private/coordinator", endpoint: endpoint)
-    let coordinator = KagemushaNativeCoreCoordinatorAdapterV1(bridge: bridge)
+    func freshCoordinator() throws -> KagemushaNativeCoreCoordinatorAdapterV1 {
+      let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath: "/private/coordinator", endpoint: endpoint)
+      return KagemushaNativeCoreCoordinatorAdapterV1(bridge: bridge)
+    }
+    var coordinator = try freshCoordinator()
     let operationID = Data(repeating: 0x31, count: 32)
     let certificate = Data(repeating: 0x32, count: 32)
     let envelope = Data(repeating: 0x33, count: 32)
@@ -633,10 +636,14 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     XCTAssertEqual(try store.load(keyID: "dedicated-key"),
       .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
     endpoint.configure(.substituted)
+    // Post-dispatch failure revokes the bridge. This fixture models a fresh process owner;
+    // changing the endpoint response cannot restore the failed handle's authority.
+    coordinator = try freshCoordinator()
     do { try await acknowledge(); XCTFail("substituted native response advanced App Attest") } catch {}
     XCTAssertEqual(try store.load(keyID: "dedicated-key"),
       .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
     endpoint.configure(.valid)
+    coordinator = try freshCoordinator()
     try await acknowledge()
     let reopened = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
     XCTAssertEqual(try reopened.load(keyID: "dedicated-key"), .ready(counter: 1))

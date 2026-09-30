@@ -1365,6 +1365,7 @@ pub const BFV_DETERMINISTIC_SEED_MAX_BYTES: usize = 64;
 const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = BFV_DETERMINISTIC_SEED_MAX_BYTES;
 /// Maximum byte length for public BFV bootstrap refresh key identifiers.
 pub const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
+#[cfg(any(test, feature = "bfv-test-fixtures"))]
 const BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS: u16 = 1;
 /// Maximum public refresh rounds admitted in one BFV bootstrap key.
 pub const BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS: u16 = 1;
@@ -38155,6 +38156,7 @@ fn key_switch_entries_from_rng(
     }
     Ok(entries)
 }
+#[cfg(any(test, feature = "bfv-test-fixtures"))]
 fn key_switch_entries_bounded_noise_from_rng(
     params: &BfvParameters,
     source_secret: &[u64],

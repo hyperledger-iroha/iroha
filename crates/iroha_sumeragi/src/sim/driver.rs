@@ -281,9 +281,31 @@ impl Io {
         done
     }
 
+    /// Whether this event names the first pending write at its current due time.
+    /// Events scheduled before a retry cannot complete or skip the blocked head.
+    pub fn is_ready(&self, id: u64, now: Millis) -> bool {
+        self.pending
+            .front()
+            .is_some_and(|(first, due, _)| *first == id && *due <= now)
+    }
+
+    /// Retry the failed FIFO head, retaining every write and delaying its successors.
+    /// Zero configured backoff still yields one virtual millisecond to other events.
+    /// Returns the next attempt; successors are scheduled as each head completes.
+    pub fn retry(&mut self, now: Millis, backoff: Millis) -> Option<(u64, Millis)> {
+        let (_, due, _) = self.pending.front()?;
+        let delay = now.saturating_sub(*due).saturating_add(backoff.max(1));
+        self.last_done = self.last_done.saturating_add(delay);
+        for (_, due, _) in &mut self.pending {
+            *due = due.saturating_add(delay);
+        }
+        self.pending.front().map(|(id, due, _)| (*id, *due))
+    }
+
     /// Lose every non-durable write (crash).
     pub fn clear(&mut self) {
         self.pending.clear();
+        self.last_done = 0;
     }
 
     /// A body in a pending (not yet durable) write.
@@ -692,6 +714,59 @@ mod tests {
         io.clear();
         barrier.clear();
         assert!(io.pending.is_empty() && barrier.held.is_empty());
+    }
+
+    #[test]
+    fn io_retry_retains_fifo_and_rejects_stale_completion_events() {
+        let mut io = Io::default();
+        let record = SafetyRecord::fresh(
+            Hash32::ZERO,
+            crate::testing::TEST_EPOCH.id,
+            PublicKey::new(vec![1; 32]).unwrap(),
+            0,
+            None,
+        );
+        let (first, _) = io.write(0, 5, Write::Record(Box::new(record.clone()), vec![1]));
+        let (second, _) = io.write(0, 5, Write::Record(Box::new(record.clone()), vec![2]));
+        assert!(io.is_ready(first, 5));
+        assert!(!io.is_ready(second, 10));
+        assert_eq!(io.retry(5, 10), Some((first, 15)));
+        assert!(!io.is_ready(first, 5));
+        assert!(!io.is_ready(second, 10));
+        assert_eq!(io.pending[1].1, 20);
+        assert_eq!(io.retry(15, 0), Some((first, 16)));
+        let (third, due) = io.write(12, 5, Write::Record(Box::new(record), vec![3]));
+        assert_eq!(due, 26);
+        for (id, due, expected) in [(first, 16, 1), (second, 21, 2), (third, 26, 3)] {
+            assert!(io.is_ready(id, due));
+            let writes = io.complete(id);
+            assert_eq!(writes.len(), 1);
+            assert!(matches!(&writes[0], Write::Record(_, bytes) if bytes == &[expected]));
+            assert!(!io.is_ready(id, due));
+        }
+        assert_eq!(io.retry(26, 10), None);
+    }
+
+    #[test]
+    fn io_crash_discards_pending_latency_and_never_reuses_write_ids() {
+        let mut io = Io::default();
+        let record = SafetyRecord::fresh(
+            Hash32::ZERO,
+            crate::testing::TEST_EPOCH.id,
+            PublicKey::new(vec![1; 32]).unwrap(),
+            0,
+            None,
+        );
+        let (lost, _) = io.write(0, 1_000, Write::Record(Box::new(record.clone()), vec![1]));
+        io.retry(1_000, 1_000);
+        io.clear();
+        let (fresh, due) = io.write(10, 5, Write::Record(Box::new(record), vec![2]));
+        assert_eq!(due, 15);
+        assert!(fresh > lost);
+        assert!(!io.is_ready(lost, 2_000));
+        assert!(io.is_ready(fresh, due));
+        assert_eq!(io.retry(100, 0), Some((fresh, 101)));
+        assert!(!io.is_ready(fresh, 100), "a delayed attempt must yield too");
     }
 
     #[test]

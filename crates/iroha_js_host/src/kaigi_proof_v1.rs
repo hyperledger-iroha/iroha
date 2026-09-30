@@ -24,17 +24,21 @@ use napi::{
 };
 use rand_core_06::OsRng;
 
-pub(super) const VK_BACKEND: &str = "halo2/ipa";
+/// Native verifier backend shared by the fixed Kaigi circuits.
+pub const VK_BACKEND: &str = "halo2/ipa";
 const ZK1_PREFIX: &[u8] = b"ZK1\0";
 
-pub(super) fn invalid(message: impl ToString) -> napi::Error {
+/// Report rejected caller input at the JavaScript boundary.
+pub fn invalid(message: impl ToString) -> napi::Error {
     napi::Error::new(napi::Status::InvalidArg, message.to_string())
 }
-pub(super) fn failure(message: impl ToString) -> napi::Error {
+/// Report a native proving or encoding failure.
+pub fn failure(message: impl ToString) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, message.to_string())
 }
 
-pub(super) fn take_witness(bytes: &mut [u8]) -> napi::Result<KaigiAuthorizationWitnessV1> {
+/// Consume the canonical blinding scalar and erase the supplied byte slice.
+pub fn take_witness(bytes: &mut [u8]) -> napi::Result<KaigiAuthorizationWitnessV1> {
     let mut owned = [0; 32];
     if bytes.len() == owned.len() {
         owned.copy_from_slice(bytes);
@@ -48,7 +52,8 @@ pub(super) fn take_witness(bytes: &mut [u8]) -> napi::Result<KaigiAuthorizationW
     KaigiAuthorizationWitnessV1::take_blinding(&mut owned).map_err(invalid)
 }
 
-pub(super) fn consume_blinding(
+/// Copy the caller's scalar into native custody and erase its JavaScript buffer.
+pub fn consume_blinding(
     env: Env,
     blinding: &mut Uint8ArraySlice<'_>,
 ) -> napi::Result<KaigiAuthorizationWitnessV1> {
@@ -82,7 +87,7 @@ fn append_tlv(bytes: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) -> Result<(), S
 }
 
 /// Public, witness-free setup for one fixed final circuit; safe to share.
-pub(super) struct KaigiProvingMaterialV1 {
+pub struct KaigiProvingMaterialV1 {
     params: ParamsIPA<EqAffine>,
     pk: ProvingKey<EqAffine>,
     pub(super) key: VerifyingKeyBox,
@@ -108,7 +113,8 @@ impl KaigiProvingMaterialV1 {
     }
 }
 
-pub(super) fn encode_verified_envelope(
+/// Encode only a proof envelope accepted by its exact native verifying key.
+pub fn encode_verified_envelope(
     envelope: &OpenVerifyEnvelope,
     key: &VerifyingKeyBox,
 ) -> napi::Result<Vec<u8>> {
@@ -122,7 +128,8 @@ pub(super) fn encode_verified_envelope(
     Ok(encoded)
 }
 
-pub(super) fn prove<C: Circuit<Scalar>>(
+/// Prove the fixed circuit and authenticate the resulting native envelope.
+pub fn prove<C: Circuit<Scalar>>(
     material: &KaigiProvingMaterialV1,
     circuit: C,
     instance: &[Scalar],

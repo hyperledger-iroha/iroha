@@ -5,7 +5,8 @@ use super::*;
 use crate::{
     query::{
         provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveV1,
+            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveInsertOutcomeV1,
+            ProviderIngestFinalizedArchiveV1,
         },
         reputation_finalized::{ReputationFinalizedArchive, ReputationFinalizedArchiveBounds},
     },
@@ -764,9 +765,16 @@ fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case() 
     );
     // The daemon reconciles the provider archive against the replayed tip before binding (the
     // one committed successor); the reputation archive is left to the binding's own capture.
-    provider
+    let reconciliation = provider
         .reconcile_certified_state_tip(&restarted.state.view(), &restarted.kura)
         .unwrap();
+    assert_eq!(
+        reconciliation.insertion(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert_eq!(reconciliation.qualification().kura_tip_height(), tip);
+    assert_eq!(reconciliation.qualification().lag_blocks(), 0);
+    assert!(!reconciliation.activation_floor_created());
     assert_eq!(provider.health_generation().unwrap(), before.0 + 1);
     let bound = FinalizedArchives {
         provider_ingest: Some(Arc::clone(&provider)),

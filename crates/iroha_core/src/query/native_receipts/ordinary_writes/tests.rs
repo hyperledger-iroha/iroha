@@ -347,15 +347,18 @@ fn casting_materializer_rejects_malformed_native_fields_before_any_allocation() 
     let root = fields::<21>(&original, flags).unwrap();
     let bad_id_version = replace_field::<3>(root[4], 0, &2_u16.to_le_bytes(), flags);
     let bad_id_length = replace_field::<3>(root[4], 1, &31_u16.to_le_bytes(), flags);
-    let bad_id_raw = replace_field::<3>(root[4], 2, &[2; 32], flags);
+    let bad_id_generic = replace_field::<3>(root[4], 2, &[2_u8; 32].encode(), flags);
     let bad_digest = replace_field::<3>(root[17], 2, &[0; 32], flags);
     let mut option_suffix = root[20].to_vec();
     option_suffix.push(0);
     let mutations = [
         replace_field::<21>(&original, 2, &3_u32.to_le_bytes(), flags),
+        replace_field::<21>(&original, 3, &[1_u8; 32].encode(), flags),
+        replace_field::<21>(&original, 8, &[5_u8; 32].encode(), flags),
+        replace_field::<21>(&original, 11, &[8_u8; 96].encode(), flags),
         replace_field::<21>(&original, 4, &bad_id_version, flags),
         replace_field::<21>(&original, 4, &bad_id_length, flags),
-        replace_field::<21>(&original, 4, &bad_id_raw, flags),
+        replace_field::<21>(&original, 4, &bad_id_generic, flags),
         replace_field::<21>(&original, 11, &root[11][..root[11].len() - 1], flags),
         replace_field::<21>(&original, 17, &bad_digest, flags),
         replace_field::<21>(&original, 18, &[0, 0], flags),

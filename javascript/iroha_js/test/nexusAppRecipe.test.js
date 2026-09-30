@@ -30,11 +30,11 @@ test("Nexus App transfer recipe executes the canonical native codec end to end",
   );
   assert.match(
     result.stdout,
-    /payload hash: 2b1553daadf14385d797279fe662b01812e4bf37b7d62df8144a2f0bd60b6297/u,
+    /payload hash: 2cacc93dde41f87f33da6c74281c887bdf2e54d6e11ef7e3cf6eb970a7df7db9/u,
   );
   assert.match(
     result.stdout,
-    /signed transaction hash: d338123041fd61a734f21577b92cbe4b2c177541983ddc96e9e63f9fd878bde9/u,
+    /signed transaction hash: ef1e1042fb07356fa96d6d51898837f5d2030b8e6286acb1c31076501360aad5/u,
   );
   assert.match(result.stdout, /final status: Applied/u);
 });

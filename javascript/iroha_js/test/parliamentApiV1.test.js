@@ -629,7 +629,9 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.action.payload.future = null; },
     (proposal) => { proposal.payload.future = null; },
     (proposal) => { proposal.payload.action.future = null; },
+    (proposal) => { proposal.payload.future = null; },
   ];
+  assert.equal(mutations.length, parliamentProposalFixtures().length);
   for (const [index, canonical] of parliamentProposalFixtures().entries()) {
     const malformed = structuredClone(canonical);
     mutations[index](malformed);

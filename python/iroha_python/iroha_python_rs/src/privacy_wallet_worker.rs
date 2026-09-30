@@ -2188,7 +2188,18 @@ mod tests {
     const KEY: [u8; 32] = [0x51; 32];
     const TEST_SIGNER_SEED: [u8; 32] = [7; 32];
     const JINDO_PUBLIC_ACTION: &[u8] = br#"{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
-    const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"]]}"#;
+    const JINDO_WITNESS: &[u8] = concat!(
+        "{\"polynomials_hex\":[[\"",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "\"],[\"",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "\"],[\"",
+        "0200000000000000000000000000000000000000000000000000000000000000",
+        "\"],[\"",
+        "0300000000000000000000000000000000000000000000000000000000000000",
+        "\"]]}"
+    )
+    .as_bytes();
     const CANONICAL_JINDO_PUBLIC_INTENT: &[u8] = br#"{"algorithm_id":"iroha-jindo-polynomial-commitment-v1","operation_schema":"jindo_polynomial_evaluation_v1","protocol_id":"iroha-jindo-polynomial-commitment-v1","public_action":{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"},"selected_criteria":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"selected_features":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"signer_wallet_id":"alice@wonderland"}"#;
     fn binding() -> WitnessBinding {
         WitnessBinding {
@@ -2995,7 +3006,7 @@ mod tests {
             .expect("profile digest");
         assert_eq!(
             hex::encode(baseline),
-            "296f382fbb00ee5646328337e71b69ecfe3551a1e896746fe916f7ad40074a2d"
+            "ae65a35ac3420351ec4c7da140ba820d80756446a09c18e0a8e6ea4a19c80a89"
         );
         let mut mutations = [
             profile.parameter_id,

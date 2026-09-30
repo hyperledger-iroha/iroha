@@ -54,7 +54,6 @@ use iroha_core::{
     },
     zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1,
 };
-use iroha_genesis::GenesisBlock;
 use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::LaneId};
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, DisposableBeaconProviderBinding, DisposableGenesisDkgOutput,
@@ -955,8 +954,6 @@ async fn execute_rotation_preparation(
         |height| {
             let admin = admin.clone();
             let voters = current_roster.clone();
-            let genesis = network.genesis();
-            let chain_id = network.chain_id().to_string();
             async move {
                 advance_exact_rotation_phase(network, &voters, height).await?;
                 let observed = spawn_blocking({

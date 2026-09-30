@@ -50,6 +50,7 @@ function baseContext() {
     deviceKeyReference: Kagemusha.deviceKeyReference(key),
     issuedAtMs: 1n,
     expiresAtMs: 10_000n,
+    appPolicyBindingDigest: octets(13),
     governanceSignature: new Kagemusha.DeviceSignature(octets(8, 64)),
   });
   return { networkId, asset, assetIncarnation, recipient, hardwareCredential };
@@ -81,6 +82,23 @@ const publicFields = (value) => Object.fromEntries(
   Object.keys(Object.getPrototypeOf(value)).map((key) => [key, value[key]]),
 );
 const replace = (value, updates) => new value.constructor({ ...publicFields(value), ...updates });
+
+test("hardware credentials require and retain the exact app-policy binding", () => {
+  const { hardwareCredential } = baseContext();
+  assert.deepEqual(hardwareCredential.appPolicyBindingDigest, octets(13));
+  const returned = hardwareCredential.appPolicyBindingDigest;
+  returned.fill(0);
+  assert.deepEqual(hardwareCredential.appPolicyBindingDigest, octets(13));
+  const fields = publicFields(hardwareCredential);
+  delete fields.appPolicyBindingDigest;
+  assert.throws(() => new Kagemusha.HardwareCredential(fields));
+  for (const value of [octets(0), octets(13, 31), octets(13, 33)]) {
+    assert.throws(() => replace(hardwareCredential, { appPolicyBindingDigest: value }));
+  }
+  const request = requestFor();
+  const decoded = Kagemusha.decodePaymentRequest(Kagemusha.encodePaymentRequest(request));
+  assert.deepEqual(decoded.hardwareCredential.appPolicyBindingDigest, octets(13));
+});
 const digest = (domain, transcript) => {
   const size = Buffer.alloc(8);
   size.writeBigUInt64LE(BigInt(transcript.length));

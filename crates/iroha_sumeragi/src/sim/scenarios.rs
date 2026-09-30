@@ -225,6 +225,9 @@ pub fn f04(seed: u64) -> Scenario {
         }
     }
     sc.checks.progress = 8;
+    // Eight heights are a progress obligation, not a 40/60 s performance bound. Keep that
+    // minimum observation, then finish under the oracle's original per-commit deadlines.
+    sc.checks.complete_progress = true;
     sc
 }
 

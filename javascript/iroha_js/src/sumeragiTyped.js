@@ -107,7 +107,7 @@ export function parseSumeragiStatusJson(text, context = "native status") {
   return parseSumeragiStatusPayload(parseStrictLosslessIntegerJson(text, context));
 }
 const LANE_STATUS = ["record", "instance"];
-const LANE_RECORD = "lane dataspace incarnation params da_layout committee created_at active_from closing anchor_freshness merged merged_at rescued".split(" ");
+const LANE_RECORD = "da_layout lane dataspace incarnation params committee created_at active_from closing anchor_freshness merged merged_at rescued".split(" ");
 const LANE_DA_LAYOUT = "encoding chunk_size_bytes data_shards parity_shards max_payload_size_bytes max_chunk_count".split(" ");
 const LANE_PARAMS = "block_cadence_ms max_clock_drift_ms key_activation_lead_blocks key_overlap_grace_blocks key_expiry_grace_blocks key_allowed_algorithms payload_retry_interval_ms exec_budget_ms apply_budget_ms max_block_bytes epoch_length_blocks demotion_window".split(" ");
 const LANE_NONZERO_PARAMS = new Set(["block_cadence_ms", "payload_retry_interval_ms", "exec_budget_ms", "apply_budget_ms", "max_block_bytes", "epoch_length_blocks", "demotion_window"]);
@@ -181,8 +181,8 @@ function laneRecord(value) {
     throw new RangeError("native lane block limit exceeds its data-availability payload limit");
   }
   return Object.freeze({
-    lane: uint(r.lane, 32), dataspace: uint(r.dataspace), incarnation: byte32(r.incarnation, "native lane incarnation"),
-    params, da_layout: layout, committee: Object.freeze(r.committee.map(laneMember)),
+    da_layout: layout, lane: uint(r.lane, 32), dataspace: uint(r.dataspace), incarnation: byte32(r.incarnation, "native lane incarnation"),
+    params, committee: Object.freeze(r.committee.map(laneMember)),
     created_at: uint(r.created_at), active_from: uint(r.active_from), closing: optionalUint(r.closing),
     anchor_freshness: uint(r.anchor_freshness), merged: laneFrontier(r.merged), merged_at: uint(r.merged_at), rescued: uint(r.rescued),
   });

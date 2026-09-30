@@ -744,7 +744,7 @@ public enum CanonicalNorito {
         writer.writeUInt64LE(UInt64(keys.count))
         for key in keys {
             guard !key.isEmpty, key.utf8.count <= 255,
-                  key.precomposedStringWithCanonicalMapping == key,
+                  key.utf8.elementsEqual(key.precomposedStringWithCanonicalMapping.utf8),
                   key.unicodeScalars.allSatisfy({ scalar in
                       scalar.properties.generalCategory != .control
                           && !CharacterSet.whitespacesAndNewlines.contains(scalar)

@@ -97,8 +97,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
-    // share validation across eight canonical modules: 56,385 bytes with pinned
-    // esbuild. The 56 KiB ceiling leaves 959 bytes; browser isolation is mandatory.
+    // share validation across eight canonical modules: 57,300 bytes with pinned
+    // esbuild. The 56 KiB ceiling leaves 44 bytes; browser isolation is mandatory.
     limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,

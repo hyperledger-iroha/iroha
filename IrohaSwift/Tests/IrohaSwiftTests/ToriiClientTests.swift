@@ -1855,6 +1855,8 @@ final class ToriiClientTests: XCTestCase {
               "total": 1,
               "items": [{
                 "policy_id":"email#retail",
+                "program_id":"identifier_lookup_retail",
+                "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                 "owner":"\(owner)",
                 "active":true,
                 "normalization":"email_address",
@@ -1920,6 +1922,8 @@ final class ToriiClientTests: XCTestCase {
               "total": 1,
               "items": [{
                 "policy_id":"email#retail",
+                "program_id":"identifier_lookup_retail",
+                "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                 "owner":"\(owner)",
                 "active":true,
                 "normalization":"email_address",
@@ -2176,8 +2180,20 @@ final class ToriiClientTests: XCTestCase {
             try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
         let execute = try object(ramLfeExecuteResponseJSON())
-        let receipt = try XCTUnwrap(execute["receipt"] as? [String: Any])
-        let execution = try XCTUnwrap(receipt["payload"] as? [String: Any])
+        let execution = try object(JSONEncoder().encode(ToriiIdentifierResolutionExecutionPayload(
+            programId: "identifier_lookup_retail",
+            programDigest: String(repeating: "11", count: 32),
+            backend: "bfv-programmed-v1",
+            verificationMode: "signed",
+            inputCiphertextHash: String(repeating: "ab", count: 32),
+            outputCiphertextHash: String(repeating: "bb", count: 32),
+            parameterDigest: String(repeating: "cd", count: 32),
+            evaluationKeyDigest: String(repeating: "dd", count: 32),
+            outputHash: String(repeating: "22", count: 32),
+            associatedDataHash: String(repeating: "33", count: 32),
+            executedAtMs: 42,
+            expiresAtMs: 142
+        )))
         let programList = try object(ramLfeProgramPoliciesJSON())
         let policies = try XCTUnwrap(programList["items"] as? [[String: Any]])
         let identifierPolicy: [String: Any] = [

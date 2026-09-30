@@ -539,6 +539,30 @@ mod top_up_submission_binding_tests {
             0
         );
     }
+
+    #[test]
+    fn shared_swift_request_has_native_sealed_ids_and_exact_payer_signature() {
+        let bytes = include_bytes!("../../../fixtures/offline/kagemusha_top_up_request_v1.nrt");
+        let request = decode_kagemusha_top_up_request_v1(bytes).expect("native fixture shape");
+        assert_eq!(request_bytes(&request), bytes);
+        let key = KeyPair::from_private_key(
+            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x42; 32])
+                .expect("public fixture seed"),
+        )
+        .expect("fixture payer");
+        assert_eq!(request.payer, AccountId::new(key.public_key().clone()));
+        let signed = TransactionBuilder::new(
+            request.network_id,
+            request.payer.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([TopUpKagemushaV1::new(request).expect("native top-up")])
+        .try_sign(key.private_key())
+        .expect("sign")
+        .encode_wire_v1()
+        .expect("canonical carrier");
+        validate_top_up_submission(&signed, bytes).expect("exact native submission");
+    }
     #[test]
     fn different_valid_reviewed_requests_cannot_authorize_signed_bytes() {
         let expected = top_up_request();

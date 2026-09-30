@@ -1,19 +1,30 @@
 //! One retained authenticated archive scan, bounded to a captured original State publication.
 
 use super::{invalid, pending, selection::LaneSelection};
+use crate::query::native_receipts::lane_payload::{
+    LaneAuthority, LaneAuthorityRead, LanePayloadError, LanePayloadRead,
+};
 use crate::{
     kura::Kura,
-    query::native_context_archive::{NativeContextArchive, NativeContextArchiveError},
+    query::native_context_archive::{
+        NativeContextArchive, NativeContextArchiveError, NativeContextRead,
+    },
     state::{NativeExecutionEvidenceLimits, NativeExecutionEvidenceVerifier, State, StateReadOnly},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
-    sumeragi_lanes::SumeragiLaneRecord,
 };
 use iroha_model_base::topology::LaneId;
 use std::{io, num::NonZeroUsize, sync::Arc};
+
+enum AuthorityRead {
+    Payload(LanePayloadRead),
+    Config(LaneAuthorityRead),
+    Ready(LaneAuthority),
+}
 
 pub(super) struct HistoryScan {
     lane: LaneId,
@@ -21,12 +32,18 @@ pub(super) struct HistoryScan {
     generation: u64,
     height: u64,
     carrier: HashOf<BlockHeader>,
+    original_tip: crate::state::NativeExecutionTip,
     kura: Arc<Kura>,
-    archive: NativeContextArchive,
+    archive: Option<NativeContextArchive>,
+    read: Option<NativeContextRead>,
+    budget: AllocationBudget,
+    network: iroha_data_model::NetworkId,
+    authority: Option<AuthorityRead>,
     verifier: NativeExecutionEvidenceVerifier,
     selected: LaneSelection,
     next: u64,
     current: Option<Arc<SignedBlock>>,
+    genesis_bytes: Option<ChargedBuffer<u8>>,
 }
 
 impl HistoryScan {
@@ -39,7 +56,7 @@ impl HistoryScan {
         if generation % 2 != 0 {
             return Err(pending("native State publication is in progress"));
         }
-        let (height, carrier) = {
+        let original_tip = {
             let view = state.view();
             if view.kura().native_consensus_gate().is_closed() {
                 return Err(io::Error::other(
@@ -56,8 +73,10 @@ impl HistoryScan {
                     "native lane lookup has no matching original State tip",
                 ));
             }
-            (tip.height(), tip.iroha_hash())
+            tip
         };
+        let height = original_tip.height();
+        let carrier = original_tip.iroha_hash();
         if height < 2 {
             return Ok(None);
         }
@@ -92,12 +111,18 @@ impl HistoryScan {
             generation,
             height,
             carrier,
+            original_tip,
             kura,
-            archive,
+            archive: Some(archive),
+            read: None,
+            budget: state.ivm_execution_budget(),
+            network: *state.network_id_ref(),
+            authority: None,
             verifier,
             selected: LaneSelection::new(lane, incarnation),
             next: 1,
             current: None,
+            genesis_bytes: None,
         }))
     }
 
@@ -128,17 +153,70 @@ impl HistoryScan {
                     "native authority prefix differs from captured State tip",
                 ));
             }
-            let bytes = self
-                .archive
-                .read_exact(self.next, block.hash())
-                .map_err(archive_error)?;
-            if let Some(receipt) = self
+            if self.read.is_none() {
+                self.read = Some(
+                    self.archive
+                        .take()
+                        .expect("original archive owner")
+                        .read_job(self.next, block.hash()),
+                );
+            }
+            let bytes = loop {
+                match self.read.as_mut().expect("original acquisition").poll() {
+                    Ok(Some(bytes)) => break bytes,
+                    Ok(None) => {}
+                    Err(NativeContextArchiveError::Io(error))
+                        if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(archive_error(error)),
+                }
+            };
+            self.archive = Some(
+                self.read
+                    .take()
+                    .expect("completed acquisition")
+                    .into_archive(),
+            );
+            let selected = &mut self.selected;
+            let authority = &mut self.authority;
+            let budget = &self.budget;
+            let network = self.network;
+            let genesis_bytes = &mut self.genesis_bytes;
+            let receipt = self
                 .verifier
-                .push_shared_height(Arc::clone(block), bytes.as_slice())
-                .map_err(invalid)?
-            {
-                self.selected
-                    .observe(receipt.block().header().height().get(), receipt.lanes())?;
+                .push_shared_height_with_genesis(Arc::clone(block), bytes.as_slice(), |genesis| {
+                    let bytes = genesis_bytes
+                        .take()
+                        .ok_or("original genesis archive owner is missing")?;
+                    if selected
+                        .observe(1, genesis.lanes())
+                        .map_err(|error| error.to_string())?
+                    {
+                        *authority = Some(AuthorityRead::Payload(LanePayloadRead::from_verified(
+                            bytes,
+                            budget.clone(),
+                            network,
+                            &genesis,
+                        )));
+                    }
+                    Ok(())
+                })
+                .map_err(invalid)?;
+            if let Some(receipt) = receipt {
+                if self.next == self.height && !receipt.matches_original_tip(self.original_tip) {
+                    return Err(invalid(
+                        "verified authority prefix differs from original native execution result",
+                    ));
+                }
+                if selected.observe(receipt.block().header().height().get(), receipt.lanes())? {
+                    *authority = Some(AuthorityRead::Payload(LanePayloadRead::from_verified(
+                        bytes,
+                        budget.clone(),
+                        network,
+                        &receipt,
+                    )));
+                }
+            } else {
+                *genesis_bytes = Some(bytes);
             }
             self.current = None;
             self.next = self
@@ -146,12 +224,66 @@ impl HistoryScan {
                 .checked_add(1)
                 .ok_or_else(|| invalid("native authority height exhausted"))?;
         }
-        self.archive.recheck_namespace().map_err(archive_error)
+        self.archive
+            .as_ref()
+            .expect("complete namespace")
+            .recheck_namespace()
+            .map_err(archive_error)?;
+        if !self.selected.is_active(self.height) {
+            self.authority = None;
+            return Ok(());
+        }
+        loop {
+            match self.authority.take().expect("selected original creation") {
+                AuthorityRead::Payload(read) => match read.authenticate() {
+                    Ok(source) => {
+                        self.authority = Some(AuthorityRead::Config(LaneAuthorityRead::new(
+                            source,
+                            self.incarnation,
+                        )))
+                    }
+                    Err((read, error)) => {
+                        self.authority = Some(AuthorityRead::Payload(read));
+                        return Err(payload_error(error));
+                    }
+                },
+                AuthorityRead::Config(read) => match read.complete(&self.budget) {
+                    Ok(owner) => self.authority = Some(AuthorityRead::Ready(owner)),
+                    Err((read, error)) => {
+                        self.authority = Some(AuthorityRead::Config(read));
+                        return Err(payload_error(error));
+                    }
+                },
+                ready @ AuthorityRead::Ready(_) => {
+                    self.authority = Some(ready);
+                    return self
+                        .archive
+                        .as_ref()
+                        .expect("same completed namespace")
+                        .recheck_namespace()
+                        .map_err(archive_error);
+                }
+            }
+        }
     }
 
-    pub(super) fn finish(self) -> Option<SumeragiLaneRecord> {
-        self.selected.finish(self.height)
+    pub(super) fn finish(self) -> Option<LaneAuthority> {
+        match self.authority {
+            Some(AuthorityRead::Ready(owner)) => Some(owner),
+            _ => None,
+        }
     }
+}
+
+fn payload_error(error: LanePayloadError) -> io::Error {
+    io::Error::new(
+        if error.is_local_refusal() {
+            io::ErrorKind::WouldBlock
+        } else {
+            io::ErrorKind::InvalidData
+        },
+        error,
+    )
 }
 
 fn archive_error(error: NativeContextArchiveError) -> io::Error {

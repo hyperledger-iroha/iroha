@@ -22,7 +22,7 @@ use iroha_data_model::{
 use iroha_sumeragi::{
     crypto::{AttestOutcome, AttestationVerifier, Attestor, verify_attestations},
     message::{AttestationSignature, BlockHeader, CommitAttestation, Qc, ResultWitness},
-    preimage::{AttestationStatement, att_preimage},
+    preimage::AttestationStatement,
     types::{Committee, Hash32, PublicKey, ValidatorIndex},
 };
 use std::sync::{Mutex, TryLockError};
@@ -586,6 +586,7 @@ mod tests {
         test_chain::{CertifiedTestChain, Signers},
     };
     use iroha_crypto::{Hash, HashOf};
+    use iroha_sumeragi::preimage::att_preimage;
 
     #[test]
     fn native_mint_witness_requires_independent_tip_and_actual_pasta_equations() {

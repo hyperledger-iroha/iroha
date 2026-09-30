@@ -198,6 +198,7 @@ testDependencies.append(bridgeDependency)
 // unrelated compatibility archives twice in executable consumers.
 irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-force-lNoritoBridge"], .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("Metal", .when(platforms: [.iOS, .macOS])))
 
 var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),

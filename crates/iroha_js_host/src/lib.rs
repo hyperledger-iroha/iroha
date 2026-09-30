@@ -95,7 +95,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
 use iroha_storage_client::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
@@ -364,9 +364,9 @@ pub fn validation_fee_verify_current_policy_proof_v1(
     trusted_checkpoint_norito: Uint8Array,
     network_prefix: f64,
 ) -> napi::Result<ValidationFeeVerifiedPageV1> {
+    const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
     let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
     if proof_norito.is_empty() || proof_norito.len() > MAX_PROOF_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -457,12 +457,12 @@ pub fn validation_fee_verify_hijiri_quote_response_v1(
     request_norito: Uint8Array,
     network_prefix: f64,
 ) -> napi::Result<String> {
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     const MAX_REQUEST_BYTES: usize =
         iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
     const MAX_RESPONSE_BYTES: usize =
         iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1;
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     if request_norito.is_empty() || request_norito.len() > MAX_REQUEST_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -1511,12 +1511,12 @@ pub fn inspect_subscription_trigger_action(
     encoded_action: String,
     network_prefix: f64,
 ) -> napi::Result<String> {
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     use iroha_data_model::{
         events::EventFilterBox,
         subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
     };
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let action: Action =
         json::from_value(json::Value::String(encoded_action)).map_err(norito_to_napi)?;
     let Executable::Ivm(bytecode) = action.executable() else {
@@ -7901,7 +7901,7 @@ mod tests {
             .expect("canonical Pending status");
 
         for invalid in [
-            br#"{}"#.as_slice(),
+            br"{}".as_slice(),
             br#"{"state":"pending","value":{"operation_id":"00"}}"#.as_slice(),
         ] {
             assert!(
@@ -9493,14 +9493,14 @@ seiyaku Privacy {
         let (_alg, private_key) = keypair.private_key().to_bytes();
         let public_key = public_key.to_vec();
         let signature = crypto_sign(
-            "mldsa".to_owned(),
+            Algorithm::MlDsa.as_static_str().to_owned(),
             Uint8Array::from(private_key),
             Uint8Array::from(message.to_vec()),
         )
         .expect("crypto sign");
         assert!(
             crypto_verify(
-                "mldsa".to_owned(),
+                Algorithm::MlDsa.as_static_str().to_owned(),
                 Uint8Array::from(public_key.clone()),
                 Uint8Array::from(message.to_vec()),
                 Uint8Array::from(signature.as_ref().to_vec()),
@@ -9518,7 +9518,7 @@ seiyaku Privacy {
             ("all-zero", vec![0_u8; signature.as_ref().len()]),
         ] {
             let verified = crypto_verify(
-                "mldsa".to_owned(),
+                Algorithm::MlDsa.as_static_str().to_owned(),
                 Uint8Array::from(public_key.clone()),
                 Uint8Array::from(message.to_vec()),
                 Uint8Array::from(malformed),
@@ -9766,9 +9766,21 @@ seiyaku Privacy {
             "CastZkBallot" => norito_json!({
                 "CastZkBallot": norito_json!({ "election_id": selector })
             }),
-            "CastPlainBallot" => norito_json!({
-                "CastPlainBallot": norito_json!({ "referendum_id": selector })
-            }),
+            "CastPlainBallot" => {
+                let mut value = cast_plain_ballot_json(
+                    &sample_account("wonderland"),
+                    json::Value::String("1".to_owned()),
+                );
+                value
+                    .get_mut("CastPlainBallot")
+                    .and_then(json::Value::as_object_mut)
+                    .expect("complete plain ballot fixture")
+                    .insert(
+                        "referendum_id".to_owned(),
+                        json::Value::String(selector.to_owned()),
+                    );
+                value
+            }
             "CreateElection" => norito_json!({
                 "zk": norito_json!({
                     "CreateElection": norito_json!({ "election_id": selector })
@@ -10619,7 +10631,7 @@ seiyaku Privacy {
         let commitment = KaigiParticipantCommitment {
             commitment: KaigiAuthorizationScalarV1::from_le_bytes(buf).unwrap(),
         };
-        let option = Some(commitment.clone());
+        let option = Some(commitment);
         let bytes = option.encode();
         let mut cursor = Cursor::new(bytes.as_slice());
         let decoded: Option<KaigiParticipantCommitment> =
@@ -13008,19 +13020,37 @@ seiyaku Privacy {
             public_key: Buffer::from(public_key_bytes.to_vec()),
             authority: authority_i105.clone(),
         };
-        let retired_builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
-            .expect("decode baseline payload");
-        let retired_hash = retired_builder.payload_hash_bytes();
-        let retired_signature = Signature::try_new(authority_key.private_key(), &retired_hash)
-            .expect("sign exact retired intent");
+        // The retired layout carried an admission-intent field after fee payment.
+        // Insert that actual extra field; an unchanged current payload is valid.
+        let flags = norito::core::default_encode_flags();
+        let canonical = built.payload_bytes.as_ref();
+        let mut after_fee = 0;
+        for _ in 0..7 {
+            let (len, prefix) =
+                norito::core::read_len_from_slice_with_flags(&canonical[after_fee..], flags)
+                    .expect("canonical transaction field length");
+            after_fee += prefix + len;
+        }
+        let mut retired_bytes = canonical[..after_fee].to_vec();
+        norito::core::write_len_to_vec_with_flags(&mut retired_bytes, 4, flags);
+        retired_bytes.extend_from_slice(&0_u32.to_le_bytes());
+        retired_bytes.extend_from_slice(&canonical[after_fee..]);
+        let retired_hash = Hash::new(&retired_bytes);
+        let retired_signature =
+            Signature::try_new(authority_key.private_key(), retired_hash.as_ref())
+                .expect("sign exact retired layout");
         let mut retired = valid_input();
-        retired.payload_bytes = Buffer::from(retired_builder.encode_payload());
-        retired.payload_hash_hex = Some(hex::encode(retired_hash));
+        retired.payload_bytes = Buffer::from(retired_bytes);
+        retired.payload_hash_hex = Some(hex::encode(retired_hash.as_ref()));
         retired.signature = Buffer::from(retired_signature.payload().to_vec());
         let error = finalize_signed_transaction(retired)
             .err()
-            .expect("retired intent must reject");
-        assert!(error.reason.contains("requires Ordinary admission intent"));
+            .expect("retired transaction layout must reject");
+        assert!(
+            error
+                .reason
+                .contains("invalid canonical transaction payload")
+        );
         let mut missing_authority = valid_input();
         missing_authority.authority.clear();
         assert!(finalize_signed_transaction(missing_authority).is_err());
@@ -14150,7 +14180,7 @@ seiyaku Privacy {
             })
         });
         let error = value_to_instruction(defaults).expect_err("native account requires metadata");
-        assert_eq!(error.status, napi::Status::GenericFailure);
+        assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("metadata"));
         let mut unknown_account_json = account_json.clone();
         unknown_account_json

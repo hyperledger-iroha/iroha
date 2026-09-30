@@ -107,8 +107,14 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
     func testNativeIngressAcceptsOnlyTheVersionedExactSignedTopUp() throws {
         let key = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
         let authority = try AccountId.makeI105(publicKey: key.publicKey())
-        let request = try kagemushaTopUpRequest(payer: authority)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let request = try KagemushaNoritoV1.decodeTopUpRequestShapeExact(Data(contentsOf:
+            root.appendingPathComponent("fixtures/offline/kagemusha_top_up_request_v1.nrt")))
+        XCTAssertEqual(request.payer, try KagemushaAccountIDV1(authority))
         let envelope = try build(request, authority: authority, signingKey: key)
+        XCTAssertNotNil(NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito),
+            "The native canonical transaction decoder must accept the authored carrier")
         let prepared = try KagemushaPreparedTopUpSubmissionV1(
             signedTransaction: envelope.norito, expectedRequest: request)
         XCTAssertEqual(prepared.signedTransactionBytes, envelope.norito)
@@ -123,6 +129,19 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         tampered[tampered.index(before: tampered.endIndex)] ^= 1
         XCTAssertThrowsError(try KagemushaPreparedTopUpSubmissionV1(
             signedTransaction: tampered, expectedRequest: request)) {
+            XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
+        }
+    }
+
+    func testNativeIngressRejectsInventedIssuanceAndCreditIDs() throws {
+        let key = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
+        let authority = try AccountId.makeI105(publicKey: key.publicKey())
+        // This authoring fixture binds the same IDs everywhere but does not derive them.
+        // Native ingress must still reject it; structural SDK encoding grants no authority.
+        let request = try kagemushaTopUpRequest(payer: authority)
+        let envelope = try build(request, authority: authority, signingKey: key)
+        XCTAssertThrowsError(try KagemushaPreparedTopUpSubmissionV1(
+            signedTransaction: envelope.norito, expectedRequest: request)) {
             XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
         }
     }

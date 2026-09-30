@@ -102,11 +102,12 @@ fn disjoint_builder() -> Result<NetworkBuilder> {
         }))
 }
 
-/// Check actual signer ownership on every running process, including global observers of lanes.
-fn ready_frontiers(network: &Network) -> Result<[u64; 2]> {
+/// Check signer ownership on the original observed processes, including global lane observers.
+fn ready_frontiers(network: &Network, peers: &[&NetworkPeer]) -> Result<[u64; 2]> {
+    ensure!(!peers.is_empty(), "no peers selected for lane progress");
     let mut minimum = [u64::MAX; 2];
     let mut maximum = [0; 2];
-    for peer in network.all_peers().filter(|peer| peer.is_running()) {
+    for peer in peers {
         let key = peer
             .bls_public_key()
             .ok_or_else(|| eyre!("missing BLS key"))?;
@@ -154,9 +155,23 @@ fn ready_frontiers(network: &Network) -> Result<[u64; 2]> {
 }
 
 fn wait_frontiers(network: &Network, at_least: [u64; 2]) -> Result<[u64; 2]> {
+    wait_frontiers_with_stopped(network, at_least, &[])
+}
+
+/// Omit only the explicitly stopped seats, never a process that unexpectedly exited.
+fn wait_frontiers_with_stopped(
+    network: &Network,
+    at_least: [u64; 2],
+    stopped: &[NetworkPeer],
+) -> Result<[u64; 2]> {
+    let peers: Vec<_> = network
+        .all_peers()
+        .filter(|peer| !stopped.iter().any(|stopped| stopped.id() == peer.id()))
+        .collect();
+    ensure!(!peers.is_empty(), "no peers selected for lane progress");
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        match ready_frontiers(network) {
+        match ready_frontiers(network, &peers) {
             Ok(frontiers)
                 if frontiers
                     .iter()
@@ -225,7 +240,11 @@ fn disjoint_lane_committees_keep_progress_when_one_stops_and_all_restart() -> Re
             "retained while its entire committee is stopped",
         )?;
         submit_lane_work(&network, 1, "continues with the other lane stopped")?;
-        let after = wait_frontiers(&network, [before[0], before[1] + 1])?;
+        let after = wait_frontiers_with_stopped(
+            &network,
+            [before[0], before[1] + 1],
+            &network.committee_validators()[..MEMBERS],
+        )?;
         // Already certified lane blocks may still merge after shutdown. The new carrier
         // submitted after every member stopped must remain pending while the other lane runs.
         ensure!(

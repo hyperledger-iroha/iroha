@@ -1,0 +1,252 @@
+//! Prepaid selected native authority, borrowing the original creation corpus and proofs.
+//!
+//! No full lane/World graph is decoded. Only the selected core committee and epoch acquire
+//! new storage. PoPs and unused parameter fields remain in the original authenticated bytes.
+//! Cryptographic admission caches and the original source decoder remain separate owners.
+
+mod raw;
+use raw::RawAuthority;
+
+use std::alloc::Layout;
+
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
+    RetainedPayload,
+};
+use iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier;
+use iroha_model_base::topology::LaneId;
+use iroha_sumeragi::types::{Committee, EpochConfig, EpochId, Hash32, HeightConfig, PublicKey};
+
+use super::{LanePayload, LanePayloadError};
+
+/// Original creation bytes and immutable selected incarnation, preserved across local refusal.
+pub(crate) struct LaneAuthorityRead {
+    source: LanePayload,
+    incarnation: [u8; 32],
+}
+impl LaneAuthorityRead {
+    pub(crate) fn new(source: LanePayload, incarnation: [u8; 32]) -> Self {
+        Self {
+            source,
+            incarnation,
+        }
+    }
+
+    fn prepare(&self, budget: &AllocationBudget) -> Result<AuthorityConfig, LanePayloadError> {
+        if !self.source.belongs_to(budget) {
+            return Err(LanePayloadError::Source);
+        }
+        let encoded = self
+            .source
+            .lane_record(&self.incarnation)?
+            .ok_or(LanePayloadError::Source)?;
+        let raw = RawAuthority::parse(encoded)?;
+        if raw.created != self.source.carrier().1 {
+            return Err(LanePayloadError::Source);
+        }
+        let context = raw.context()?;
+        let genesis = SumeragiLaneFrontier {
+            height: 0,
+            block_hash: iroha_crypto::Hash::new_from_chunks(&[
+                crate::sumeragi::lanes::LANE_GENESIS_TAG,
+                self.source.carrier().0.as_bytes(),
+                &raw.lane.as_u32().to_be_bytes(),
+                &self.incarnation,
+            ])
+            .into(),
+            result: context.0,
+        };
+        if raw.frontier()? != genesis {
+            return Err(LanePayloadError::Source);
+        }
+        let demand = raw.demand()?;
+        // Construction is declared before every detached value, so its ledger outlives all
+        // payload destruction on ordinary failure. An unwind conservatively retains credit.
+        let mut construction = Construction::new(demand, budget)?;
+        let mut members =
+            ChargedBuffer::from_reservation(raw.count, &mut construction.reservation)?;
+        raw.visit(|key, _pop| {
+            let mut bytes =
+                ChargedBuffer::from_reservation(key.len(), &mut construction.reservation)?;
+            bytes.append(key).map_err(|_| LanePayloadError::Source)?;
+            let key = PublicKey::new(construction.vector(bytes)?)
+                .map_err(|_| LanePayloadError::Source)?;
+            members
+                .try_push(key)
+                .map_err(|_| LanePayloadError::Source)?;
+            Ok(())
+        })?;
+        let committee =
+            Committee::new(construction.vector(members)?).map_err(|_| LanePayloadError::Source)?;
+        let epoch = construction.epoch(EpochConfig {
+            da_layout: raw.layout,
+            id: EpochId { epoch: 0, context },
+            authority_generation: context,
+            first_height: 0,
+            last_height: u64::MAX,
+            leader_seed: context,
+        })?;
+        let config = HeightConfig {
+            epoch,
+            committee,
+            params: raw.params.to_core(),
+        };
+        let config = construction.finish(config, budget)?;
+        Ok(AuthorityConfig {
+            config,
+            lane: raw.lane,
+        })
+    }
+
+    /// Retain the same source and selection on every error; no graph is allocated before its
+    /// complete exact demand is admitted. Success keeps both source and destination custody.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the original funded creation source without allocating on refusal"
+    )]
+    pub(crate) fn complete(
+        self,
+        budget: &AllocationBudget,
+    ) -> Result<LaneAuthority, (Self, LanePayloadError)> {
+        match self.prepare(budget) {
+            Ok(authority) => Ok(LaneAuthority {
+                source: self.source,
+                incarnation: self.incarnation,
+                authority,
+            }),
+            Err(error) => Err((self, error)),
+        }
+    }
+}
+
+struct AuthorityConfig {
+    config: RetainedPayload<HeightConfig>,
+    lane: LaneId,
+}
+
+/// Exact prepaid selected configuration and original immutable creation/proof bytes.
+/// This is a configuration owner, not a PoP verification cache or monetary admission.
+pub(crate) struct LaneAuthority {
+    source: LanePayload,
+    incarnation: [u8; 32],
+    authority: AuthorityConfig,
+}
+impl LaneAuthority {
+    pub(crate) fn config(&self) -> &HeightConfig {
+        self.authority.config.get()
+    }
+    pub(crate) fn lane(&self) -> LaneId {
+        self.authority.lane
+    }
+    #[cfg(test)]
+    pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.source.belongs_to(budget) && self.authority.config.belongs_to(budget)
+    }
+    /// Inspect exact original key/proof bytes without allocating a second credential graph.
+    /// The key borrow lasts only for this callback; its canonical compact encoding is scanned
+    /// into bounded stack storage. PoPs borrow the original retained creation record.
+    pub(crate) fn visit_members<'a>(
+        &'a self,
+        mut visit: impl FnMut(&[u8], &'a [u8]) -> Result<(), LanePayloadError>,
+    ) -> Result<(), LanePayloadError> {
+        let encoded = self
+            .source
+            .lane_record(&self.incarnation)?
+            .ok_or(LanePayloadError::Source)?;
+        RawAuthority::parse(encoded)?.visit(|key, pop| visit(key, pop))
+    }
+}
+
+fn array<T>(length: usize) -> Result<Layout, AllocationRefusal> {
+    Layout::array::<T>(length).map_err(|_| AllocationRefusal::DemandOverflow)
+}
+struct Demand {
+    bytes: usize,
+    charges: usize,
+}
+struct Construction {
+    reservation: AllocationReservation,
+    charges: Option<ChargedBuffer<AllocationCharge>>,
+}
+impl Drop for Construction {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            if let Some(charges) = self.charges.take() {
+                std::mem::forget(charges);
+            }
+        }
+    }
+}
+impl Construction {
+    fn new(demand: Demand, budget: &AllocationBudget) -> Result<Self, LanePayloadError> {
+        let mut reservation = budget.try_reserve_bytes(demand.bytes)?;
+        let charges = ChargedBuffer::from_reservation(demand.charges, &mut reservation)?;
+        Ok(Self {
+            reservation,
+            charges: Some(charges),
+        })
+    }
+    #[allow(
+        unsafe_code,
+        reason = "exact canonical fields retain their original ledger until destruction"
+    )]
+    fn vector<T>(&mut self, original: ChargedBuffer<T>) -> Result<Vec<T>, LanePayloadError> {
+        // SAFETY: every caller immediately moves the exact backing into an immutable field
+        // declared after this construction guard. No capacity mutation or escape is exposed.
+        let (values, charge) = unsafe { original.into_allocation_parts() };
+        if let Err(charge) = self
+            .charges
+            .as_mut()
+            .expect("construction ledger")
+            .try_push(charge)
+        {
+            std::mem::forget(charge);
+            return Err(LanePayloadError::Source);
+        }
+        Ok(values)
+    }
+    #[allow(
+        unsafe_code,
+        reason = "one prepaid epoch allocation moves unchanged into its canonical Box"
+    )]
+    fn epoch(&mut self, epoch: EpochConfig) -> Result<Box<EpochConfig>, LanePayloadError> {
+        let mut original = ChargedBuffer::from_reservation(1, &mut self.reservation)?;
+        original
+            .try_push(epoch)
+            .map_err(|_| LanePayloadError::Source)?;
+        let values = self.vector(original)?;
+        // SAFETY: length and capacity are exactly one; into_boxed_slice cannot resize.
+        // A one-element slice has the same layout as its element. The immutable returned
+        // epoch stays paired with this guard's exact charge, including all failure paths.
+        let pointer = Box::into_raw(values.into_boxed_slice()).cast::<EpochConfig>();
+        Ok(unsafe { Box::from_raw(pointer) })
+    }
+    #[allow(
+        unsafe_code,
+        reason = "all selected config allocations are exact prepaid immutable fields"
+    )]
+    fn finish(
+        mut self,
+        config: HeightConfig,
+        budget: &AllocationBudget,
+    ) -> Result<RetainedPayload<HeightConfig>, LanePayloadError> {
+        if self.reservation.remaining_bytes() != 0 {
+            drop(config);
+            return Err(LanePayloadError::Source);
+        }
+        let charges = self.charges.take().expect("complete construction ledger");
+        // SAFETY: each committee/key backing and the sole epoch Box is immutable, was
+        // allocated from an exact split above, and has exactly one original ledger entry.
+        match unsafe { RetainedPayload::try_new(config, charges, budget) } {
+            Ok(owner) => Ok(owner),
+            Err((config, charges, _)) => {
+                drop(config);
+                drop(charges);
+                Err(LanePayloadError::Source)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

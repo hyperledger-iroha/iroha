@@ -3,13 +3,14 @@ use iroha_data_model::transaction::TransactionSubmissionReceipt;
 
 #[test]
 fn fee_sponsor_program_ids_require_exact_canonical_literals() {
-    let sponsor_literal = taira_i105_from_seed(0x74);
+    let sponsor_literal = canonical_i105_from_seed(0x74);
     let literal = format!("{sponsor_literal}/retail");
     let parsed = parse_fee_sponsor_program_id(&literal).expect("program id parses");
     assert_eq!(parsed.sponsor, sample_account(0x74));
     assert_eq!(parsed.name.as_ref(), "retail");
     assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
     assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
+    assert!(parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err());
 }
 #[test]
 fn i105_discriminant_hint_decodes_valid_literals_only() {
@@ -190,8 +191,8 @@ fn bind_test_network_privacy_capability(
     protocol_id: PrivacyProtocolIdV1,
 ) {
     builder.privacy_capability_manifest = Some(
-        crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
-            protocol_id,
+        crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
+            protocol_id, builder.network_id,
         ),
     );
 }
@@ -470,6 +471,20 @@ fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
             .expect("servable is boolean");
         assert_eq!(state, "fresh");
         assert!(servable);
+    });
+}
+
+#[test]
+fn sorafs_alias_proof_fixture_rejects_bad_cid_and_expiry_overflow() {
+    ensure_python();
+    Python::attach(|py| {
+        let malformed = PyDict::new(py);
+        malformed.set_item("manifest_cid_hex", "aabb").unwrap();
+        assert!(sorafs_alias_proof_fixture_py(py, Some(&malformed)).is_err());
+        let overflow = PyDict::new(py);
+        overflow.set_item("generated_at_unix", u64::MAX).unwrap();
+        let error = sorafs_alias_proof_fixture_py(py, Some(&overflow)).unwrap_err();
+        assert!(error.to_string().contains("overflows the default alias expiry"));
     });
 }
 #[test]

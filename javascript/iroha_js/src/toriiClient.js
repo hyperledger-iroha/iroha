@@ -155,6 +155,17 @@ import {
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
+import {
+  assertSorafsOrderbookFixedHeaders,
+  createSorafsOrderbookSubmissionDeadline,
+  prepareSorafsOrderbookSubmission,
+  sorafsOrderbookHeaderFingerprint,
+  validateSorafsOrderbookSubmissionTransport,
+} from "./sorafsOrderbookPreflight.js";
+import {
+  normalizeValidationFeeCheckpointV1,
+  normalizeValidationFeeLedgerBindingV1,
+} from "./validationFeeTrust.js";
 import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
@@ -3373,17 +3384,6 @@ export class ToriiClient {
     options,
   ) {
     const signingContext = requireLocalDraftSigningContext(this._localSigningContext, "getValidationFeeCurrentPolicyProofPage");
-    const {
-      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
-      VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
-      createValidationFeeConsensusApi,
-      normalizeValidationFeeCheckpointV1,
-      normalizeValidationFeeLedgerBindingV1,
-    } = await loadToriiOptionalModule();
-    const {
-      encodeValidationFeeCurrentPolicyProofRequestV1,
-      verifyValidationFeeCurrentPolicyProofV1,
-    } = createValidationFeeConsensusApi(this._nativeRuntime);
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedCheckpoint =
       checkpoint === null || checkpoint === undefined
@@ -3393,10 +3393,21 @@ export class ToriiClient {
       options,
       "getValidationFeeCurrentPolicyProofPage",
     );
+    const sendRequest = this._request.bind(this);
+    const nativeRuntime = this._nativeRuntime;
+    const {
+      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+      VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+      createValidationFeeConsensusApi,
+    } = await loadToriiOptionalModule();
+    const {
+      encodeValidationFeeCurrentPolicyProofRequestV1,
+      verifyValidationFeeCurrentPolicyProofV1,
+    } = createValidationFeeConsensusApi(nativeRuntime);
     const request = encodeValidationFeeCurrentPolicyProofRequestV1(
       normalizedCheckpoint,
     );
-    const response = await this._request(
+    const response = await sendRequest(
       "POST",
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       {
@@ -3444,10 +3455,6 @@ export class ToriiClient {
    * promotion is required; this convenience method promotes only in memory.
    */
   async catchUpValidationFeeCurrentPolicyProof(binding, options) {
-    const {
-      normalizeValidationFeeCheckpointV1,
-      normalizeValidationFeeLedgerBindingV1,
-    } = await loadToriiOptionalModule();
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -3458,15 +3465,22 @@ export class ToriiClient {
       new Set(["checkpoint", "maxPages", "signal", CANONICAL_AUTH_FIELD]),
       "catchUpValidationFeeCurrentPolicyProof options",
     );
+    const selectedCheckpoint = normalizedOptions.checkpoint;
+    const selectedMaxPages = normalizedOptions.maxPages;
+    const { signal } = normalizeSignalOption(normalizedOptions, "catchUpValidationFeeCurrentPolicyProof");
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      normalizedOptions.canonicalAuth, "catchUpValidationFeeCurrentPolicyProof.canonicalAuth",
+    );
+    const readPage = this.getValidationFeeCurrentPolicyProofPage.bind(this);
     let checkpoint =
-      normalizedOptions.checkpoint === undefined
+      selectedCheckpoint === undefined
         ? normalizedBinding.checkpoint
-        : normalizeValidationFeeCheckpointV1(normalizedOptions.checkpoint);
+        : normalizeValidationFeeCheckpointV1(selectedCheckpoint);
     const maxPages =
-      normalizedOptions.maxPages === undefined
+      selectedMaxPages === undefined
         ? 4096
         : ToriiClient._normalizeUnsignedInteger(
-            normalizedOptions.maxPages,
+            selectedMaxPages,
             "catchUpValidationFeeCurrentPolicyProof.maxPages",
             { allowZero: false },
           );
@@ -3474,10 +3488,10 @@ export class ToriiClient {
       rejectType("catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096");
     }
     for (let pagesVerified = 1; pagesVerified <= maxPages; pagesVerified += 1) {
-      const page = await this.getValidationFeeCurrentPolicyProofPage(
+      const page = await readPage(
         normalizedBinding,
         checkpoint,
-        { signal: normalizedOptions.signal, canonicalAuth: normalizedOptions.canonicalAuth },
+        { signal, canonicalAuth },
       );
       if (
         page.projection.evaluated_block_height < page.projection.trusted_checkpoint_height ||
@@ -11012,16 +11026,6 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
-    const {
-      assertSorafsOrderbookFixedHeaders,
-      createSorafsOrderbookSubmissionDeadline,
-      prepareSorafsOrderbookSubmission,
-      sorafsOrderbookHeaderFingerprint,
-      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-      validateSorafsOrderbookSubmissionTransport,
-      validateSorafsOrderbookSubmissionHeaders,
-      verifySorafsOrderbookSubmissionReceipt,
-    } = await loadToriiOptionalModule();
     const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
     const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
       rejectType(`${context} requires ToriiClient options.localSigningContext`);
@@ -11041,6 +11045,11 @@ export class ToriiClient {
     try {
       throwIfAborted(operation.signal);
       await waitForPromiseWithSignal(validateDataModel(operation.signal), operation.signal);
+      const {
+        SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+        validateSorafsOrderbookSubmissionHeaders,
+        verifySorafsOrderbookSubmissionReceipt,
+      } = await waitForPromiseWithSignal(loadToriiOptionalModule(), operation.signal);
       throwIfAborted(operation.signal);
       assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
       if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {

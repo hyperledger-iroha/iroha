@@ -380,7 +380,6 @@ function assertContractCallPayloadJson(body, expected, label) {
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
-    "contract_address",
     "contract_alias",
     "entrypoint",
   ]) {
@@ -10758,23 +10757,10 @@ function replaceJsonStringPlaceholder(text, placeholder, integerToken) {
 
 
 
-test("autonomous diagnostics declarations expose provisional and optional identities", () => {
+test("retired autonomous pipeline diagnostics are absent from the public declarations", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
-  const match = declarations.match(
-    /export interface ToriiSumeragiAutonomousLaneExecution \{([\s\S]*?)\n\}/u,
-  );
-  assert.ok(match, "missing ToriiSumeragiAutonomousLaneExecution declaration");
-  for (const field of [
-    "proposal_view: ToriiU64 | null;",
-    "reservation_owner_hash: string;",
-    "proposal_identity_hash: string;",
-    "reservation_group_hash: string;",
-    "proposal_hash: string | null;",
-    "descriptor_hash: string | null;",
-  ]) {
-    assert.ok(match[1].includes(field), `missing declaration: ${field}`);
-  }
-  assert.match(declarations, /\| "awaiting_executable_payload"/u);
+  assert.doesNotMatch(declarations, /ToriiSumeragiAutonomousLaneExecution|autonomous_lane_executions/u);
+  assert.doesNotMatch(declarations, /\| "awaiting_executable_payload"/u);
 });
 
 
@@ -18081,6 +18067,7 @@ test("registerContractCode posts manifest JSON", async () => {
         { name: "Votes", type_name: "StateMap<Name, bool>" },
       ],
       error_types: null,
+      error_messages: null,
       kotoba: [
         {
           msg_id: "contract.title",
@@ -19828,7 +19815,7 @@ test("proposeMultisig binds every unsigned payload to local caller intent", asyn
   );
   const replacedMetadata = draftWithReplacedTransactionField(
     trustedDraft,
-    8,
+    7,
     alternateMetadata,
   );
   await assert.rejects(

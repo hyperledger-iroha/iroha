@@ -36,7 +36,7 @@ pub use iroha_data_model::sumeragi_finality::{
 
 mod epoch_graph;
 mod execution;
-pub(crate) use execution::{authenticate_successor_context, validate_executed_genesis};
+pub(crate) use execution::authenticate_successor_context;
 mod retained;
 pub(crate) use epoch_graph::NativeExecutionInputs;
 pub use epoch_graph::{

@@ -843,16 +843,25 @@ fn cancelled_lane_read_finishes_original_custody_before_a_different_height() {
         assert_eq!(budget.reserved_bytes(), 0);
         let raw = usize::try_from(fs::metadata(path).unwrap().len()).unwrap();
         budget.set_limit_bytes(raw);
-        assert_eq!(store.committed_body(1).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            store.committed_body(1).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         assert_eq!(budget.reserved_bytes(), raw);
         // The worker can cancel height one while this store still owns its refused read.
         // New metadata and payload requests must preserve that owner until it completes.
-        assert_eq!(store.entry(2).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            store.entry(2).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);
         assert_eq!(budget.reserved_bytes(), raw);
         budget.set_limit_bytes(1 << 25);
         if invalid_certificate {
-            assert_eq!(store.committed_body(2).unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(
+                store.committed_body(2).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
             assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);
         } else {
             let (body, certificate) = store.committed_body(2).unwrap().unwrap();

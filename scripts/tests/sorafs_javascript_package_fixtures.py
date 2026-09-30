@@ -17,7 +17,7 @@ CHECKSUM = b'{"component_control":"opaque original manifest; not native qualific
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js", "numericV1.js",
-    "strictLosslessJson.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
+    "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
     "smartContractDeploymentSubmit.js", "sumeragiTyped.js", "tairaTestnetProfile.js",
     "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js", "kotodamaCompiler/index.js",
     "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js", "kotodamaCompiler/nativeBridge.js",

@@ -51,8 +51,9 @@ pub struct JsKaigiAuthorizationProofV1 {
     pub proof: Buffer,
 }
 
+/// Decode exact native identities and sequence values for the typed N-API context.
 #[allow(clippy::too_many_arguments)] // Fixed context fields mirror the typed N-API boundary.
-pub(super) fn parse_context(
+pub fn parse_context(
     network: &[u8],
     domain: &str,
     call_name: &str,
@@ -283,6 +284,8 @@ mod tests {
 
     #[test]
     fn canonical_context_rejects_lossy_sequence_and_wrong_roles_and_binds_all_identities() {
+        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+
         let base = fixture_context();
         let network =
             NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([3; 32])));
@@ -336,7 +339,6 @@ mod tests {
         assert_eq!(maximum.participation_sequence, u64::MAX);
         let other = context(BigInt::from(1_u64), "join", &account(4).to_string()).unwrap();
         assert_ne!(other.subject_id, base.subject_id);
-        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
         let members: Vec<_> = (1..=24)
             .map(|seed| {
                 MultisigMember::new(account(seed).expect_single_signatory().clone(), 1).unwrap()

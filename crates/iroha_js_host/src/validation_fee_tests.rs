@@ -85,8 +85,17 @@ fn assert_validation_fee_policy_instruction_roundtrip(
     let framed =
         iroha_data_model::isi::frame_instruction_payload(WIRE_ID, original_dyn_bytes.as_slice())
             .expect("frame validation-fee instruction");
-    let decoded =
-        decode_instruction_aligned(&framed).expect("decode framed validation-fee instruction");
+    assert!(
+        decode_instruction_aligned(&framed).is_err(),
+        "a concrete instruction frame is not a public InstructionBox frame"
+    );
+    let typed = iroha_data_model::isi::decode_instruction_from_pair(WIRE_ID, &framed)
+        .expect("decode registered concrete validation-fee instruction");
+    assert_eq!(InstructionTrait::dyn_encode(&*typed), original_dyn_bytes);
+    let public_frame = norito::encode_canonical(&instruction)
+        .expect("frame public validation-fee InstructionBox");
+    let decoded = decode_instruction_aligned(&public_frame)
+        .expect("decode public validation-fee InstructionBox");
     assert_eq!(
         InstructionTrait::id(&*decoded),
         InstructionTrait::id(&*instruction)
@@ -101,7 +110,10 @@ fn assert_validation_fee_policy_instruction_roundtrip(
     let json_payload = json::to_json(&json_value).expect("encode validation-fee JSON");
     let reconstructed =
         value_to_instruction(json_value).expect("rebuild validation-fee instruction");
-    assert_eq!(InstructionTrait::id(&*reconstructed), WIRE_ID);
+    assert_eq!(
+        iroha_data_model::isi::instruction_wire_id(&reconstructed),
+        Some(WIRE_ID)
+    );
     assert_eq!(
         InstructionTrait::dyn_encode(&*reconstructed),
         original_dyn_bytes,
@@ -133,7 +145,10 @@ fn assert_validation_fee_policy_instruction_roundtrip(
         .iter()
         .next()
         .expect("validation-fee draft instruction");
-    assert_eq!(InstructionTrait::id(&**rebuilt), WIRE_ID);
+    assert_eq!(
+        iroha_data_model::isi::instruction_wire_id(rebuilt),
+        Some(WIRE_ID)
+    );
     assert_eq!(
         InstructionTrait::dyn_encode(&**rebuilt),
         original_dyn_bytes,

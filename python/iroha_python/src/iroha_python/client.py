@@ -8559,7 +8559,7 @@ class VerifiedCommittedTransaction:
                 raise TypeError(
                     "verified transaction contract_rejection must be an object or null"
                 )
-            required_contract_fields = {"contract", "error_type", "schema_hash", "name", "code"}
+            required_contract_fields = {"contract", "error_type", "schema_hash", "name", "code", "message"}
             if set(contract_rejection_value) != required_contract_fields:
                 raise ValueError(
                     "verified transaction contract_rejection must contain exactly "
@@ -8596,6 +8596,16 @@ class VerifiedCommittedTransaction:
                     "verified transaction contract rejection code must be a non-zero u32"
                 )
             contract_error_code = contract_error_code_value
+            contract_error_message = contract_rejection_value["message"]
+            if contract_error_message is not None:
+                try:
+                    contract_error_message = ContractErrorMessage.from_payload({
+                        "error_type": contract_error_type,
+                        "code": contract_error_code,
+                        "message": contract_error_message,
+                    }).message
+                except (TypeError, ValueError) as error:
+                    raise TypeError(f"verified transaction contract rejection message: {error}") from error
             if rejection_code != contract_error_name:
                 raise ValueError(
                     "verified transaction rejection_code must equal the "
@@ -8607,6 +8617,7 @@ class VerifiedCommittedTransaction:
                 "schema_hash": tuple(contract_schema_hash),
                 "name": contract_error_name,
                 "code": contract_error_code,
+                "message": contract_error_message,
             }
         raw_batch_outcomes = payload.get("batch_outcomes")
         if not isinstance(raw_batch_outcomes, list):

@@ -679,11 +679,11 @@ function proofPageClient(response, verifyProof = () => {
   assert.fail("rejected proof responses must not reach the native verifier");
 }) {
   const native = {
-    connectNoritoBridgeAbiVersion: () => 24,
+    connectNoritoBridgeAbiVersion: () => 25,
     validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([1, 2, 3]),
     validationFeeVerifyCurrentPolicyProofV1(proofNorito) {
       verifyProof(proofNorito);
-      return JSON.stringify(completeVerifiedProjection());
+      return nativePage(completeVerifiedProjection());
     },
   };
   const client = new ToriiClient("https://torii.invalid", {
@@ -722,7 +722,8 @@ test("Torii validation-fee proof pages accept an exact-bound streamed response",
   const page = await fetchProofPage(client);
   assert.equal(verifiedLength, PROOF_RESPONSE_MAX_BYTES);
   assert.equal(page.proofNorito.length, PROOF_RESPONSE_MAX_BYTES);
-  assert.equal(page.promotedCheckpoint.height, 127n);
+  assert.deepEqual(page.promotedCheckpoint.checkpointNorito, Buffer.from([127, 189]));
+  assert.equal(page.projection.evaluated_block_height, 127n);
   assert.equal(streamed.streamState.cancelled, false);
   assert.equal(streamed.streamState.released, true);
 });

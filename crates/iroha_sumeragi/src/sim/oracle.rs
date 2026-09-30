@@ -844,7 +844,7 @@ impl World {
     /// of the current committee are honest, running, and able to sign — a member with an
     /// unanchored key counts as faulty until it anchors, and one whose key abstains at its
     /// height counts as faulty there (R2, R6).
-    fn live_precondition(&self, inst: usize) -> bool {
+    pub(super) fn live_precondition(&self, inst: usize) -> bool {
         let height = self
             .replicas
             .iter()
@@ -1513,6 +1513,27 @@ impl World {
 
     // ---- end of run --------------------------------------------------------------------------
 
+    /// The same original progress baseline and height count used at completion and during
+    /// bounded observation. Restarted replicas retain their existing one-height requirement.
+    pub(super) fn progress_obligation(&self, r: usize) -> Option<(u64, u64)> {
+        let heal = self.heal_of(self.replicas[r].inst);
+        if !self.honest_running(r) || self.now < heal {
+            return None;
+        }
+        let started = self.machines[self.replicas[r].machine].started_at;
+        Some(if started > heal {
+            (
+                self.oracle.reps[r].at_start.unwrap_or(0),
+                1.min(self.checks.progress),
+            )
+        } else {
+            (
+                self.oracle.reps[r].at_heal.unwrap_or(0),
+                self.checks.progress,
+            )
+        })
+    }
+
     /// End-of-run checks: progress, P1 p99, P2/P4 frequencies, P5, O-TXP, O-CQ, O-MEM of the
     /// body stores.
     pub fn finish(&mut self) {
@@ -1523,24 +1544,10 @@ impl World {
                 return;
             }
             self.observe_core(r);
-            let inst = self.replicas[r].inst;
-            let heal = self.heal_of(inst);
-            if !self.honest_running(r) || self.now < heal {
+            let Some((base, expect)) = self.progress_obligation(r) else {
                 continue;
-            }
-            let started = self.machines[self.replicas[r].machine].started_at;
-            let base = if started > heal {
-                // Started after heal: progress counts from its store tip at the start.
-                self.oracle.reps[r].at_start.unwrap_or(0)
-            } else {
-                self.oracle.reps[r].at_heal.unwrap_or(0)
             };
             let progress = self.committed(r).saturating_sub(base);
-            let expect = if started > heal {
-                1.min(self.checks.progress)
-            } else {
-                self.checks.progress
-            };
             if progress < expect && self.checks.liveness {
                 return self.fail(format!(
                     "progress: honest replica {r} committed {progress} heights after heal (expected ≥ {expect})"

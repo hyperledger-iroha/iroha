@@ -604,7 +604,7 @@ def fault_payload(participants: int = 3) -> dict[str, Any]:
             "successful_leg_applications": participants,
             "each_leg_applied_exactly_once": True,
             "invalid_leg_state_byte_identical": True,
-            "replay_rejected": True,
+            "exact_retry_idempotent": True,
         },
         "all_nodes_converged": True,
     }

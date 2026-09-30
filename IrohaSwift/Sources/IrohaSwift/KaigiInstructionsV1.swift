@@ -754,7 +754,7 @@ private func kaigiCanonicalDomainID(_ value: String) throws -> String {
 private func kaigiRequireName(_ value: String, field: String) throws {
   guard !value.isEmpty,
     value.utf8.count <= 255,
-    value.precomposedStringWithCanonicalMapping == value,
+    value.utf8.elementsEqual(value.precomposedStringWithCanonicalMapping.utf8),
     value.unicodeScalars.allSatisfy({ scalar in
       scalar.properties.generalCategory != .control
         && !CharacterSet.whitespacesAndNewlines.contains(scalar)

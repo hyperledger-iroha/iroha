@@ -19,7 +19,8 @@ Purpose
       killed_by_test           at least one of its named tests failed (the §13.4 requirement);
       killed_by_scenario_only  its named tests passed, a listed scenario failed;
       survived                 nothing failed;
-      error                    it did not build, or a named test filter matched no test.
+      error                    build/execution failed, timed out, or a filter matched no
+                               executed test. A process failure is not a mutation kill.
 
     The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
     extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
@@ -410,11 +411,12 @@ MUTATIONS = [
 BY_ID = {mu.id: mu for mu in MUTATIONS}
 
 TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored)", re.M)
+TEST_COMPLETION = re.compile(r"^test result: (ok|FAILED)\. \d+ passed; \d+ failed;", re.M)
 
 
 @dataclass
 class Step:
-    status: str  # pass | fail | build-error | timeout | missing-test | skipped
+    status: str  # pass | fail | build-error | execution-error | timeout | missing-test | skipped
     seconds: float = 0.0
     failed: list = field(default_factory=list)
     ran: list = field(default_factory=list)
@@ -444,7 +446,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        out, _ = proc.communicate(timeout=timeout or None)
         code = proc.returncode
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -463,7 +465,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
 def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     code, out, elapsed = cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path)
     results = TEST_LINE.findall(out)
-    ran = sorted({name for name, _ in results})
+    ran = sorted({name for name, verdict in results if verdict != "ignored"})
     failed = sorted({name for name, verdict in results if verdict == "FAILED"})
     step = Step(status="pass", seconds=round(elapsed, 1), failed=failed, ran=ran,
                 log=str(log_path))
@@ -474,18 +476,23 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     elif "error[E" in out or "could not compile" in out:
         step.status = "build-error"
         step.detail = [line for line in out.splitlines() if line.startswith("error")][:5]
-    elif failed or code != 0:
+    elif code not in (0, 101) or (code != 0 and not failed):
+        step.status = "execution-error"
+        step.detail.append(f"cargo exited {code} without a normal completed test failure")
+    elif failed:
         step.status = "fail"
         seeds_failed = re.findall(r"failing seeds (\[[^\]]*\])", out)
         violations = re.findall(r"violation: (.*)", out)
         panics = re.findall(r"panicked at [^\n]*\n([^\n]*)", out)
         step.detail = (seeds_failed[:3] + violations[:3] + panics[:3])[:6]
-        if not failed:
-            step.detail.insert(0, f"cargo exited {code} without a failed test line")
     if missing and step.status in ("pass", "fail"):
-        step.detail.append(f"no test matched: {missing}")
-        if step.status == "pass":
-            step.status = "missing-test"
+        step.detail.append(f"no executed test matched: {missing}")
+        step.status = "missing-test"
+    if step.status in ("pass", "fail"):
+        expected = "FAILED" if step.status == "fail" else "ok"
+        if TEST_COMPLETION.findall(out) != [expected] or code != (101 if failed else 0):
+            step.status = "execution-error"
+            step.detail.append("cargo did not complete exactly one expected test harness")
     return step
 
 
@@ -520,16 +527,18 @@ def evaluate(args, target_dir, mu):
     named = run_step(args, target_dir, mu.id, mu.tests, None, args.timeout_test,
                      logs / f"{mu.id}.named.log")
     result["named"] = named.__dict__
-    killed_by_test = named.status in ("fail", "timeout")
+    killed_by_test = named.status == "fail"
     scen = None
     if mu.scenarios and not args.fast:
         filters = [SCENARIOS[s] for s in mu.scenarios]
         scen = run_step(args, target_dir, mu.id, filters, args.seeds, args.timeout_scenario,
                         logs / f"{mu.id}.scenario.log")
         result["scenario"] = scen.__dict__
-    killed_by_scenario = scen is not None and scen.status in ("fail", "timeout")
-    if named.status in ("build-error", "missing-test"):
+    killed_by_scenario = scen is not None and scen.status == "fail"
+    if named.status not in ("pass", "fail"):
         result.update(verdict="error", reason=f"named tests: {named.status}")
+    elif scen is not None and scen.status not in ("pass", "fail"):
+        result.update(verdict="error", reason=f"scenarios: {scen.status}")
     elif killed_by_test:
         result["verdict"] = "killed_by_test"
     elif killed_by_scenario:
@@ -584,14 +593,17 @@ def main():
     parser.add_argument("--strict", action="store_true",
                         help="also fail when a mutation is killed only by its scenario "
                              "(the literal §13.4 CI rule)")
-    parser.add_argument("--timeout-build", type=int, default=1800, help="seconds per build")
+    parser.add_argument("--timeout-build", type=int, default=1800,
+                        help="seconds per build (0 waits without terminating it)")
     parser.add_argument("--timeout-test", type=int, default=900,
-                        help="seconds per named-test run")
+                        help="seconds per named-test run (0 waits without terminating it)")
     parser.add_argument("--timeout-scenario", type=int, default=3600,
-                        help="seconds per scenario run")
+                        help="seconds per scenario run (0 waits without terminating it)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
     args.target_dir = args.target_dir.resolve()
+    if min(args.timeout_build, args.timeout_test, args.timeout_scenario) < 0:
+        parser.error("timeouts must be nonnegative; 0 waits without terminating a command")
 
     if args.list:
         for mu in MUTATIONS:

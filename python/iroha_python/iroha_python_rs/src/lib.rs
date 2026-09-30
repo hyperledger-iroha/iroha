@@ -23,7 +23,7 @@ use core::{
     time::Duration,
 };
 use futures::executor::block_on;
-use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
+use hex::encode as hex_encode;
 use iroha_core_privacy::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -153,7 +153,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity, XorQuantity},
@@ -2114,10 +2114,10 @@ fn sorafs_alias_proof_fixture_py(
             })?;
             parse_hex_bytes_py(&hex_str, "manifest_cid_hex")?
         } else {
-            vec![0xAA, 0xBB]
+            sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
         }
     } else {
-        vec![0xAA, 0xBB]
+        sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
     };
     if manifest_cid.is_empty() {
         return Err(PyValueError::new_err(
@@ -2137,7 +2137,13 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
+    let expires_default = || {
+        generated
+            .checked_add(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS)
+            .ok_or_else(|| {
+                PyValueError::new_err("generated_at_unix overflows the default alias expiry")
+            })
+    };
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {
@@ -2145,10 +2151,10 @@ fn sorafs_alias_proof_fixture_py(
             })?;
             secs
         } else {
-            expires_default
+            expires_default()?
         }
     } else {
-        expires_default
+        expires_default()?
     };
     if expires <= generated {
         return Err(PyValueError::new_err(
@@ -6942,18 +6948,49 @@ mod tests {
                 schema_hash,
                 name: "BelowMinimum".into(),
                 code: 18,
+                message: None,
             },
         ));
         assert_eq!(transaction_rejection_code(&contract), "BelowMinimum");
+        let schema_hash_bytes = schema_hash.to_vec();
         assert_eq!(
             transaction_contract_rejection_json(&contract),
             Some(norito::json!({
                 "contract": "BoiFiLiquidity",
                 "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
-                "schema_hash": schema_hash,
+                "schema_hash": schema_hash_bytes,
                 "name": "BelowMinimum",
                 "code": 18,
+                "message": null,
             }))
+        );
+    }
+    #[test]
+    fn contract_rejection_projection_preserves_boxed_identity_and_message() {
+        let reason = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
+            iroha_data_model::executor::ContractRejection {
+                contract: "決済".into(),
+                error_type: "example/pay@1::Settlement::PaymentError".into(),
+                schema_hash: [7; 32],
+                name: "BelowMinimum".into(),
+                code: 18,
+                message: Some("  支払額が不足しています。  ".into()),
+            },
+        ));
+        let value = transaction_contract_rejection_json(&reason).unwrap();
+        assert_eq!(
+            value.get("contract").and_then(json::Value::as_str),
+            Some("決済")
+        );
+        assert_eq!(
+            value.get("message").and_then(json::Value::as_str),
+            Some("  支払額が不足しています。  ")
+        );
+        assert_eq!(
+            transaction_contract_rejection_json(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("denied".into())
+            )),
+            None
         );
     }
     #[test]
@@ -11833,7 +11870,7 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     let mut value = json::Map::new();
     value.insert(
         "contract".into(),
-        json::Value::String(rejection.contract.clone()),
+        json::Value::String(rejection.contract.to_string()),
     );
     value.insert(
         "error_type".into(),
@@ -11851,6 +11888,15 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     );
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));
+    value.insert(
+        "message".into(),
+        rejection
+            .message
+            .as_deref()
+            .map_or(json::Value::Null, |message| {
+                json::Value::String(message.to_owned())
+            }),
+    );
     Some(json::Value::Object(value))
 }
 fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {

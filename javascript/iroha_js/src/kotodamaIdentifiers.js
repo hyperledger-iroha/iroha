@@ -213,22 +213,8 @@ export function isCanonicalKotodamaStructName(value) {
     (packageParts.length === 1 || component(packageParts[1]));
 }
 
-const KOTODAMA_V1_STATE_SCALAR_TYPES = new Set([
-  "int",
-  "decimal",
-  "quantity",
-  "bool",
-  "string",
-  "bytes",
-  "DataSpaceId",
-  "AccountId",
-  "AssetDefinitionId",
-  "AssetId",
-  "NftId",
-  "DomainId",
-  "Name",
-  "Json",
-]);
+// Durable scalar values add Json to the same canonical key-scalar vocabulary.
+const KOTODAMA_V1_STATE_SCALAR_TYPES = new Set([...KOTODAMA_V1_STATE_MAP_KEY_TYPES, "Json"]);
 const KOTODAMA_V1_MAX_TYPE_DEPTH = 256;
 const KOTODAMA_V1_MAX_TYPE_NODES = 256;
 

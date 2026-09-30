@@ -79,7 +79,7 @@ declare namespace Kagemusha {
       suiteId: Bytes; firmwarePolicyDigest: Bytes; policyEpoch: Unsigned; laneCommitment: Bytes;
       hardwareEpochId: Bytes; hardwareEpochGeneration: Unsigned; devicePublicKey: DevicePublicKey;
       deviceKeyReference: Bytes; issuedAtMs: Unsigned; expiresAtMs: Unsigned;
-      governanceSignature: DeviceSignature;
+      appPolicyBindingDigest: Bytes; governanceSignature: DeviceSignature;
     });
     readonly version: 1; readonly credentialId: Uint8Array; readonly networkId: NetworkId;
     readonly hardwareProfileId: Uint8Array; readonly suiteId: Uint8Array;
@@ -87,7 +87,7 @@ declare namespace Kagemusha {
     readonly laneCommitment: Uint8Array; readonly hardwareEpochId: Uint8Array;
     readonly hardwareEpochGeneration: bigint; readonly devicePublicKey: DevicePublicKey;
     readonly deviceKeyReference: Uint8Array; readonly issuedAtMs: bigint; readonly expiresAtMs: bigint;
-    readonly governanceSignature: DeviceSignature;
+    readonly appPolicyBindingDigest: Uint8Array; readonly governanceSignature: DeviceSignature;
   }
 
   class PastaStateCommitment {
