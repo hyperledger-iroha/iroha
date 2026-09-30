@@ -59,10 +59,12 @@ Completed results are scoped to these commands, rather than the full workspace:
 | Evidence and Defect schema tags against the actual codec | Passed |
 | Core commitment, release identity, beacon/replay, World root and allocation fixtures | 69 tests passed |
 | Data-model finality, compact result, caller decode budgets and wire-schema controls | 60 passed, 1 explicit exporter ignored |
+| Recompiled shared-fixture consumers plus finality/schema controls | 62 native-bridge and 85 data-model tests passed; 1 explicit exporter ignored |
 | Public-reset first boot, occupied predecessor, capture and admission | 30 tests passed |
 | Shared canonical finality checkpoints | 3 byte-identical captures; H1 27,575 bytes, H2 31,792 bytes |
 | Mochi configuration/supervision with the GUI feature enabled | 30 core tests and 29 GUI configuration tests passed |
 | Kagami native launcher consumption order | 2 tests passed |
+| Generated-genesis preparation and unchanged strict signing boundaries | 4 tests passed |
 | F35 local-queue asymmetry | 1,000 seeds passed; original four regression seeds retained |
 | F17 corrected catch-up scenario | All 20 default seeds passed |
 | Sumeragi instance telemetry | 7 unit tests passed |
@@ -76,11 +78,29 @@ Completed results are scoped to these commands, rather than the full workspace:
 | Workspace formatting and original project-history verification | Passed |
 
 The affected-target compilation passed for Core, CLI, daemon, Kagami, schema
-generator and both Mochi crates. Selected Core, CLI and data-model regressions
-have passed after the final compact result encoding and fixture repairs.
-Rebuilt shared-fixture consumers and the generated-genesis helper's dedicated
-boundary tests are still being completed; append their actual results before
-treating this as the final checkpoint.
+generator and both Mochi crates. Subsequent rebuilt Core, CLI, data-model,
+native-bridge, GUI and generated-genesis tests passed after the final source and
+fixture repairs. The dedicated genesis-helper graph also rebuilt Core, Torii and
+daemon dependencies. These are focused checks, not a full-workspace test run.
+
+The main Cargo invocations were:
+
+```sh
+CARGO_TARGET_DIR=target/wf-sim cargo test -p iroha_sumeragi --features sim --release --lib
+CARGO_TARGET_DIR=target/wf-core-tests cargo test -p connect_norito_bridge -p iroha_data_model --lib -- sumeragi_finality wire_schema kagemusha_mobile_bootstrap kagemusha_reserve_finality kagemusha_testnet_finality_chain kagemusha_testnet_native_mint_runtime validation_fee_policy_proof_bridge --test-threads=4
+CARGO_TARGET_DIR=target/wf-sdk2 cargo test -p mochi-core -p mochi-ui -p iroha_kagami --features mochi-ui/gui --lib --bins -- sumeragi invalid_first_release_inputs_fail_before_creating_the_data_root supervisor_exposes_config_overrides config::tests taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order --test-threads=4
+CARGO_TARGET_DIR=target/wf-sdk2 cargo test -p mochi-core -p mochi-ui -p iroha_kagami -p iroha_test_network --features mochi-ui/gui --lib --bins -- genesis_support::tests --test-threads=4
+```
+
+Core and CLI selections were also run directly from the fresh compiled test
+harnesses. Detailed local logs are under `/tmp/codex-sumeragi-*.log`; the checkpoint
+exporter's retained binary and three logs are identified by
+`fixtures/sumeragi/native-finality/capture.json` with exact hashes and an explicit
+unclean-source marker. This handoff run did not create a commit or a release
+artifact. While the final checks completed, the implementation appeared in
+commit `325be07de4` (`update sumeragi`); this final evidence update was written
+afterward. The tests and retained exporter ran from the preceding working tree,
+not from a sealed release build of that commit.
 
 ## Outstanding qualification and wider implementation
 
