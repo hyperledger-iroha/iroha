@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 
 use super::*;
+use crate::kagemusha_core_coordinator_v1::native_deadline::MAX_LIFETIME;
 use crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1;
 use iroha_data_model::kagemusha::{
     KagemushaMobileBootstrapApprovalV1, KagemushaMobileBootstrapPackageV1,
@@ -289,6 +290,7 @@ fn native_startup_provisioning_is_once_and_rejects_inherited_process_identity() 
 #[test]
 fn native_startup_c_contract_bounds_and_unprovisioned_activation() {
     let mut words = [0_u32; 2];
+    let oversized = vec![0; KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1 + 1];
     unsafe {
         assert_eq!(
             connect_norito_kagemusha_testnet_native_startup_contract_v1(words.as_mut_ptr(), 1),
@@ -299,7 +301,8 @@ fn native_startup_c_contract_bounds_and_unprovisioned_activation() {
             connect_norito_kagemusha_testnet_native_startup_contract_v1(words.as_mut_ptr(), 2),
             2
         );
-        assert_eq!(words, [1, 1_048_576]);
+        assert_eq!(words, [1, 72_351_744]);
+        assert_eq!(words[1] as usize, KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1);
         assert_eq!(
             connect_norito_kagemusha_testnet_native_startup_contract_v1(std::ptr::null_mut(), 2),
             ERR_KAGEMUSHA_V1
@@ -313,7 +316,10 @@ fn native_startup_c_contract_bounds_and_unprovisioned_activation() {
             ERR_KAGEMUSHA_V1
         );
         assert_eq!(
-            connect_norito_kagemusha_testnet_native_startup_activate_v1(b"x".as_ptr(), 1_048_577),
+            connect_norito_kagemusha_testnet_native_startup_activate_v1(
+                oversized.as_ptr(),
+                oversized.len(),
+            ),
             ERR_KAGEMUSHA_V1
         );
         assert_eq!(
@@ -370,6 +376,11 @@ fn native_startup_concurrent_dispatch_waits_for_final_publication_or_failure() {
     use std::{sync::mpsc, thread, time::Duration};
 
     for succeed in [false, true] {
+        // Construct the genuinely authenticated fixture before the publication
+        // synchronization window; fixture signing is not publication latency.
+        let ctx = context();
+        let provider = Freshness::new();
+        let bootstrap = archive(10);
         let publication = TestnetPublicationGateV1::for_test();
         let owner_installed = AtomicBool::new(false);
         let ledger_installed = AtomicBool::new(false);
@@ -382,8 +393,6 @@ fn native_startup_concurrent_dispatch_waits_for_final_publication_or_failure() {
             let owner = &owner_installed;
             let ledger = &ledger_installed;
             let install = threads.spawn(move || {
-                let ctx = context();
-                let provider = Freshness::new();
                 let mut state = StartupState::Cold;
                 let mut guard = gate.exclusive().unwrap();
                 publish_activation(&mut guard, &mut state, |state| {
@@ -391,12 +400,12 @@ fn native_startup_concurrent_dispatch_waits_for_final_publication_or_failure() {
                         &ctx,
                         &provider,
                         state,
-                        &archive(10),
+                        &bootstrap,
                         |_| {
                             owner.store(true, Ordering::SeqCst);
                             ledger.store(true, Ordering::SeqCst);
                             staged_tx.send(()).unwrap();
-                            finish_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                            finish_rx.recv_timeout(MAX_LIFETIME).unwrap();
                             Ok(7_u8)
                         },
                         |_| {
@@ -409,7 +418,9 @@ fn native_startup_concurrent_dispatch_waits_for_final_publication_or_failure() {
                     )
                 })
             });
-            let staged = staged_rx.recv_timeout(Duration::from_secs(5));
+            // Actual archive verification still happens inside activation. Allow its
+            // full native lease while keeping the post-staging blocked-dispatch test.
+            let staged = staged_rx.recv_timeout(MAX_LIFETIME);
             let dispatch = threads.spawn(|| {
                 dispatch_started_tx.send(()).unwrap();
                 let result = publication.dispatch().map(|_guard| {

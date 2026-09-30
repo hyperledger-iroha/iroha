@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "workflow_name": "pii.subject.deletion.v1",
+  "steps": [
+    "validate-subject-request",
+    "freeze-read-access",
+    "enqueue-redaction-job",
+    "emit-deletion-attestation"
+  ],
+  "requires_break_glass_approval": false,
+  "audit_tag": "pii.deletion.audit"
+}

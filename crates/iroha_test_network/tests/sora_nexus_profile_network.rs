@@ -1072,10 +1072,6 @@ fn taira_catalog_content_is_recognized() {
 
 /// Unprivileged `production_mode` start plus the beacon pre-deal proof (see module docs).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one live network runs every phase of the proof in order on the same validators"
-)]
 async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() -> Result<()> {
     init_instruction_registry();
     let started = Instant::now();

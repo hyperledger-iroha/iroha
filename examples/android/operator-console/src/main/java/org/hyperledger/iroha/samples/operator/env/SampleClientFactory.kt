@@ -2,16 +2,16 @@ package org.hyperledger.iroha.samples.operator.env
 
 import android.content.Context
 import java.io.File
-import java.net.http.HttpClient
+import org.hyperledger.iroha.sdk.client.transport.OkHttpTransportExecutor
 import java.time.Duration
-import org.hyperledger.iroha.android.client.ClientConfig
-import org.hyperledger.iroha.android.client.HttpClientTransport
-import org.hyperledger.iroha.android.client.RetryPolicy
-import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue
-import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue
-import org.hyperledger.iroha.android.telemetry.AndroidDeviceProfileProvider
-import org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProvider
-import org.hyperledger.iroha.android.telemetry.TelemetryOptions
+import org.hyperledger.iroha.sdk.client.ClientConfig
+import org.hyperledger.iroha.sdk.client.HttpClientTransport
+import org.hyperledger.iroha.sdk.client.RetryPolicy
+import org.hyperledger.iroha.sdk.client.queue.FilePendingTransactionQueue
+import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
+import org.hyperledger.iroha.sdk.telemetry.AndroidDeviceProfileProvider
+import org.hyperledger.iroha.sdk.telemetry.AndroidNetworkContextProvider
+import org.hyperledger.iroha.sdk.telemetry.TelemetryOptions
 import org.hyperledger.iroha.samples.operator.BuildConfig
 
 class SampleClientFactory(
@@ -29,7 +29,7 @@ class SampleClientFactory(
         val telemetryOptions = telemetryConfig.toTelemetryOptions()
         val config = buildClientConfig(queue, telemetryConfig, telemetryOptions)
         val httpClient =
-            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).build()
+            OkHttpTransportExecutor.create(connectTimeout = Duration.ofSeconds(12))
         val transport = HttpClientTransport(httpClient, config)
         return ClientArtifacts(config, transport, queue, httpClient)
     }
@@ -69,6 +69,10 @@ class SampleClientFactory(
         val config: ClientConfig,
         val transport: HttpClientTransport,
         val queue: PendingTransactionQueue,
-        val httpClient: HttpClient
-    )
+        val httpClient: OkHttpTransportExecutor
+    ) : AutoCloseable {
+        override fun close() {
+            try { transport.close() } finally { httpClient.close() }
+        }
+    }
 }

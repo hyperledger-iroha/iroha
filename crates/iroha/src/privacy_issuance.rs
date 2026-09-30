@@ -740,10 +740,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the shared cross-SDK contract audit binds the complete request, success, and error wire fixture"
-    )]
     fn shared_client_contract_fixture_binds_exact_wire_bytes() {
         let fixture: norito::json::Value =
             norito::json::from_str(CLIENT_CONTRACT_FIXTURE_V1).expect("valid client fixture JSON");
@@ -1132,10 +1128,6 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the response-envelope audit keeps every status, header, length, and magic invariant together"
-    )]
     fn response_metadata_and_lengths_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
         let mut status = response_v1(expected);
@@ -1247,10 +1239,6 @@ mod tests {
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the structured-error audit checks the complete closed status and canonical-body mapping"
-    )]
     fn structured_error_responses_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
         for (status, code) in [

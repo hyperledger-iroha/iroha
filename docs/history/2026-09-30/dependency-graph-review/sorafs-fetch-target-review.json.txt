@@ -1,0 +1,10 @@
+{
+  "schema": "iroha.unit-test.sorafs-fetch-target-graph-review.v1",
+  "previous_manifest_fingerprint": "sha256:50c20cafba54d040df41318a191d52a35e53a20b5967f6f8baeb85ee28ea9e48",
+  "current_manifest_fingerprint": "sha256:18f8ade485fbc1a78981c5e713ff32bc677c47a08966b160c02868f5d59f37a7",
+  "previous_budget_sha256": "bbb1daebdd04f25ca83f9574c0ce94487e5968cbded96b9f2720faa5e0f3e64c",
+  "current_source_report_sha256": "2e61a5875c02e968eef70a2e481bedf902d5271c771a8483eb350e0efb4bf6d4",
+  "reviewed_manifest": "crates/sorafs_car/Cargo.toml",
+  "reviewed_manifest_sha256": "d04096c15b9d40cb2e7156b61968e1f4eabd07aa9642b628e08e108e0ec25f6d",
+  "sole_raw_change": "Explicit sorafs_fetch_cli integration test target with required-features=[cli]; no dependencies, feature selectors, costs, architecture boundaries, denies or limits changed."
+}

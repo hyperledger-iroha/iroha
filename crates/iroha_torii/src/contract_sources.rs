@@ -49,9 +49,9 @@ pub(crate) const VERIFIED_SOURCE_SUBMISSION_MAX_HTTP_BODY_BYTES_V1: usize =
             + VERIFIED_SOURCE_NAME_MAX_BYTES_V1
             + VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1)
         + VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1;
-const VERIFIED_SOURCE_TEXT_MAX_BYTES_V1: usize = ivm::kotodama::source::MAX_SOURCE_BYTES;
+const VERIFIED_SOURCE_TEXT_MAX_BYTES_V1: usize = kotodama_lang::source::MAX_SOURCE_BYTES;
 const VERIFIED_SOURCE_NAME_MAX_BYTES_V1: usize =
-    ivm::kotodama::linker::MAX_LOGICAL_SOURCE_PATH_BYTES;
+    kotodama_lang::linker::MAX_LOGICAL_SOURCE_PATH_BYTES;
 const VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1: usize = 32;
 const VERIFIED_SOURCE_RECORD_MAX_BYTES_V1: usize =
     VERIFIED_SOURCE_SUBMISSION_MAX_HTTP_BODY_BYTES_V1 + 256 * 1024;
@@ -1420,8 +1420,8 @@ fn validate_verified_source_record(
     expected_code_hash: &str,
 ) -> Result<(), Error> {
     validate_verified_source_record_schema(record, expected_code_hash)?;
-    let compiled = ivm::kotodama::session::CompilerSession::default()
-        .build(ivm::kotodama::session::CompileRequest {
+    let compiled = kotodama_lang::session::CompilerSession::default()
+        .build(kotodama_lang::session::CompileRequest {
             source: &record.source_text,
             source_name: record.source_name.as_deref(),
         })
@@ -2214,7 +2214,7 @@ impl fmt::Write for BoundedDiagnosticText {
 }
 fn write_diagnostic_source(
     output: &mut BoundedDiagnosticText,
-    span: &ivm::kotodama::diagnostic::SourceSpan,
+    span: &kotodama_lang::diagnostic::SourceSpan,
 ) -> fmt::Result {
     if let Some(package) = span.package_identity.as_deref() {
         write!(output, "{package}::")?;
@@ -2226,7 +2226,7 @@ fn write_diagnostic_source(
 /// In particular, this must not call `DiagnosticBundle::to_string` or `render_human`: both first
 /// allocate the complete attacker-influenced rendering before a caller can truncate it.
 fn bounded_verified_source_diagnostic_message(
-    bundle: &ivm::kotodama::diagnostic::DiagnosticBundle,
+    bundle: &kotodama_lang::diagnostic::DiagnosticBundle,
 ) -> String {
     let Ok(mut output) = BoundedDiagnosticText::try_new(VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1)
     else {
@@ -2379,15 +2379,15 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let compile_result = ivm::kotodama::session::CompilerSession::default().build(
-        ivm::kotodama::session::CompileRequest {
+    let compile_result = kotodama_lang::session::CompilerSession::default().build(
+        kotodama_lang::session::CompileRequest {
             source: &source_text,
             source_name: source_name.as_deref(),
         },
     );
     let response = match compile_result {
         Ok(output) => {
-            let ivm::kotodama::session::CompileOutput {
+            let kotodama_lang::session::CompileOutput {
                 artifact: code_bytes,
                 contract_interface,
                 manifest,
@@ -2542,11 +2542,11 @@ mod tests {
     fn verified_source_request_bounds_accept_exact_and_reject_first_overflow() {
         assert_eq!(
             VERIFIED_SOURCE_TEXT_MAX_BYTES_V1,
-            ivm::kotodama::source::MAX_SOURCE_BYTES
+            kotodama_lang::source::MAX_SOURCE_BYTES
         );
         assert_eq!(
             VERIFIED_SOURCE_NAME_MAX_BYTES_V1,
-            ivm::kotodama::linker::MAX_LOGICAL_SOURCE_PATH_BYTES
+            kotodama_lang::linker::MAX_LOGICAL_SOURCE_PATH_BYTES
         );
         let mut request = SubmitVerifiedContractSourceDto {
             language: "k".repeat(VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1),
@@ -2585,10 +2585,10 @@ mod tests {
     }
     #[test]
     fn verified_source_diagnostic_message_is_utf8_safe_and_bounded() {
-        let short = ivm::kotodama::diagnostic::DiagnosticBundle::single(
-            ivm::kotodama::diagnostic::Diagnostic::error(
+        let short = kotodama_lang::diagnostic::DiagnosticBundle::single(
+            kotodama_lang::diagnostic::Diagnostic::error(
                 "KTEST",
-                ivm::kotodama::diagnostic::DiagnosticPhase::Parse,
+                kotodama_lang::diagnostic::DiagnosticPhase::Parse,
                 "short diagnostic",
                 None,
             ),
@@ -2597,10 +2597,10 @@ mod tests {
             bounded_verified_source_diagnostic_message(&short),
             short.render_human()
         );
-        let long = ivm::kotodama::diagnostic::DiagnosticBundle::single(
-            ivm::kotodama::diagnostic::Diagnostic::error(
+        let long = kotodama_lang::diagnostic::DiagnosticBundle::single(
+            kotodama_lang::diagnostic::Diagnostic::error(
                 "KTEST",
-                ivm::kotodama::diagnostic::DiagnosticPhase::Parse,
+                kotodama_lang::diagnostic::DiagnosticPhase::Parse,
                 "界".repeat(VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1),
                 None,
             ),
@@ -2651,8 +2651,8 @@ mod tests {
         }
     }
     fn valid_verified_source_record(source: &str, source_name: &str) -> StoredVerifiedSourceRecord {
-        let compiled = ivm::kotodama::session::CompilerSession::default()
-            .build(ivm::kotodama::session::CompileRequest {
+        let compiled = kotodama_lang::session::CompilerSession::default()
+            .build(kotodama_lang::session::CompileRequest {
                 source,
                 source_name: Some(source_name),
             })
@@ -3194,8 +3194,8 @@ mod tests {
         ));
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
         let source_name = "demo.ko";
-        let compiled = ivm::kotodama::session::CompilerSession::default()
-            .build(ivm::kotodama::session::CompileRequest {
+        let compiled = kotodama_lang::session::CompilerSession::default()
+            .build(kotodama_lang::session::CompileRequest {
                 source,
                 source_name: Some(source_name),
             })
@@ -3253,8 +3253,8 @@ mod tests {
         persist_verified_source_record(&declared).expect("persist declared-hash source");
 
         let actual_source = "seiyaku Actual { kotoage fn main() authorize(\"Actual\") {} }";
-        let actual = ivm::kotodama::session::CompilerSession::default()
-            .build(ivm::kotodama::session::CompileRequest {
+        let actual = kotodama_lang::session::CompilerSession::default()
+            .build(kotodama_lang::session::CompileRequest {
                 source: actual_source,
                 source_name: Some("actual.ko"),
             })
@@ -3283,7 +3283,7 @@ mod tests {
         let source = r#"
 seiyaku Demo { kotoage fn main() authorize("Run") {} }
 "#;
-        let (compiled, _, _) = ivm::KotodamaCompiler::new()
+        let (compiled, _, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile contract");
         let code_hash_hex = hash_hex(&canonical_code_hash(&compiled).expect("canonical hash"));
@@ -3340,7 +3340,7 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
     fn verified_source_job_does_not_mutate_provider_storage() {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
-        let (compiled, _, _) = ivm::KotodamaCompiler::new()
+        let (compiled, _, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile contract");
         let code_hash_hex = hash_hex(&canonical_code_hash(&compiled).expect("canonical hash"));

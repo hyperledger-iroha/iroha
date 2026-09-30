@@ -521,14 +521,35 @@ fn wrap_config_error(err: PrivacyConfigError, config: &PrivacyBucketConfig) -> B
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::soranet::privacy_metrics::{
+        SoranetPrivacyEventHandshakeFailureV1, SoranetPrivacyEventHandshakeSuccessV1,
+        SoranetPrivacyEventKindV1, SoranetPrivacyHandshakeFailureV1,
+    };
     use std::io::Write as _;
     use tempfile::NamedTempFile;
-    fn write_log(lines: &[&str]) -> NamedTempFile {
+    fn write_log(events: &[SoranetPrivacyEventV1]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
-        for line in lines {
-            writeln!(file, "{}", line).expect("write log");
+        for event in events {
+            writeln!(
+                file,
+                "{}",
+                json::to_json(event).expect("canonical privacy event JSON")
+            )
+            .expect("write log");
         }
         file
+    }
+    fn success_event(timestamp_unix: u64, rtt_ms: u64) -> SoranetPrivacyEventV1 {
+        SoranetPrivacyEventV1 {
+            timestamp_unix,
+            mode: SoranetPrivacyModeV1::Entry,
+            kind: SoranetPrivacyEventKindV1::HandshakeSuccess(
+                SoranetPrivacyEventHandshakeSuccessV1 {
+                    rtt_ms: Some(rtt_ms),
+                    active_circuits_after: None,
+                },
+            ),
+        }
     }
     fn base_config() -> PrivacyBucketConfig {
         PrivacyBucketConfig {
@@ -542,10 +563,27 @@ mod tests {
         }
     }
     #[test]
+    fn rejects_flattened_privacy_event_payload() {
+        let mut log = NamedTempFile::new().expect("temp file");
+        writeln!(log, "{{\"timestamp_unix\":100,\"mode\":\"entry\",\"kind\":\"HandshakeSuccess\",\"payload\":{{\"rtt_ms\":12}}}}")
+            .expect("write retired flattened event");
+        let options = PrivacyReportOptions {
+            input_paths: vec![log.path().to_path_buf()],
+            bucket_config: base_config(),
+            drain_at_unix: Some(200),
+        };
+        let error = run_privacy_report(&options)
+            .err()
+            .expect("flattened enum fields must not be accepted as a current privacy event");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to parse privacy payload")
+        );
+    }
+    #[test]
     fn summarizes_unsuppressed_bucket() {
-        let log = write_log(&[
-            "{\"timestamp_unix\":100,\"mode\":\"entry\",\"kind\":\"HandshakeSuccess\",\"payload\":{\"rtt_ms\":12}}",
-        ]);
+        let log = write_log(&[success_event(100, 12)]);
         let options = PrivacyReportOptions {
             input_paths: vec![log.path().to_path_buf()],
             bucket_config: base_config(),
@@ -564,9 +602,17 @@ mod tests {
     }
     #[test]
     fn reports_suppressed_bucket_breakdown() {
-        let log = write_log(&[
-            "{\"timestamp_unix\":3600,\"mode\":\"exit\",\"kind\":\"HandshakeFailure\",\"payload\":{\"reason\":\"timeout\"}}",
-        ]);
+        let log = write_log(&[SoranetPrivacyEventV1 {
+            timestamp_unix: 3600,
+            mode: SoranetPrivacyModeV1::Exit,
+            kind: SoranetPrivacyEventKindV1::HandshakeFailure(
+                SoranetPrivacyEventHandshakeFailureV1 {
+                    reason: SoranetPrivacyHandshakeFailureV1::Timeout,
+                    pow_reason: None,
+                    rtt_ms: None,
+                },
+            ),
+        }]);
         let mut config = base_config();
         config.min_contributors = 5;
         let options = PrivacyReportOptions {
@@ -589,13 +635,8 @@ mod tests {
     }
     #[test]
     fn suppression_ratio_reports_fraction() {
-        let mut events: Vec<&'static str> = vec![
-            "{\"timestamp_unix\":0,\"mode\":\"entry\",\"kind\":\"HandshakeSuccess\",\"payload\":{\"rtt_ms\":9}}";
-            3
-        ];
-        events.push(
-            "{\"timestamp_unix\":180,\"mode\":\"entry\",\"kind\":\"HandshakeSuccess\",\"payload\":{\"rtt_ms\":11}}",
-        );
+        let mut events = vec![success_event(0, 9); 3];
+        events.push(success_event(180, 11));
         let log = write_log(&events);
         let mut config = base_config();
         config.min_contributors = 2;

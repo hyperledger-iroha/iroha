@@ -1,0 +1,297 @@
+[
+  {
+    "path": "crates/iroha_zkp_halo2/src/generalized_bulletproof_streaming_constraint_tests.rs",
+    "function": "exact_small_constraint_source_has_no_public_row_or_callback_escape",
+    "removed_assertions": [
+      "source.lines().count() <= 500 && source.len() <= 24 * 1024",
+      "tests.lines().count() <= 500 && tests.len() <= 24 * 1024",
+      "allocation.lines().count() <= 500 && allocation.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/bulletproof_t256_prover_workspace_tests.rs",
+    "function": "fixed_t256_workspace_source_graph_is_closed_and_capped",
+    "removed_assertions": [
+      "source.lines().count() <= max_lines",
+      "source.len() <= max_bytes"
+    ],
+    "current_function": "fixed_t256_workspace_source_graph_is_closed"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/bulletproof_t256_streaming_constraint_tests.rs",
+    "function": "exact_membership_sources_are_pretranscript_closed",
+    "removed_assertions": [
+      "parent.lines().count() <= 3_000 && parent.len() <= 120 * 1024",
+      "child.lines().count() <= 500 && child.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/exact_eight_chunk_membership_capacity_tests.rs",
+    "function": "exact_capacity_source_graph_is_closed_and_capped",
+    "removed_assertions": [
+      "source.lines().count() <= line_cap",
+      "self_source.lines().count() <= 500",
+      "source.len() <= byte_cap",
+      "self_source.len() <= 24 * 1_024"
+    ],
+    "current_function": "exact_capacity_source_graph_is_closed"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/phase23_rns_link_cross_field_v2_tests.rs",
+    "function": "source_budget_and_uninhabited_api_boundary_are_static",
+    "removed_assertions": [
+      "production.lines().count() <= 1_200",
+      "tests.lines().count() <= 700"
+    ],
+    "current_function": "uninhabited_api_boundary_is_static"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cks_release_proof_size_kats.rs",
+    "function": "release_cks_proof_size_harness_stays_inert_and_capped",
+    "removed_assertions": [
+      "source.lines().count() <= 500 && source.len() <= 24 * 1024"
+    ],
+    "current_function": "release_cks_proof_size_harness_stays_inert"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/phase23_rns_link_external_spool_tests.rs",
+    "function": "production_adapter_surface_has_no_path_key_or_raw_snapshot_escape",
+    "removed_assertions": [
+      "source.lines().count() <= 400",
+      "source.len() <= 16_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective_eval_keys_evidence_tests.rs",
+    "function": "evidence_capability_is_opaque_move_only_bounded_and_facaded",
+    "removed_assertions": [
+      "production.lines().count() <= 1_200",
+      "parent.lines().count() <= 5_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/phase23_rns_link_external_source_tests.rs",
+    "function": "source_surface_is_move_only_bounded_concrete_and_non_authorizing",
+    "removed_assertions": [
+      "source.lines().count() <= 1_050",
+      "test_source.lines().count() <= 400",
+      "source.len() <= 50_000",
+      "test_source.len() <= 18_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/phase23_encrypted_tests.rs",
+    "function": "streaming_large_owner_surface_is_move_only_redacted_and_zeroizing",
+    "removed_assertions": [
+      "phase_source.lines().count() <= 5_000",
+      "materialized_wire_source.lines().count() <= 5_000",
+      "mkhe_facade.lines().count() <= 5_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/phase23_rns_link.rs",
+    "function": "context_authority_leaf_is_small_private_and_exact",
+    "removed_assertions": [
+      "CONTEXT_AUTHORITY_SOURCE_V1.lines().count() <= 180",
+      "CONTEXT_AUTHORITY_SOURCE_V1.len() <= 8_192"
+    ],
+    "current_function": "context_authority_leaf_is_private_and_exact"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/persistent_direct_opening_v1_tests.rs",
+    "function": "owner_is_move_only_private_and_contains_one_opening",
+    "removed_assertions": [
+      "PRODUCTION_SOURCE_V1.lines().count() <= 180",
+      "TEST_SOURCE_V1.lines().count() <= 180",
+      "PRODUCTION_SOURCE_V1.len() <= 8_000",
+      "TEST_SOURCE_V1.len() <= 8_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/borrowed_product.rs",
+    "function": "borrowed_product_source_keeps_secret_tables_zeroizing_and_fallible",
+    "removed_assertions": [
+      "include_str!(\"../collective.rs\").lines().count() <= 5_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/party_local_rkg_ephemeral_v1_tests.rs",
+    "function": "caps_resources_errors_and_single_slot_are_pinned",
+    "removed_assertions": [
+      "production.lines().count() <= 500 && production.len() <= 24 * 1024",
+      "tests.lines().count() <= 500 && tests.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_tests.rs",
+    "function": "source_files_remain_below_the_global_budget_without_exceptions",
+    "removed_assertions": [
+      "authority.lines().count() <= 2_400",
+      "include_str!(\"incremental_source_phase23.rs\")\n            .lines()\n            .count()\n            <= 900",
+      "include_str!(\"incremental_source_phase23_tests.rs\")\n            .lines()\n            .count()\n            <= 2_400",
+      "authority.len() <= RUST_ORACLE_MAX_BYTES_V1"
+    ],
+    "retired_function": true
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra_tests.rs",
+    "function": "source_and_test_budgets_remain_bounded",
+    "removed_assertions": [
+      "PRODUCTION_SOURCE_V2.lines().count() <= 1_200",
+      "TEST_SOURCE_V2.lines().count() <= 650",
+      "GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 1_150",
+      "GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.lines().count() <= 120",
+      "GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count() <= 400",
+      "GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count()\n            + GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count()\n            <= 1_550",
+      "SOURCE_OPENINGS_SOURCE_V1.lines().count() <= 1_300",
+      "SOURCE_OPENINGS_TEST_SOURCE_V1.lines().count() <= 500",
+      "SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.lines().count() <= 500",
+      "PRODUCTION_SOURCE_V2.len() <= 52_000",
+      "TEST_SOURCE_V2.len() <= 30_000",
+      "GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.len() <= 6_000",
+      "SOURCE_OPENINGS_SOURCE_V1.len() <= 52_000",
+      "SOURCE_OPENINGS_TEST_SOURCE_V1.len() <= 20_000",
+      "SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.len() <= 20_000"
+    ],
+    "current_function": "source_opening_mapping_tests_have_one_module_owner"
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1_tests.rs",
+    "function": "production_source_and_release_guards_are_static",
+    "removed_assertions": [
+      "production.lines().count() <= 750",
+      "caps.lines().count() <= 400",
+      "include_str!(\"vector_arithmetic_plane_openings_v1_tests.rs\")\n            .lines()\n            .count()\n            <= 600"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective_eval_keys/source_stream.rs",
+    "function": "production_decoder_is_seekable_bounded_and_receipt_only",
+    "removed_assertions": [
+      "production.lines().count() <= 900"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective_eval_keys/source_stream.rs",
+    "function": "production_parent_has_no_legacy_owned_decoder_or_heavy_generator_entry",
+    "removed_assertions": [
+      "parent.lines().count() <= 5_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective_eval_keys/cks_stream.rs",
+    "function": "owned_receipt_has_no_owned_evidence_graph_or_replay_api",
+    "removed_assertions": [
+      "parent.lines().count() <= 5_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective_eval_keys/cks_stream.rs",
+    "function": "streaming_source_keeps_one_record_and_checks_before_receipt",
+    "removed_assertions": [
+      "implementation.lines().count() <= 1_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/cpk_relation/state_owned_secret_adapter_v1_tests.rs",
+    "function": "adapter_is_private_public_only_and_authority_neutral",
+    "removed_assertions": [
+      "PRODUCTION_SOURCE_V1.lines().count() <= 260",
+      "TEST_SOURCE_V1.lines().count() <= 180",
+      "PRODUCTION_SOURCE_V1.len() <= 11_000",
+      "TEST_SOURCE_V1.len() <= 8_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/kats.rs",
+    "function": "rkg_one_creator_production_areas_stay_within_review_caps",
+    "removed_assertions": [
+      "include_str!(\"kats.rs\").lines().count() <= 500",
+      "include_str!(\"kats.rs\").len() <= 24 * 1024"
+    ],
+    "removed_source_cap_helper_assertions": [
+      "assert!(within_cap(&[include_str!(\"../direct_rkg_one_creator_adapter_v1.rs\")]))",
+      "assert!(within_cap(&[include_str!(\"statement_v1/rkg_one_creator_core_v1.rs\")]))",
+      "assert!(within_cap(&[include_str!(\"rkg_one_creator_membership_v1.rs\")]))",
+      "assert!(within_cap(&[include_str!(\"rkg_one_creator_prover_v1.rs\"),include_str!(\"rkg_one_creator_prover_v1/transcript_v1.rs\"),]))",
+      "assert!(within_cap(&[include_str!(\"rkg_one_creator_response_v1.rs\"),include_str!(\"rkg_one_creator_response_v1/rns_first_messages_v1.rs\"),]))"
+    ],
+    "retired_function": true
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_common_a_v1/creator_replay_v1/creator_replay_v1_tests.rs",
+    "function": "creator_typestate_delta_and_tests_stay_bounded",
+    "removed_assertions": [
+      "production.lines().count() <= 180 && production.len() <= 24 * 1024",
+      "tests.lines().count() <= 500 && tests.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2_tests.rs",
+    "function": "source_corridor_is_ordered_private_and_has_no_runtime_backend",
+    "removed_assertions": [
+      "source.lines().count() <= 500",
+      "source.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_publication_v1/direct_rkg_one_publication_v1_tests.rs",
+    "function": "publication_area_and_tests_stay_within_review_caps",
+    "removed_assertions": [
+      "production.lines().count() <= 500 && production.len() <= 24 * 1024",
+      "tests.lines().count() <= 500 && tests.len() <= 24 * 1024"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_candidate_v1/direct_rkg_one_candidate_v1_tests.rs",
+    "function": "candidate_and_handoff_support_areas_stay_within_review_caps",
+    "removed_assertions": [
+      "adapter.lines().count() <= 500 && adapter.len() <= 24 * 1024",
+      "prover.lines().count() <= 500 && prover.len() <= 24 * 1024",
+      "candidate.lines().count() + sealed.lines().count() <= 500",
+      "source.lines().count() <= 500 && source.len() <= 24 * 1024",
+      "tests.lines().count() <= 500 && tests.len() <= 24 * 1024",
+      "candidate.len() + sealed.len() <= 24 * 1024"
+    ],
+    "retired_function": true
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/commitment_session_v1_tests.rs",
+    "function": "authority_chain_and_non_authority_surfaces_are_structurally_frozen",
+    "removed_assertions": [
+      "SESSION_SOURCE_V1.lines().count() <= 750",
+      "SESSION_TEST_SOURCE_V1.lines().count() <= 450",
+      "SESSION_SOURCE_V1.len() <= 32_000",
+      "SESSION_TEST_SOURCE_V1.len() <= 20_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/commitment_session_v1/existing_radix_candidate_v1_tests.rs",
+    "function": "owner_is_move_only_source_bound_and_all_stronger_gates_remain_false",
+    "removed_assertions": [
+      "CANDIDATE_SOURCE_V1.lines().count() <= 900",
+      "CANDIDATE_TEST_SOURCE_V1.lines().count() <= 500",
+      "CANDIDATE_SOURCE_V1.len() <= 45_000",
+      "CANDIDATE_TEST_SOURCE_V1.len() <= 25_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/commitment_session_v1/existing_radix_candidate_v1/prepared_comparator_commitment_v1_tests.rs",
+    "function": "private_transition_has_no_point_or_entropy_injection_or_cursor_reset",
+    "removed_assertions": [
+      "source.lines().count() <= 400",
+      "source.len() <= 24_000"
+    ]
+  },
+  {
+    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_tests.rs",
+    "function": "source_authority_oracle_rejects_lexical_visibility_and_mint_decoys",
+    "removed_assertions": [
+      "SELF_SOURCE.len() <= RUST_ORACLE_MAX_BYTES_V1",
+      "rust_tokens_v1(&\" \".repeat(RUST_ORACLE_MAX_BYTES_V1 + 1)).is_none()"
+    ],
+    "scanner_input_byte_cap_retired": true,
+    "retained_resources": "256 Ki tokens, delimiter/comment nesting depth, raw string delimiter width; exact source parsing required",
+    "new_test": "rust_authority_scanner_accepts_large_trivia_with_bounded_token_storage"
+  }
+]

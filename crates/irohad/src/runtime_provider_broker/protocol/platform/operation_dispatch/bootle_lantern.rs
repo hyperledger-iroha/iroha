@@ -113,7 +113,7 @@ pub(super) fn bootle_lantern_issuance_prepare_authorization(
     }
 }
     })?;
-    iroha_core::privacy_engines::bootle_lantern::issuer::
+    iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
     issuer_validate_prepared_blind_issuance_authorization_v1(
         &prepare.context,
         prepare.canonical_genesis_hash,
@@ -139,7 +139,7 @@ pub(super) fn bootle_lantern_issuance_validate_request(
         || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
     let (issue, authorization) =
         decode_bootle_lantern_issue_request(&request.payload, &request.binding, &state.network_id)?;
-    let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+    let expected = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
     issuer_validate_blind_issuance_request_encoded_v1(
         &issue.context,
         issue.canonical_genesis_hash,
@@ -223,7 +223,7 @@ pub(super) fn bootle_lantern_issuance_issue_validated(
     if response.len() != BOOTLE_LANTERN_RESPONSE_BYTES_V1 {
         return Err(BrokerError::Rejected);
     }
-    iroha_core::privacy_engines::bootle_lantern::issuer::
+    iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
     issuer_validate_cached_blind_issuance_response_encoded_v1(
         &issue.context,
         issue.canonical_genesis_hash,

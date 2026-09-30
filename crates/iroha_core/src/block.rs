@@ -9660,7 +9660,7 @@ seiyaku GuardedOverlay {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile protected overlay contract");
         let interface = ivm::ProgramMetadata::parse(&program)
@@ -9833,7 +9833,7 @@ seiyaku DynamicAccessCounter {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic StateMap counter");
         let contract_interface = ivm::ProgramMetadata::parse(&program)
@@ -10032,7 +10032,7 @@ seiyaku DynamicTarget {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic-target contract");
         let contract_interface = ivm::ProgramMetadata::parse(&program)

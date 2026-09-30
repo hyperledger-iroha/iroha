@@ -19,7 +19,7 @@ use iroha::{
     blocking::Client,
     client::{AccountTransactionDraft, FeeQuoteRequest},
 };
-use iroha_core::execution_proofs::{
+use iroha_core_privacy::execution_proofs::{
     compiled_race_profile_v1, prove_race_v1, race_profile_id_v1, race_result_v1,
     race_state_root_v1, race_transcript_root_v1, replay_race_v1, verify_game_proof_for_history_v1,
 };

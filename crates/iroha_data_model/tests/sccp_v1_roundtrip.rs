@@ -352,10 +352,6 @@ fn set_bridge_key(public_key: Option<[u8; 33]>, nonce: u64) -> SetSccpBridgeKeyV
 }
 
 /// One event of every §4.17 variant, in declaration order, with its JSON tag.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one literal per event variant keeps the inventory reviewable"
-)]
 fn every_event() -> Vec<(SccpEvent, &'static str)> {
     vec![
         (
@@ -829,10 +825,6 @@ fn constants_match_the_spec() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pinned name per public type keeps the inventory reviewable"
-)]
 fn schema_names_are_stable() {
     let cases = [
         (
@@ -1004,10 +996,6 @@ fn schema_names_are_stable() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pinned name per public type keeps the inventory reviewable"
-)]
 fn event_schema_names_are_stable() {
     let cases = [
         (
@@ -1139,10 +1127,6 @@ fn event_schema_names_are_stable() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pinned name per public type keeps the inventory reviewable"
-)]
 fn instruction_schema_names_and_ids_are_stable() {
     let schema_names = [
         (

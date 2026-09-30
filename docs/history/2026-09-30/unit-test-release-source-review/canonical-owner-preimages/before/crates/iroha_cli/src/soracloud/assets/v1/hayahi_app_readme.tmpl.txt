@@ -1,0 +1,85 @@
+# __SORACLOUD_SERVICE_NAME__ Hayahi-App Template
+
+This template provides a real Soracloud/IVM Hayahi API scaffold:
+
+- `contract/hayahi_api.ko` with concrete Soracloud query and public replicated update entrypoints.
+- `build.sh` that compiles the contract into `build/hayahi-app-api.to`.
+- Shared Soracloud state bindings for search sessions, shared cache, and collector job/result ledgers.
+- Confidential Soracloud state bindings for wallet-bound preferences and saved searches.
+- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Build the IVM bundle
+
+```bash
+./build.sh
+```
+
+`build.sh` requires `KOTO_BIN` to be an absolute, non-symlinked executable
+built from the same Iroha revision as this workspace and `KOTO_BIN_SHA256` to
+match that exact file:
+
+```bash
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./build.sh
+```
+
+The invoked command is equivalent to:
+
+```bash
+"$KOTO_BIN" build \
+  ./contract/hayahi_api.ko \
+  --out ./build/hayahi-app-api.to \
+  --manifest-out ./build/hayahi-app-api.contract_manifest.json \
+  --max-cycles 1000000
+```
+
+## Exposed routes
+
+- `GET /api/v1/health`
+- `GET /api/v1/state/overview`
+- `GET /api/v1/collector/status`
+- `GET /api/auth/me`
+- `GET /api/v1/user/preferences`
+- `GET /api/v1/user/saved-searches`
+- `POST /api/auth/challenge`
+- `POST /api/v1/search`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `PUT /api/v1/user/preferences`
+- `POST /api/v1/user/saved-searches`
+
+Method-aware public route matching in Torii is required for the shared REST
+paths such as `GET|PUT /api/v1/user/preferences` and
+`GET|POST /api/v1/user/saved-searches`.
+
+## Keep manifest hashes aligned
+
+After local edits or a fresh bytecode build, refresh the Soracloud manifest
+hashes before deploy:
+
+```bash
+iroha soracloud service sync-manifests \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --bundle-file ./build/hayahi-app-api.to
+```
+
+## Deploy API service on Soracloud
+
+```bash
+iroha soracloud service deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --bundle-file ./build/hayahi-app-api.to \
+  --sorafs-retention-epoch 2000000000 \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend bundle
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/hayahi_frontend_manifest.to \
+  --car-out ../sorafs/hayahi_frontend_payload.car \
+  --json-out ../sorafs/hayahi_frontend_pack_report.json
+```

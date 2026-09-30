@@ -13,7 +13,14 @@ fn custody_namespace_paths() -> Vec<StatePath> {
     ];
     // Admission policy, counters, immutable revisions and revocation tombstones are native-only.
     for subject in [None, Some(provider)] {
-        for suffix in ["head", "history/1", "history/1024", "provider_count", "history_bytes", "revocation_bytes"] {
+        for suffix in [
+            "head",
+            "history/1",
+            "history/1024",
+            "provider_count",
+            "history_bytes",
+            "revocation_bytes",
+        ] {
             paths.push(crate::query::provider_admission::path(subject, suffix));
         }
     }
@@ -101,7 +108,7 @@ fn custody_namespace_vm(paths: &[StatePath]) -> IVM {
 // Obtain a real compiler-produced Bytes record, rather than making invalid SET
 // payloads that would independently fail after a missing namespace guard.
 fn custody_namespace_bytes_record() -> Vec<u8> {
-    let (program, _) = ivm::KotodamaCompiler::new()
+    let (program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"seiyaku CustodyNamespaceControl {
                 state bytes sorafs_stream_token_custody_v1x;

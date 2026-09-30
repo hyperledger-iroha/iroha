@@ -253,7 +253,8 @@ impl Run for RebindArgs {
         );
         let signature = SignatureOf::try_new(key_pair.private_key(), &authorization)
             .wrap_err("failed to sign validator binding with the replacement peer key")?;
-        let instruction = RebindPublicLaneValidatorPeer::new(lane_id, validator, peer_id, signature);
+        let instruction =
+            RebindPublicLaneValidatorPeer::new(lane_id, validator, peer_id, signature);
         context.finish(vec![InstructionBox::from(instruction)])
     }
 }
@@ -1456,9 +1457,9 @@ mod tests {
             lane_id: 1,
             validator: alice_literal(),
             peer_id: valid_peer_id_literal(),
-            network_id: NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other-network")),
-            ),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"other-network"),
+            )),
             peer_private_key_file: PathBuf::from("/unused/peer.key"),
             activation_height: 1,
             previous_peer_id: valid_peer_id_literal().parse().expect("previous peer"),

@@ -6668,10 +6668,8 @@ mod tests {
         };
         use iroha_model_base::metadata::Metadata;
         use iroha_model_base::name::Name;
-        use ivm::{
-            KotodamaCompiler,
-            kotodama::compiler::{CompilerMode, CompilerOptions},
-        };
+        use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+        use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
         tx!(
             state,
             block,
@@ -7319,7 +7317,7 @@ seiyaku TriggerDispatch {
             "#,
             multisig_id = multisig_id,
         );
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(&src)
             .expect("compile staged mint-like contract");
         let (bytecode, contract_address) =

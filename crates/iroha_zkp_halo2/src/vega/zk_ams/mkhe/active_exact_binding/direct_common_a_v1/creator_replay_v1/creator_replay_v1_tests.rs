@@ -65,11 +65,3 @@ fn creator_typestate_has_no_borrowed_replay_or_raw_digest_surface() {
     let facade = include_str!("../../../active_exact_binding.rs");
     assert!(!facade.contains("fn mint_rkg_round_one_selector_v1("));
 }
-
-#[test]
-fn creator_typestate_delta_and_tests_stay_bounded() {
-    let production = include_str!("../creator_replay_v1.rs");
-    let tests = include_str!("creator_replay_v1_tests.rs");
-    assert!(production.lines().count() <= 180 && production.len() <= 24 * 1024);
-    assert!(tests.lines().count() <= 500 && tests.len() <= 24 * 1024);
-}

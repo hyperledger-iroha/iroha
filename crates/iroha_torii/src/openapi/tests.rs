@@ -1310,10 +1310,6 @@ fn uploaded_private_model_runtime_openapi_surface_is_absent() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one cohesive exact Soracloud release-route and schema authority audit"
-)]
 fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
     use iroha_torii_shared::route_catalog::{AdmissionPolicy, AuthenticationPolicy, RouteEffect};
 

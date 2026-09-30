@@ -164,7 +164,7 @@ positive scalar-boundary control. This closes only the source-bound admission
 gap; it does not prove those residues came from the claimed BFV operands.
 
 The compiled-profile owner is
-[`privacy_profiles.rs`](../crates/iroha_core/src/privacy_profiles.rs). Engine
+[`privacy_profiles.rs`](../crates/iroha_core_privacy/src/privacy_profiles.rs). Engine
 implementation markers must not be substituted for the qualification record in
 [`release_manifest.rs`](../crates/iroha_data_model/src/privacy/release_manifest.rs).
 

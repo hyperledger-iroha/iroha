@@ -792,6 +792,7 @@ impl FaultPeer for NetworkPeer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
     use std::{
@@ -1026,7 +1027,25 @@ mod tests {
         assert!(bounded_delay(now, deadline, Duration::from_secs(1)).is_none());
     }
     fn dummy_genesis() -> Arc<GenesisBlock> {
-        Arc::new(genesis_factory(Vec::new(), UniqueVec::new(), Vec::new()))
+        let keys = (0x70..=0x73)
+            .map(|seed| {
+                iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal)
+            })
+            .collect::<Vec<_>>();
+        let topology = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<UniqueVec<_>>();
+        let entries = keys
+            .iter()
+            .map(|key| {
+                iroha_genesis::GenesisTopologyEntry::new(
+                    PeerId::new(key.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                )
+            })
+            .collect();
+        Arc::new(genesis_factory(Vec::new(), topology, entries))
     }
     #[tokio::test]
     async fn run_fault_loop_respects_stop_flag() {

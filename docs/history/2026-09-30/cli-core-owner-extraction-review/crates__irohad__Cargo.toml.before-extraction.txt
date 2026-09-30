@@ -1,0 +1,225 @@
+[package]
+name = "irohad"
+autobins = false
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+build = "../build-support/script.rs"
+
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Portable daemon defaults retain automatic SIMD and target-appropriate Metal.
+# The canonical Linux release builder adds `ivm-cuda`, requiring the signed PTX
+# bundle while keeping nvcc and the driver out of build/startup dependencies.
+default = ["daemon", "iroha_core/simd"]
+daemon = [
+    "telemetry",
+    "schema-endpoint",
+    "gost",
+    "sm",
+    "dag-recovery-verify",
+    "expensive-telemetry",
+    "iroha_core/node",
+    "iroha_torii/node-api",
+    "iroha_crypto/consensus",
+    "iroha_crypto/pqc",
+    "norito/node-codec",
+]
+# Build the standalone external signer only in release lanes that request it.
+external-software-signer-bin = ["daemon"]
+dev-tools = ["daemon", "zk-stark"]
+accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
+# Canonical Linux daemon release feature: IVM CUDA alone uses a runtime driver
+# loader and an embedded, signed PTX bundle.
+ivm-cuda = ["ivm/cuda"]
+# Explicit toolkit-coupled helper bundle; these helpers still require separate
+# nvcc/cudart qualification and are not part of driverless daemon defaults.
+accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
+# Non-shipping daemon controlling authenticated private-settlement HTTP requests.
+test-network-private-settlement-route-control = ["iroha_torii/test-network-private-settlement-route-control"]
+# Dedicated non-shipping daemon used only by the four-validator Parliament
+# integration corridor. It injects proof-valid beacon and TLE shares for this
+# daemon's exact roster seat and does not alter consensus verification.
+test-network-parliament-signers = ["iroha_core/test-network-parliament-signers"]
+# Separate non-shipping broker process for unprivileged multi-peer network qualification.
+# It uses the stock canonical credential decoder and broker server, with an
+# inherited one-shot credential pipe in place of a host supervisor.
+test-network-disposable-broker = ["daemon"]
+fastpq-gpu = ["fastpq_prover/fastpq-gpu", "iroha_core/fastpq-gpu"]
+zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
+sm = [
+    "iroha_core/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_config/sm",
+    "iroha_genesis/sm",
+    "iroha_telemetry/sm",
+    "iroha_torii/sm",
+]
+gost = [
+    "iroha_core/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+    "iroha_config/gost",
+    "iroha_torii/gost",
+]
+sm-ffi-openssl = [
+    "sm",
+    "iroha_config/sm-ffi-openssl",
+    "iroha_core/sm-ffi-openssl",
+    "iroha_crypto/sm-ffi-openssl",
+    "iroha_genesis/sm-ffi-openssl",
+]
+beep = ["ivm/beep"]
+## Enable deep DAG recovery diagnostics at startup.
+## Recomputes per-block DAG fingerprints and compares with persisted sidecars.
+## Included in the portable shipping daemon.
+dag-recovery-verify = []
+# Support lightweight telemetry, including diagnostics
+telemetry = [
+    "iroha_telemetry",
+    "iroha_telemetry/event-exporter",
+    "iroha_core/telemetry",
+    "iroha_torii/telemetry",
+]
+# Enable ISI counters/timing instrumentation in the core crate.
+expensive-telemetry = ["telemetry", "iroha_core/expensive-telemetry"]
+# Support developer-specific telemetry.
+# Should not be enabled on production builds.
+# Tokio Console is configured via ENV:
+#   https://docs.rs/console-subscriber/0.2.0/console_subscriber/struct.Builder.html#method.with_default_env
+dev-telemetry = ["telemetry", "iroha_telemetry/dev-telemetry", "iroha_logger/tokio-console"]
+# Telegram alerts for telemetry via Telegram Bot API
+telegram-alerts = ["telemetry", "iroha_telemetry/telegram"]
+# Support schema generation from the `schema` endpoint in the local binary.
+# Useful for debugging issues with decoding in SDKs.
+schema-endpoint = ["iroha_torii/schema"]
+# Enable profiling endpoint
+profiling-endpoint = ["iroha_torii/profiling"]
+[[bin]]
+name = "iroha3d"
+path = "src/bin/iroha3d.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "iroha3d_taira"
+path = "src/bin/iroha3d_taira.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "sorafs_governance_dag"
+path = "src/bin/sorafs_governance_dag.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "taira_bootle_lantern_broker"
+path = "src/bin/taira_bootle_lantern_broker.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "sorafs_external_software_signer"
+path = "src/bin/sorafs_external_software_signer.rs"
+required-features = ["external-software-signer-bin"]
+
+[[bin]]
+name = "iroha_test_runtime_provider_broker"
+path = "src/bin/iroha_test_runtime_provider_broker.rs"
+required-features = ["test-network-disposable-broker"]
+
+[badges]
+is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
+is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+iroha_allocation = { workspace = true }
+iroha_model_base = { workspace = true }
+iroha_musubi_service = { workspace = true }
+iroha_storage_client = { workspace = true }
+iroha_core = { workspace = true, default-features = false }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_logger = { workspace = true }
+iroha_futures = { workspace = true }
+iroha_panic_hook = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
+iroha_primitives = { workspace = true }
+iroha_telemetry = { workspace = true, optional = true }
+iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false }
+iroha_sccp = { workspace = true }
+iroha_sccp_rpc = { workspace = true }
+iroha_torii = { workspace = true, default-features = false }
+iroha_torii_shared = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_version = { workspace = true }
+ivm = { workspace = true }
+iroha_p2p = { workspace = true }
+mv = { workspace = true }
+fastpq_prover = { path = "../fastpq_prover" }
+parking_lot = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_node = { path = "../sorafs_node" }
+
+# Deps used by recovery diagnostics (dag-recovery-verify) and proof helpers
+base64 = { workspace = true, features = ["alloc"] }
+sha2 = { version = "0.10.9", default-features = false }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
+hex = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env", "string"] }
+eyre = { workspace = true }
+thiserror = { workspace = true }
+error-stack = { workspace = true, features = ["eyre"] }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+supports-color = { workspace = true }
+toml = { workspace = true }
+norito = { workspace = true, default-features = false }
+iroha_i18n = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+bytes = { workspace = true }
+hyper = { version = "1.7.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+http-body-util = { workspace = true }
+tokio-rustls = { workspace = true, features = ["ring"] }
+rand = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
+iroha_p2p = { workspace = true, features = ["test-fixtures"] }
+serial_test = "3.5.0"
+tempfile = { workspace = true }
+assertables = { workspace = true }
+iroha_test_samples = { workspace = true }
+sorafs_chunker = { path = "../sorafs_chunker" }
+rcgen = "0.14.5"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }
+
+[build-dependencies]
+build-support = { path = "../build-support", default-features = false }
+
+[package.metadata.cargo-all-features]
+denylist = [
+    "schema-endpoint",
+    "telemetry",
+]
+skip_optional_dependencies = true

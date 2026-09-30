@@ -2,6 +2,8 @@
 //! [`RawGenesisTransaction`] and the [`GenesisBuilder`] structures.
 //! Every genesis batch signs expiry height two and its one-based sequence so the
 //! genesis parameter snapshot may require either ingress rule from height one.
+//! Normalization preserves authored source boundaries and refuses inputs above
+//! the fixed FASTPQ bootstrap budget; draft generators partition physical routes explicitly.
 #![allow(unexpected_cfgs)]
 #![allow(
     clippy::let_and_return,
@@ -1947,6 +1949,57 @@ impl RawGenesisTransaction {
         self.transactions.splice(index..=index, replacements);
         Ok(())
     }
+    /// Partition one explicitly selected instruction-only draft batch at authored boundaries.
+    ///
+    /// Every nonzero length describes one contiguous output batch. Their sum must
+    /// equal the original instruction count, so values and order cannot change.
+    /// All unselected transactions retain their exact boundaries. Apply this
+    /// transformation before preparing or signing a generated manifest.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid index, zero or incomplete partitions, structured parameters,
+    /// topology, IVM triggers, or noncanonical explicit `SetParameter` instructions.
+    pub fn partition_instruction_only_transaction(
+        mut self,
+        index: usize,
+        lengths: &[usize],
+    ) -> Result<Self> {
+        Self::reject_set_parameter_instructions(&self.transactions)?;
+        let transaction = self.transactions.get(index).ok_or_else(|| {
+            eyre!(
+                "raw genesis transaction index {index} is out of bounds for {} transactions",
+                self.transactions.len()
+            )
+        })?;
+        if transaction.parameters.is_some()
+            || !transaction.topology.is_empty()
+            || !transaction.ivm_triggers.is_empty()
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} is not instruction-only; refusing to partition parameters, IVM triggers, or topology"
+            ));
+        }
+        let total = lengths
+            .iter()
+            .try_fold(0_usize, |total, length| total.checked_add(*length));
+        if lengths.is_empty()
+            || lengths.contains(&0)
+            || total != Some(transaction.instructions.len())
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} partition must preserve its exact {} instructions in nonempty batches",
+                transaction.instructions.len()
+            ));
+        }
+        let mut instructions = self.transactions.remove(index).instructions.into_iter();
+        let replacements = lengths.iter().map(|length| RawGenesisTx {
+            instructions: instructions.by_ref().take(*length).collect(),
+            ..RawGenesisTx::default()
+        });
+        self.transactions.splice(index..index, replacements);
+        Ok(self)
+    }
     /// Remove topology entries from all transactions.
     #[must_use]
     pub fn clear_topology(mut self) -> Self {
@@ -2389,17 +2442,31 @@ impl RawGenesisTransaction {
         {
             instructions_list.push(meta);
         }
+        let generated_tail = instructions_list.len();
         Self::inject_crypto_manifest_param(&mut instructions_list, &manifest.crypto)?;
         let registry = GenesisVkRegistry::build(instructions_list.iter().flatten())?;
         Self::inject_confidential_registry_param(&mut instructions_list, registry.vk_set_hash());
-        Ok(pack_genesis_batches(
-            instructions_list,
+        // These two generated global parameters share one canonical metadata owner.
+        // Authored instruction, trigger, and topology batches are never repacked.
+        if instructions_list.len() == generated_tail + 2 {
+            let confidential = instructions_list
+                .pop()
+                .expect("generated confidential metadata");
+            instructions_list
+                .last_mut()
+                .expect("generated crypto metadata")
+                .extend(confidential);
+        }
+        validate_genesis_batch_limit(
+            &instructions_list,
             usize::try_from(
                 iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
             )
             .expect("the bootstrap input count fits usize"),
-        ))
+        )?;
+        Ok(instructions_list)
     }
+
     fn inject_confidential_registry_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
         vk_set_hash: Option<[u8; 32]>,
@@ -4261,37 +4328,19 @@ mod tests {
     include!("genesis_tail_tests.rs");
 }
 
-/// Pack genesis instruction batches into at most `limit` transactions.
-///
-/// Genesis executes under the pre-genesis FASTPQ source policy, which bounds the Network inputs
-/// of every block, genesis included (`specs/fastpq_source_statements.md`, activation
-/// requirements). While there are more batches than `limit`, the smallest adjacent pair is
-/// merged (the earlier one on ties). Instruction order is preserved; a leading executor upgrade
-/// stays a transaction of its own, since it changes the executor for the instructions after it.
-fn pack_genesis_batches(
-    mut batches: Vec<Vec<InstructionBox>>,
-    limit: usize,
-) -> Vec<Vec<InstructionBox>> {
-    let pinned = usize::from(batches.first().is_some_and(|first| {
-        first
-            .iter()
-            .any(|instruction| instruction.as_any().is::<Upgrade>())
-    }));
-    let limit = limit.max(pinned.saturating_add(1));
-    while batches.len() > limit {
-        let Some(at) = (pinned..batches.len().saturating_sub(1))
-            .min_by_key(|&index| batches[index].len() + batches[index + 1].len())
-        else {
-            break;
-        };
-        let next = batches.remove(at + 1);
-        batches[at].extend(next);
+/// Bound the exact authored genesis inputs without changing source boundaries.
+fn validate_genesis_batch_limit(batches: &[Vec<InstructionBox>], limit: usize) -> Result<()> {
+    if batches.len() > limit {
+        return Err(eyre!(
+            "genesis has {} network inputs, exceeding the FASTPQ bootstrap limit {limit}; author compatible draft batches explicitly before signing",
+            batches.len()
+        ));
     }
-    batches
+    Ok(())
 }
 
 #[cfg(test)]
-mod pack_genesis_batches_tests {
+mod genesis_batch_limit_tests {
     use iroha_data_model::{
         Level,
         isi::{InstructionBox, Log},
@@ -4299,7 +4348,7 @@ mod pack_genesis_batches_tests {
         transaction::IvmBytecode,
     };
 
-    use super::pack_genesis_batches;
+    use super::validate_genesis_batch_limit;
 
     fn log(message: &str) -> InstructionBox {
         Log::new(Level::INFO, message.to_owned()).into()
@@ -4318,13 +4367,21 @@ mod pack_genesis_batches_tests {
     }
 
     #[test]
-    fn packs_to_the_limit_preserving_order() {
+    fn refuses_overbudget_inputs_without_changing_authored_order() {
         let batches: Vec<Vec<InstructionBox>> =
             (0..15).map(|i| vec![log(&i.to_string())]).collect();
         let flat = messages(&batches).concat();
-        let packed = pack_genesis_batches(batches, 11);
-        assert_eq!(packed.len(), 11);
-        assert_eq!(messages(&packed).concat(), flat, "order is preserved");
+        assert!(
+            validate_genesis_batch_limit(&batches, 11)
+                .unwrap_err()
+                .to_string()
+                .contains("15 network inputs")
+        );
+        assert_eq!(
+            messages(&batches).concat(),
+            flat,
+            "original order is retained"
+        );
     }
 
     #[test]
@@ -4333,16 +4390,18 @@ mod pack_genesis_batches_tests {
             IvmBytecode::from_compiled(vec![1, 2, 3]),
         )))]];
         batches.extend((0..5).map(|i| vec![log(&i.to_string())]));
-        let packed = pack_genesis_batches(batches, 2);
-        assert_eq!(packed.len(), 2);
-        assert_eq!(packed[0].len(), 1, "the executor upgrade stays alone");
-        assert_eq!(packed[1].len(), 5);
+        let original = messages(&batches);
+        assert!(validate_genesis_batch_limit(&batches, 2).is_err());
+        assert_eq!(messages(&batches), original);
+        assert_eq!(batches[0].len(), 1, "the executor upgrade stays alone");
+        assert!(batches[1..].iter().all(|batch| batch.len() == 1));
     }
 
     #[test]
     fn leaves_small_genesis_unchanged() {
         let batches: Vec<Vec<InstructionBox>> = (0..3).map(|i| vec![log(&i.to_string())]).collect();
         let before = messages(&batches);
-        assert_eq!(messages(&pack_genesis_batches(batches, 11)), before);
+        validate_genesis_batch_limit(&batches, 11).unwrap();
+        assert_eq!(messages(&batches), before);
     }
 }

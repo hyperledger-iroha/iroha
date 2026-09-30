@@ -925,10 +925,6 @@ fn archive_registration_projection_excludes_mutable_location_state() {
     assert!(zero_height.validate().is_err());
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one provider-attestation scenario covers quorum, replay, substitution, retention, and wire invariants"
-)]
 fn provider_bundle_attestation_requires_controller_quorum_and_exact_finalized_completion() {
     let first =
         KeyPair::try_from_seed(vec![61; 32], Algorithm::Ed25519).expect("first provider keypair");
@@ -1072,10 +1068,6 @@ fn structured_version_rejects_build_metadata_overflow_and_leading_zeroes() {
     assert!(MusubiVersionV1::new(1, 0, 0, too_many).is_err());
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one cursor-ceiling matrix pins every structured Musubi V1 key family"
-)]
 fn finalized_cursor_ceiling_covers_every_structured_v1_key_family() {
     let maximum_version = MusubiVersionV1::new(
         u64::MAX,
@@ -1594,10 +1586,6 @@ fn canonical_bundle_file_size_gate_is_inclusive() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one large-lock regression covers aligned, misaligned, measured-allocation, and byte-limit decoding"
-)]
 fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
     let maximum = usize::try_from(MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1)
         .expect("Musubi metadata byte cap fits usize");

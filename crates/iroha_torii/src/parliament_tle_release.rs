@@ -7,10 +7,10 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use iroha_core::tle_release::{
-    TlePartialReleaseShareV1, TleReleaseAuthorizationErrorV1, TleReleaseCoordinatorErrorV1,
-    TleReleaseCoordinatorV1,
-};
+use iroha_core::tle_release::TleReleaseAuthorizationErrorV1;
+use iroha_core::tle_release::TleReleaseCoordinatorErrorV1;
+use iroha_core::tle_release::TleReleaseCoordinatorV1;
+use iroha_core_timed_ovn::tle::TlePartialReleaseShareV1;
 use iroha_data_model::governance::types::BallotAttemptId;
 
 /// Consume at most one byte and enforce the partial-release zero-body contract.

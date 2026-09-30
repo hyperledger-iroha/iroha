@@ -1127,6 +1127,10 @@ mod tests {
     #[test]
     fn finalized_mint_entry_rejects_oversized_checkpoint_before_reading_or_owner_lookup() {
         let input = [1_u8; 32];
+        // A real separate caller allocation keeps the declared checkpoint span
+        // disjoint from output_len. Fabricating a huge stack span instead exercises
+        // the aliased-length refusal, which must leave that output untouched.
+        let oversized_checkpoint = vec![0; MAX_FINALITY_CHECKPOINT_BYTES + 1];
         let mut output = [0x5a; KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1];
         let mut output_len = 99;
         assert_eq!(
@@ -1138,8 +1142,8 @@ mod tests {
                     1,
                     input.as_ptr(),
                     32,
-                    input.as_ptr(),
-                    MAX_FINALITY_CHECKPOINT_BYTES + 1,
+                    oversized_checkpoint.as_ptr(),
+                    oversized_checkpoint.len(),
                     input.as_ptr(),
                     1,
                     input.as_ptr(),

@@ -3,6 +3,87 @@
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
 
+/// Unvalidated immutable build metadata supplied by the owning executable.
+///
+/// Capture this value in a thin executable and pass it to runtime libraries, so
+/// source revisions never become compilation inputs of those libraries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledBuildMetadata {
+    version: &'static str,
+    source_commit: Option<&'static str>,
+    sealed_source_commit: Option<&'static str>,
+    dpn_validator_release_commit: Option<&'static str>,
+    cargo_features: Option<&'static str>,
+    target_triple: Option<&'static str>,
+}
+
+impl CompiledBuildMetadata {
+    /// Capture immutable parts compiled into the owning executable.
+    #[must_use]
+    pub const fn from_compiled_parts(
+        version: &'static str,
+        source_commit: Option<&'static str>,
+        sealed_source_commit: Option<&'static str>,
+        dpn_validator_release_commit: Option<&'static str>,
+        cargo_features: Option<&'static str>,
+        target_triple: Option<&'static str>,
+    ) -> Self {
+        Self {
+            version,
+            source_commit,
+            sealed_source_commit,
+            dpn_validator_release_commit,
+            cargo_features,
+            target_triple,
+        }
+    }
+
+    /// Validate this executable's identity at the runtime admission boundary.
+    ///
+    /// # Errors
+    /// Rejects absent, malformed, or contradictory source metadata.
+    pub fn identity(self) -> Result<BuildIdentity, BuildIdentityError> {
+        BuildIdentity::from_compiled_parts(
+            self.version,
+            self.source_commit,
+            self.sealed_source_commit,
+            self.dpn_validator_release_commit,
+            self.cargo_features,
+            self.target_triple,
+        )
+    }
+
+    /// Package version compiled into the owning executable.
+    #[must_use]
+    pub const fn version(self) -> &'static str {
+        self.version
+    }
+
+    /// Canonical source label used in executable diagnostics.
+    #[must_use]
+    pub const fn source_commit_label(self) -> &'static str {
+        match self.source_commit {
+            Some(value) => value,
+            None => "unknown",
+        }
+    }
+
+    /// Executable feature label used in diagnostics.
+    #[must_use]
+    pub const fn cargo_features_label(self) -> &'static str {
+        match self.cargo_features {
+            Some(value) => value,
+            None => "unknown",
+        }
+    }
+
+    /// Optional sealed source marker compiled into the executable.
+    #[must_use]
+    pub const fn sealed_source_commit(self) -> Option<&'static str> {
+        self.sealed_source_commit
+    }
+}
+
 /// Immutable build metadata supplied by the executable that owns a runtime.
 ///
 /// Shared libraries never inspect environment variables or Git to construct this
@@ -156,15 +237,15 @@ fn covered_wire_roots() -> [iroha_schema::MetaMap; 2] {
     ]
 }
 
-/// Capture the canonical build metadata in the executable invoking this macro.
+/// Capture build metadata in the executable invoking this macro.
 ///
-/// Invoke at the executable startup boundary, then pass the returned immutable
-/// identity to runtime constructors. Expansion occurs in the caller, so the
-/// shared Core library does not embed or depend on these environment values.
+/// Expand only in executable crates, then pass this immutable value to runtime
+/// libraries. Expansion occurs in the caller, keeping source revisions out of
+/// library compilation inputs.
 #[macro_export]
-macro_rules! compiled_build_identity {
+macro_rules! compiled_build_metadata {
     () => {
-        $crate::release_identity::BuildIdentity::from_compiled_parts(
+        $crate::release_identity::CompiledBuildMetadata::from_compiled_parts(
             env!("CARGO_PKG_VERSION"),
             option_env!("VERGEN_GIT_SHA"),
             option_env!("IROHA_GIT_COMMIT_HASH"),
@@ -172,6 +253,17 @@ macro_rules! compiled_build_identity {
             option_env!("VERGEN_CARGO_FEATURES"),
             option_env!("VERGEN_CARGO_TARGET_TRIPLE"),
         )
+    };
+}
+
+/// Capture and validate the canonical identity in the invoking executable.
+///
+/// Runtime libraries receive [`CompiledBuildMetadata`] from their executable
+/// instead of invoking this macro themselves.
+#[macro_export]
+macro_rules! compiled_build_identity {
+    () => {
+        $crate::compiled_build_metadata!().identity()
     };
 }
 
@@ -207,6 +299,59 @@ mod tests {
     use super::*;
     const SOURCE: &str = "1234567890abcdef1234567890abcdef12345678";
     const OTHER: &str = "2234567890abcdef1234567890abcdef12345678";
+
+    #[test]
+    fn captured_build_metadata_preserves_validation_and_labels() {
+        for (version, source, sealed) in [
+            ("3.0.0", Some(SOURCE), Some(SOURCE)),
+            ("3.0.0", Some("local-fast-build"), None),
+            ("3.0.0", None, None),
+            ("", Some(SOURCE), None),
+            ("3.0.0", Some("unknown"), None),
+            ("3.0.0", Some(SOURCE), Some(OTHER)),
+        ] {
+            let build = CompiledBuildMetadata::from_compiled_parts(
+                version,
+                source,
+                sealed,
+                Some(OTHER),
+                Some("daemon"),
+                Some("target"),
+            );
+            assert_eq!(
+                build.identity(),
+                BuildIdentity::from_compiled_parts(
+                    version,
+                    source,
+                    sealed,
+                    Some(OTHER),
+                    Some("daemon"),
+                    Some("target"),
+                )
+            );
+            assert_eq!(build.version(), version);
+            assert_eq!(build.source_commit_label(), source.unwrap_or("unknown"));
+            assert_eq!(build.cargo_features_label(), "daemon");
+            assert_eq!(build.sealed_source_commit(), sealed);
+        }
+        let build =
+            CompiledBuildMetadata::from_compiled_parts("3.0.0", None, None, None, None, None);
+        assert_eq!(build.source_commit_label(), "unknown");
+        assert_eq!(build.cargo_features_label(), "unknown");
+        assert_eq!(build.sealed_source_commit(), None);
+        let build = CompiledBuildMetadata::from_compiled_parts(
+            "3.0.0",
+            Some("local-fast-build"),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            build.identity().unwrap().release_source_commit(),
+            Err(BuildIdentityError::DevelopmentSource)
+        );
+    }
 
     #[test]
     fn executable_identity_rejects_missing_malformed_and_conflicting_source() {

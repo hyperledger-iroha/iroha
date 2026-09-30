@@ -12,13 +12,13 @@ mod bootstrap_checkpoint;
 pub use bootstrap_checkpoint::{
     KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
 };
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 mod recovery_journal_bundle;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 pub use recovery_journal_bundle::KagemushaPendingRecoveryJournalsV1;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 mod response_evidence_archive;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
     KagemushaResponseEvidenceContextV1,
@@ -26,9 +26,9 @@ pub use response_evidence_archive::{
 mod candidate_lifecycle;
 mod commitments;
 use commitments::*;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 mod coordinator_operation_store;
-#[cfg(all(unix, test))]
+#[cfg(unix)]
 pub use coordinator_operation_store::{
     KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1, KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1,
     KagemushaCoordinatorOperationStoreErrorV1, KagemushaCoordinatorOperationStoreV1,
@@ -38,7 +38,6 @@ mod handoff_verification;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod hardware_transaction_journal;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
-#[cfg(any(test, feature = "test-utils"))]
 pub use hardware_transaction_journal::KagemushaHardwareTransactionJournalV1;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use hardware_transaction_journal::KagemushaHardwareTransactionTransportV1;
@@ -2083,7 +2082,6 @@ impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
     }
 }
 
-#[cfg(test)]
 /// Compute the private store identity from the exact governed lane and state context.
 #[cfg(unix)]
 pub(crate) fn disk_history_lane_binding(
@@ -2134,7 +2132,6 @@ where
     /// restore path still verifies the guard, full snapshot commitment, both roots, and retained
     /// proof state. This function never initializes missing files or falls back to empty history.
     // TODO: Wire the product coordinator's authenticated hardware session into durable restore.
-    #[cfg(test)]
     pub(crate) fn restore_from_disk_history(
         snapshot: KagemushaStateSnapshotV1,
         current_hardware_anchor: &DurabilityAnchorV1,

@@ -3,6 +3,13 @@ title: SoraFS V1 Closure Ledger
 summary: Canonical implementation, validation, documentation, and rollout-evidence ledger for the first SoraFS production release.
 ---
 
+Code line-count and repository-source-size acceptance gates are retired.
+Size measurements and size-guard failures in the checkpoint records below are
+historical observations, not current release criteria. Protocol, custody,
+wire/resource bounds and scoped qualification requirements remain unchanged.
+The [retirement record](../../docs/history/2026-09-30/source-size-gate-removal/README.md)
+retains the preceding policy and exact source preimages.
+
 # SoraFS V1 Closure Ledger
 
 This is the single closure index for the first SoraFS production release. It
@@ -504,7 +511,7 @@ test summaries; these parser checks are synthetic validation only.
 
 Release/runtime-owner contracts now pass **927 tests**, including the guard
 updates for interval, digest, receipt-lease and lifecycle coverage. Formatting,
-codec and history checks pass. The source-budget guard still fails with exactly
+codec and history checks pass. The preceding source-budget guard failed at that checkpoint with exactly
 the previous **241 findings** and no new exceptions. The cache index
 `native-time-interval-local-checkpoint.json` has SHA-256
 `9425b813364bb1cc012af10ec34978904f33fca6fe6379c8ca8a16a54d2b178e`;
@@ -633,7 +640,7 @@ prototype qualification.
 
 The result `final-promotion-account-final-validation-result.json` has SHA256
 `528a9d656285ca400035d6a1c9f635732f7976991fc332c52c2b9c45544c7b2f`.
-Formatting and codec checks pass. The global source-budget guard still reports
+Formatting and codec checks pass. The preceding global source-budget guard recorded
 241 findings with no new offender paths; two limits were ratcheted down.
 Cargo.lock is unchanged. This is local captured source/binary execution evidence,
 not a whole-build seal or deployment approval.
@@ -699,7 +706,7 @@ unchanged across their recorded intervals. The 27 new source-owned tests and all
 5,783 previously selected account-checkpoint test names are retained. Native CI
 and local selection still agree on 17 filters and 75 mandatory sentinels.
 All 1,094 release/CI contracts, formatting and the codec guard pass. The global
-source-budget guard remains failing with exactly the same 241 findings; no limit
+preceding source-budget guard failed at that checkpoint with exactly the same 241 findings; no limit
 was raised for this slice. Cargo.lock is unchanged.
 
 Separately, before these identity/age source changes, the Kagami fixture cleanup
@@ -1065,9 +1072,10 @@ The extraction retains all 33 complete test modules and cfg gates byte-for-byte,
 including 176 test attributes and 623 assertion lines. Same-directory textual
 includes retain their module namespaces and relative paths; actual registered
 names still require native verification. `lib.rs` drops from 58,182 to 50,588
-lines, with three test owners of 2,666, 2,104 and 2,859 lines. The source-budget
-guard requires downward ratchets from 50,718 to 50,588 for the root and from
-42,266 to 42,225 for the API; no exception or inventory has been changed here.
+lines, with three test owners of 2,666, 2,104 and 2,859 lines. The preceding
+source-budget guard required downward ratchets from 50,718 to 50,588 for the
+root and from 42,266 to 42,225 for the API. Those recorded policy requirements
+are now retired; the test inventory is preserved.
 
 Formatting, exact source composition and isolated strict patch replay pass.
 The final test-layout overlay retains 25 selected Python passes. Wrapper/TLS
@@ -1330,10 +1338,10 @@ identities and rejection without state or provider side effects. The frozen
 provider/rollout source-contract rerun reports **410 passed, two failed** in
 57.71 seconds with no scoped source drift
 (`node-security-03-source-contracts-result.json`). Both failures remain the
-actual unfinished-source closure guards. The current global source-size guard
-reports 222 findings; the owned PoP parent now meets the 5,000-line limit and
-reviewed evidence-viewer/lib-test reductions are ratcheted down. Existing Node
-`lib.rs` and moderation-orchestrator overages still prevent a global pass.
+actual unfinished-source closure guards at that checkpoint. The preceding
+source-size guard recorded 222 findings and the captured PoP parent met its
+then-current limit. Node `lib.rs` and moderation-orchestrator sizes prevented
+that historical size-policy pass; code-size requirements are now retired.
 The next coordinated build includes the Node library test executable directly;
 no native pass is inferred from these source checks.
 
@@ -1417,7 +1425,7 @@ pinned-environment context and exact offender inventory remain in
 The remaining entries concern authenticated MKHE reports,
 the SoraFS signer hardware/state and production-consumer hard cut, curated Torii
 capabilities, and bounded multi-page shard prefixes. No guard, source seal or
-dependency pin was relaxed. The global source-budget audit also fails; new
+dependency pin was relaxed. The preceding source-budget audit failed at that checkpoint; new
 canonical regression groups are extracted into small cohesive test files rather
 than enlarging their existing parent modules. Neither source inventories nor
 local test counts establish hardware or reference-deployment readiness.
@@ -1638,14 +1646,13 @@ Consensus threshold custody keeps its existing behavior while dropping its
 dependency on software-signer wrapping APIs. All **three native reader tests**
 pass, covering bounds, metadata changes, links and unsafe permissions.
 
-Ten stale SoraFS source-size baselines have been tightened to the smaller
-current files. The fetch CLI's existing test module is now a separate owned file:
-all 50 tests and 144 assertions are retained, and both files meet their default
-5,000/3,000-line limits with the exception removed. The combined source-budget
-and fetch-contract selection passes **41 tests**. No limit was raised; other
-identified SoraFS growth findings still require source refactoring. Other
-tasks have advanced the repository revision during this work, so these results
-cannot serve as evidence for one immutable release candidate.
+At that checkpoint, ten SoraFS source-size baselines were adjusted to the
+recorded files. The fetch CLI's existing test module became a separate owned
+file, retaining all 50 tests and 144 assertions. The combined preceding
+source-budget and fetch-contract selection passed **41 tests**. The recorded
+5,000/3,000-line requirements are now retired; source growth alone requires no
+refactoring. Other tasks advanced the repository revision during that work,
+so these results do not establish one immutable release candidate.
 
 The broad Python 3.12 release-helper baseline completed with **3,371 passes and
 60 failures** after 3h40m across a changing worktree. Current-source triage
@@ -1658,8 +1665,8 @@ path-resolution check. These stay open. The receipt verifier suite is now
 mandatory in the release gate and its source/test changes trigger the workflow.
 Packaging replays with Python 3.12 stop at the unchanged reviewed-source seal;
 the pipeline also rejects its changed signing bootstrap helper. These denials
-are not successful packaging evidence. Source-budget findings, dirty OpenAPI
-manifests, remaining signer provider/state adapters and atomic custody-profile
+are not successful packaging evidence. Dirty OpenAPI manifests, remaining
+signer provider/state adapters and atomic custody-profile
 replacement still require closure. The workspace formatting check found the
 receipt CLI's formatting plus unrelated executor/exporter formatting; the
 receipt CLI is now formatted. No other owner's Rust code was reformatted.

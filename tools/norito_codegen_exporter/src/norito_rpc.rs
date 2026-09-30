@@ -980,10 +980,6 @@ struct WireInstructionPayload {
     payload_base64: String,
 }
 impl RawPayloadFixture {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "fixture construction keeps all descriptor-to-signed-payload invariants in one fail-closed path"
-    )]
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
         if self.network_id_hint != self.payload.network_id {
             bail!(
@@ -2007,10 +2003,6 @@ impl PublicationSnapshot {
         Ok(unsealed)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "snapshot capture validates one cohesive path, type, mode, link, and spelling invariant matrix"
-    )]
     fn capture(root: &Path, expected_paths: &[PathBuf]) -> Result<Self> {
         let root_metadata = fs::symlink_metadata(root)
             .with_context(|| format!("failed to inspect publication root {}", root.display()))?;
@@ -2288,10 +2280,6 @@ fn set_canonical_directory_mode(path: &Path) -> Result<()> {
         path.display()
     )
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "publication keeps reservation, namespace identity, exact-tree validation, and the final seal commit in one auditable transaction"
-)]
 fn publish_create_only_publication<F>(
     snapshot: &PublicationSnapshot,
     destination_root: &Path,
@@ -3238,10 +3226,6 @@ struct FixtureEntry {
     time_to_live_ms: u64,
 }
 impl FixtureEntry {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "fixture validation is one cohesive fail-closed manifest invariant matrix"
-    )]
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         validate_fixture_identity(&self.name, &self.encoded_file)?;
         if self.time_to_live_ms == 0 {
@@ -4512,10 +4496,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the closed-schema test keeps all top-level and nested rejection cases auditable together"
-    )]
     fn payload_descriptor_requires_exact_top_level_and_payload_fields() {
         let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
         let entry = fixture

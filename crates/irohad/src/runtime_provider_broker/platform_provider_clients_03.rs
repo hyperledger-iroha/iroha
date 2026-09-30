@@ -2877,7 +2877,7 @@ struct ParliamentTleBrokerPartialReleaseSigner {
 impl ParliamentTleBrokerPartialReleaseSigner {
     fn attest_projected_capability(
         &self,
-        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
     ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError>
     {
@@ -2919,11 +2919,11 @@ impl ParliamentTleBrokerPartialReleaseSigner {
 
     fn sign_projected_partial_release(
         &self,
-        projection: &iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
-        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        projection: &iroha_core_timed_ovn::tle::AuthorizedTleReleaseProjectionV1,
+        session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         identity: &iroha_crypto::tle::TleReleaseIdentityV1,
         finalized_height: u64,
-    ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, BrokerError> {
+    ) -> Result<iroha_core_timed_ovn::tle::TlePartialReleaseShareV1, BrokerError> {
         retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
             let request_payload = encode_canonical(
@@ -2959,7 +2959,7 @@ impl iroha_core::tle_release::TlePartialReleaseSignerV1
 {
     fn attest_partial_release_capability(
         &self,
-        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -2982,7 +2982,7 @@ impl iroha_core::tle_release::TlePartialReleaseSignerV1
     fn sign_partial_release(
         &self,
         context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
-    ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+    ) -> Result<iroha_core_timed_ovn::tle::TlePartialReleaseShareV1, String> {
         let projection = context
             .broker_projection_v1()
             .map_err(|_| redacted_provider_error(BrokerError::Rejected))?;
@@ -3028,10 +3028,6 @@ pub(super) fn resolve(
     resolve_with_decode_pool(bindings, endpoint, shared_decode_resource_pool())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 provider-resolution matrix is exhaustive"
-)]
 fn resolve_with_decode_pool(
     bindings: &IrohaRuntimeProviderBindingsV1,
     endpoint: &EndpointPolicy,

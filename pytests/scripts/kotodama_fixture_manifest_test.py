@@ -38,6 +38,10 @@ def _copy_fixture_tree(destination: Path) -> Path:
         copied_source = destination / source["path"]
         copied_source.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, copied_source)
+    for test_source in checker.OUT_OF_LINE_TEST_SOURCES.values():
+        copied_source = destination / test_source
+        copied_source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / test_source, copied_source)
     for source_path, includes in checker.EXPECTED_TEST_INCLUDES.items():
         source_parent = Path(source_path).parent
         for include in includes:
@@ -57,6 +61,24 @@ def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 301
     assert stats.tests == 591
+
+
+def test_out_of_line_test_module_is_required(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    test_source = next(iter(checker.OUT_OF_LINE_TEST_SOURCES.values()))
+    (tmp_path / test_source).unlink()
+    with pytest.raises(FileNotFoundError):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_out_of_line_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    test_source = next(iter(checker.OUT_OF_LINE_TEST_SOURCES.values()))
+    source = tmp_path / test_source
+    with source.open("a", encoding="utf-8") as output:
+        output.write("\n#[test]\nfn unexpected_out_of_line_test() {}\n")
+    with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:

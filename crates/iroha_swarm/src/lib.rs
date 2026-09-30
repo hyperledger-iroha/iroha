@@ -429,10 +429,6 @@ impl PeerSettings {
             prepared_runtime: None,
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "prepared-bundle validation is one ordered fail-closed admission transaction"
-    )]
     fn prepared(
         chain: iroha_model_base::chain::ChainId,
         validators: Vec<PreparedValidator>,

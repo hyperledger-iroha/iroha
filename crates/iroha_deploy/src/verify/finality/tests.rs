@@ -169,10 +169,6 @@ impl Chain {
     fn constant(size: usize, tip: u64) -> Self {
         Self::new(&[(0..size, tip + 3)], tip)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one linear builder keeps every certified field of the synthetic chain visible"
-    )]
     fn new(ranges: &[(Range<usize>, u64)], tip: u64) -> Self {
         let keys = ordered_keys(ranges[0].0.clone());
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);

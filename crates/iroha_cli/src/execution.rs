@@ -3,7 +3,7 @@
 use crate::{Run, RunContext};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
-use iroha_core::execution_proofs::{
+use iroha_core_privacy::execution_proofs::{
     RACE_MAX_PROOF_BYTES_V1, compiled_execution_profiles_v1, export_race_kernels_json_v1,
     export_race_parity_json_v1, prove_race_v1, race_profile_id_v1, verify_execution_proof_v1,
 };

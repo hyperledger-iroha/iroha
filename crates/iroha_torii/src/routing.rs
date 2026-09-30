@@ -20175,7 +20175,7 @@ mod contract_payload_normalization_tests {
     }
     #[test]
     fn normalize_contract_payload_preserves_compiled_public_call_fields() {
-        let code = ivm::KotodamaCompiler::new()
+        let code = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku PublicCallPayloadNormalizeTest {
@@ -22907,7 +22907,7 @@ mod multisig_selector_tests {
             _alias_literal,
             authority_keypair,
         ) = multisig_contract_test_fixture();
-        let code = ivm::KotodamaCompiler::new()
+        let code = kotodama_lang::compiler::Compiler::new()
             .compile_source(
                 r#"
 seiyaku BytesPayloadNormalizeTest {

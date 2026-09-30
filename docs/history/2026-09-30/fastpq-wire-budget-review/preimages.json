@@ -1,0 +1,17 @@
+[
+  {
+    "path": "scripts/fastpq/check_compact_source_budget.py",
+    "archive": "docs/history/2026-09-30/fastpq-wire-budget-review/scripts__fastpq__check_compact_source_budget.py.txt",
+    "sha256": "01bc5949ae14b1da779a3359ee8d26c4f9f6b3e7370d5cdcb6a4b0b798255168"
+  },
+  {
+    "path": "scripts/fastpq/tests/test_compact_source_budget.py",
+    "archive": "docs/history/2026-09-30/fastpq-wire-budget-review/scripts__fastpq__tests__test_compact_source_budget.py.txt",
+    "sha256": "39a54504166ebf2f06990795723d406b19927e0113168e14b21d242b30e7b94b"
+  },
+  {
+    "path": "crates/fastpq_prover/src/backend/deep_proof/fri_values.rs",
+    "archive": "docs/history/2026-09-30/fastpq-wire-budget-review/crates__fastpq_prover__src__backend__deep_proof__fri_values.rs.txt",
+    "sha256": "058e049c71f47ab6ddd6653335ebda060022c6e013cea96abf0397ed24462f7e"
+  }
+]

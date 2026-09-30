@@ -379,34 +379,3 @@ fn rkg_one_response_attempt_is_fresh_whole_box_and_memberships_precede_it() {
         "destination[32..]\n            .copy_from_slice(&self.capability.selector.proof_commitment_transcript_digest)"
     ));
 }
-
-#[test]
-fn rkg_one_creator_production_areas_stay_within_review_caps() {
-    let within_cap = |sources: &[&str]| {
-        sources
-            .iter()
-            .map(|source| source.lines().count())
-            .sum::<usize>()
-            <= 500
-            && sources.iter().map(|source| source.len()).sum::<usize>() <= 24 * 1024
-    };
-    assert!(within_cap(&[include_str!(
-        "../direct_rkg_one_creator_adapter_v1.rs"
-    )]));
-    assert!(within_cap(&[include_str!(
-        "statement_v1/rkg_one_creator_core_v1.rs"
-    )]));
-    assert!(within_cap(&[include_str!(
-        "rkg_one_creator_membership_v1.rs"
-    )]));
-    assert!(within_cap(&[
-        include_str!("rkg_one_creator_prover_v1.rs"),
-        include_str!("rkg_one_creator_prover_v1/transcript_v1.rs"),
-    ]));
-    assert!(within_cap(&[
-        include_str!("rkg_one_creator_response_v1.rs"),
-        include_str!("rkg_one_creator_response_v1/rns_first_messages_v1.rs"),
-    ]));
-    assert!(include_str!("kats.rs").lines().count() <= 500);
-    assert!(include_str!("kats.rs").len() <= 24 * 1024);
-}

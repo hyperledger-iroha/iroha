@@ -279,10 +279,6 @@ fn success_installs_once_take_keeps_bit_and_drop_clears_owner() {
 
 #[test]
 fn caps_resources_errors_and_single_slot_are_pinned() {
-    let production = include_str!("party_local_rkg_ephemeral_v1.rs");
-    let tests = include_str!("party_local_rkg_ephemeral_v1_tests.rs");
-    assert!(production.lines().count() <= 500 && production.len() <= 24 * 1024);
-    assert!(tests.lines().count() <= 500 && tests.len() <= 24 * 1024);
     assert_eq!(
         [
             RKG_EPHEMERAL_RETAINED_PAYLOAD_BYTES_V1,

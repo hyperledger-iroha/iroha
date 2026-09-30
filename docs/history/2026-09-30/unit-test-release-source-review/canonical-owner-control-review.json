@@ -1,0 +1,48 @@
+{
+  "scope": "Current canonical crate-owner extraction, read-only lexical/control review; complete source/native/runtime qualification pending",
+  "evidence": [
+    {
+      "ignored_evidence": "target/unit-tests/root/privacy-owner-relocation-audit/record.json",
+      "sha256": "64c7af049e0be81e08aa4b20d1a674747d87fd9e72e74535d397cf531a0e2af1",
+      "bytes": 506051
+    },
+    {
+      "ignored_evidence": "target/unit-tests/root/timed-ovn-owner-assertion-audit.json",
+      "sha256": "a0d2b893489fbde1a79b3dcf37ab24eea8b649e8513e9b1bc2fd4d95af96fed7",
+      "bytes": 4685
+    },
+    {
+      "ignored_evidence": "target/unit-tests/sdk/cli-test-relocation-audit/record.json",
+      "sha256": "fe3b771db9eaf3a30d78f244e1f38b8b83f17478e620a9b75f2ee3c1643df505",
+      "bytes": 22176
+    }
+  ],
+  "privacy_assertions": {
+    "before": 12590,
+    "after": 12598,
+    "changes": "Eight additional owner/frame roundtrip/schema/truncation/trailing-byte checks; two source-gate strings follow the new test-utils feature; one unchanged assertion pair moves with a test fixture. No assertion is removed."
+  },
+  "audit_capsule_assertions": {
+    "before": 19,
+    "after": 19,
+    "ordered_equal": true
+  },
+  "timed_ovn_assertions": {
+    "before": 148,
+    "after": 167,
+    "removed_or_modified": 0,
+    "added": 19
+  },
+  "cli_tests": {
+    "functions": 127,
+    "assertions": 625,
+    "all_tokens_preserved_after_exact_owner_projection": true
+  },
+  "release_test_helpers": {
+    "privacy": "cfg(test) or test-utils",
+    "timed_ovn": "cfg(test) or test-utils",
+    "explicit_nonshipping_evidence": "privacy-release-evidence",
+    "shipping_feature_guard": "Both extracted test-utils markers are rejected; actual focused two-case test passes."
+  },
+  "source_input_checkpoint": "Provisional inventory only. The active 82d945 source seal remains intentionally unchanged pending coherent final review."
+}

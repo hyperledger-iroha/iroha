@@ -218,33 +218,8 @@ public final class NoritoBridgeKit {
     return String(data: data, encoding: .utf8) ?? "{}"
   }
 
-  // MARK: - Optional Control frame helpers via dynamic lookup
-  // These use dlsym to avoid hard link requirements; return NoritoError.ffi(-1) if unavailable.
-  public func encodeControlOpen(sid: Data, dir: UInt8, seq: UInt64, appPub: Data) throws -> Data {
-    try controlEncode4(name: "connect_norito_encode_control_open", sid: sid, dir: dir, seq: seq, p1: appPub)
-  }
-  public func encodeControlApprove(sid: Data, dir: UInt8, seq: UInt64, walletPub: Data, account: Data? = nil, sig: Data? = nil) throws -> Data {
-    let sym = dlsym(RTLD_DEFAULT, "connect_norito_encode_control_approve")
-    guard let s = sym else { throw NoritoError.ffi(-1) }
-    typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
-    let fn = unsafeBitCast(s, to: Fn.self)
-    var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
-    let rc = sid.withUnsafeBytes { sp in
-      walletPub.withUnsafeBytes { wp in
-        (account ?? Data()).withUnsafeBytes { ap in
-          (sig ?? Data()).withUnsafeBytes { sg in
-            fn(sp.bindMemory(to: UInt8.self).baseAddress!, dir, seq,
-               wp.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(walletPub.count),
-               account == nil ? nil : ap.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(account?.count ?? 0),
-               sig == nil ? nil : sg.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(sig?.count ?? 0),
-               &outPtr, &outLen)
-          }
-        }
-      }
-    }
-    guard rc == 0, let p = outPtr else { throw NoritoError.ffi(rc) }
-    let d = Data(bytes: p, count: Int(outLen)); ffi_free(p); return d
-  }
+  // MARK: - Current Control frame helpers via dynamic lookup
+  // Current bridge symbols are mandatory; unavailable symbols fail closed.
   public func decodeControlKind(_ frame: Data) throws -> (sid: Data, dir: UInt8, seq: UInt64, kind: UInt16) {
     guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_kind") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>, UnsafeMutablePointer<UInt8>, UnsafeMutablePointer<UInt64>, UnsafeMutablePointer<UInt16>) -> Int32
@@ -316,17 +291,7 @@ public final class NoritoBridgeKit {
     return String(data: data, encoding: .utf8) ?? "{}"
   }
 
-  private func controlEncode4(name: String, sid: Data, dir: UInt8, seq: UInt64, p1: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, name) else { throw NoritoError.ffi(-1) }
-    typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
-    let fn = unsafeBitCast(sym, to: Fn.self)
-    var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
-    let rc = sid.withUnsafeBytes { sp in
-      p1.withUnsafeBytes { p in fn(sp.bindMemory(to: UInt8.self).baseAddress!, dir, seq, p.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(p1.count), &outPtr, &outLen) }
-    }
-    guard rc == 0, let ptr = outPtr else { throw NoritoError.ffi(rc) }
-    let d = Data(bytes: ptr, count: Int(outLen)); ffi_free(ptr); return d
-  }
+
 }
 #else
 // Stubs to keep project building without the XCFramework

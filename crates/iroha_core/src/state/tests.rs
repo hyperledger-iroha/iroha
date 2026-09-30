@@ -1424,7 +1424,7 @@ state_test! { sync trigger_batch_contract_calls_advance_nft_sequence
         transaction::{ExecutableBatchItem, executable::ContractInvocation},
     };
     use iroha_test_samples::ALICE_KEYPAIR;
-    let_row! { (program, manifest) = ivm::KotodamaCompiler::new() .compile_source_with_manifest( r#"
+    let_row! { (program, manifest) = kotodama_lang::compiler::Compiler::new() .compile_source_with_manifest( r#"
 seiyaku SequentialNfts {
   kotoage fn run() authorize("CanInvokeContractEntrypoint") {
 ledger::nft::create_for_all_users();
@@ -26492,7 +26492,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         },
     };
     use iroha_test_samples::ALICE_KEYPAIR;
-    use ivm::KotodamaCompiler;
+    use kotodama_lang::compiler::Compiler as KotodamaCompiler;
     let state = blank_state();
     const REQUIRED_PERMISSION: &str = "raw_trigger_run";
     let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
@@ -26887,7 +26887,7 @@ state_test! { sync identityless_raw_trigger_rejects_before_event_argument_decode
     };
     let state = blank_state();
     let trigger_id: TriggerId = "identityless_raw_callback".parse().expect("trigger id");
-    let_row! { program = ivm::KotodamaCompiler::new() .compile_source( r#"
+    let_row! { program = kotodama_lang::compiler::Compiler::new() .compile_source( r#"
 seiyaku IdentitylessRawCallback {
   kotoage fn main(Json ev) authorize("identityless_raw_callback_run") {
 let _ev = ev;
@@ -26959,7 +26959,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         },
     };
     use iroha_test_samples::ALICE_KEYPAIR;
-    use ivm::KotodamaCompiler;
+    use kotodama_lang::compiler::Compiler as KotodamaCompiler;
     let state = blank_state();
     const REQUIRED_PERMISSION: &str = "contract_trigger_run";
     let_row! { src = r#"
@@ -27224,10 +27224,8 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_KEYPAIR;
-    use ivm::{
-        KotodamaCompiler,
-        kotodama::compiler::{CompilerMode, CompilerOptions},
-    };
+    use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+    use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
     let state = blank_state();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let_row! { rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( domain_id.clone(), "rose".parse().unwrap(), ) };

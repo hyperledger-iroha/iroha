@@ -1,0 +1,125 @@
+{
+  "before_sha256": "f6426f55748e54a3a64873968a4226f747d4fada5a301f3313a674d1850a48f3",
+  "current_sha256": "7fa37cb681128c66088a01fcf40b634d345a34191488f834384307c901fe02e7",
+  "rows": 973,
+  "counts": {
+    "catch_unwind": 54,
+    "spawn_blocking": 21,
+    "task_spawn": 397,
+    "upgrade_task": 10
+  },
+  "guard_log": "target/unit-tests/script-tests/panic-compiler-migration-current.log",
+  "source_diff_sha256": "31aaa7d38dd6ca9efec1d55b7da75c17c47b1e5c8bc7288c0916158290c7dcc6",
+  "changes": [
+    {
+      "path": "crates/iroha_core/src/executor.rs",
+      "before": [
+        "eaf9034e0265c8490456d7a3129218d361294812ff4c6dbfeae027c62da584b9",
+        "none"
+      ],
+      "after": [
+        "bde00e7186585f2fff377800f606a92d3ef39575efa6f1b1feec06ad9c70fc89",
+        "none"
+      ]
+    },
+    {
+      "path": "crates/iroha_core/src/executor_contract_owner_permission_tests.rs",
+      "before": [
+        "d4db0569d94cc0cfd9c11f89293d2497ae5079937fd3542ed99769f7f4789db7",
+        "none"
+      ],
+      "after": [
+        "256a7eaaef13eb30bd620097da6fda8adf077182088883d7d254b95a832cf775",
+        "none"
+      ]
+    },
+    {
+      "path": "crates/iroha_core/src/executor_effect_budget_tests.rs",
+      "before": [
+        "5284704b53926f3cf022342a0594fc353c9cdbf63e29ea39f245eb10c934e034",
+        "none"
+      ],
+      "after": [
+        "aafb11b8ca00cb6f3b43123fba4aab359ce612f0e72ebdb28f74bfa66b4854af",
+        "none"
+      ]
+    },
+    {
+      "path": "crates/iroha_core/src/executor_raw_ivm_work_tests.rs",
+      "before": [
+        "aa83a414dad72b58e58ae2084fd7c096d8c211185af3026a3404ea04a235a47e",
+        "none"
+      ],
+      "after": [
+        "4bc75d8339a5aea74de59784db01969166f8592ad4f0dda6ae1baa87957c181d",
+        "none"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/Cargo.toml",
+      "before": [
+        "2202dff4dea4595b80478251bcf520a93b60dcc05049a045c287b488f8ce302a",
+        "manifest"
+      ],
+      "after": [
+        "ecc64b70d21c31624d61f5f4aa71bbe5fc044bdad653ecf28bee5a9f8d38d2fc",
+        "manifest"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/src/contract_sources.rs",
+      "before": [
+        "2e13483202048c7b438f5f5c87438501da29b78c3da21f3d5d5b010cfb5d1126",
+        "task_spawn:spawn=1"
+      ],
+      "after": [
+        "081b18970a4b6e570bb85de0ce382f5bf96a3b08182f14d0f33001a15466cb52",
+        "task_spawn:spawn=1"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/src/gov/tests.rs",
+      "before": [
+        "0ffc8722790d4df395625c56dc00a077021d0f07c4fa928e7dc6c16e8050ffc5",
+        "none"
+      ],
+      "after": [
+        "337fc2748151931cffb8960c3e462e09513b6773ab51110a728aa26ec4624196",
+        "none"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/src/lib.rs",
+      "before": [
+        "5d863794185dadf0a229313f5a06c4daf63f53bec49882567b95165fbd1cfce6",
+        "catch_unwind:catch_unwind=1,task_spawn:spawn=12,upgrade_task:on_upgrade=3"
+      ],
+      "after": [
+        "ccb53515f2e78f39129166e15c3fec828a64670f0bbb1b6ee295115b0ec3b46a",
+        "catch_unwind:catch_unwind=1,task_spawn:spawn=12,upgrade_task:on_upgrade=3"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/src/routing.rs",
+      "before": [
+        "01dff2146c41e92d5bbc623177f128a59ba1ed11e59ee725bf1451ecf0367ef8",
+        "catch_unwind:catch_unwind=1,task_spawn:spawn=7"
+      ],
+      "after": [
+        "5340cfe7c7917d379ad8380f6367ba3e5e37a925e447cadff7a27723986e6c67",
+        "catch_unwind:catch_unwind=1,task_spawn:spawn=7"
+      ]
+    },
+    {
+      "path": "crates/iroha_torii/tests/contracts_call_integration.rs",
+      "before": [
+        "dbe184bfae3254a448f1f6c7a7f31caee7a1940894b58cd8bae391ec8545553e",
+        "none"
+      ],
+      "after": [
+        "690443e7b4772b847e55f0a339244e41dfa8587de455b141ff471f03d61cbd4c",
+        "none"
+      ]
+    }
+  ]
+}

@@ -2,10 +2,10 @@
 //! admission.
 //!
 //! This crate owns the canonical builtin registry, the generated V1 source
-//! policy tables and the reserved-name predicates. It is kept as a leaf (it
-//! depends only on `ivm_abi`) so that compiler edits never rebuild the VM or the
-//! node, while admission and tooling still agree with the compiler on which
-//! source names are reserved.
+//! policy tables and the reserved-name predicates. It depends only on `ivm_abi`
+//! and `strum`, so admission and the VM can share source policy without depending
+//! on the compiler implementation. Tooling uses the same registry of reserved
+//! source names.
 
 pub mod builtins;
 pub mod source_policy;

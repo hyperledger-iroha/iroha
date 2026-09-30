@@ -15,10 +15,6 @@ fn release_manifest_placeholder_signature() -> Signature {
     Signature::from_bytes(&[1; 64])
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixture intentionally constructs the complete frozen 12/48/54 matrix"
-)]
 fn synthetic_valid_release_manifest() -> PrivacyExact12ReleaseManifestV1 {
     let protocols = PrivacyProtocolIdV1::ALL
         .into_iter()

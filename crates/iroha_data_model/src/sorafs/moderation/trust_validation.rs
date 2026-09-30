@@ -58,10 +58,6 @@ impl ModerationTrustPolicyV1 {
             result_quorum: self.body.result_quorum,
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fail-closed policy validator keeps all signed-field invariants together"
-    )]
     fn validate_structure(
         &self,
         manifest: &ModerationReproManifestV1,
@@ -250,10 +246,6 @@ impl ModerationSignedScreeningResultV1 {
     ///
     /// Returns [`ModerationSignedResultError`] when any binding, score, signer,
     /// signature, digest, or time invariant is invalid.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fail-closed verifier keeps every signed result invariant in a fixed order"
-    )]
     pub fn validate(
         &self,
         manifest: &ModerationReproManifestV1,

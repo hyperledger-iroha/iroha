@@ -17,16 +17,60 @@ fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-fn monitor_bin() -> Option<PathBuf> {
-    std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
+fn monitor_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_iroha_monitor"))
+}
+struct StatusStub {
+    addr: std::net::SocketAddr,
+    // The listener and HTTP task stay live until the process assertion finishes.
+    _runtime: tokio::runtime::Runtime,
+}
+fn serve_stub(app: axum::Router) -> Option<StatusStub> {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let addr = runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
+        {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!("stub bind failed: {err}");
+                return None;
+            }
+        };
+        let addr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(err) => {
+                eprintln!("stub local addr failed: {err}");
+                return None;
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(err) = axum::serve(listener, app).await {
+                eprintln!("stub server error: {err}");
+            }
+        });
+        Some(addr)
+    })?;
+    Some(StatusStub {
+        addr,
+        _runtime: runtime,
+    })
+}
+#[test]
+fn status_stub_retains_listener_until_its_owner_drops() {
+    let _serial = serial_guard();
+    let stub = spawn_status_metrics_stub().expect("local status stub");
+    let response = attohttpc::get(format!("http://{}/status", stub.addr))
+        .send()
+        .expect("retained runtime serves status");
+    assert!(response.status().is_success());
+    let addr = stub.addr;
+    drop(stub);
+    assert!(std::net::TcpStream::connect(addr).is_err());
 }
 #[test]
 fn spawn_lite_smoke_renders_frames() {
     let _serial = crate::serial_guard();
-    let Some(bin) = monitor_bin() else {
-        eprintln!("skipping: monitor binary path not provided by cargo");
-        return;
-    };
+    let bin = monitor_bin();
     let mut child = Command::new(bin)
         .args([
             "--spawn-lite",
@@ -61,10 +105,7 @@ fn spawn_lite_smoke_renders_frames() {
 #[test]
 fn headless_max_frames_triggers_auto_exit() {
     let _serial = crate::serial_guard();
-    let Some(bin) = monitor_bin() else {
-        eprintln!("skipping: monitor binary path not provided by cargo");
-        return;
-    };
+    let bin = monitor_bin();
     let status = Command::new(bin)
         .args([
             "--spawn-lite",
@@ -88,23 +129,20 @@ fn headless_max_frames_triggers_auto_exit() {
 #[test]
 fn attach_mode_with_stubs_runs_cleanly() {
     let _serial = crate::serial_guard();
-    let Some(addr1) = spawn_status_metrics_stub() else {
+    let Some(stub1) = spawn_status_metrics_stub() else {
         eprintln!("skipping attach_mode_with_stubs_runs_cleanly: no stub addr");
         return;
     };
-    let Some(addr2) = spawn_status_metrics_stub() else {
+    let Some(stub2) = spawn_status_metrics_stub() else {
         eprintln!("skipping attach_mode_with_stubs_runs_cleanly: no stub addr");
         return;
     };
-    let Some(bin) = monitor_bin() else {
-        eprintln!("skipping: monitor binary path not provided by cargo");
-        return;
-    };
+    let bin = monitor_bin();
     let mut child = Command::new(bin)
         .args([
             "--attach",
-            &format!("http://{addr1}"),
-            &format!("http://{addr2}"),
+            &format!("http://{}", stub1.addr),
+            &format!("http://{}", stub2.addr),
             "--interval",
             "250",
             "--no-theme",
@@ -128,26 +166,9 @@ fn attach_mode_with_stubs_runs_cleanly() {
         "expected headless fallback notice in stderr: {stderr}"
     );
 }
-fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {
+fn spawn_status_metrics_stub() -> Option<StatusStub> {
     use axum::{Router, response::IntoResponse, routing::get};
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
-        {
-            Ok(listener) => listener,
-            Err(err) => {
-                eprintln!("stub bind failed: {err}");
-                return None;
-            }
-        };
-        let addr = match listener.local_addr() {
-            Ok(addr) => addr,
-            Err(err) => {
-                eprintln!("stub local addr failed: {err}");
-                return None;
-            }
-        };
-        let app = Router::new()
+    let app = Router::new()
             .route(
                 "/status",
                 get(|| async move {
@@ -168,11 +189,5 @@ fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {
                     body.into_response()
                 }),
             );
-        tokio::spawn(async move {
-            if let Err(err) = axum::serve(listener, app).await {
-                eprintln!("stub server error: {err}");
-            }
-        });
-        Some(addr)
-    })
+    serve_stub(app)
 }

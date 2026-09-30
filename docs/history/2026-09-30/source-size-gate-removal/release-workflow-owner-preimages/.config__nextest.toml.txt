@@ -1,0 +1,78 @@
+[[profile.default.overrides]]
+filter = "package(integration_tests) & test(/^extra_functional/)"
+retries = { count = 3, backoff = "exponential", delay = "5s", max-delay = "30s" }
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# Release gate (specs/network_deployment.md §8, "Where tests gate"). The `build`
+# job of `.github/workflows/workspace_release.yml` runs it before the full
+# workspace build. It replaces the hand-listed census in
+# `scripts/taira_release_check.py`.
+#
+# Selection is by package, target kind and module path only (`test(/^path::/)`),
+# never by individual test names, so renaming a test does not break the gate: a
+# renamed test inside a selected module stays selected, a new test there joins the
+# gate, and a test harness file can be split, merged or renamed. Test binaries are
+# deliberately not named, because nextest rejects a `binary()` matcher that
+# matches nothing. A renamed package is rejected the same way and must be updated
+# here. Nextest does not reject a module path that matches nothing, so
+# `pytests/scripts/workspace_release_gate_test.py` requires every module named
+# below to exist in its package; a renamed or removed module fails that PR check.
+#
+# TODO(P8): until the census is deleted, the same pytest also requires every test
+# of its basic scope (except the four-peer fixture below) to be selected here.
+#
+# Small packages run whole. Large harnesses are narrowed to the module groups that
+# carry the release contracts: ownership and storage custody, consensus, Kura,
+# state publication, admission, startup, beacon custody, KAGEMUSHA key and mint
+# custody, fee sponsorship and reward accounting, telemetry backpressure, public
+# Torii routes and the SDK. The workflow's `test` job still runs every test.
+#
+# The workflow passes the package set explicitly so that unrelated test targets
+# are not compiled; `pytests/scripts/workspace_release_gate_test.py` keeps that
+# `-p` list equal to the packages named here.
+#
+# TODO(P4): the live four-peer fixtures (`four_peer_*`) need prebuilt daemons and
+# an owner-only fixture root. The engine self-test (`iroha network up networks/ci.toml`
+# plus `verify --full`) replaces them in the signed release pipeline.
+[profile.release-gate]
+default-filter = '''
+    package(mv)
+    | package(iroha_allocation)
+    | package(iroha_genesis)
+    | package(iroha_schema_gen)
+    | package(iroha_sumeragi)
+    | package(iroha_deploy)
+    | package(iroha_config)
+    | package(iroha_torii_shared)
+    | package(iroha_wallet)
+    | (package(iroha) & kind(lib))
+    | (package(concread) & kind(lib) & test(/^(bptree|ebrcell|internals)::/))
+    | (package(iroha_data_model) & kind(lib) & test(/^(asset::id|block|isi::kagemusha_v1|nexus|query|sumeragi|sumeragi_finality)::/))
+    | (package(iroha_crypto) & kind(lib) & test(/^(signature::bls|soranet::puzzle)::/))
+    | (package(iroha_p2p) & kind(lib) & test(/^(network|peer)::/))
+    | (package(fastpq_prover) & kind(lib) & test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::/))
+    | (package(iroha_core) & kind(lib)
+        & test(/^(beacon|block|executor|governance::manifest|kura|query::archive_finality|query::provider_ingest_finalized|query::reputation_finalized|queue|sns|snapshot|state|sumeragi|telemetry)::/))
+    | (package(iroha_core) & kind(lib)
+        & test(/^smartcontracts::isi::(domain|multisig|staking|triggers::set::detachment|world)::/))
+    | (package(iroha_core_zk) & kind(lib)
+        & test(/^(debug_backend_tests|halo2_ipa_parameter_source_tests|kagemusha_polynomial_store_v1::tests::key_roles|kagemusha_v1_recursion::mint_helper|zkparse::production_parameter_cache_tests)::/))
+    | (package(iroha_torii) & kind(lib)
+        & test(/^(app_api|app_routed_read_http_admission_tests|connect|mcp|openapi|routing|sns|sorafs::gateway::rate_limit|tests|tests_queue_metadata|tests_runtime_handlers|torii_routed_read_tests)::/))
+    | (package(iroha_torii) & kind(test)
+        & test(/^(accounts_faucet|accounts_onboard|contracts_call_integration|nexus_lifecycle_endpoint)::/))
+    | (package(irohad) & kind(lib)
+        & test(/^(beacon_bootstrap|configured_genesis_tests|runtime_provider_broker|startup_[a-z_]+|taira_runtime_signer|tests)::/))
+    | (package(iroha_cli) & kind(bin)
+        & test(/^(address|client_config|operator_key|soracloud|taira[a-z_]*|tests)::/))
+    | (package(iroha_kagami) & kind(bin) & test(/^(genesis::sign|kagemusha|kura|localnet)::/))
+    | (package(iroha_test_network) & kind(lib) & test(/^(config|tests)::/))
+    | (package(iroha_test_network) & kind(test) & not test(/four_peer/))
+'''
+fail-fast = false
+failure-output = "immediate-final"
+slow-timeout = { period = "30s", terminate-after = 4 }

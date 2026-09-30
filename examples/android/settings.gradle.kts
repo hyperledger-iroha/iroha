@@ -14,5 +14,10 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "IrohaAndroidSamples"
-include(":operator-console", ":retail-wallet", ":android-sdk")
-project(":android-sdk").projectDir = file("../../java/iroha_android")
+include(":operator-console", ":retail-wallet")
+includeBuild("../../kotlin") {
+    dependencySubstitution {
+        substitute(module("org.hyperledger.iroha.sdk:client-android"))
+            .using(project(":client-android"))
+    }
+}

@@ -1,0 +1,41 @@
+{
+  "purpose": "Exact originals before removing current-source line-count and line-width gates; semantic and historical authentication remain in each current owner.",
+  "files": [
+    {
+      "original_path": "scripts/tests/soracloud_full_bootstrap_proof_case_matrix_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/soracloud_full_bootstrap_proof_case_matrix_source_test.py.txt",
+      "sha256": "84ff5e60e7254a865b61c2b1bccd4181b078e68470a6c77b1a353e87f5a7746d",
+      "semantic_coverage_owner": "scripts/tests/soracloud_full_bootstrap_proof_case_matrix_source_test.py"
+    },
+    {
+      "original_path": "scripts/tests/soracloud_fhe_job_fixture_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/soracloud_fhe_job_fixture_source_test.py.txt",
+      "sha256": "c7196a057c895cd348730893c9455c60cb69e6b2c2ef1f43a3355b7bef600c53",
+      "semantic_coverage_owner": "scripts/tests/soracloud_fhe_job_fixture_source_test.py"
+    },
+    {
+      "original_path": "scripts/tests/soracloud_fhe_input_admission_case_matrix_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/soracloud_fhe_input_admission_case_matrix_source_test.py.txt",
+      "sha256": "5dd38cf2e9688da4137aa20d44cd301e89cb8178425baa18d1d37b1c4fff00f1",
+      "semantic_coverage_owner": "scripts/tests/soracloud_fhe_input_admission_case_matrix_source_test.py"
+    },
+    {
+      "original_path": "scripts/tests/query_iter_dispatch_rank_matrix_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/query_iter_dispatch_rank_matrix_source_test.py.txt",
+      "sha256": "01f8245e9af658369c7131c4429111d3dbe5953dd014865aaa0296fcc8310b3f",
+      "semantic_coverage_owner": "scripts/tests/query_iter_dispatch_rank_matrix_source_test.py"
+    },
+    {
+      "original_path": "scripts/tests/mcp_alias_dispatch_case_matrix_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/mcp_alias_dispatch_case_matrix_source_test.py.txt",
+      "sha256": "b9de1ded21e2ac1f7a876af9acbc18b69624ce66cbac94ad3ff2282501480dc4",
+      "semantic_coverage_owner": "scripts/tests/mcp_alias_dispatch_case_matrix_source_test.py"
+    },
+    {
+      "original_path": "scripts/tests/connect_gating_fixture_compaction_source_test.py",
+      "archive_path": "docs/history/2026-09-30/source-size-gate-removal/connect_gating_fixture_compaction_source_test.py.txt",
+      "sha256": "f404f7d2536b86b47099d08746098bca91bb4cc6603ecccd050f68e94540b109",
+      "semantic_coverage_owner": "scripts/tests/connect_gating_fixture_compaction_source_test.py"
+    }
+  ]
+}

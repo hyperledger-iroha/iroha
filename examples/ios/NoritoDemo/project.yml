@@ -1,6 +1,9 @@
 name: NoritoDemo
 options:
   bundleIdPrefix: tech.iroha
+packages:
+  IrohaSwift:
+    path: ../../../IrohaSwift
 targets:
   NoritoDemo:
     type: application
@@ -9,24 +12,21 @@ targets:
     sources:
       - Sources
     resources:
-      - Sources/Resources
+      - ../../../fixtures/sdk/pos/manifest_v1.json
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: tech.iroha.NoritoDemo
       SWIFT_VERSION: 5.9
-    # To link NoritoBridge, drop NoritoBridge.xcframework into Frameworks/ and uncomment below
-    # dependencies:
-    #   - framework: Frameworks/NoritoBridge.xcframework
-    info:
-      path: Sources/Info.plist
-      properties:
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+      INFOPLIST_FILE: Sources/Info.plist
+    dependencies:
+      - package: IrohaSwift
   NoritoDemoTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "15.0"
     sources:
       - Tests
-    info:
-      path: Tests/Info.plist
+    settings:
+      INFOPLIST_FILE: Tests/Info.plist
     dependencies:
       - target: NoritoDemo
+      - package: IrohaSwift

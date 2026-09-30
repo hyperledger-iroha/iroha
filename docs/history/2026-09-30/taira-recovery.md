@@ -43,6 +43,18 @@ and 22 remain pending. An isolated local Linux qualification VM is provisioned;
 production validators remain on the approved MacStadium host. The live
 ledger remains preserved until a concrete replacement decision is authorized.
 
+## Subsequent deployment-policy correction — September 30, 2026
+
+The operator explicitly authorized immediate public Taira cutover and removed the
+24-hour fault-test requirement for both Taira and production. On-chain governance
+owns deployment policy. Fixed fault-test durations and missing or failing soak
+verdicts do not authorize or block a cutover and are not Sumeragi protocol or
+node-admission rules. The earlier requirement above is retained as incident history
+and superseded by `specs/sumeragi.md` and the reset runbook. Authenticated native
+control authority, genesis and committee validation, safety-record custody, and
+live readiness/write/restart checks remain in force. No 24-hour fault run was
+started for this recovery.
+
 ## Superseded status paragraph, retained verbatim
 
 Public Taira remains bound to source42 (`d085418a382e831875731144436c174d8621cdd6`); the last funding-policy probe returned HTTP 502. Verified off-host archives precede inactive source85–93 and selected binary retirement; current runtime, ledger, configuration and history remain preserved. The user explicitly authorized clearing a 24.38 GB IPFS stderr log on the same Mac. Exact held-inode truncation increased measured Mac free space from 2.66 GB to 27.05 GB, preserving the active append writer and permissions without restart. A dedicated logrotate job now checks the exact log every minute at a 64 MiB threshold with seven gzip archives. Nine installed-utility controls and two natural launchd runs passed; the same Kubo process and log inode remain active, with 26.90 GB free at the scheduled observation. Deployment remains gated on native qualification, concrete fresh inputs and an explicit shared-ledger replacement decision. See the [incident record](docs/history/2026-09-20/dpn-live-recovery.md).

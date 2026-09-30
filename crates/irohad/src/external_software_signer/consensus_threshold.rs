@@ -36,32 +36,31 @@ use crate::{
     ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendRegistryV1,
     RuntimeProviderBrokerBackendsV1,
 };
-use iroha_core::{
-    beacon::{
-        GlobalThresholdBeaconPartialSignerV1 as _, RuntimeGlobalThresholdBeaconShareCustodyV1,
-        ValidatedGlobalThresholdBeaconSessionV1,
-        credential::{
-            CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1, ConsensusThresholdCredentialErrorV1,
-            ConsensusThresholdCredentialHeaderV1, ConsensusThresholdSecretScalarTripleV1,
-            GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1,
-            MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, RuntimeGlobalBeaconShareProvisioningV1,
-            consensus_threshold_public_inventory_digest_v1,
-            decode_consensus_threshold_credential_v1,
-            decode_global_beacon_partial_signer_credential_shares_v1,
-            decode_global_beacon_partial_signer_credential_v1,
-            encode_consensus_threshold_secret_credential_v1,
-            encode_global_beacon_partial_signer_credential_v1,
-            global_beacon_partial_signer_inventory_digest_v1,
-            validate_consensus_threshold_provisioning_v1,
-            validate_consensus_threshold_session_count_v1,
-        },
-    },
-    tle_release::{
-        RuntimeTleReleaseShareCustodyV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
-        TlePartialReleaseSignerV1 as _, TleProjectedPartialReleaseSignerV1 as _,
-        ValidatedTleReleaseProjectionV1,
-    },
-};
+use iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 as _;
+use iroha_core::beacon::RuntimeGlobalThresholdBeaconShareCustodyV1;
+use iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1;
+use iroha_core::beacon::credential::CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1;
+use iroha_core::beacon::credential::ConsensusThresholdCredentialErrorV1;
+use iroha_core::beacon::credential::ConsensusThresholdCredentialHeaderV1;
+use iroha_core::beacon::credential::ConsensusThresholdSecretScalarTripleV1;
+use iroha_core::beacon::credential::GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1;
+use iroha_core::beacon::credential::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1;
+use iroha_core::beacon::credential::RuntimeGlobalBeaconShareProvisioningV1;
+use iroha_core::beacon::credential::consensus_threshold_public_inventory_digest_v1;
+use iroha_core::beacon::credential::decode_consensus_threshold_credential_v1;
+use iroha_core::beacon::credential::decode_global_beacon_partial_signer_credential_shares_v1;
+use iroha_core::beacon::credential::decode_global_beacon_partial_signer_credential_v1;
+use iroha_core::beacon::credential::encode_consensus_threshold_secret_credential_v1;
+use iroha_core::beacon::credential::encode_global_beacon_partial_signer_credential_v1;
+use iroha_core::beacon::credential::global_beacon_partial_signer_inventory_digest_v1;
+use iroha_core::beacon::credential::validate_consensus_threshold_provisioning_v1;
+use iroha_core::beacon::credential::validate_consensus_threshold_session_count_v1;
+use iroha_core::tle_release::RuntimeTleReleaseShareCustodyV1;
+use iroha_core::tle_release::TlePartialReleaseSignerV1 as _;
+use iroha_core::tle_release::TleProjectedPartialReleaseSignerV1 as _;
+use iroha_core_timed_ovn::tle::TleKeySessionPublicStateV1;
+use iroha_core_timed_ovn::tle::TlePartialReleaseShareV1;
+use iroha_core_timed_ovn::tle::ValidatedTleReleaseProjectionV1;
 use iroha_data_model::{NetworkId, consensus::GlobalThresholdBeaconPartialSignatureV1};
 use norito::{NoritoDeserialize, NoritoSerialize};
 use std::{fmt, path::Path, sync::Arc};
@@ -843,7 +842,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
 
     fn attest_partial_release_capability(
         &self,
-        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -947,17 +946,14 @@ pub(crate) mod tests {
     use crate::external_software_signer::ExternalSoftwareSignerBackendsV1;
     use iroha_config::parameters::actual::Root as Config;
     use iroha_config_base::toml::TomlSource;
-    use iroha_core::{
-        beacon::{
-            GlobalThresholdBeaconPulseAggregatorV1, GlobalThresholdBeaconSessionBindingV1,
-            complete_beacon_dkg_fixture_for_seat_v1, validate_global_threshold_beacon_session_v1,
-        },
-        governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
-        tle_release::{
-            AuthorizedTleReleaseProjectionV1, TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1,
-            ValidatedTleKeySessionV1,
-        },
-    };
+    use iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1;
+    use iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1;
+    use iroha_core::beacon::complete_beacon_dkg_fixture_for_seat_v1;
+    use iroha_core::beacon::validate_global_threshold_beacon_session_v1;
+    use iroha_core_timed_ovn::evidence::TimedOvnReleaseIdentityPublicV1;
+    use iroha_core_timed_ovn::tle::AuthorizedTleReleaseProjectionV1;
+    use iroha_core_timed_ovn::tle::TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1;
+    use iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1;
     use iroha_crypto::{
         Hash, HashOf,
         threshold_bls::{

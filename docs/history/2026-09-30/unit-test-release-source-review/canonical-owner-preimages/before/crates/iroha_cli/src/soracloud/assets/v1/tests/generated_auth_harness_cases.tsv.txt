@@ -1,0 +1,19 @@
+6	webapp_auth_strict_key	webapp	webapp_auth_strict_key_fail.mjs	false	SESSION_HMAC_KEY must be set to at least 32 characters~|~resolveSessionHmacKey
+7	webapp_auth_invalid_mode	webapp	webapp_auth_invalid_mode_fail.mjs	false	normalizeAuthMode~|~AUTH_MODE must be strict or dev
+8	webapp_auth_missing_external_adapter	webapp	webapp_auth_external_state_required_fail.mjs	false	AUTH_REQUIRE_EXTERNAL_SHARED_STATE~|~__soracloudSharedStateAdapter~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled
+9	webapp_auth_default_external_adapter_required	webapp	webapp_auth_external_state_default_required_fail.mjs	false	AUTH_MODE === "strict" || IS_PRODUCTION~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled
+10	webapp_auth_production_disables_external_state	webapp	webapp_auth_external_state_production_disable_fail.mjs	false	AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled
+11	webapp_auth_invalid_external_adapter_shape	webapp	webapp_auth_invalid_external_adapter_shape_fail.mjs	false	__soracloudSharedStateAdapter~|~must be a function
+12	webapp_auth_external_adapter	webapp	webapp_auth_external_adapter_smoke.mjs	false	__soracloudSharedStateAdapter~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE~|~shared state adapter entries(prefix) must return [key, value][]
+13	pii_auth_missing_external_adapter	pii-app	pii_auth_external_state_required_fail.mjs	false	AUTH_REQUIRE_EXTERNAL_SHARED_STATE~|~__soracloudSharedStateAdapter~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled
+14	pii_auth_default_external_adapter_required	pii-app	pii_auth_external_state_default_required_fail.mjs	false	AUTH_MODE === "strict" || IS_PRODUCTION~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled
+15	pii_auth_production_disables_external_state	pii-app	pii_auth_external_state_production_disable_fail.mjs	false	AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled
+16	pii_auth_invalid_external_adapter_shape	pii-app	pii_auth_invalid_external_adapter_shape_fail.mjs	false	__soracloudSharedStateAdapter~|~must be a function
+17	pii_auth_external_adapter	pii-app	pii_auth_external_adapter_smoke.mjs	false	__soracloudSharedStateAdapter~|~AUTH_REQUIRE_EXTERNAL_SHARED_STATE~|~shared state adapter entries(prefix) must return [key, value][]
+18	webapp_auth_capability_map_required	webapp	webapp_auth_capability_map_required.mjs	false	AUTH_CAPABILITY_MAP_REQUIRED~|~capability map is required
+19	webapp_auth_smoke	webapp	webapp_auth_smoke.mjs	true	AUTH_CHALLENGE_REPLAYED~|~AUTH_CHALLENGE_EXPIRED~|~AUTH_CHALLENGE_NOT_FOUND~|~AUTH_CHALLENGE_PRINCIPAL_MISMATCH~|~AUTH_SIGNATURE_INVALID~|~SameSite=Strict~|~/api/private/state
+20	webapp_auth_replay_lock_contention	webapp	webapp_auth_replay_lock_contention.mjs	false	acquireChallengeConsumeLock~|~statePutIfAbsent~|~AUTH_CHALLENGE_REPLAYED
+21	pii_auth_replay_lock_contention	pii-app	pii_auth_replay_lock_contention.mjs	false	acquireChallengeConsumeLock~|~statePutIfAbsent~|~AUTH_CHALLENGE_REPLAYED
+22	webapp_auth_origin_mismatch	webapp	webapp_auth_origin_mismatch.mjs	false	AUTH_ORIGIN_MISMATCH~|~requestOrigin(req)~|~shouldUseSecureCookie
+23	pii_auth_origin_mismatch	pii-app	pii_auth_origin_mismatch.mjs	false	AUTH_ORIGIN_MISMATCH~|~requestOrigin(req)~|~shouldUseSecureCookie
+24	pii_auth_smoke	pii-app	pii_auth_smoke.mjs	true	AUTH_FORBIDDEN~|~required_capability~|~pii.consent.grant~|~pii.consent.revoke~|~pii.records.retention.sweep~|~pii.records.delete~|~pii.records.read

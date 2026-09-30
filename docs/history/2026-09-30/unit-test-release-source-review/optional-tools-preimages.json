@@ -1,0 +1,51 @@
+[
+  {
+    "path": "configs/soranexus/taira/privacy_bootstrap_plan.json",
+    "sha256": "9e0ae9326b96cdae32fe9f48b136db0b33393f9321202eebb6877fc0a07298c3",
+    "size": 3814,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
+    "sha256": "952093643a5c48ff3fad5304c5c8ede3b68d70208e83ce61aa3f34101923161a",
+    "size": 4753,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "crates/iroha_cli/src/taira.rs",
+    "sha256": "24941d7c5c7ac0affeb523f1692c10a72cfd3aed89498bcddb3ea8ac302bded5",
+    "size": 564876,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "crates/iroha_cli/src/taira_canary_deadline_tests.rs",
+    "sha256": "e088233505614e038ddb3c6ce16e2030b144a98a6092a2dbcd3203257c63420d",
+    "size": 12062,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "crates/sorafs_car/Cargo.toml",
+    "sha256": "a4d69337aa7bd61897c257f0310ed8bfd9d898c6b70ab0bd3049aae607370dbc",
+    "size": 3725,
+    "source": "git HEAD4032051e02",
+    "archived_path": "optional-tools-preimages/crates/sorafs_car/Cargo.toml.txt"
+  },
+  {
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt",
+    "sha256": "45197d481ff54b9283219db1ae216f8098b5b1bc9d15cda8f09040c99b1e6d35",
+    "size": 16299,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt",
+    "sha256": "eed683213082b9018022f05a63488eac3a900ce78fa8f10fd28c6586e510f581",
+    "size": 31200,
+    "source": "git HEAD4032051e02"
+  },
+  {
+    "path": "scripts/check_android_samples.sh",
+    "sha256": "970e7acc514b86cc6a4d23d079a0505d37cba65e8dad324c028110a7462efdb6",
+    "size": 2087,
+    "source": "git HEAD4032051e02"
+  }
+]

@@ -139,7 +139,7 @@ mod raw_ivm_work {
 
     #[test]
     fn bound_raw_contract_runtime_rejection_retains_actual_work() {
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku RawMeteredFailure {
@@ -232,7 +232,7 @@ seiyaku RawMeteredFailure {
         // Generic-v1 cannot call this syscall. The canonical inline builder
         // supplies the NoritoBytes pointer required by the typed bridge; a
         // contract bytes argument is a Blob and cannot stand in for that type.
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku UnverifiedBallot {

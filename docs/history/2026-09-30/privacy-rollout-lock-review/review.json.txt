@@ -1,0 +1,27 @@
+{
+  "schema": "iroha.unit-test.privacy-rollout-lock-review.v1",
+  "derivation_owner": "crates/iroha_kagami/src/privacy_bootstrap/release.rs::validate_rollout_plan_v1",
+  "canonical_lock_owner": "ci/privacy_sdk_cargo_lockfile.sh",
+  "cargo_lock_sha256": "8e234e5af029525715ef4da1b677956205f148b51a2ba0d9a5eb12ad903adf6a",
+  "cargo_lock_size": 304257,
+  "previous_rollout_lock_sha256": "c8a488c98f2df6c89be446c8beda84c69f9b7a975c37941d52df09dd09a218d2",
+  "previous_rollout_sha256": "952093643a5c48ff3fad5304c5c8ede3b68d70208e83ce61aa3f34101923161a",
+  "current_rollout_sha256": "f30da7bfa5ce7d1c6102363eb2bae9b009c1fd3d583778e24d63f54d95180b79",
+  "preserved_preimages": [
+    {
+      "path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
+      "archive": "privacy_rollout_plan_v1.json.txt",
+      "sha256": "952093643a5c48ff3fad5304c5c8ede3b68d70208e83ce61aa3f34101923161a"
+    },
+    {
+      "path": "configs/soranexus/taira/privacy_bootstrap_plan.json",
+      "archive": "privacy_bootstrap_plan.json.txt",
+      "sha256": "9e0ae9326b96cdae32fe9f48b136db0b33393f9321202eebb6877fc0a07298c3"
+    },
+    {
+      "path": "crates/iroha_kagami/src/privacy_bootstrap/release.rs",
+      "archive": "release.rs.txt",
+      "sha256": "b27e47dba6db12efa526f590c063cf9792df175690475c35d38e338c6d3b1d53"
+    }
+  ]
+}

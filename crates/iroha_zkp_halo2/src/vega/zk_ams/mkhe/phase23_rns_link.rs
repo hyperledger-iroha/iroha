@@ -2533,12 +2533,11 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn context_authority_leaf_is_small_private_and_exact() {
+    fn context_authority_leaf_is_private_and_exact() {
         // Rust privacy is the graph-wide authority boundary. The exact small
         // leaf pin makes any new descendant, expansion, unsafe, or construction
         // surface a direct review event instead of approximating Rust syntax.
-        assert!(CONTEXT_AUTHORITY_SOURCE_V1.lines().count() <= 180);
-        assert!(CONTEXT_AUTHORITY_SOURCE_V1.len() <= 8_192);
+
         assert!(
             CONTEXT_AUTHORITY_SOURCE_V1
                 .lines()

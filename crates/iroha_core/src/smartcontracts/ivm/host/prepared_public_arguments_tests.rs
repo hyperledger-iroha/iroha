@@ -1,11 +1,12 @@
 #[test]
 #[cfg(debug_assertions)]
 fn prepared_public_arguments_decode_once_ignore_guest_descriptors_and_require_precharge() {
-    let compiler =
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-            mode: ivm::kotodama::compiler::CompilerMode::Production,
-            ..ivm::kotodama::compiler::CompilerOptions::default()
-        });
+    let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
+            mode: kotodama_lang::compiler::CompilerMode::Production,
+            ..kotodama_lang::compiler::CompilerOptions::default()
+        },
+    );
     let (program, _) = compiler
         .compile_source_with_manifest(
             r#"
@@ -43,8 +44,14 @@ seiyaku PreparedArguments {
     );
     let mut vm = IVM::new(100_000);
     vm.load_program(&program).expect("load table ABI contract");
-    let descriptor = metadata.contract_interface.as_ref().unwrap().entrypoints.iter()
-        .find(|entry| entry.name == "invoke").unwrap();
+    let descriptor = metadata
+        .contract_interface
+        .as_ref()
+        .unwrap()
+        .entrypoints
+        .iter()
+        .find(|entry| entry.name == "invoke")
+        .unwrap();
     let entry_pc = metadata.prefix_len() as u64 + descriptor.entry_pc;
     vm.set_program_counter(entry_pc).unwrap();
     // Arbitrary guest-facing descriptors cannot substitute for the signed host record.
@@ -52,8 +59,11 @@ seiyaku PreparedArguments {
     vm.set_register(11, 8193);
     vm.set_register(12, 1);
     vm.set_register(13, 0);
-    prepared.precharge_vm(&mut vm).expect("precharge prepared arguments");
-    vm.run_with_host(&mut host).expect("host prepares the authenticated root tables");
+    prepared
+        .precharge_vm(&mut vm)
+        .expect("precharge prepared arguments");
+    vm.run_with_host(&mut host)
+        .expect("host prepares the authenticated root tables");
     assert_eq!(ivm::argument_record_decode_count(), 1);
     assert_eq!(vm.call_result_word_count().unwrap(), 1);
     assert_eq!(vm.public_call_result_word(0).unwrap(), 0);

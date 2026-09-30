@@ -17,7 +17,7 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
-use iroha_core::privacy_profiles::{
+use iroha_core_privacy::privacy_profiles::{
     CompiledPrivacyProfileErrorV1, compiled_privacy_profile_snapshot_result_v1,
     compiled_privacy_profile_v1,
 };

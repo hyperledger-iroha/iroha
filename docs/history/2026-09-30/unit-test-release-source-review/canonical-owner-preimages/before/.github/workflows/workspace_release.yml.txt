@@ -1,0 +1,348 @@
+name: Full workspace release gate
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-release-${{ github.sha }}
+  # A release-evidence run must finish even when another ref advances.
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.93.1
+
+jobs:
+  format:
+    name: Workspace format
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          components: rustfmt
+          toolchain: 1.93.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install pinned workflow-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Verify release-workflow semantics
+        run: python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py
+      - name: Verify locked metadata and workspace formatting
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo fmt --all -- --check
+
+  build:
+    name: Workspace build
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-build-1.93.1
+      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Run the release-gate test profile
+        # The package set equals the packages named by the release-gate
+        # default-filter in .config/nextest.toml.
+        run: >-
+          cargo nextest run --profile release-gate --locked --offline
+          --no-tests=fail
+          -p mv -p iroha_allocation -p iroha_genesis -p iroha_schema_gen
+          -p iroha_sumeragi -p iroha_deploy -p iroha_config -p iroha_torii_shared
+          -p iroha_wallet -p iroha -p concread -p iroha_data_model
+          -p iroha_crypto -p iroha_p2p -p fastpq_prover -p iroha_core
+          -p iroha_core_zk -p iroha_torii -p irohad -p iroha_cli -p iroha_kagami
+          -p iroha_test_network
+      - name: Build the full workspace
+        run: cargo build --locked --offline --workspace
+
+  doc:
+    name: Workspace documentation
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-doc-1.93.1
+      - name: Document every workspace feature
+        run: cargo doc --locked --workspace --no-deps --all-features
+
+  test:
+    name: Workspace tests
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-test-1.93.1
+      - name: Enforce data-model compile-unit budget
+        run: >-
+          python3 scripts/check_compile_unit_budget.py
+          --locked
+          --lib
+          -p iroha_data_model
+          --artifact-scope workspace
+          --baseline ci/compile_unit_baselines.json
+          --baseline-key iroha_data_model_lib
+          --budget-percent 2
+          --budget-min-growth 3
+          --json-out target/ci/iroha-data-model-compile-units.json
+      - name: Upload data-model compile-unit evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-release-compile-units
+          path: target/ci/iroha-data-model-compile-units.json
+          if-no-files-found: error
+      - name: Test the full workspace
+        run: cargo test --locked --workspace --no-fail-fast
+
+  coverage:
+    name: Workspace coverage
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 360
+    env:
+      LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
+      IROHA_TEST_REQUIRE_NETWORK: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          components: llvm-tools-preview
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-coverage-1.93.1
+      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
+      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955
+      - name: Collect workspace test coverage
+        run: >-
+          mold --run cargo llvm-cov nextest
+          --workspace --locked
+          --branch --no-report
+      - name: Collect documentation-test coverage
+        run: >-
+          mold --run cargo llvm-cov --doc
+          --branch --no-report
+      - name: Generate LCOV report
+        run: >-
+          cargo llvm-cov report --doctests
+          --ignore-filename-regex 'iroha_cli|iroha_torii'
+          --lcov --output-path lcov.info
+      - name: Upload LCOV report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: report-coverage
+          path: lcov.info
+          if-no-files-found: error
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b
+        with:
+          file: lcov.info
+          format: lcov
+          github-token: ${{ github.token }}
+
+  clippy:
+    name: Strict workspace Clippy
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          components: clippy
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-clippy-1.93.1
+      - name: Lint every workspace target and feature
+        run: >-
+          cargo clippy --locked --workspace --all-targets --all-features
+          -- -D warnings
+
+  adversarial:
+    name: Adversarial Norito and IVM fuzz gate
+    runs-on: [self-hosted, Linux, iroha2]
+    timeout-minutes: 180
+    env:
+      RUNS: "10000"
+      FUZZ_MAX_TOTAL_TIME: "60"
+      FUZZ_RSS_LIMIT_MB: "3072"
+      FUZZ_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: nightly-2025-05-08
+      - name: Install pinned cargo-fuzz
+        run: |
+          cargo +nightly-2025-05-08 install cargo-fuzz \
+            --version 0.13.2 \
+            --locked
+          test "$(cargo-fuzz --version)" = "cargo-fuzz 0.13.2"
+      - name: Verify immutable security-corpus integrity fingerprints
+        run: python3 scripts/replay_security_corpora.py
+      - name: Verify integrity and fuzz inventory contracts without executing Cargo
+        run: >-
+          python3 -m unittest -v
+          pytests.scripts.corpora_integrity_replay_test
+          pytests.scripts.fuzz_smoke_inventory_test
+      - name: Run strict Norito and IVM fuzz targets
+        run: scripts/fuzz_smoke.sh --strict
+      - name: Archive fuzz crash artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-release-fuzz-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            crates/norito/fuzz/artifacts
+            crates/ivm/fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30

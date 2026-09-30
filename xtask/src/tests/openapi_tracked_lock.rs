@@ -47,7 +47,9 @@ fn openapi_generator_tracked_lock_fails_closed_when_missing_substituted_or_unsta
     let unstaged = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
         .expect_err("unstaged Cargo lock must fail");
     assert!(
-        unstaged.to_string().contains("stage-zero 100644 blob"),
+        unstaged
+            .to_string()
+            .contains("must contain exactly one NUL-terminated entry"),
         "unexpected unstaged-lock error: {unstaged}"
     );
 }

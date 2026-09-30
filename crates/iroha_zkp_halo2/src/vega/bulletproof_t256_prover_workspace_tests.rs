@@ -226,7 +226,7 @@ fn fixed_t256_transcript_heap_is_only_the_exact_public_proof_buffer() {
 }
 
 #[test]
-fn fixed_t256_workspace_source_graph_is_closed_and_capped() {
+fn fixed_t256_workspace_source_graph_is_closed() {
     let parent = include_str!("bulletproof_t256.rs");
     let lease = include_str!("bulletproof_t256_workspace_lease_v1.rs");
     let transcript = include_str!("bulletproof_t256_transcript_v1.rs");
@@ -479,18 +479,5 @@ fn fixed_t256_workspace_source_graph_is_closed_and_capped() {
             assert!(!source.contains(forbidden));
         }
     }
-    for (source, max_lines, max_bytes) in [
-        (parent, 3_000, 120 * 1_024),
-        (generalized, 3_000, 120 * 1_024),
-        (lease, 500, 24 * 1_024),
-        (transcript, 500, 24 * 1_024),
-        (
-            include_str!("bulletproof_t256_prover_workspace_tests.rs"),
-            500,
-            24 * 1_024,
-        ),
-    ] {
-        assert!(source.lines().count() <= max_lines);
-        assert!(source.len() <= max_bytes);
-    }
+
 }

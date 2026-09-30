@@ -1,0 +1,193 @@
+#!/usr/bin/env node
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+const SERVICE_NAME = __SORACLOUD_APP_NAME_DEBUG__ + " vault dev";
+const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8788", 10);
+const STATE_FILE = process.env.SORACLOUD_VAULT_DEV_STATE_FILE
+  ?? path.join(process.cwd(), "tmp", "vault-dev-state.json");
+const DEV_WALLET = process.env.SORACLOUD_VAULT_DEV_WALLET ?? "dev-wallet";
+
+fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+
+function loadState() {
+  if (!fs.existsSync(STATE_FILE)) {
+    return {
+      authenticated: true,
+      wallet: DEV_WALLET,
+      preferences: {},
+      saved_searches: [],
+      challenges: {}
+    };
+  }
+  const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  return {
+    authenticated: parsed.authenticated ?? true,
+    wallet: parsed.wallet ?? DEV_WALLET,
+    preferences: typeof parsed.preferences === "object" && parsed.preferences ? parsed.preferences : {},
+    saved_searches: Array.isArray(parsed.saved_searches) ? parsed.saved_searches : [],
+    challenges: typeof parsed.challenges === "object" && parsed.challenges ? parsed.challenges : {}
+  };
+}
+
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        reject(new Error("request body exceeds 1 MiB"));
+      }
+    });
+    req.on("end", () => {
+      if (raw.trim().length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function authEnvelope(state) {
+  return {
+    authenticated: state.authenticated,
+    wallet: state.wallet,
+    preferences: state.preferences,
+    saved_search_count: state.saved_searches.length,
+    mode: "local_dev_shim"
+  };
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  const pathname = url.pathname;
+  const state = loadState();
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {
+    sendJson(res, 200, {
+      service: SERVICE_NAME,
+      runtime: "local_dev_shim",
+      state_file: STATE_FILE,
+      wallet: state.wallet
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/auth/challenge") {
+    const challengeId = randomUUID();
+    const challenge = {
+      challenge_id: challengeId,
+      wallet: state.wallet,
+      issued_at: new Date().toISOString(),
+      mode: "local_dev_shim"
+    };
+    state.challenges[challengeId] = challenge;
+    saveState(state);
+    sendJson(res, 200, challenge);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/auth/login") {
+    state.authenticated = true;
+    saveState(state);
+    sendJson(res, 200, authEnvelope(state));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/auth/logout") {
+    state.authenticated = false;
+    saveState(state);
+    sendJson(res, 200, authEnvelope(state));
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/auth/me") {
+    sendJson(res, 200, authEnvelope(state));
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/v1/user/preferences") {
+    sendJson(res, 200, {
+      wallet: state.wallet,
+      preferences: state.preferences
+    });
+    return;
+  }
+
+  if (req.method === "PUT" && pathname === "/v1/user/preferences") {
+    try {
+      const body = await readJsonBody(req);
+      state.preferences = typeof body.preferences === "object" && body.preferences
+        ? body.preferences
+        : {};
+      state.authenticated = true;
+      saveState(state);
+      sendJson(res, 200, {
+        accepted: true,
+        wallet: state.wallet,
+        preferences: state.preferences
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message ?? String(error) });
+    }
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/v1/user/saved-searches") {
+    sendJson(res, 200, {
+      wallet: state.wallet,
+      saved_searches: state.saved_searches
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/v1/user/saved-searches") {
+    try {
+      const body = await readJsonBody(req);
+      const entry = {
+        id: randomUUID(),
+        created_at: new Date().toISOString(),
+        query: body.query ?? body
+      };
+      state.saved_searches = [...state.saved_searches, entry];
+      state.authenticated = true;
+      saveState(state);
+      sendJson(res, 200, {
+        accepted: true,
+        saved_search: entry,
+        saved_searches: state.saved_searches
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message ?? String(error) });
+    }
+    return;
+  }
+
+  sendJson(res, 404, { error: "not found", path: pathname });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`${SERVICE_NAME} listening on ${PORT}`);
+});

@@ -127,7 +127,7 @@ fn forced_vendor_latch_cannot_admit_development_ballot() {
     Grant::account_permission(lifecycle_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant contract lifecycle permission");
-    let (contract_program, _) = ivm::KotodamaCompiler::new()
+    let (contract_program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku VendorBridgeGate {

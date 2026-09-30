@@ -11,7 +11,7 @@ const FUNDED_BYTES: usize = 128 * 1024 * 1024;
 pub(crate) fn funded_return_vm() -> (IVM, AllocationBudget) {
     let budget = AllocationBudget::new(FUNDED_BYTES);
     let mut vm = IVM::try_new_with_memory_budget(100_000, &budget).expect("fund root VM");
-    let program = ivm::KotodamaCompiler::new()
+    let program = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku ResourceReturn { view fn main() { () } }")
         .expect("compile authenticated root call");
     vm.load_program(&program)

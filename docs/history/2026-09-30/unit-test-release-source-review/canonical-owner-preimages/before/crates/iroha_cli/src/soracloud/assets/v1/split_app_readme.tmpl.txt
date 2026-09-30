@@ -1,0 +1,146 @@
+# __SORACLOUD_APP_NAME__ Split App Template
+
+This template provides:
+
+- `frontend/` static SPA intended for SoraFS publication
+- `services/live/` hosted HTTP live API targeting `Inrou`
+- `services/vault/` deterministic IVM vault API plus a local dev shim
+- `app_manifest.json` wiring the frontend plus both services together
+- `dev.sh` to boot the frontend plus both local API processes
+- `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
+- `doctor.sh` to rebuild every artifact and fail-close on the split-app release contract
+- `release.sh` to run the mandatory build, validation, publication, deploy,
+  authoritative-status, and live-verification flow
+
+## Local dev
+
+```bash
+./dev.sh
+```
+
+This starts the frontend dev server on `http://127.0.0.1:5173`, the live API on
+`http://127.0.0.1:8787`, and the vault dev shim on `http://127.0.0.1:8788`.
+
+The generated Vite config keeps `VITE_PUBLIC_API_BASE=/api` and proxies:
+
+- `/api/v1/search*`, `/api/v1/health`, `/api/v1/airports*`,
+  `/api/v1/filters*`, `/api/v1/luxury*`, and `/api/v1/links*` to the live API
+- `/api/auth*` and `/api/v1/user*` to the vault dev shim
+
+Those local proxies strip the shared `/api` prefix before forwarding, matching
+the same hosted longest-prefix route behavior Torii applies in production.
+
+The CLI can resolve and run the same manifest-adjacent entrypoint:
+
+```bash
+iroha soracloud app dev --manifest ./app_manifest.json --dry-run
+iroha soracloud app dev --manifest ./app_manifest.json
+```
+
+Then inspect the mixed route split from the app manifest:
+
+```bash
+iroha soracloud app plan --manifest ./app_manifest.json
+```
+
+`app plan` prints the root `manifest_path`, root `hostname`, then each
+service's resolved `container_manifest_path`, `service_manifest_path`, child
+`workspace_dir`, and child service scripts, which you can feed directly into
+service-scoped Soracloud commands.
+
+## Build everything
+
+```bash
+./build-and-sync.sh
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json
+```
+
+Root scripts require `IROHA_BIN` to be an absolute path to an
+operator-qualified binary built from the same revision as the scaffold and
+`IROHA_BIN_SHA256` to match that exact file. They never resolve `iroha` from
+`PATH` or compile a source checkout while releasing. Contract build scripts
+likewise require an absolute same-revision `KOTO_BIN` and matching
+`KOTO_BIN_SHA256`.
+
+## Doctor the release contract
+
+```bash
+./doctor.sh
+iroha soracloud app doctor --manifest ./app_manifest.json
+```
+
+`app doctor` fail-closes on the split-plane production contract before you ship:
+CID-only frontend publication, same-origin `/api`, a hosted `Inrou` live plane,
+a deterministic `Ivm` vault plane, lease-backed live storage, vault-only
+auth/user bindings, and no cross-service route collisions.
+
+## Inspect the local split-plane plan
+
+```bash
+iroha soracloud app plan --manifest ./app_manifest.json
+```
+
+This validates every referenced service pair locally and prints the mixed-app
+route ownership, including the hosted `/api/v1/*` live plane, the
+deterministic `/api/auth*` and `/api/v1/user*` vault plane, and the expected
+CID gateway URL template for the frontend.
+
+## Publish + deploy the mixed app
+
+```bash
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./release.sh
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000
+```
+
+Choose a future Unix-second SoraFS retention boundary for the release and
+reuse that exact value on every retry. It is part of each manifest identity.
+
+`doctor.sh` rebuilds the frontend and both services, verifies the vault
+bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,
+and then runs `iroha soracloud app doctor`.
+
+`release.sh` executes `iroha soracloud app release`, whose single V1 path runs
+the build and doctor checks before publication and submission. It then requires
+authoritative status reconciliation plus a real live 2xx health response. The
+CLI performs the publication without manual pin or SSH-only steps; no build
+bypass or direct app deploy exists.
+
+Each service entry in the app manifest carries a `bundle_file`, so the sync
+step refreshes both `container.bundle_hash` and the referenced service
+container hash before deploy.
+
+Direct `iroha soracloud app release` responses keep the root
+`manifest_path`, root `hostname`, root `workspace_dir`, root
+`workspace_scripts`, the frontend publish projection, one manifest-derived
+child service entry per app service, and the top-level mixed `routes` split
+that `app plan` reports.
+
+## Inspect deployed status
+
+```bash
+iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+`app status` keeps one entry per child service manifest and reports the child
+manifest paths, the root `manifest_path`, root `hostname`, root
+`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
+top-level `routes` split, the frontend publish projection, and the matched
+Torii control-plane status when present.
+
+Service-scoped Soracloud commands still operate on the child service manifests:
+
+- use `services/live/container_manifest.json` plus
+  `services/live/service_manifest.json` for live-plane commands
+- use `services/vault/container_manifest.json` plus
+  `services/vault/service_manifest.json` for vault-plane commands
+
+When those commands are driven by `--container` plus `--service`, their
+responses also attach the same local `service_plan` projection that
+`iroha soracloud service plan` reports.
+
+The generated API origin is `https://__SORACLOUD_PACKAGE_NAME__.sora`, and the frontend is
+served from the published `cid_gateway_url` under
+`https://__SORACLOUD_PACKAGE_NAME__.sora/sorafs/cid/...` while both services continue to
+share `/api` on the host origin.

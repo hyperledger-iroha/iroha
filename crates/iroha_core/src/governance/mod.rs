@@ -4,4 +4,4 @@ pub mod draw;
 pub mod manifest;
 pub mod parliament;
 pub mod sortition;
-pub mod timed_ovn;
+pub(crate) use iroha_core_timed_ovn::evidence as timed_ovn;

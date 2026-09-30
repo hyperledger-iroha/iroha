@@ -1,0 +1,241 @@
+{
+  "changed_scope_metrics": {
+    "iroha-cli-shipping": {
+      "declared_dependency_edges": {
+        "after": 961,
+        "before": 907
+      },
+      "declared_external_dependency_edges": {
+        "after": 601,
+        "before": 574
+      },
+      "declared_local_packages": {
+        "after": 73,
+        "before": 70
+      },
+      "declared_workspace_packages": {
+        "after": 69,
+        "before": 66
+      },
+      "required_dependency_edges": {
+        "after": 808,
+        "before": 758
+      },
+      "required_external_dependency_edges": {
+        "after": 477,
+        "before": 454
+      },
+      "required_local_packages": {
+        "after": 69,
+        "before": 66
+      },
+      "required_workspace_packages": {
+        "after": 65,
+        "before": 62
+      }
+    },
+    "iroha-data-model-shipping": {},
+    "iroha-model-base-shipping": {},
+    "iroha-sdk-shipping": {},
+    "iroha3d-shipping": {
+      "declared_dependency_edges": {
+        "after": 1031,
+        "before": 976
+      },
+      "declared_external_dependency_edges": {
+        "after": 639,
+        "before": 613
+      },
+      "declared_local_packages": {
+        "after": 74,
+        "before": 71
+      },
+      "declared_workspace_packages": {
+        "after": 70,
+        "before": 67
+      },
+      "required_dependency_edges": {
+        "after": 852,
+        "before": 813
+      },
+      "required_external_dependency_edges": {
+        "after": 510,
+        "before": 491
+      },
+      "required_local_packages": {
+        "after": 68,
+        "before": 66
+      },
+      "required_workspace_packages": {
+        "after": 64,
+        "before": 62
+      }
+    },
+    "workspace-all-targets": {
+      "declared_dependency_edges": {
+        "after": 1949,
+        "before": 1854
+      },
+      "declared_external_dependency_edges": {
+        "after": 1095,
+        "before": 1054
+      },
+      "declared_local_packages": {
+        "after": 114,
+        "before": 110
+      },
+      "declared_workspace_packages": {
+        "after": 110,
+        "before": 106
+      },
+      "required_dependency_edges": {
+        "after": 1780,
+        "before": 1689
+      },
+      "required_external_dependency_edges": {
+        "after": 963,
+        "before": 926
+      },
+      "required_local_packages": {
+        "after": 114,
+        "before": 110
+      },
+      "required_workspace_packages": {
+        "after": 110,
+        "before": 106
+      }
+    }
+  },
+  "current_fingerprint": "sha256:012887fb3aa8c8cdcc5dc938a809169ac01c2b3cefb58ece9c7d4139b70f143c",
+  "manifest_sha256": {
+    "crates/build-support/Cargo.toml": "221e30386e4d788d0690b7153c7a0f744d593e182be6c50b901bb853d58e1b71",
+    "crates/connect_norito_bridge/Cargo.toml": "7698dc9185ab4125a54806294e1a950a0c7498800fed01887940be5adde0b18e",
+    "crates/fastpq_isi/Cargo.toml": "a11842113c1f749d76a1ebac981f5c3c01c0eb9bbafb7ea35c223cb74454b465",
+    "crates/fastpq_prover/Cargo.toml": "fe9309e319369866b08d6de265992a9204c0e8aa3ac1bc511a95ff5bf42758da",
+    "crates/gpuzstd_cuda/Cargo.toml": "a46ed4e15a6f4d08a24a2eb9134e680a73876472865107ba4ef541567a2ca34e",
+    "crates/gpuzstd_metal/Cargo.toml": "b3ad83a10430174e7879b15f96d496a5e955138ef2efbc04591c64ed1a5ff8f8",
+    "crates/iroha/Cargo.toml": "caa8caf9d007f7b4434ba29962da455d3f29cd81ae0db72dc1f3157d4552089a",
+    "crates/iroha_accel/Cargo.toml": "9d7af456aa86f848b0d90dc8c193f749710a887239d651d3c428b395683062ab",
+    "crates/iroha_allocation/Cargo.toml": "0229bb8f77b6436fc5b9a32274bb4f1e7feb44acc0f639cbe38b2717e1813ef0",
+    "crates/iroha_audio/Cargo.toml": "b894f9a54289add275619f4611bfe17fd3b6c4180c1ff29cfd63bfa4f6089eb2",
+    "crates/iroha_cli/Cargo.toml": "0a7e1daabfa8ae940fb72f89bac10ebc51279120cbe94997ee9059bc0d4ba2f9",
+    "crates/iroha_cli/bins/Cargo.toml": "d54bb1a1e682d15c1af62486f50209927a29b35e52c6751f3ce9b59511161fa0",
+    "crates/iroha_config/Cargo.toml": "8204f16dd6747ca6460bdaa3f2cd15df229939dcd5be94730b914d9a41866316",
+    "crates/iroha_config_base/Cargo.toml": "7cfb3a63d53432631a8739338e0a5e5dd4d3a4e6fe49b0bdd991b08f0efc9e6d",
+    "crates/iroha_contract_deploy/Cargo.toml": "de3d6703091aa3576bf2c7a13b17bb4fb9b28dddf996d0ec66da934b6e323f0a",
+    "crates/iroha_core/Cargo.toml": "9f5a5837da4869fdfc773a0a0e64ba5468f567bee7f3635057cbe2a1b6bf190f",
+    "crates/iroha_core_privacy/Cargo.toml": "7e1a3fb6b3cdd3fe9189e4ce4897d2b1da1b1f0fcf57e24c904d3bd070e3bee3",
+    "crates/iroha_core_timed_ovn/Cargo.toml": "810c306c892456650de42408a22b060adc3f7d1bbebf60dbccfe01f0b84da6c1",
+    "crates/iroha_core_zk/Cargo.toml": "9b3a96b701aa9bbe9c26d0e5a0441d227e39a8c618ae95828e23d5c342f08185",
+    "crates/iroha_crypto/Cargo.toml": "5f5bad9e3a677c7b252d3d1b4c6fafcef881368098442df0703f196b584c905c",
+    "crates/iroha_data_model/Cargo.toml": "a48ad2891d90e26a74f334cd8c44497625627175bbbbcc43c8b3fa90af66b950",
+    "crates/iroha_data_model_derive/Cargo.toml": "e9e8873e59a1d2ab200009c79c55abb4a7bfe52d8acc83f93701d5843063eb1f",
+    "crates/iroha_deploy/Cargo.toml": "730a7fa552a276b1da727d2bb5267cae5e2d8c8977414e4deaa493b81a6336d8",
+    "crates/iroha_derive/Cargo.toml": "8aa474a98f408e950ae6daff2412861ec7213731ec4dedcb13f6986a6cbe7902",
+    "crates/iroha_derive_primitives/Cargo.toml": "7a1328ba3f71e1d57875c0befb2f8921da571637fa7669743511a9ec377b0b55",
+    "crates/iroha_executor_data_model/Cargo.toml": "b457a52c75d5fc698112589eec8681247cc50cbaefb6c667936be753dd551125",
+    "crates/iroha_executor_data_model_derive/Cargo.toml": "592aa8f65943334dc671f618f6ed65a166c3c6ae1104baa053dc8fb199eb4283",
+    "crates/iroha_file_mmap/Cargo.toml": "627f29a8cdbaaefd88a75fe91047d19c1b810bc75fca53c33d639f2a449bb314",
+    "crates/iroha_futures/Cargo.toml": "76ad984fe44bdec5d6bef92d2239c74b961cb490ca29edf0be0de6f7b60cb037",
+    "crates/iroha_genesis/Cargo.toml": "60def6506d994141019a8f5aee3685070ae7f1359f3ee080fe6c5a7520ee013e",
+    "crates/iroha_i18n/Cargo.toml": "56a0aed0ffac46ac4ae66c19a5af991cb021a484020c30dae7487576ea253aa7",
+    "crates/iroha_js_codec/Cargo.toml": "76bbf8fffa14983dd1c7b0c44dc49ea7a1427a816a470095f9cf8134b6c0760d",
+    "crates/iroha_js_host/Cargo.toml": "c3e59518bfef954e699e434f300f27098d5cb6bf77de53e775fff8634929c33a",
+    "crates/iroha_kagami/Cargo.toml": "02b8e93c2c6674f80b87f509cb71f1391f9b9ef35cf9f83e7f33324bbab0c33c",
+    "crates/iroha_logger/Cargo.toml": "5daa11f456471cdaf555b1f9e7529d0f62fdbe23fe131aaca78c82f7d3b2cd99",
+    "crates/iroha_macro/Cargo.toml": "d6ea2b98b69b4d160704927725cfa6ccb928170a672c58420a34376a7530ced3",
+    "crates/iroha_model_base/Cargo.toml": "819f13664fa2474d1dc25c152a02d50251ff3148168df12f86fd64592e4f4dd8",
+    "crates/iroha_monitor/Cargo.toml": "fe947d38efa0d75d71f02834d92d7e6fd7d0bb90c0afc7fe487eb7f5f3b1c434",
+    "crates/iroha_musubi_service/Cargo.toml": "4527187f1282352df3017dd84797e4faa9d31a4b876151b3d92a7bdd9e8a4430",
+    "crates/iroha_p2p/Cargo.toml": "b8a7fb9382ca2db025c8b568afd6be5c64d549a3a52d21bd7866a24f2d603342",
+    "crates/iroha_panic_hook/Cargo.toml": "5fa51469ba9444a0c5b9379477defe449be002abde6861580b9405f73eff3c36",
+    "crates/iroha_primitives/Cargo.toml": "7a8608c113a179cc6734738e1395598ba5e162d292ef28ade6bd9d772aa7dd54",
+    "crates/iroha_primitives_derive/Cargo.toml": "15914a4adc959fb478d341fc7267a7fc0540242390179e71b4898d1c89f1dcfc",
+    "crates/iroha_sccp/Cargo.toml": "5ebd5357de7a66ccaf8afbbea5f8a87bce76c71222800db8c8df46cc4d66fa3a",
+    "crates/iroha_sccp_rpc/Cargo.toml": "6c1eac80757273d4a9416825f2725e6409655319266c8c4cc24121337e92c858",
+    "crates/iroha_sccp_wallet/Cargo.toml": "3e3d12c7bf4556366f019927406a060d914e6ccd7a3bb08893f042b26c1b0d44",
+    "crates/iroha_schema/Cargo.toml": "d84183c07024f3b9737d899ac29fc142f4f06f333afaa064a0583558ea9c0c01",
+    "crates/iroha_schema_derive/Cargo.toml": "f2e31fd791dc58a69d10cd92bbb1dee95042adea5cf60e4104309d5e7305d3de",
+    "crates/iroha_schema_gen/Cargo.toml": "4739cc96d4074391d02fd7aed1a63510c8509a56e060c846c2e3374fb334cced",
+    "crates/iroha_service_model/Cargo.toml": "3324c47827dd4a4eaf0c98504e60674bf4b4fd9b9251b906bafc01815100ca6c",
+    "crates/iroha_storage_client/Cargo.toml": "58bc1da42d22ad66c316d71dcc368ad350b864c1e5d1c12c851f76c8ac900790",
+    "crates/iroha_sumeragi/Cargo.toml": "57737310c74fa6ad7abd975074b550aef29f76507776fb272f5547cab335d175",
+    "crates/iroha_swarm/Cargo.toml": "97651aeaf1af19f6af2d309a62e1b2400e1d63c277a85929d03652856d43eb8a",
+    "crates/iroha_telemetry/Cargo.toml": "002740ff45df670282990baa11d76e96233964fc45eba6e5850b89e13109bfab",
+    "crates/iroha_telemetry_derive/Cargo.toml": "4b7b6c5a26a7d372ec555b47fde0cf15fe4aa07255d5f34861218fe199c0d360",
+    "crates/iroha_test_network/Cargo.toml": "984202aeb8c3c2fceaffdcba3581e85f3fe9f380d65f4f624960b59589eba18e",
+    "crates/iroha_test_samples/Cargo.toml": "1237b568b910e0def7e3adf4ba946d267c2c58af49088735661fbd285f5cd9d7",
+    "crates/iroha_torii/Cargo.toml": "e31b287ed1569fb1844b2a530a27325d092f62a566e0b8796f65b05f02aba976",
+    "crates/iroha_torii_shared/Cargo.toml": "abb9547e4f5a60a34e3aaa6bfac01bc90eefef136077a7f2d0946c9d38bcceaa",
+    "crates/iroha_version/Cargo.toml": "64080746601512c6b39f7572c2d812a95ba0e81b302114723d352b01ed247b93",
+    "crates/iroha_wallet/Cargo.toml": "93b8691d4b0a3e4ac12b1af83dabdcdebb4a5f3276cac15b520b7a297c60e692",
+    "crates/iroha_zkp_halo2/Cargo.toml": "933cbd2f0396e14ea9ac215fcb4e50ec1b13047e9e3a915dd85a04b5f2ab4f66",
+    "crates/iroha_zkp_poseidon/Cargo.toml": "ad24b16339c4cd2773e04a36a113b931abdd5c3465ff0beda169c18e17a15980",
+    "crates/irohad/Cargo.toml": "6f4085057db6081821f335d037cef16a7047b9d308de00f4e26690a30f202457",
+    "crates/irohad/bins/Cargo.toml": "b92ca6d3824a9e88973dcd7d6f7f6414a4a79ff1c95b7d22abc9d9e68a9bacad",
+    "crates/ivm/Cargo.toml": "21454f0d9fcb013902aceeeb2639a62728484312a3043aaada4d1174b77bf3c9",
+    "crates/ivm_abi/Cargo.toml": "caf07b5b355ac611e8a049f9aa2448ffd811d94189b5536217bdfa8d3da3e9e6",
+    "crates/ivm_artifact_admission/Cargo.toml": "dead990174e1c00b1256536912032968ab22bd6320432643346110f54c942d68",
+    "crates/izanami/Cargo.toml": "914d4207876df97cce4019e6227647a2efcb54ff101e5e08518372fad5e17889",
+    "crates/kaigi_zk/Cargo.toml": "2f8c479f09e882ea7d7032525e95d4ed7984e5d4e3aaee15fee0aab9e614d9cd",
+    "crates/kotodama_lang/Cargo.toml": "9e5ed2ec3a8c4d53e50c6d6a55b92fc8ad3bba012876928f00b4a7f2f28576e3",
+    "crates/kotodama_surface/Cargo.toml": "1faa80a9859e7c084e94c1dd188c318c1a3d1d37f2a1eff6ded11f6b18f77db8",
+    "crates/kotodama_toolchain/Cargo.toml": "3b8789d702f842608e1e292041c1c442ca91c3c72936168f44fd1f7e17d26453",
+    "crates/musubi/Cargo.toml": "1af2a5b6a64fd6206ef350305330d85aa2070566fa49287aa06fefd9de6aba69",
+    "crates/mv/Cargo.toml": "0deaeee6eb9f8f92fdf69c604de1239407c6bf558410bcf93aa4785a975df223",
+    "crates/norito/Cargo.toml": "732b9aed2a117f0a74421321d03d1480e50da9aa7eda7e33e3bfcabffacbb408",
+    "crates/norito/accelerators/jsonstage1_cuda/Cargo.toml": "741f64e895408a0ab638b68a284efe262af980556172d2951bcd12d5850d6d04",
+    "crates/norito/accelerators/jsonstage1_metal/Cargo.toml": "6522789a6da760ed7fb760fbac7f765b6ffa6b0e650cee1294cf8dda5647e03d",
+    "crates/norito_derive/Cargo.toml": "1b523937cfd55981e7087ecc76403cecae0fcd73133e28e04a4fdc9c58345359",
+    "crates/settlement_router/Cargo.toml": "39ab00751a73acef97597f293e336b39268af5ba0a5849817427eaf737a06d7d",
+    "crates/sm3_neon/Cargo.toml": "c5b749a6581ca1122cd4080da0928bb8e8d411b587810a87b4bce80d3024acff",
+    "crates/sm4_neon/Cargo.toml": "7ec642f9ec06c86d2c72982a8e01092138705a39246a73387e053f875d25ed9b",
+    "crates/sorafs_car/Cargo.toml": "d04096c15b9d40cb2e7156b61968e1f4eabd07aa9642b628e08e108e0ec25f6d",
+    "crates/sorafs_chunker/Cargo.toml": "6a381936423e79608a42cf19d5c151bb0aaa0bbd829bb73929ff29e005e56a47",
+    "crates/sorafs_manifest/Cargo.toml": "dc34df658996fd52331b324be03fbbbf2f723b1bf7651ec9358d704d24f3cb0e",
+    "crates/sorafs_node/Cargo.toml": "1500d335ba6cba24585a9649ab3bc0ff5c264d201a5b37d7e71ec1acf620d80a",
+    "crates/sorafs_orchestrator/Cargo.toml": "45c4074bbbfefc66c9ce3af7d81d0e05b91f44207fb0c354f690a6ba1ea2da39",
+    "crates/soranet_incentives/Cargo.toml": "b451e3a9727f4e8799b683dd5cd464bab630d041adf090102136be965e646c9e",
+    "crates/soranet_pq/Cargo.toml": "eaf84cb2c5fee5f6cbd3907e616cea165a5c8d1f7fce4bc73e56f681a693cecc",
+    "crates/zk_ace_prover/Cargo.toml": "e3dab9d2002ca072212188c79856b7501f9e69e475f74276fecd5f22c53a808a",
+    "data_model/samples/executor_custom_data_model/Cargo.toml": "a590795106edc77b771248fd84bfeb02e4c12adc97059e3f81ad59c4a34f439a",
+    "data_model/samples/mint_rose_trigger_data_model/Cargo.toml": "2ef7d20fd01516be809125caa61e363258c9509281a6f75cc8b7e8b243355331",
+    "integration_tests/Cargo.toml": "e2cef12a179ffc938fb8a36cb15ff04dcdd8f09f4483f5c75291bb66110c6aa4",
+    "mochi/mochi-core/Cargo.toml": "380812b8f70735a8698065ed1b5b94187c79c170ac22414de94e77c60034fc98",
+    "mochi/mochi-integration/Cargo.toml": "d31cf3d8c208757c0338f48f653101327a95c53f144e65cd19a27ebd663e7830",
+    "mochi/mochi-ui-egui/Cargo.toml": "43678fb8c9cb2b3d119d26a10dde07eed491f96b1da3d806df574830395d4a04",
+    "python/iroha_python/iroha_python_rs/Cargo.toml": "22e61d315bdf1da35d028f989bc13d36af1e0c7f49dd4836fac3b484a4982dc1",
+    "tools/kotlin-fixture-gen/Cargo.toml": "f81a031461a75764251b7086c4b3e963277dbea13534b1f9c4a8de8adbb18a44",
+    "tools/norito_codegen_exporter/Cargo.toml": "1d74aa00e6f259e327027a8b67f66b9a1daa09e705ffdeb4041c521651d8db6b",
+    "tools/sora-vpn-backend/Cargo.toml": "b552e36d91b151b4060eb027e8484f8bc7ff45ed306132d2f92eef95680c9b38",
+    "tools/sora-vpn-helper/Cargo.toml": "2e34914ee50201182466343605aa75f9cae5be79d3b610d761b7eaa429fe947a",
+    "tools/soradns-resolver/Cargo.toml": "c22ab3af9650e4464faa1a455be3a7efcf72cde84e820af88bca6b69be7ec64b",
+    "tools/soranet-handshake-harness/Cargo.toml": "484ab53ac526ccc2a8fb65c1ea745f16ff3df27f26f52fc43be96f797185f672",
+    "tools/soranet-puzzle-service/Cargo.toml": "e1f9a7060f64cae8754f82fd6af543b2929944d6b9002443a46687977c15c610",
+    "tools/soranet-relay/Cargo.toml": "0b90605b68f383ac48c4ba75b0100248c6429f231101b1db1a2b9424fccb9cda",
+    "tools/telemetry-schema-diff/Cargo.toml": "d33ebb969792f7a3530296ecc833f480ad1c9f456d7000ae6df779f6a6ed03c9",
+    "vendor/concread/Cargo.toml": "69c1b7e9a119d930cd53c0dc157dad9cd62603c5fa3abf82ea7d18cfabb7cd36",
+    "vendor/cust_raw/Cargo.toml": "ec393371108a000ccd0da55a4b11bc4751105a194dc83f09bc323a175faa27b4",
+    "vendor/find_cuda_helper/Cargo.toml": "62c05c27024326ef93ac3fda038d9f99f57df5dea74583373f751358ae0c51b1",
+    "vendor/halo2-axiom/Cargo.toml": "f1de979a33d6ecbd8e5533ed10db1e0b7122888995d70ce005283c6411b01996",
+    "vendor/halo2-base/Cargo.toml": "f564c91bd4be729ce2efbedc2766f3bd38a9968518c739d2b57baf219167300e",
+    "vendor/halo2curves-axiom/Cargo.toml": "4a54ebe43f3b0ae61c78590718d2d13e6630eccb372efc29c23dbd166105986f",
+    "vendor/num-bigint-0.4.6/Cargo.toml": "a6042603541ecb91ec1f5c158679c0b47090462434e2a53e65f78395994f223f",
+    "vendor/wayland-scanner-0.31.10/Cargo.toml": "f0f70cce76cac9923d3eb06aa956d8d66cd9acda790c1e09f45f943a02ef7b27",
+    "xtask/Cargo.toml": "540bdc33578ff006d86e181c17c071055ea0ec6a12b3c211082f6b9ac0b23b74"
+  },
+  "new_registry_packages": [],
+  "new_workspace_owners": [
+    "iroha_core_privacy",
+    "iroha_core_timed_ovn",
+    "irohad_lib",
+    "iroha_cli_lib"
+  ],
+  "policy_changes": [
+    "Assign irohad_lib to the existing node_execution layer; preserve all deny rules and configured selections.",
+    "Replace each numeric ceiling with its exact measured source metric, including decreases."
+  ],
+  "prior_budget_sha256": "cd7c61c93229a800bc1933c2bb646a8a7b36456eaefe96a6a4fab4023510edbc",
+  "prior_fingerprint": "sha256:bdd6511aef73ae211b751d06aa0ec3529865ab8684bd5855581e38c442f92308",
+  "schema_version": 1
+}

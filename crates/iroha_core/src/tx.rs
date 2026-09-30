@@ -9657,7 +9657,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
-        let (artifact, _) = ivm::KotodamaCompiler::new()
+        let (artifact, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
             )
@@ -11903,7 +11903,7 @@ pub mod tests {
                 )
             }};
         }
-        let (code, _) = ivm::KotodamaCompiler::new()
+        let (code, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
             )

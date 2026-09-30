@@ -40,19 +40,17 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
-    privacy_profiles::{
-        CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
-        compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
-    },
-    privacy_release_evidence::{
-        PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
-        build_privacy_release_bootle_lantern_network_action_v1,
-        build_privacy_release_fcmp_network_action_v1,
-        build_privacy_release_ivm_private_note_network_action_v1,
-        build_privacy_release_verange_network_action_v1,
-        build_privacy_release_zk_ace_network_action_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
+    build_privacy_release_bootle_lantern_network_action_v1,
+    build_privacy_release_fcmp_network_action_v1,
+    build_privacy_release_ivm_private_note_network_action_v1,
+    build_privacy_release_verange_network_action_v1,
+    build_privacy_release_zk_ace_network_action_v1,
+};
+use iroha_core_privacy::privacy_profiles::{
+    CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
+    compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;

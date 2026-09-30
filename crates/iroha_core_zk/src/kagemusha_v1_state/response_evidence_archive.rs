@@ -5,13 +5,11 @@
 //! current checkpoint before any response may supply authority. This archive exposes no
 //! completion, stock observation, authenticated absence, or history-retirement capability.
 
-#[cfg(test)]
 use super::private_journal::PrivateJournalFormat;
 use super::{
     KagemushaLaneIdV1, KagemushaRecoveryJournalPrefixV1,
     private_journal::{PrivateJournal, PrivateJournalError},
 };
-#[cfg(test)]
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_DEVICE_PAYLOAD_MAX_BYTES_V1, KAGEMUSHA_DEVICE_RESPONSE_MAX_BYTES_V1,
     KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KagemushaHardwareCredentialV1,
@@ -19,22 +17,16 @@ use iroha_data_model::kagemusha::{
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use norito::{Decode, Encode};
-#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
-#[cfg(test)]
 use std::path::Path;
 
-#[cfg(test)]
 const COMMAND_HEADER_BYTES: usize = 80;
-#[cfg(test)]
 const COMMAND_MAX_BYTES: usize = COMMAND_HEADER_BYTES + KAGEMUSHA_DEVICE_PAYLOAD_MAX_BYTES_V1;
-#[cfg(test)]
 const RECORD_MAX_BYTES: usize = COMMAND_MAX_BYTES
     + KAGEMUSHA_DEVICE_RESPONSE_MAX_BYTES_V1
     + KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1
     + 2048;
-#[cfg(test)]
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "responses.norito.wal",
     magic: b"IKGRW1\0\0",
@@ -89,7 +81,6 @@ pub struct KagemushaResponseEvidenceContextV1 {
     pub qualification_report_digest: [u8; 32],
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::response_evidence_archive::Record")]
 enum Record {
@@ -136,7 +127,6 @@ pub struct KagemushaResponseEvidenceArchiveV1 {
 }
 
 impl KagemushaResponseEvidenceArchiveV1 {
-    #[cfg(test)]
     pub(super) fn create_new(
         path: &Path,
         lane: &KagemushaLaneIdV1,
@@ -159,7 +149,6 @@ impl KagemushaResponseEvidenceArchiveV1 {
         Ok(archive)
     }
 
-    #[cfg(test)]
     pub(super) fn open_existing(
         path: &Path,
         lane: &KagemushaLaneIdV1,
@@ -218,7 +207,6 @@ impl KagemushaResponseEvidenceArchiveV1 {
         self.wal.recovery_prefix().map_err(storage_error)
     }
 
-    #[cfg(test)]
     pub(super) fn validate_recovery_prefix(
         &self,
         lane: &KagemushaLaneIdV1,
@@ -238,7 +226,6 @@ impl KagemushaResponseEvidenceArchiveV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     /// Retain both complete correlated frames, including the original response authenticator.
     ///
     /// Returns `true` only after the first append is fsynced. A retry with the same complete
@@ -289,13 +276,11 @@ impl KagemushaResponseEvidenceArchiveV1 {
     }
 }
 
-#[cfg(test)]
 fn validate_owner(lane: &KagemushaLaneIdV1, incarnation: AxtAssetIncarnationV1) -> Result<()> {
     lane.validate().map_err(|_| Error::InvalidBinding)?;
     incarnation.validate().map_err(|_| Error::InvalidBinding)
 }
 
-#[cfg(test)]
 fn frame_identity(
     lane: &KagemushaLaneIdV1,
     operation: u8,
@@ -365,7 +350,6 @@ fn frame_identity(
     })
 }
 
-#[cfg(test)]
 fn encode(record: &Record) -> Result<Vec<u8>> {
     let bytes = norito::encode_canonical(record).map_err(|_| Error::InvalidBinding)?;
     if bytes.is_empty() || bytes.len() > RECORD_MAX_BYTES {
@@ -374,7 +358,6 @@ fn encode(record: &Record) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(test)]
 fn decode(bytes: &[u8]) -> Result<Record> {
     if bytes.is_empty() || bytes.len() > RECORD_MAX_BYTES {
         return Err(Error::JournalCorrupt);

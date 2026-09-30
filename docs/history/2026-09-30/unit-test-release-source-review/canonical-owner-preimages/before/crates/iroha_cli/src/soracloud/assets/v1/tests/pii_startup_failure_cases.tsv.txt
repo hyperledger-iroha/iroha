@@ -1,0 +1,17 @@
+strict_key	SESSION_HMAC_KEY	too-short	SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode	SESSION_HMAC_KEY must be set to at least 32 characters~|~resolveSessionHmacKey
+invalid_mode	AUTH_MODE	permissive	AUTH_MODE must be strict or dev, got: permissive	normalizeAuthMode~|~AUTH_MODE must be strict or dev
+missing_capability_map	AUTH_CAPABILITY_MAP_JSON		AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints	AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints~|~parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true)
+invalid_capability_map	AUTH_CAPABILITY_MAP_JSON	{not-json	AUTH_CAPABILITY_MAP_JSON is invalid JSON	AUTH_CAPABILITY_MAP_JSON is invalid JSON
+empty_capability_map_object	AUTH_CAPABILITY_MAP_JSON	{}	AUTH_CAPABILITY_MAP_JSON must define at least one principal	AUTH_CAPABILITY_MAP_JSON must define at least one principal
+non_object_capability_map	AUTH_CAPABILITY_MAP_JSON	[]	AUTH_CAPABILITY_MAP_JSON must be an object	AUTH_CAPABILITY_MAP_JSON must be an object
+invalid_capability_map_principal	AUTH_CAPABILITY_MAP_JSON	{"not-a-public-key":["pii.records.read"]}	AUTH_CAPABILITY_MAP_JSON principal must be 32 bytes of hex	AUTH_CAPABILITY_MAP_JSON principal
+empty_capability_array	AUTH_CAPABILITY_MAP_JSON	{"1111111111111111111111111111111111111111111111111111111111111111":[]}	AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays	AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays
+non_array_capability_value	AUTH_CAPABILITY_MAP_JSON	{"1111111111111111111111111111111111111111111111111111111111111111":"pii.records.read"}	AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays	AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays
+non_string_capability	AUTH_CAPABILITY_MAP_JSON	{"1111111111111111111111111111111111111111111111111111111111111111":[42]}	AUTH_CAPABILITY_MAP_JSON capability must be a string	AUTH_CAPABILITY_MAP_JSON capability
+blank_capability	AUTH_CAPABILITY_MAP_JSON	{"1111111111111111111111111111111111111111111111111111111111111111":[" "]}	AUTH_CAPABILITY_MAP_JSON capability must not be empty	AUTH_CAPABILITY_MAP_JSON capability
+invalid_public_base_url	PUBLIC_BASE_URL	http://	PUBLIC_BASE_URL is invalid	PUBLIC_BASE_URL is invalid
+invalid_session_ttl	AUTH_SESSION_TTL_SECS	59	AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]	AUTH_SESSION_TTL_SECS
+non_numeric_session_ttl	AUTH_SESSION_TTL_SECS	not-a-number	AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]	AUTH_SESSION_TTL_SECS
+invalid_challenge_ttl	AUTH_CHALLENGE_TTL_SECS	4	AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]	AUTH_CHALLENGE_TTL_SECS
+challenge_ttl_above_max	AUTH_CHALLENGE_TTL_SECS	901	AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]	AUTH_CHALLENGE_TTL_SECS
+invalid_external_state_boolean	AUTH_REQUIRE_EXTERNAL_SHARED_STATE	maybe	AUTH_REQUIRE_EXTERNAL_SHARED_STATE must be boolean (true/false/1/0)	AUTH_REQUIRE_EXTERNAL_SHARED_STATE~|~must be boolean

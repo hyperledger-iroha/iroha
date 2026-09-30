@@ -22,49 +22,38 @@ mod signed_transaction_fixture_tests {
             b"connect-norito-signed-transaction-fixture-genesis",
         )))
     }
-    fn read_compact_length(bytes: &[u8], offset: &mut usize) -> usize {
-        let mut value = 0_u64;
-        let mut shift = 0_u32;
-        loop {
-            let byte = *bytes.get(*offset).expect("compact length byte");
-            *offset += 1;
-            value |= u64::from(byte & 0x7f) << shift;
-            if byte & 0x80 == 0 {
-                return usize::try_from(value).expect("compact length fits usize");
-            }
-            shift += 7;
-            assert!(shift < 64, "compact length overflow");
-        }
-    }
-    fn split_compact_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
+    fn split_default_norito_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
+        let flags = norito::core::default_encode_flags();
         let mut offset = 0;
         let mut fields = Vec::with_capacity(count);
         for _ in 0..count {
-            let len = read_compact_length(bytes, &mut offset);
-            let end = offset.checked_add(len).expect("field end");
-            fields.push(bytes.get(offset..end).expect("complete field").to_vec());
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(
+                bytes.get(offset..).expect("Norito field prefix"),
+                flags,
+            )
+            .expect("Norito field length");
+            let start = offset.checked_add(prefix).expect("Norito field start");
+            let end = start.checked_add(len).expect("Norito field end");
+            fields.push(
+                bytes
+                    .get(start..end)
+                    .expect("complete Norito field")
+                    .to_vec(),
+            );
             offset = end;
         }
-        assert_eq!(offset, bytes.len(), "unexpected compact field tail");
+        assert_eq!(offset, bytes.len(), "unexpected trailing Norito fields");
         fields
     }
-    fn push_compact_length(bytes: &mut Vec<u8>, mut value: usize) {
-        loop {
-            let mut byte = (value & 0x7f) as u8;
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            bytes.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-    }
-    fn compact_fields(fields: &[Vec<u8>]) -> Vec<u8> {
+    fn encode_default_norito_fields(fields: &[Vec<u8>]) -> Vec<u8> {
+        let flags = norito::core::default_encode_flags();
         let mut bytes = Vec::new();
         for field in fields {
-            push_compact_length(&mut bytes, field.len());
+            norito::core::write_len_to_vec_with_flags(
+                &mut bytes,
+                u64::try_from(field.len()).expect("Norito field length fits u64"),
+                flags,
+            );
             bytes.extend_from_slice(field);
         }
         bytes
@@ -74,29 +63,29 @@ mod signed_transaction_fixture_tests {
         concrete_type_name: &str,
     ) -> Vec<u8> {
         assert_eq!(canonical.first(), Some(&1));
-        let mut signed = split_compact_fields(&canonical[1..], 3);
-        let mut payload = split_compact_fields(&signed[1], 10);
+        let mut signed = split_default_norito_fields(&canonical[1..], 3);
+        let mut payload = split_default_norito_fields(&signed[1], 9);
 
         assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
-        let executable_fields = split_compact_fields(&payload[3][4..], 1);
+        let executable_fields = split_default_norito_fields(&payload[3][4..], 1);
         let sequence = &executable_fields[0];
         assert_eq!(&sequence[..8], &1_u64.to_le_bytes());
-        let sequence_fields = split_compact_fields(&sequence[8..], 1);
-        let mut instruction = split_compact_fields(&sequence_fields[0], 2);
-        let wire_id = split_compact_fields(&instruction[0], 1);
+        let sequence_fields = split_default_norito_fields(&sequence[8..], 1);
+        let mut instruction = split_default_norito_fields(&sequence_fields[0], 2);
+        let wire_id = split_default_norito_fields(&instruction[0], 1);
         assert_eq!(wire_id[0], b"iroha.log");
 
-        instruction[0] = compact_fields(&[concrete_type_name.as_bytes().to_vec()]);
-        let instruction = compact_fields(&instruction);
+        instruction[0] = encode_default_norito_fields(&[concrete_type_name.as_bytes().to_vec()]);
+        let instruction = encode_default_norito_fields(&instruction);
         let mut sequence = 1_u64.to_le_bytes().to_vec();
-        sequence.extend_from_slice(&compact_fields(&[instruction]));
+        sequence.extend_from_slice(&encode_default_norito_fields(&[instruction]));
         let mut executable = 0_u32.to_le_bytes().to_vec();
-        executable.extend_from_slice(&compact_fields(&[sequence]));
+        executable.extend_from_slice(&encode_default_norito_fields(&[sequence]));
         payload[3] = executable;
-        signed[1] = compact_fields(&payload);
+        signed[1] = encode_default_norito_fields(&payload);
 
         let mut alternate = vec![1];
-        alternate.extend_from_slice(&compact_fields(&signed));
+        alternate.extend_from_slice(&encode_default_norito_fields(&signed));
         alternate
     }
     #[test]
@@ -161,6 +150,7 @@ mod signed_transaction_fixture_tests {
         let canonical = transaction
             .encode_wire_v1()
             .expect("encode canonical signed transaction");
+        decode_signed_transaction(&canonical).expect("canonical instruction wire is accepted");
         let alternate = signed_transaction_with_type_name_instruction_pair(
             &canonical,
             std::any::type_name::<Log>(),

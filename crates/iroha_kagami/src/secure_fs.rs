@@ -299,10 +299,6 @@ mod unix {
         harden_empty_private_directory(&path)?;
         Ok(path)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "keep the security-audited stat/open/stat root walk as one linear flow"
-    )]
     fn open_private_tree_root(path: &Path) -> Result<OpenPrivateTreeRoot> {
         let raw_path = path.as_os_str().as_bytes();
         if raw_path.is_empty()

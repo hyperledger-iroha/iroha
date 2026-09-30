@@ -490,10 +490,6 @@ fn assert_bootle_lantern_policy_roundtrip(record: &BootleLanternIssuerPolicyV1) 
         "unknown JSON fields must not create an alternate first-release policy encoding"
     );
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "all matrix-shape and coefficient boundaries are checked in one helper"
-)]
 fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1) {
     let mut invalid = record.clone();
     invalid.issuer_public_matrix.entries.pop();
@@ -634,10 +630,6 @@ fn negacyclic_basis_shift(coefficients: &[u16], shift: usize) -> Vec<u16> {
     shifted
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the R512 constructor mutation corpus is one cohesive algebraic matrix"
-)]
 fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     let first_column = dense_bootle_first_column();
     let mut short_first_column = first_column.clone();
@@ -1046,10 +1038,6 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         .validate(limits)
         .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the non-Orchard private-transfer boundary cases form one protocol matrix"
-)]
 fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimitsV1) {
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {

@@ -1,0 +1,64 @@
+[package]
+name = "iroha_core_privacy"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "State-free native privacy engines and execution proofs for Iroha"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["zk-stark", "simd"]
+zk-stark = []
+simd = ["sha3/asm"]
+privacy-release-evidence = ["zk-stark", "iroha_data_model/privacy-exact12-conformance"]
+test-utils = ["dep:rand_08"]
+
+[dependencies]
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc", "json"] }
+iroha_model_base = { workspace = true }
+iroha_schema = { workspace = true }
+ivm_abi = { workspace = true }
+ivm = { workspace = true }
+mv = { workspace = true }
+soranet_pq = { workspace = true }
+iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
+fastpq_isi = { path = "../fastpq_isi" }
+fastpq_prover = { path = "../fastpq_prover" }
+orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"] }
+incrementalmerkletree = "=0.8.2"
+nonempty = "=0.11.0"
+curve25519-dalek = "4.1.3"
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
+chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
+rand = { workspace = true }
+rand_core_06 = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
+sha3 = { version = "0.10.8", default-features = false, features = ["std", "zeroize"] }
+blake2 = { workspace = true }
+blake3 = "1.8.2"
+hex = { workspace = true }
+once_cell = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
+rand_08 = { package = "rand", version = "=0.8.7", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[dev-dependencies]
+rand_08 = { package = "rand", version = "=0.8.7" }
+tempfile = { workspace = true }
+x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }

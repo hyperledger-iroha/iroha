@@ -3370,9 +3370,14 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
   scheduler with the fake executor, and O9 with two threaded driver instances in one process.
   `Init` assembly and serving stay with the world in the simulator; the driver's versions are
   tested over in-memory backends.
-- Before the Taira cutover: a multi-process soak test (n = 4 and n = 22; netem loss 10–30 %,
-  delay spikes, random `kill -9`, disk-full injection; 24 h) with O-AGR, O-SIGN, O-LIVE and O-PERF
-  computed from node logs. It is a release gate.
+- Deployment policy is owned by on-chain governance for Taira and production. Multi-process
+  fault runs, including loss/delay, crashes, restarts and disk exhaustion, are optional
+  engineering diagnostics; their duration, topology and verdict do not authorize or block a
+  cutover. There is no mandatory 24-hour fault test for any network, and elapsed off-chain
+  runtime or a missing soak verdict is not a Sumeragi protocol or node-admission rule.
+  Operators still enforce signed native control authority, authenticated genesis and committee,
+  safety-record provenance and custody, and live readiness/write/restart checks. Optional
+  diagnostics compute O-AGR, O-SIGN, O-LIVE and O-PERF from node logs.
 
 ---
 

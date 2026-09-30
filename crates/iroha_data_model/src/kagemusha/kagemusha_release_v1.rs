@@ -2863,10 +2863,6 @@ impl KagemushaInternalValidationReceiptV1 {
     /// # Errors
     /// Rejects missing structural evidence, invalid provider authority, protocol substitution,
     /// or production-only evidence in the experimental receipt.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one closed checklist validates every experimental evidence field in order"
-    )]
     pub fn validate_experimental(&self) -> Result<(), KagemushaReleaseErrorV1> {
         let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
         let absent_report = KagemushaEvidenceFileV1 {

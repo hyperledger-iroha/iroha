@@ -39,6 +39,7 @@ const TEST_ONLY_SOURCES: &[&str] = &[
     "src/network/queue_depth_tests.rs",
     "src/network/runtime_tests.rs",
     "src/network/tcp_listener_bind_tests.rs",
+    "src/network/tests.rs",
     "src/payload_codec_tests.rs",
     "src/peer/receive_credit/tests.rs",
     "src/peer/receive_credit/arbitration_tests.rs",

@@ -2394,7 +2394,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
 
     fn attest_partial_release_capability(
         &self,
-        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        _session: &iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1,
         _expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
@@ -2405,9 +2405,9 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
 
     fn sign_projected_partial_release(
         &self,
-        _projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+        _projection: &iroha_core_timed_ovn::tle::ValidatedTleReleaseProjectionV1,
     ) -> Result<
-        iroha_core::tle_release::TlePartialReleaseShareV1,
+        iroha_core_timed_ovn::tle::TlePartialReleaseShareV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
         Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
@@ -3381,7 +3381,7 @@ fn correlated_malformed_tle_response_is_rejected_by_typed_proxy() {
         );
         let malformed = encode_canonical(
             &ParliamentTlePartialReleaseSignResultWireV1 {
-                partial: iroha_core::tle_release::TlePartialReleaseShareV1 {
+                partial: iroha_core_timed_ovn::tle::TlePartialReleaseShareV1 {
                     key_session_id,
                     identity_digest: [0; 32],
                     participant_index: 1,

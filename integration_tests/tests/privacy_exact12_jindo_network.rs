@@ -7,7 +7,7 @@ use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::{blocking::Client, client::FeeQuoteRequest};
-use iroha_core::{
+use iroha_core_privacy::{
     privacy_engines::jindo::{
         JindoPrivacyActionEffectV1, JindoPrivacyActionTransactionContextV1,
         JindoPrivacyActionWitnessV1, prepare_jindo_privacy_action_v1,

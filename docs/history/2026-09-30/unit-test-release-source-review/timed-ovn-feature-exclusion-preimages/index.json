@@ -1,0 +1,17 @@
+{
+  "purpose": "Preserve current controls before excluding newly extracted timed-OVN test helpers from shipping graphs",
+  "preimages": [
+    {
+      "path": "scripts/check_release_feature_graph.py",
+      "sha256": "208dcec61736bae7c2a7aa408e24ab7f74748562c14750b1f2b9b551e886a91c",
+      "bytes": 118481,
+      "archive": "docs/history/2026-09-30/unit-test-release-source-review/timed-ovn-feature-exclusion-preimages/scripts__check_release_feature_graph.py.txt"
+    },
+    {
+      "path": "scripts/tests/release_feature_graph_test.py",
+      "sha256": "98ecf61a62950221388e017b4cd85c65d92d9350f09865a8fd91a6dec7bc1b6e",
+      "bytes": 84653,
+      "archive": "docs/history/2026-09-30/unit-test-release-source-review/timed-ovn-feature-exclusion-preimages/scripts__tests__release_feature_graph_test.py.txt"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "captured_at_utc": "2026-09-30T05:14:17.531062+00:00",
+  "head": "4032051e02fa9782cefe21e8f5b9761c9281cc34",
+  "cargo_lock_sha256": "ef670cd07bde7afed2110e967285bdc8e9719ed4a7420362a46a59a6784bcb43",
+  "scope": "Exact preimages before repair of nine failing bridge unit cases; concurrent Core privacy extraction is preserved. No release qualification asserted.",
+  "files": [
+    {
+      "path": "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs",
+      "archive": "crates__connect_norito_bridge__src__kagemusha_core_coordinator_v1.rs.txt",
+      "bytes": 115154,
+      "sha256": "c450e2b5e84e1e5e5da52958371bd692eff624d68df548d7a9fe8d8cbb1c07f4"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/kagemusha_mobile_bootstrap_v1_tests.rs",
+      "archive": "crates__connect_norito_bridge__src__kagemusha_mobile_bootstrap_v1_tests.rs.txt",
+      "bytes": 14547,
+      "sha256": "aae351fc86d3bcb7a7c5b000b499596d79981322ac9f1b4578c99cc48c67d66a"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/kagemusha_testnet_native_startup_v1_tests.rs",
+      "archive": "crates__connect_norito_bridge__src__kagemusha_testnet_native_startup_v1_tests.rs.txt",
+      "bytes": 18539,
+      "sha256": "e696e0c5c1a7320e4bd9f9eeb39767ef0f0a3a876e3112a44cb39aacaa0168db"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/platform_jni/kagemusha_testnet_native_startup.rs",
+      "archive": "crates__connect_norito_bridge__src__platform_jni__kagemusha_testnet_native_startup.rs.txt",
+      "bytes": 2523,
+      "sha256": "8e7f240f2f098e18a37c71e69f6d795a37bf6bd0d7714d7d9e545dbec09dedab"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs",
+      "archive": "crates__connect_norito_bridge__src__kagemusha_testnet_observation_v1.rs.txt",
+      "bytes": 59597,
+      "sha256": "d3121c4f58590dd8133d7d0cb12925710c1a249f81143305f6503e5e7146ceec"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/bridge_tail_tests.rs",
+      "archive": "crates__connect_norito_bridge__src__bridge_tail_tests.rs.txt",
+      "bytes": 10536,
+      "sha256": "81faafb4f16934672448b7a4c36c7c6dcdb1b5d47b123b390a9573cf60edc345"
+    },
+    {
+      "path": "crates/connect_norito_bridge/src/kagemusha_sender_release_evidence_tests.rs",
+      "archive": "crates__connect_norito_bridge__src__kagemusha_sender_release_evidence_tests.rs.txt",
+      "bytes": 40079,
+      "sha256": "96b9fc4b0c28b49ade4732e944e0d955677350eae057db445c5538c1e536f950"
+    },
+    {
+      "path": "fixtures/offline/kagemusha_sender_release_parser_v1.json",
+      "archive": "fixtures__offline__kagemusha_sender_release_parser_v1.json.txt",
+      "bytes": 556193,
+      "sha256": "87515a795cd0a1db66f100e6c96ca85e1133f5ec84737cdc1a247450c0086bec"
+    }
+  ]
+}

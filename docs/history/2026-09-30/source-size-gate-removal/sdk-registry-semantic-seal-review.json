@@ -1,0 +1,14 @@
+[
+  {
+    "source": "crates/ivm/tests/kotodama.rs",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/kotodama-ivm-registry-region.txt",
+    "sha256": "27c39d9fc502a22f13ebce08831547ee1898114f0791cec44892708c75fbca10",
+    "token_sha256": "75a857b41d94d0b890bd7aa3f79c04d50fb7b6027c1ec8c97d32738e5502c3f7"
+  },
+  {
+    "source": "crates/kotodama_lang/src/ir.rs",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/kotodama-ir-registry-region.txt",
+    "sha256": "d361b6a6d5bacf917729bee90898e2a17cb23c4d6c4ad0a746bb5c325e11d17f",
+    "token_sha256": "f1669b72eb08c6e27e2e7ae5c61235d630ace8a773e8cf595b81fa5fe67a3685"
+  }
+]

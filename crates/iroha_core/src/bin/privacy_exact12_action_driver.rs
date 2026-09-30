@@ -10,20 +10,17 @@
 //! governed Figure 9 proving artifacts are available; ZK-AMS and ZK-X509 also
 //! remain absent until their native release paths are genuinely available, so
 //! receipt issuance remains closed.
-use iroha_core::{
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
-    privacy_release_evidence::{
-        PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
-        build_privacy_release_bootle_lantern_network_action_v1,
-        build_privacy_release_fcmp_network_action_v1,
-        build_privacy_release_ivm_private_note_network_action_v1,
-        build_privacy_release_jindo_network_action_v1,
-        build_privacy_release_orchard_network_action_v1,
-        build_privacy_release_pq_masp_network_actions_v1,
-        build_privacy_release_verange_network_action_v1,
-        build_privacy_release_zk_ace_network_action_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
+    build_privacy_release_bootle_lantern_network_action_v1,
+    build_privacy_release_fcmp_network_action_v1,
+    build_privacy_release_ivm_private_note_network_action_v1,
+    build_privacy_release_jindo_network_action_v1, build_privacy_release_orchard_network_action_v1,
+    build_privacy_release_pq_masp_network_actions_v1,
+    build_privacy_release_verange_network_action_v1,
+    build_privacy_release_zk_ace_network_action_v1,
 };
+use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     block::BlockHeader,

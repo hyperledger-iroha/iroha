@@ -240,7 +240,12 @@ transaction. Complete entry framing is charged before transfer mutation; intrins
 refusals roll back business effects and retain one rejected invocation. Fee and
 ballot-penalty tail shapes are checked before execution, and proposal packing uses
 the same frozen policy. The bootstrap ordinary prefix is conservatively eleven
-Network entries; it is not a qualified throughput optimum. In-genesis parameter
+Network entries; it is not a qualified throughput optimum. Genesis normalization
+preserves authored input boundaries and refuses an overbudget source. Draft generators
+must author compatible physical routing phases explicitly; merging arbitrary adjacent
+inputs by size can combine distinct authorization worlds. Generated crypto and
+confidential parameters share one global metadata input after authored instructions.
+In-genesis parameter
 changes cannot enlarge that carrier's pre-frozen capacity.
 
 TODO: complete current-source Core execution and genesis qualification, then bind

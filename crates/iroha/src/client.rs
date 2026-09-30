@@ -823,10 +823,6 @@ fn alias_setup_dependency_rank(intent: &AliasIntentV1) -> u8 {
 /// Returns an error when the plan version or hash is invalid, the plan is not
 /// executable, a frame is unknown or non-canonical, or its resource mapping is
 /// incomplete or inconsistent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered setup-plan verifier keeps every first-error check in protocol order"
-)]
 pub fn decode_and_verify_alias_setup_plan(
     plan: &AliasTransactionPlanV1,
 ) -> Result<Vec<InstructionBox>> {
@@ -1088,10 +1084,6 @@ pub fn decode_and_verify_alias_setup_plan_for_request(
 ///
 /// Returns an error when the plan is malformed, non-canonical, blocked,
 /// internally inconsistent, or carries a substituted lifecycle instruction.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the lifecycle verifier keeps its ordered V1 framing and quote checks together"
-)]
 pub fn decode_and_verify_alias_lifecycle_plan(
     plan: &AliasLifecycleTransactionPlanV1,
 ) -> Result<Option<InstructionBox>> {
@@ -1601,10 +1593,6 @@ pub mod account_onboarding_test_fixture {
 /// # Errors
 /// Returns an error if the receipt is stale, substituted, conflicting, or not
 /// canonically framed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the onboarding verifier preserves the receipt's ordered fail-closed checks"
-)]
 pub fn decode_and_verify_account_onboarding_plan_for_request(
     expected_network_id: NetworkId,
     request: &AccountOnboardingPlanRequestV1,
@@ -20256,10 +20244,6 @@ impl AccountClient {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the contract-call workflow keeps prepare, quote, bind, sign, and submit checks in order"
-    )]
     pub async fn post_contract_call_json(
         &self,
         authority: &iroha_data_model::account::AccountId,
@@ -25149,10 +25133,6 @@ mod tests {
         Index,
         Account,
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the helper checks all alias read variants against the same signed and unsigned request contract"
-    )]
     fn assert_alias_read_request(fixture: AliasReadFixture, authenticated: bool) {
         let client = client_with_static_canonical_auth_headers();
         let alias = "bright-brook-5859@ubl.sbp"
@@ -25515,10 +25495,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test keeps the complete fail-closed canonicality and cross-field consistency payload matrix together"
-    )]
     fn typed_account_alias_reads_reject_noncanonical_or_inconsistent_payloads() {
         let alias = "merchant@banka.paynet"
             .parse::<AccountAliasName>()

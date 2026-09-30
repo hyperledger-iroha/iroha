@@ -1,0 +1,38 @@
+[
+  {
+    "source": "roadmap.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-roadmap.md.txt",
+    "bytes": 51894,
+    "sha256": "e1a54ed259fd21022a130a9eecdd6e1a4d92c82e7aea9cdfd362a8133d542eaf"
+  },
+  {
+    "source": "status.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-status.md.txt",
+    "bytes": 103197,
+    "sha256": "c10930ea2f434accf18ffe782260dc6ab179ee108827c7ed00535b47a9e9fc1b"
+  },
+  {
+    "source": "specs/model_base_extraction.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-specs__model_base_extraction.md.txt",
+    "bytes": 13185,
+    "sha256": "36b3701f83ea3a53f69372b69a36401e8b1ba75fb1c9068b32e6eab88332b344"
+  },
+  {
+    "source": "specs/first_release_architecture_redesign.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-specs__first_release_architecture_redesign.md.txt",
+    "bytes": 119694,
+    "sha256": "3049d6c33d8af1de9c8743a05d2896475822148640e13da1fd825b0c8a599138"
+  },
+  {
+    "source": "specs/sorafs/v1_closure_ledger.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-specs__sorafs__v1_closure_ledger.md.txt",
+    "bytes": 218937,
+    "sha256": "3f3bf875a7f7da88e06146b574d41fb55eff8c0f47a124421c86ad9e12495148"
+  },
+  {
+    "source": "crates/iroha_data_model/tests/fixtures/public_frame_owner_identities.md",
+    "archive": "docs/history/2026-09-30/source-size-gate-removal/sdk-doc-preimage-crates__iroha_data_model__tests__fixtures__public_frame_owner_identities.md.txt",
+    "bytes": 16700,
+    "sha256": "2219266ebf00f7499cc16833d329430723faa7b54b27a8e4fedd8bacd0adfc1f"
+  }
+]

@@ -2388,7 +2388,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testIrohaSDKGetTimeNowAsync() async throws {
         let payload = """
-        {"now":42,"offset_ms":0,"confidence_ms":1}
+        {"now":42,"offset_ms":0,"confidence_ms":1,"sample_count":6,"peer_count":3,"enforcement_mode":"reject","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -2410,7 +2410,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTimeNowAsync() async throws {
         let payload = """
-        {"now":1700000000123,"offset_ms":5,"confidence_ms":2}
+        {"now":1700000000123,"offset_ms":5,"confidence_ms":2,"sample_count":6,"peer_count":3,"enforcement_mode":"reject","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -2430,7 +2430,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         StubURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"now":10,"offset_ms":-1,"confidence_ms":0}
+            {"now":10,"offset_ms":-1,"confidence_ms":0,"sample_count":6,"peer_count":3,"enforcement_mode":"reject","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}
             """.data(using: .utf8)!
             return (response, body)
         }

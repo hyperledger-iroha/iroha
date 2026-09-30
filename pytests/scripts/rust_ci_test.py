@@ -394,7 +394,7 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     """Only packages that start independent test nodes require release artifacts."""
 
     manifest = rust_ci.load_lane_manifest()
-    assert manifest.daemon_packages == ("irohad",)
+    assert manifest.daemon_packages == ("irohad", "irohad_lib")
     assert manifest.package_binaries == {
         "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
         "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),

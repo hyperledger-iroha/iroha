@@ -162,7 +162,7 @@ mod effect_budget {
     }
 
     fn contract_fixture() -> (State, Vec<u8>, ContractAddress, Hash) {
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(r#"
 seiyaku ActualEffectGroups {
   kotoage fn first() authorize("CanInvokeContractEntrypoint") {

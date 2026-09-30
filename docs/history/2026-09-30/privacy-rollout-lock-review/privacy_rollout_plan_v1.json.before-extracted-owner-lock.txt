@@ -1,0 +1,170 @@
+{
+  "schema": "iroha.taira.privacy_rollout_plan.v1",
+  "schema_version": 1,
+  "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+  "cargo_lock_sha256": "3ffd0bf792b80d55e76a70688b4a5d275bbb31cac14f2359c1f3eac60e871408",
+  "protocol_matrix_sha256": "1e8c12983c3fe0e3894e51c5839c27bccb47c075229c80f3720bf6d1d058697d",
+  "wire_contract": {
+    "catalog_size": 12,
+    "catalog_commitment_le_hex": "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+    "proof_envelope_magic_hex": "4952485a4b31a55a"
+  },
+  "capability_gate": {
+    "authoritative_route": "/v1/privacy/capabilities",
+    "authenticated_committed_state_required": true,
+    "required_readiness": "production-qualified",
+    "all_exact12_rows_required": true,
+    "caller_asserted_readiness_forbidden": true
+  },
+  "activation_contract": {
+    "mode": "explicit-register-then-activate",
+    "execution_height": 1,
+    "proposed_lifecycle": "Proposed",
+    "active_lifecycle": "Active",
+    "ordered_instruction_count": 24,
+    "protocol_count": 12,
+    "one_governed_instruction_batch": true
+  },
+  "canary_contract": {
+    "positive_query_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ],
+    "rejection_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ],
+    "malformed_failure_code": "privacy-malformed-proof",
+    "replay_failure_code": "privacy-replay",
+    "per_protocol": [
+      "positive",
+      "negative",
+      "replay"
+    ]
+  },
+  "endpoints": [
+    "public-torii",
+    "taira-validator-1",
+    "taira-validator-2",
+    "taira-validator-3",
+    "taira-validator-4"
+  ],
+  "halt_conditions": [
+    "state-or-hash-divergence",
+    "exact12-protocol-not-production-qualified",
+    "malformed-or-replayed-input-accepted",
+    "native-resource-ceiling-exceeded",
+    "restart-convergence-failed",
+    "receipt-or-release-binding-mismatch"
+  ],
+  "post_cutover_contract": {
+    "mode": "signed-write-and-privacy",
+    "authority_scope": "dedicated-no-governance-canary",
+    "privacy_protocol": "verange-transparent-range-v1",
+    "bootstrap_authority_forbidden": true,
+    "governance_permission_forbidden": true,
+    "skip_write_canary_forbidden": true
+  },
+  "protocols": [
+    {
+      "index": 0,
+      "label": "zk-ace-pq-authorization-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 1,
+      "label": "anonymous-pgc-k-out-of-n-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 2,
+      "label": "verange-transparent-range-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 3,
+      "label": "iroha-zk-ams-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 4,
+      "label": "vega-existing-credential-zk-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 5,
+      "label": "iroha-zk-x509-stark-p256-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 6,
+      "label": "iroha-jindo-polynomial-commitment-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 7,
+      "label": "iroha-bootle-lantern-anoncred-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 8,
+      "label": "orchard-halo2-actions-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 9,
+      "label": "monero-fcmp-plus-plus-v1",
+      "security_model": "classical-rom"
+    },
+    {
+      "index": 10,
+      "label": "iroha-ivm-private-note-stark-v1",
+      "security_model": "pq-qrom"
+    },
+    {
+      "index": 11,
+      "label": "pq-masp-stark-v1",
+      "security_model": "pq-qrom"
+    }
+  ],
+  "publication_contract": {
+    "requires_rollout_status": "passed",
+    "network_success_is_native_authority": false,
+    "only_deployed_and_readmitted_oci_digest": true
+  },
+  "resource_ceilings": {
+    "max_address_space_bytes": 1099511627776,
+    "max_elapsed_millis": 3600000,
+    "max_peak_rss_bytes": 68719476736,
+    "max_transport_bytes": 134217728,
+    "max_work_units": 100000000000,
+    "zk_ams_evaluated_key_bytes": 48452611616
+  },
+  "restart_contract": {
+    "exact_sentinel_height_and_hash": true,
+    "successor_finality_required": true,
+    "peer_finality_scope": [
+      "public-torii",
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ],
+    "sequential_validators": [
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
+    ]
+  },
+  "rollback_contract": {
+    "restore_mode": "immutable-release-and-capability-set",
+    "armed_before_activation": true
+  }
+}

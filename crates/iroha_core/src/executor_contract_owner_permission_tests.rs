@@ -177,7 +177,7 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
 #[test]
 fn ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it() {
     let authority = ALICE_ID.clone();
-    let (program, manifest) = ivm::KotodamaCompiler::new()
+    let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku OwnerPermission {

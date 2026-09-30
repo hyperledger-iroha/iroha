@@ -5,14 +5,12 @@
 //! decodes one canonical typed plaintext, evaluates local policy, and returns a
 //! purpose-specific approval without returning or logging plaintext material.
 
-use super::{
-    audit::open_private_settlement_audit_capsule_v1,
-    sidecar_store::{
-        PrivateSettlementAuditorSidecarViewV1, PrivateSettlementSidecarLifecycleV1,
-        verify_private_settlement_availability_certificate_v1,
-    },
+use super::sidecar_store::{
+    PrivateSettlementAuditorSidecarViewV1, PrivateSettlementSidecarLifecycleV1,
+    verify_private_settlement_availability_certificate_v1,
 };
 use crate::privacy_engines::atomic_private_settlement::validate_audit_openings_v1;
+use iroha_core_privacy::privacy_engines::atomic_private_settlement::audit::open_private_settlement_audit_capsule_v1;
 use iroha_crypto::{Algorithm, HybridPublicKey, HybridSecretKey, KeyPair, PublicKey, SignatureOf};
 use iroha_data_model::{
     account::AccountId,

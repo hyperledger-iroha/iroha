@@ -10,7 +10,7 @@ let package = Package(
         .executable(name: "ConnectMinimalApp", targets: ["ConnectMinimalApp"])
     ],
     dependencies: [
-        .package(name: "IrohaSwift", path: "../../IrohaSwift")
+        .package(name: "IrohaSwift", path: "../../../IrohaSwift")
     ],
     targets: [
         .executableTarget(

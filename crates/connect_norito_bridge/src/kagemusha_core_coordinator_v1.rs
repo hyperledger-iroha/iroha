@@ -1521,7 +1521,7 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),

@@ -1,3 +1,5 @@
+//! Canonical four-validator genesis framing and unique transaction fixtures.
+
 use core::iter::FromIterator;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -14,6 +16,19 @@ fn checked_bls_fixture_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("checked genesis roundtrip BLS fixture key generation")
 }
+fn checked_committee() -> (UniqueVec<PeerId>, Vec<iroha_genesis::GenesisTopologyEntry>) {
+    let entries = (0..4)
+        .map(|_| {
+            let key = checked_bls_fixture_keypair();
+            iroha_genesis::GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS PoP generation"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let topology = UniqueVec::from_iter(entries.iter().map(|entry| entry.peer.clone()));
+    (topology, entries)
+}
 #[test]
 fn genesis_roundtrip_fixture_uses_checked_bls_key_generation() {
     let bls = checked_bls_fixture_keypair();
@@ -27,14 +42,8 @@ fn genesis_roundtrip_fixture_uses_checked_bls_key_generation() {
 #[test]
 fn genesis_roundtrip_decode() {
     init_instruction_registry();
-    let bls = checked_bls_fixture_keypair();
-    let peer = PeerId::new(bls.public_key().clone());
-    let topology = UniqueVec::from_iter([peer]);
-    let entry = iroha_genesis::GenesisTopologyEntry::new(
-        PeerId::new(bls.public_key().clone()),
-        iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-    );
-    let genesis = genesis_factory(Vec::new(), topology, vec![entry]);
+    let (topology, entries) = checked_committee();
+    let genesis = genesis_factory(Vec::new(), topology, entries);
     let wire = genesis
         .0
         .encode_wire()
@@ -75,7 +84,8 @@ fn network_genesis_roundtrip_preserves_signed_header_hash() {
 #[test]
 fn genesis_transactions_are_unique() {
     init_instruction_registry();
-    let genesis = genesis_factory(Vec::new(), UniqueVec::new(), Vec::new());
+    let (topology, entries) = checked_committee();
+    let genesis = genesis_factory(Vec::new(), topology, entries);
     let mut seen = HashSet::new();
     for tx in genesis.0.external_transactions() {
         let hash = tx.hash();

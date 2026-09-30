@@ -11,6 +11,12 @@ This record tracks implementation of the approved SDK and repository redesign.
 It is not a release qualification claim. The implementation retains one canonical
 first-release interface and does not add compatibility adapters.
 
+Code line-count and repository-source-size acceptance gates are retired.
+The source-size measurements and guard outcomes below describe their recorded
+historical candidates, not current requirements or remaining release blockers.
+Dependency ownership, semantic contracts and measured compiler-memory bounds
+remain enforced; see the [retirement record](../docs/history/2026-09-30/source-size-gate-removal/README.md).
+
 ## Allocation and runtime storage boundary
 
 `iroha_allocation` owns the std-only finite budget, original reservations and
@@ -92,7 +98,7 @@ Seventeen capability tests and nine real loopback adapter tests cover exact
 signing, isolation, cancellation, response/message bounds, ping/pong, fragmented
 messages, redirects, revocation and blocking-runtime behavior. Strict SDK library
 Clippy, the codec guard, all 16 dependency boundaries and eight route-inventory
-tests pass. Source budgets retain 239 findings and 172 exceptions.
+tests pass. The preceding source inventory recorded 239 findings and 172 exceptions.
 All targets of the eight selected SDK/consumer packages compile, retaining
 31 broader warnings and all 421 selected consumer inputs unchanged. The earlier
 773- and 774-test runtimes, notification-fixture type errors and encoder-correction
@@ -191,7 +197,7 @@ their scoped checks. Eight new SDK regressions cover signatures, operator/networ
 endpoint isolation, bounded decoding, deadlines, structured errors and independent
 blocking authority. Two compile-fail doctests enforce the absent public/account API.
 Independent source review, formatting, codec checks, all 16 forbidden dependency
-boundaries and eight operation-inventory tests pass. Source budgets still report
+boundaries and eight operation-inventory tests pass. The preceding source inventory recorded
 239 findings/172 exceptions; the existing manifest discrepancy remains unresolved.
 
 Evidence and exact dirty beforeimages are retained under
@@ -230,7 +236,7 @@ Strict SDK library Clippy passes with `--no-deps -- -D warnings`, resolving the
 SDK/CLI/storage/Musubi/test-network/Izanami/integration packages compile with all
 411 captured consumer inputs unchanged; that broader check retains 31 warnings.
 Independent source review, formatting, codec checks, all 16 forbidden dependency
-boundaries and eight operation-inventory tests pass. Source budgets still report
+boundaries and eight operation-inventory tests pass. The preceding source inventory recorded
 239 findings/172 exceptions; the recorded manifest-budget mismatch remains.
 
 The two initial compile/lint failures and their corrections, exact dirty
@@ -278,7 +284,7 @@ test-network/Izanami/integration packages compile on the final caller source.
 
 Independent review, formatting, codec checks, all 16 forbidden dependency
 boundaries and all eight operation-inventory tests pass; the inventory retains
-665 routes. At that checkpoint, strict SDK library Clippy retained 33 findings. Source budgets retain
+665 routes. At that checkpoint, strict SDK library Clippy retained 33 findings. The preceding source inventory recorded
 239 findings and 172 exceptions; manifest budgets retain the previously recorded
 SoraFS filesystem edge and vendor fingerprint discrepancy. These development
 checks do not qualify node binaries, four-validator execution, native/device
@@ -317,7 +323,7 @@ uses the asynchronous prepare/quote/sign/submit sequence directly.
 These are development checks, not a source-sealed release build. Strict SDK
 library Clippy still reports 34 findings; all 34 primary expressions occur in the
 retained pre-construction source. All 16 forbidden dependency boundaries pass;
-source-size checking retains 239 findings and 172 exceptions. Manifest budgets
+the preceding source-size check recorded 239 findings and 172 exceptions. Manifest budgets
 still reject the existing `sorafs_car -> rustix` filesystem edge and vendored
 profile fingerprint changes, both of which predate this SDK stage. No manifest,
 lockfile or budget limit changed here. Remaining synchronous reads in asynchronous
@@ -672,7 +678,7 @@ all 1,000 selected source-input hashes remain unchanged through the 792-second
 run. The capture record and its 999 pre-declaration input hashes are retained
 beside the fixture. These are scoped development checks, not full release
 provenance. The history archive verifies and all 74 history/source-budget guard
-tests pass; the source-size audit still reports 231 violations.
+tests pass; the preceding source-size audit recorded 231 violations.
 Strict model Clippy is not passing: the dependency-inclusive run reports five
 crypto errors and one proof-library error. A separate model-target-only run
 reports 129 model diagnostics. Their complete logs are retained under
@@ -753,7 +759,7 @@ to its function signature. The fee test compares every field of the retained
 nonzero hold. All 19 source tests and 35 subtests pass, including a complete
 snapshot authenticating 28 actions and 29 runtime bindings; all 5,104 selected
 inputs remain unchanged. Workspace formatting
-and all four retired-codec guards pass. The source-size check still reports 237
+and all four retired-codec guards pass. The preceding source-size check recorded 237
 violations over 10,643 files, with no new violating paths or expanded exceptions.
 The receipt-source contract now follows the shared strict structural reader,
 propagates corruption/recovery errors, and authenticates lock order, exact
@@ -806,7 +812,7 @@ qualification limit. Workspace formatting passes, and 48 architecture tests
 plus 31 subtests pass. The current codec
 source gate passes nine tests, including 23 diagnostic-specific mutations;
 historical helper fingerprints are preserved in the dated history record.
-Source budgets remain unchanged, and two companion historical gates still fail
+The preceding source-size inventory was unchanged, and two companion historical gates still fail
 11 of 18 tests on stale manifest/lock and source assumptions.
 Five generic query owners, four concrete records and two typed-hash markers
 now declare identities from successful pre-declaration captures. Immutable
@@ -830,13 +836,14 @@ inputs remains unchanged. An independent source review confirms the finite
 record removes the ownership cycle; this does not establish decoder allocation
 peaks, other feature coverage or complete release qualification.
 
-The source guard now applies the existing 3,000-line test limit to pytests,
-Swift Tests directories and split Rust test directories; all 50 guard tests pass.
+At that checkpoint, the preceding source guard applied a 3,000-line test limit
+to pytests, Swift Tests directories and split Rust test directories; all 50
+guard tests passed. Those code-size requirements are now retired.
 The release corridor's unchanged acceptance and inventory tests now live in
 their capability components, sized 1,830, 2,102 and 2,938 lines. All five focused
 candidate tests pass, including the complete corridor source test; four applied
 smoke tests pass with the exact reviewed afterimages. All 5,877 canonical test
-IDs are preserved. The current repository budget reports 242 findings and 174
+IDs are preserved. The source-size inventory at that checkpoint recorded 242 findings and 174
 existing exceptions, with no new violating path after the split. The main test
 module's complete decomposition remains unresolved. The current proof-fidelity
 registration binds the actual 6,170-case census; its full execution remains pending.
@@ -873,7 +880,8 @@ record; unrelated lockfile/manifest changes and module ordering no longer stand
 in for current behavior. Their 14 applied tests pass, including positive-baseline
 mutation checks. Combined with current codec and source-budget tests, all 73
 tests and 67 subtests pass. This resolves the earlier 11 stale companion failures;
-it does not qualify the outstanding source-size or complete release budgets.
+it does not qualify the complete release or measured-resource budgets. The
+recorded source-size checks belong to the retired policy.
 
 Bare serialization now has one object-safe `SerializePayload` owner, separate
 from the typed frame contract. Bare `Encode`, containers and borrowed adapters
@@ -897,18 +905,19 @@ and optimization settings are unchanged.
 The exact reviewed integration preserves inherited dirty work and excludes
 three unrelated live edits. Subsequent downstream trait-bound/import corrections
 and eight whitespace-only lines are recorded separately from those test inputs.
-Selected downstream target checks pass; complete workspace, source-size and
-same-source release qualification remain open. The model transcript digest is
+Selected downstream target checks passed; complete workspace and same-source
+release qualification remained open. The recorded source-size check belongs
+to the preceding policy, which is now retired. The model transcript digest is
 `0d813689de0b81ac9ab75df05310ea92e3203824d142e35fe607f0fe4aced8f4`;
 the codec transcript digest is
 `a57030ead9bc3ae55847ca01a24a81e441495049deb88aae9077257e117bb427`.
 
 Codec and authorization-fixture modules retain every production nominal
 declaration and codec body in the same semantic owner. The outbox and Governance
-DAG parent files now contain 10,255 and 7,401 lines. Their existing exceptions ratchet downward; both remain
-above the ultimate 5,000-line production limit. All 77 applied source-budget and
-provider-ingest contract tests pass. The repository still reports 240 findings
-with the same 174 exceptions; no complete module-budget pass is claimed.
+DAG parent files measured 10,255 and 7,401 lines in that capture. The preceding
+size policy recorded downward exception adjustments and 240 findings with 174
+exceptions. All 77 applied source-budget and provider-ingest contract tests
+passed. These are historical observations under the retired size policy.
 
 The all-target build also exposed an existing Torii test source hidden by the
 global `security_*` scratch ignore. The rule is now rooted at `/security_*`, so
@@ -958,8 +967,8 @@ Source/artifact hashes and individual logs remain under the ignored
   public/account/operator contexts and asynchronous capability interfaces.
 - Keep an explicit blocking facade over the same transport implementation.
 - Compose Core storage and Torii routes from capability-owned components.
-- Enforce dependency boundaries, module sizes, and measured compiler memory
-  instead of a repository-wide Rust line-count objective.
+- Enforce dependency boundaries, substantive duplication removal and measured
+  compiler memory.
 - Classify CI consumers before building their required binaries.
 - Use Kotlin/JVM as the sole JVM implementation, with Java consumer tests.
 - Keep current status and roadmap documents below 300 lines and preserve
@@ -985,7 +994,7 @@ single IVM ABI remain enforced. Existing uncommitted work must be preserved.
 | Foundational/privacy/service models | Service policy compilation boundary implemented; larger record moves pending | Canonical codecs, registry completeness, and compile-memory measurements |
 | Client API and transport | Pending | All consumer migrations and authority/async/finality regressions |
 | Core state and Torii routes | Pending | Atomic commit/rollback/replay and capability isolation |
-| Architecture budgets | Feature-resolved dependency checks (31 tests); file/provenance schema 2 and release routing (128 tests); compiler-unit profiler (148 tests); measured memory comparator and four pinned baseline contracts (43 tests) | Remaining SDK forbidden edges, source findings, failed baseline repair, pinned-runner CI and comparable candidates |
+| Architecture budgets | Feature-resolved dependency checks (31 tests); file/provenance schema 2 and release routing (128 tests); compiler-unit profiler (148 tests); measured memory comparator and four pinned baseline contracts (43 tests) | Remaining SDK forbidden edges, failed baseline repair, pinned-runner CI and comparable candidates |
 | JVM consolidation | Norito harness migrated into 55 Java-source tests against Kotlin; 34 related Kotlin tests and 14 JVM gate tests pass; duplicate Java harness removed | Pre-CUDA checkpoint: 1,295 JVM tests pass with rebuilt JNI and fixture generator. Canonical CUDA source adds eight passing Java consumers and five compiled CPU-reference hardware tests; rebuilt binding and hardware execution remain unverified. Kotlin attestation tooling passes 25 tests and real launcher fixture checks; complete remaining Java/JNI/publication removal and native packaging |
 | Documentation | Root current views remain below 300 lines; exact dirty history is reconstructable from dated subsystem records, with all 66 roadmap areas mapped to owned outcomes. Archive verification and 70 combined archive/release-contract tests pass; PR gate enforces integrity and 300-line limits | Complete SDK operation/consumer mapping and reconcile remaining source-coupled/public documentation |
 
@@ -1113,10 +1122,10 @@ inline-string rejection path retains the original allocation; its existing
 regression passes. A dedicated crypto test target avoids pulling unrelated
 PQC/rand/streaming test requirements into minimal-feature qualification.
 
-Cargo formatting and the codec guard pass. Strict Clippy and repository
-source-size qualification remain failing: existing crypto/PQ diagnostics,
-primitive test-helper diagnostics and 240 source-budget findings remain.
-No exceptions or limits were expanded. This is identity coverage evidence,
+Cargo formatting and the codec guard passed at that checkpoint. Strict Clippy
+retained the existing crypto/PQ and primitive test-helper diagnostics. The
+preceding source inventory recorded 240 findings under the now-retired size
+policy, without expanding exceptions or limits. This is identity coverage evidence,
 not the atomic codec cutover, physical model extraction or release approval.
 
 Seventeen unchanged consensus-key, FX settlement and privacy protocol owners
@@ -1130,7 +1139,8 @@ owners, with one canonical public error path. Governance, AXT and private
 settlement retain all 114 existing tests in separate test modules. Their
 production roots now contain 3,511, 2,911 and 4,992 lines respectively; every
 extracted test file remains below 3,000 lines. No wire declaration moved,
-field/tag changed, assertion disappeared or source-size exception expanded.
+field/tag changed or assertion disappeared. The size observations belong to
+the preceding policy, which is now retired.
 
 The fresh AMX-only run passes all 32 tests on the default stack, with all
 19,262 recorded candidate inputs unchanged. It includes the maximum 4,096-source
@@ -1181,8 +1191,8 @@ integration tests and six pointer/generated-schema integration tests, with
 one fixture printer ignored. All 19,273 frozen inputs remain unchanged and
 the three executable artifacts are retained. Formatting, the codec guard,
 dependency boundaries and all five manifest-budget scopes pass. All changed
-source files satisfy their production/test limits; the frozen repository
-still has 237 other source-budget findings. Strict Clippy, the atomic codec
+source files met the preceding size policy; its frozen inventory recorded
+237 other findings. Those code-size requirements are now retired. Strict Clippy, the atomic codec
 cutover, physical extraction and complete workspace/native/release gates
 remain open. These focused results do not replace the separately scoped
 3,644-test complete-library evidence above.
@@ -1209,7 +1219,7 @@ scoped capture directory above. The preceding complete codec/derive/primitives
 run passes 1,684 tests (three ignored); six refined child-consumption tests and
 267 minimal-feature primitive tests pass separately. Norito/derive library
 Clippy and four retired-codec guards pass; the codec-contract Python suite
-passes nine tests and 31 subtests. Source-file checks still report 237 findings.
+passes nine tests and 31 subtests. The preceding source-file size check recorded 237 findings.
 
 The 42-path integration preserves every recorded root preimage, including
 13 already-integrated ParseError consumers. These results do not qualify the
@@ -1317,8 +1327,8 @@ Required model/SDK closures each add one local/workspace package (`mv`), one
 external package (`concread`), four edges and one external edge. Model required
 edges become 198; SDK edges become 272. CLI, daemon and workspace required edge
 counts each increase by two, to 650, 671 and 1,542. The refreshed fingerprint
-binds the exact 106 current manifests; denials, layers and source-file limits
-are unchanged. This graph accounting does not qualify runtime or memory use.
+bound the exact 106 manifests at that checkpoint; dependency denials and layers
+were unchanged. Its source-file size limits are now retired. This graph accounting does not qualify runtime or memory use.
 
 The final `iroha_data_model --lib --no-default-features` check passes with the
 unchanged lock; one existing governance `validate_capacity_intent` dead-code
@@ -1364,7 +1374,7 @@ private test module becomes `codec/tests.rs`. Both retain their original Rust
 namespaces, private access and all existing assertions. All 109 direct streaming
 tests remain, including the 69 codec tests and 59 moved `codec::tests` cases.
 
-| Owner | Lines | Unchanged limit |
+| Historical owner capture | Recorded lines | Policy ceiling at that checkpoint (retired) |
 | --- | ---: | ---: |
 | `crates/norito/src/streaming.rs` | 3,757 | 5,000 |
 | `crates/norito/src/streaming/codec.rs` | 4,383 | 5,000 |
@@ -1372,10 +1382,10 @@ tests remain, including the 69 codec tests and 59 moved `codec::tests` cases.
 
 The source-budget change removes only the obsolete 10,218-line streaming
 exception. Existing exceptions decrease from 174 to 173; the corrected report
-retains 236 source-size findings across all measured languages. The global
-production/test limits remain 5,000/3,000; no other exception expands. Earlier
-237-finding checkpoints remain historical scoped measurements, not Rust-only
-counts.
+retained 236 source-size findings across all measured languages under the
+preceding 5,000/3,000 production/test policy, without expanding other
+exceptions. That policy is now retired. The 236- and earlier 237-finding
+checkpoints remain historical scoped measurements, not Rust-only counts.
 
 Final default Norito tests pass **1,308 cases**, and the separate
 `--no-default-features --features base-codec --lib` run passes **456 tests**;
@@ -1477,8 +1487,9 @@ the failure. Evidence remains in `structural-before-correction.log`,
 integration cases did not qualify the failed selections or the streaming
 guards that had not executed at that checkpoint.
 
-The final source-budget check still exits 1 with 236 findings and 173 exceptions;
-none of the seven correction paths violates its limit. Atomic identity cutover,
+At that checkpoint, the preceding source-budget check exited 1 with 236
+findings and 173 exceptions; none of the seven correction paths violated its
+then-current limit. Those code-size requirements are now retired. Atomic identity cutover,
 physical crate extraction, the required measured 25% model-memory reduction and
 unchanged-unit budgets, native/workspace and other feature qualification, and
 the complete first-release goal remain open.
@@ -1629,7 +1640,7 @@ The earlier frozen review bundles remain historical snapshots. The restored
 synthetic compiler probe is excluded. Cargo.lock and both streaming fixture
 files remain exact.
 
-The final v3 legacy-codec guard passes. Its authoritative size check still fails
+The final v3 legacy-codec guard passes. Its preceding size check failed at that checkpoint
 with
 **236 source-size findings and 173 unchanged exceptions** over 10,763 measured
 files; its findings and exceptions are identical to v2. No file newly fails its
@@ -1695,7 +1706,7 @@ two TODO failures. No completion gate or architecture budget was weakened.
 Those gates remain red for unfinished capability routing, bounded fanout, provider
 authentication and hardware/state/evidence integration. All 16 resolved dependency
 boundaries pass. Five manifest dependency ratchets still fail, and the global
-source-size check reports 249 findings. The binary inventory pins 104 exact owners
+preceding source-size check recorded 249 findings. The binary inventory pins 104 exact owners
 and keeps its 24-default maximum; all 12 focused tests pass. Historical target
 changes are traced separately from this migration's removed validator target.
 

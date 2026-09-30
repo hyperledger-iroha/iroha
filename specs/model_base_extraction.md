@@ -57,7 +57,7 @@ The [validation and test ownership changes](../docs/history/2026-09-10/model-val
 close the production and test lint findings. Strict library/test Clippy passes
 in default and FFI configurations. The final selected aggregate run passes
 3,718 unit and 183 fixture-group tests; the FFI configuration passes 3,722 unit
-tests. All model files meet the 5,000/3,000-line limits without exceptions.
+tests. That checkpoint met the preceding source-size policy; code line-count requirements are now retired.
 All 76 moved runtime tests execute under their new owner with matching
 outcomes; wire fixture identities and assertions remain intact. Physical
 extraction, measured memory reduction and full release qualification remain open.

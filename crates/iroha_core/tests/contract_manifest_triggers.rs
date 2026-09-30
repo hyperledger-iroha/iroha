@@ -117,7 +117,7 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
 }
 #[test]
 fn trigger_fixture_authenticates_each_distinct_unit_return_entrypoint() {
-    let (_, manifest) = ivm::KotodamaCompiler::new()
+    let (_, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             "seiyaku TriggerFixture { view fn run() { () } view fn arm() { () } }",
         )
@@ -969,7 +969,7 @@ seiyaku Test {{
 }}
 "#
     );
-    let (program, manifest) = ivm::KotodamaCompiler::new()
+    let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(&source)
         .expect("compile source with manifest");
     let code_hash = ivm::contract_code_hash(&program);

@@ -252,6 +252,16 @@ target/debug/kagami genesis generate \
 
 Sign with topology and PoPs:
 
+Localnet generation partitions mixed asset and scoped namespace drafts before
+staging and signing. Global permissions and subsequent account/asset registration
+share the generated bootstrap phase. Scoped domain registration has its own input;
+alias binding, global balance minting, ownership transfer and subsequent universal
+service bootstrap continue in the next global input. Routing authenticates that
+input against the original World before installing the asset alias. Normalization preserves authored
+boundaries and refuses sources above the 11-input FASTPQ bootstrap limit. Generated
+crypto and confidential parameters share one global metadata input. Structured
+parameter, topology, and IVM trigger batches cannot be partitioned.
+
 ```bash
 target/debug/kagami genesis sign \
   genesis.json \

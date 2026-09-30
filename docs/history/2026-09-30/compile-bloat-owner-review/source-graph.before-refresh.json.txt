@@ -1,0 +1,332 @@
+{
+  "baseline_manifest_fingerprint": "sha256:bdd6511aef73ae211b751d06aa0ec3529865ab8684bd5855581e38c442f92308",
+  "fingerprint_matches_baseline": false,
+  "manifest": "Cargo.toml",
+  "manifest_fingerprint": "sha256:012887fb3aa8c8cdcc5dc938a809169ac01c2b3cefb58ece9c7d4139b70f143c",
+  "measurement_kind": "cargo-manifest-source-graph-v1",
+  "schema_version": 1,
+  "scopes": {
+    "iroha-cli-shipping": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 907,
+        "declared_external_dependency_edges": 574,
+        "declared_external_packages": 177,
+        "declared_local_packages": 70,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 66,
+        "required_dependency_edges": 758,
+        "required_external_dependency_edges": 454,
+        "required_external_packages": 128,
+        "required_local_packages": 66,
+        "required_path_packages": 4,
+        "required_workspace_packages": 62
+      },
+      "metrics": {
+        "declared_dependency_edges": 961,
+        "declared_external_dependency_edges": 601,
+        "declared_external_packages": 177,
+        "declared_local_packages": 73,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 69,
+        "required_dependency_edges": 808,
+        "required_external_dependency_edges": 477,
+        "required_external_packages": 128,
+        "required_local_packages": 69,
+        "required_path_packages": 4,
+        "required_workspace_packages": 65
+      },
+      "over_budget": {
+        "declared_dependency_edges": {
+          "limit": 907,
+          "observed": 961
+        },
+        "declared_external_dependency_edges": {
+          "limit": 574,
+          "observed": 601
+        },
+        "declared_local_packages": {
+          "limit": 70,
+          "observed": 73
+        },
+        "declared_workspace_packages": {
+          "limit": 66,
+          "observed": 69
+        },
+        "required_dependency_edges": {
+          "limit": 758,
+          "observed": 808
+        },
+        "required_external_dependency_edges": {
+          "limit": 454,
+          "observed": 477
+        },
+        "required_local_packages": {
+          "limit": 66,
+          "observed": 69
+        },
+        "required_workspace_packages": {
+          "limit": 62,
+          "observed": 65
+        }
+      },
+      "roots": [
+        "iroha_cli"
+      ],
+      "within_budget": false
+    },
+    "iroha-data-model-shipping": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 275,
+        "declared_external_dependency_edges": 212,
+        "declared_external_packages": 103,
+        "declared_local_packages": 28,
+        "declared_path_packages": 3,
+        "declared_workspace_packages": 25,
+        "required_dependency_edges": 213,
+        "required_external_dependency_edges": 156,
+        "required_external_packages": 72,
+        "required_local_packages": 25,
+        "required_path_packages": 3,
+        "required_workspace_packages": 22
+      },
+      "metrics": {
+        "declared_dependency_edges": 275,
+        "declared_external_dependency_edges": 212,
+        "declared_external_packages": 103,
+        "declared_local_packages": 28,
+        "declared_path_packages": 3,
+        "declared_workspace_packages": 25,
+        "required_dependency_edges": 213,
+        "required_external_dependency_edges": 156,
+        "required_external_packages": 72,
+        "required_local_packages": 25,
+        "required_path_packages": 3,
+        "required_workspace_packages": 22
+      },
+      "over_budget": {},
+      "roots": [
+        "iroha_data_model"
+      ],
+      "within_budget": true
+    },
+    "iroha-model-base-shipping": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 171,
+        "declared_external_dependency_edges": 139,
+        "declared_external_packages": 78,
+        "declared_local_packages": 20,
+        "declared_path_packages": 1,
+        "declared_workspace_packages": 19,
+        "required_dependency_edges": 112,
+        "required_external_dependency_edges": 86,
+        "required_external_packages": 49,
+        "required_local_packages": 16,
+        "required_path_packages": 1,
+        "required_workspace_packages": 15
+      },
+      "metrics": {
+        "declared_dependency_edges": 171,
+        "declared_external_dependency_edges": 139,
+        "declared_external_packages": 78,
+        "declared_local_packages": 20,
+        "declared_path_packages": 1,
+        "declared_workspace_packages": 19,
+        "required_dependency_edges": 112,
+        "required_external_dependency_edges": 86,
+        "required_external_packages": 49,
+        "required_local_packages": 16,
+        "required_path_packages": 1,
+        "required_workspace_packages": 15
+      },
+      "over_budget": {},
+      "roots": [
+        "iroha_model_base"
+      ],
+      "within_budget": true
+    },
+    "iroha-sdk-shipping": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 347,
+        "declared_external_dependency_edges": 254,
+        "declared_external_packages": 114,
+        "declared_local_packages": 35,
+        "declared_path_packages": 3,
+        "declared_workspace_packages": 32,
+        "required_dependency_edges": 280,
+        "required_external_dependency_edges": 194,
+        "required_external_packages": 83,
+        "required_local_packages": 32,
+        "required_path_packages": 3,
+        "required_workspace_packages": 29
+      },
+      "metrics": {
+        "declared_dependency_edges": 347,
+        "declared_external_dependency_edges": 254,
+        "declared_external_packages": 114,
+        "declared_local_packages": 35,
+        "declared_path_packages": 3,
+        "declared_workspace_packages": 32,
+        "required_dependency_edges": 280,
+        "required_external_dependency_edges": 194,
+        "required_external_packages": 83,
+        "required_local_packages": 32,
+        "required_path_packages": 3,
+        "required_workspace_packages": 29
+      },
+      "over_budget": {},
+      "roots": [
+        "iroha"
+      ],
+      "within_budget": true
+    },
+    "iroha3d-shipping": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 976,
+        "declared_external_dependency_edges": 613,
+        "declared_external_packages": 184,
+        "declared_local_packages": 71,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 67,
+        "required_dependency_edges": 813,
+        "required_external_dependency_edges": 491,
+        "required_external_packages": 135,
+        "required_local_packages": 66,
+        "required_path_packages": 4,
+        "required_workspace_packages": 62
+      },
+      "metrics": {
+        "declared_dependency_edges": 1031,
+        "declared_external_dependency_edges": 639,
+        "declared_external_packages": 184,
+        "declared_local_packages": 74,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 70,
+        "required_dependency_edges": 852,
+        "required_external_dependency_edges": 510,
+        "required_external_packages": 135,
+        "required_local_packages": 68,
+        "required_path_packages": 4,
+        "required_workspace_packages": 64
+      },
+      "over_budget": {
+        "declared_dependency_edges": {
+          "limit": 976,
+          "observed": 1031
+        },
+        "declared_external_dependency_edges": {
+          "limit": 613,
+          "observed": 639
+        },
+        "declared_local_packages": {
+          "limit": 71,
+          "observed": 74
+        },
+        "declared_workspace_packages": {
+          "limit": 67,
+          "observed": 70
+        },
+        "required_dependency_edges": {
+          "limit": 813,
+          "observed": 852
+        },
+        "required_external_dependency_edges": {
+          "limit": 491,
+          "observed": 510
+        },
+        "required_local_packages": {
+          "limit": 66,
+          "observed": 68
+        },
+        "required_workspace_packages": {
+          "limit": 62,
+          "observed": 64
+        }
+      },
+      "roots": [
+        "irohad"
+      ],
+      "within_budget": false
+    },
+    "workspace-all-targets": {
+      "denied_required_packages_present": [],
+      "include_root_dev_dependencies": true,
+      "limits": {
+        "declared_dependency_edges": 1854,
+        "declared_external_dependency_edges": 1054,
+        "declared_external_packages": 231,
+        "declared_local_packages": 110,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 106,
+        "required_dependency_edges": 1689,
+        "required_external_dependency_edges": 926,
+        "required_external_packages": 183,
+        "required_local_packages": 110,
+        "required_path_packages": 4,
+        "required_workspace_packages": 106
+      },
+      "metrics": {
+        "declared_dependency_edges": 1949,
+        "declared_external_dependency_edges": 1095,
+        "declared_external_packages": 231,
+        "declared_local_packages": 114,
+        "declared_path_packages": 4,
+        "declared_workspace_packages": 110,
+        "required_dependency_edges": 1780,
+        "required_external_dependency_edges": 963,
+        "required_external_packages": 183,
+        "required_local_packages": 114,
+        "required_path_packages": 4,
+        "required_workspace_packages": 110
+      },
+      "over_budget": {
+        "declared_dependency_edges": {
+          "limit": 1854,
+          "observed": 1949
+        },
+        "declared_external_dependency_edges": {
+          "limit": 1054,
+          "observed": 1095
+        },
+        "declared_local_packages": {
+          "limit": 110,
+          "observed": 114
+        },
+        "declared_workspace_packages": {
+          "limit": 106,
+          "observed": 110
+        },
+        "required_dependency_edges": {
+          "limit": 1689,
+          "observed": 1780
+        },
+        "required_external_dependency_edges": {
+          "limit": 926,
+          "observed": 963
+        },
+        "required_local_packages": {
+          "limit": 110,
+          "observed": 114
+        },
+        "required_workspace_packages": {
+          "limit": 106,
+          "observed": 110
+        }
+      },
+      "roots": [
+        "*"
+      ],
+      "within_budget": false
+    }
+  },
+  "within_budget": false
+}

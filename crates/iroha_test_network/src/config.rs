@@ -3,7 +3,7 @@
 mod genesis_policy;
 use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
-pub(crate) use genesis_policy::discover_generated_policy_hashes;
+pub(crate) use genesis_policy::{discover_generated_policy_hashes, execute_generated_genesis};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
     Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
@@ -821,6 +821,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     ));
     builder = builder.append_instruction(Mint::asset_quantity(13u32, rose_asset_id));
     builder = builder.append_instruction(Mint::asset_quantity(44u32, cabbage_asset_id));
+    // Author one global bootstrap phase for the fixture permission grants and
+    // SoraCloud asset definitions/balances. They share the genesis authority and
+    // universal routing; grants add no balance work to the existing mint phase.
+    // Caller-owned batches and the proof-bearing topology stay separate below.
     builder = builder.next_transaction();
     let xor_asset_def: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -953,7 +957,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     // processes are seeded later from the peer streaming identities in `NetworkBuilder`.
     let soracloud_bootstrap_accounts =
         BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
-    builder = builder.next_transaction();
     builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
         agent_wallet_asset_definition.clone(),
         "soracloud_agent_wallet".to_owned(),
@@ -1838,6 +1841,208 @@ mod tests {
                     .is_some_and(|set_parameter| set_parameter.inner() == &parameter)
             })
         }));
+    }
+    #[test]
+    fn generated_global_bootstrap_keeps_grants_before_exact_soracloud_balances() {
+        init_instruction_registry();
+        let (topology, entries) = genesis_committee();
+        let (_, _, _, _, raw) = build_minimal_genesis_unexecuted_with_post_topology(
+            Vec::new(),
+            Vec::new(),
+            topology,
+            entries,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            None,
+        );
+        let grant_phases = raw
+            .transactions()
+            .iter()
+            .enumerate()
+            .filter(|(_, transaction)| {
+                transaction
+                    .instructions()
+                    .iter()
+                    .any(|instruction| instruction.as_any().is::<GrantBox>())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(grant_phases.len(), 1, "built-in grants have one owner");
+        let (phase_index, phase) = grant_phases[0];
+        assert!(phase_index > 0, "initial registration stays separate");
+        assert!(phase.topology().is_empty(), "topology has its own owner");
+        let grant_count = phase
+            .instructions()
+            .iter()
+            .take_while(|instruction| instruction.as_any().is::<GrantBox>())
+            .count();
+        assert_eq!(grant_count, 22, "all built-in grants precede balances");
+        let agent_wallet: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
+        let shared_lease: AssetDefinitionId = "5PeSrQmLNwwKtruJvDZrbrm9RuMw".parse().unwrap();
+        let mut expected = vec![
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                agent_wallet.clone(),
+                "soracloud_agent_wallet".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))),
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                shared_lease.clone(),
+                "soracloud_hf_lease".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))),
+        ];
+        for account in BTreeSet::from([
+            sanitize_account_id(&ALICE_ID),
+            sanitize_account_id(&BOB_ID),
+            sanitize_account_id(&CARPENTER_ID),
+        ]) {
+            expected.push(
+                Mint::asset_quantity(
+                    500_000_u32,
+                    AssetId::new(agent_wallet.clone(), account.clone()),
+                )
+                .into(),
+            );
+            expected.push(
+                Mint::asset_quantity(500_000_u32, AssetId::new(shared_lease.clone(), account))
+                    .into(),
+            );
+        }
+        assert_eq!(&phase.instructions()[grant_count..], expected);
+        assert!(
+            raw.transactions()[phase_index - 1]
+                .instructions()
+                .iter()
+                .any(|instruction| instruction
+                    .as_any()
+                    .is::<iroha_data_model::isi::TransferBox>())
+        );
+    }
+    #[test]
+    fn generated_global_bootstrap_preserves_caller_batches_at_exact_input_limit() {
+        use iroha_data_model::{Level, isi::Log};
+
+        init_instruction_registry();
+        let extra = (0..3)
+            .map(|index| {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("before-{index}"),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let post = (0..2)
+            .map(|index| {
+                vec![
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-first"))),
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-second"))),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let (topology, entries) = genesis_committee();
+        let (block, _, _, _, raw) = build_minimal_genesis_unexecuted_with_post_topology(
+            extra.clone(),
+            post.clone(),
+            topology,
+            entries.clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            None,
+        );
+        assert_eq!(
+            block.0.external_transactions().count(),
+            iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS as usize,
+            "the authored draft uses exactly the fixed eleven network inputs"
+        );
+        let topology_index = raw
+            .transactions()
+            .iter()
+            .position(|tx| !tx.topology().is_empty())
+            .unwrap();
+        assert_eq!(raw.transactions()[topology_index].topology(), entries);
+        assert!(raw.transactions()[topology_index].instructions().is_empty());
+        for (transaction, original) in raw.transactions()
+            [topology_index - extra.len()..topology_index]
+            .iter()
+            .zip(&extra)
+        {
+            assert_eq!(transaction.instructions(), original);
+            assert!(transaction.topology().is_empty());
+        }
+        for (transaction, original) in raw.transactions()
+            [topology_index + 1..topology_index + 1 + post.len()]
+            .iter()
+            .zip(&post)
+        {
+            assert_eq!(transaction.instructions(), original);
+            assert!(transaction.topology().is_empty());
+        }
+        for original in extra.iter().chain(&post) {
+            assert_eq!(block.0.external_transactions().filter(|transaction| {
+                matches!(transaction.instructions(), Executable::Instructions(batch) if batch.as_ref() == original.as_slice())
+            }).count(), 1, "each caller batch enters the signed block exactly once");
+        }
+    }
+    #[test]
+    fn generated_global_bootstrap_refuses_caller_overflow_without_repacking() {
+        use iroha_data_model::{Level, isi::Log};
+
+        init_instruction_registry();
+        let extra = (0..6)
+            .map(|index| {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("caller-{index}"),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let original = extra.clone();
+        let (topology, entries) = genesis_committee();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_minimal_genesis_unexecuted_with_post_topology(
+                extra.clone(),
+                Vec::new(),
+                topology,
+                entries,
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                super::chain_id(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+                None,
+            )
+        }))
+        .expect_err("the generator must refuse a twelfth caller-authored input");
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(message.contains("12 network inputs"), "{message}");
+        assert!(message.contains("FASTPQ bootstrap limit 11"), "{message}");
+        assert_eq!(
+            extra, original,
+            "refusal leaves the authored batches intact"
+        );
     }
     #[test]
     fn genesis_allows_wonderland_assets_from_genesis_authority() {

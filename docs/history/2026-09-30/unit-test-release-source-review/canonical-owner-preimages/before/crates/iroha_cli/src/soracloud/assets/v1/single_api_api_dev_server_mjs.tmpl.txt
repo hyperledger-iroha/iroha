@@ -1,0 +1,33 @@
+#!/usr/bin/env node
+import http from "node:http";
+
+const APP_NAME = __SORACLOUD_APP_NAME_DEBUG__;
+const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
+
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/api/healthz") {
+    sendJson(res, 200, {
+      app: APP_NAME,
+      route: "/api/healthz",
+      status: "ready",
+      runtime: "local_dev_shim"
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: "not found", path: url.pathname });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`${APP_NAME} api dev shim listening on ${PORT}`);
+});

@@ -297,6 +297,5 @@ mod tests {
         assert!(production.contains("try_reserve_exact"));
         assert!(!production.contains(".to_vec()"));
         assert!(!production.contains("vec!["));
-        assert!(include_str!("../collective.rs").lines().count() <= 5_000);
     }
 }

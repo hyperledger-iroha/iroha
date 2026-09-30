@@ -418,10 +418,6 @@ fn resolve_with_policy(
     solver.run()
 }
 impl Solver {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "solver construction validates and canonicalizes every bounded first-release resolver input in one ordered pass"
-    )]
     fn new(
         mut request: ResolveRequestV1,
         limits: Limits,
@@ -685,10 +681,6 @@ impl Solver {
             })
             .collect()
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "candidate ordering keeps selected, parent-locked, globally locked, and fresh pointer-shared sources in one auditable precedence chain"
-    )]
     fn candidates(&self, state: &SearchState, task: &PendingEdge) -> Vec<Arc<MusubiReleaseIdV1>> {
         let preserved = self.preserved_edge(task);
         let update_edge = self.update.as_ref().is_some_and(|update| {
@@ -2687,10 +2679,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture keeps parallel locked occurrences and their preservation assertions together"
-    )]
     fn version_qualified_update_isolates_parallel_occurrences_and_forced_descendants() {
         let old_snapshot = snapshot(36);
         let new_snapshot = snapshot(37);
@@ -3048,10 +3036,6 @@ mod tests {
         }));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture enumerates every parallel candidate needed to verify occurrence binding"
-    )]
     fn sibling_parallel_selection_cannot_satisfy_a_precise_target_occurrence() {
         let old_snapshot = snapshot(26);
         let new_snapshot = snapshot(27);
@@ -3250,10 +3234,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture builds the complete previously selected graph needed for replay coverage"
-    )]
     fn precise_replay_propagates_through_an_already_selected_parent() {
         let old_snapshot = snapshot(30);
         let new_snapshot = snapshot(31);

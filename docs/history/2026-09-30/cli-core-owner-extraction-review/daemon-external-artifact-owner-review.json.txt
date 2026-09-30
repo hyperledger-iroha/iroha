@@ -1,0 +1,6 @@
+{
+  "path": "pytests/scripts/rust_ci_test.py",
+  "prior_sha256": "a9ebc3486f4e11244e15c5cbb04b04777225d529345e3734eb958e947958a0fe",
+  "current_sha256": "c9baaf676fa0082794d2fa9c8509515d57fd5d5cd5fb97f6fb2e551657b833b9",
+  "reason": "Both daemon executable and implementation unit packages participate in daemon lane classification; independent node artifact requirements remain package-scoped with identical binary and consumer contracts."
+}

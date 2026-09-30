@@ -1,10 +1,9 @@
 import Foundation
 import CryptoKit
-#if canImport(IrohaSwift)
 import IrohaSwift
-#endif
 
-struct PosProvisionManifest: Decodable {
+struct PosProvisionManifest: Codable {
+  let schema: String
   let manifestId: String
   let sequence: Int
   let publishedAtMs: UInt64
@@ -14,10 +13,9 @@ struct PosProvisionManifest: Decodable {
   let operatorId: String
   let backendRoots: [PosBackendRoot]
   let metadata: [String: String]?
-  let payloadBase64: String
-  let operatorSignature: String?
 
   enum CodingKeys: String, CodingKey {
+    case schema
     case manifestId = "manifest_id"
     case sequence
     case publishedAtMs = "published_at_ms"
@@ -27,12 +25,10 @@ struct PosProvisionManifest: Decodable {
     case operatorId = "operator"
     case backendRoots = "backend_roots"
     case metadata
-    case payloadBase64 = "payload_base64"
-    case operatorSignature = "operator_signature"
   }
 }
 
-struct PosBackendRoot: Decodable {
+struct PosBackendRoot: Codable {
   let label: String
   let role: String
   let publicKey: String
@@ -134,7 +130,7 @@ struct PosManifestStatus: Identifiable {
       let remaining = manifest.validUntilMs.date.timeIntervalSince(now)
       return DualStatus(healthy: true, label: "KAGEMUSHA V1 trust roots for \(formatDuration(milliseconds: remaining * 1000))")
     }
-    return DualStatus(healthy: false, label: "missing \(missing.joined(separator: \", \"))")
+    return DualStatus(healthy: false, label: "missing \(missing.joined(separator: ", "))")
   }
 
   private static func computeWarnings(
@@ -195,122 +191,72 @@ enum PosManifestLoader {
   static let manifestWarningWindow: TimeInterval = 7 * 24 * 3600
   static let rotationWarningWindow: TimeInterval = 3 * 24 * 3600
 
+  private struct Envelope: Decodable {
+    let payload_base64: String
+    let operator_signature: String
+  }
+
   static func loadManifest(bundle: Bundle = .main) throws -> PosProvisionManifest {
-    guard let url = bundle.url(forResource: "pos_manifest", withExtension: "json") else {
-      throw NSError(domain: "PosManifestLoader", code: 1, userInfo: [NSLocalizedDescriptionKey: "pos_manifest.json missing from bundle"])
+    guard let url = bundle.url(forResource: "manifest_v1", withExtension: "json") else {
+      throw invalid("manifest_v1.json missing from bundle")
     }
-    let data = try Data(contentsOf: url)
-    return try parse(data: data)
+    return try parse(data: Data(contentsOf: url))
   }
 
   static func parse(data: Data) throws -> PosProvisionManifest {
+    guard data.count <= 65_536 else { throw invalid("manifest exceeds its byte bound") }
     let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .useDefaultKeys
-    let manifest = try decoder.decode(PosProvisionManifest.self, from: data)
-    try verifySignature(manifest: manifest)
+    let envelope = try decoder.decode(Envelope.self, from: data)
+    guard envelope.operator_signature.count == 128,
+          envelope.operator_signature.utf8.allSatisfy({
+            (48...57).contains($0) || (97...102).contains($0)
+          }),
+          let signature = Data(hexString: envelope.operator_signature),
+          let payload = Data(base64Encoded: envelope.payload_base64),
+          payload.base64EncodedString() == envelope.payload_base64 else {
+      throw invalid("manifest signature or payload encoding is not canonical")
+    }
+    // The two-field envelope has one exact ASCII encoding. This also rejects
+    // duplicate keys and unsigned copies of any signed manifest field.
+    let canonicalEnvelope = "{\"operator_signature\":\"\(envelope.operator_signature)\",\"payload_base64\":\"\(envelope.payload_base64)\"}\n"
+    guard data == Data(canonicalEnvelope.utf8) else {
+      throw invalid("manifest envelope is not canonical")
+    }
+    let manifest = try decoder.decode(PosProvisionManifest.self, from: payload)
+    let encoder = NoritoJSON.makeEncoder()
+    encoder.outputFormatting.insert(.withoutEscapingSlashes)
+    // Only the typed, canonically encoded signed payload supplies display state.
+    // A roundtrip rejects unknown/duplicate fields and non-integral number tokens.
+    guard try encoder.encode(manifest) == payload,
+          manifest.schema == "iroha.example.pos-manifest.v1",
+          manifest.sequence >= 0,
+          [manifest.publishedAtMs, manifest.validFromMs, manifest.validUntilMs]
+            .allSatisfy({ $0 <= UInt64(Int64.max) }),
+          manifest.rotationHintMs.map({ $0 <= UInt64(Int64.max) }) ?? true,
+          manifest.backendRoots.allSatisfy({
+            $0.validFromMs <= UInt64(Int64.max) && $0.validUntilMs <= UInt64(Int64.max)
+          }) else {
+      throw invalid("manifest signed payload is not canonical")
+    }
+    let account = try AccountAddress.fromI105(manifest.operatorId, expectedPrefix: nil)
+    let canonical = try account.canonicalBytes()
+    // Native account admission owns the address layout. This example requires
+    // its fixed V1 single Ed25519 controller, never a raw-key or multisig alias.
+    guard canonical.count == 36,
+          canonical.prefix(4) == Data([0x02, 0x00, 0x01, 0x20]) else {
+      throw invalid("manifest operator requires a canonical single Ed25519 account")
+    }
+    let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: canonical.dropFirst(4))
+    guard publicKey.isValidSignature(signature, for: payload) else {
+      throw invalid("manifest signature verification failed")
+    }
     return manifest
   }
 
-  private static func verifySignature(manifest: PosProvisionManifest) throws {
-    guard let operatorSignature = manifest.operatorSignature,
-          let signature = Data(hexString: operatorSignature) else {
-      throw NSError(
-        domain: "PosManifestLoader",
-        code: 2,
-        userInfo: [NSLocalizedDescriptionKey: "manifest missing operator signature"]
-      )
-    }
-    guard let payload = Data(base64Encoded: manifest.payloadBase64) else {
-      throw NSError(
-        domain: "PosManifestLoader",
-        code: 3,
-        userInfo: [NSLocalizedDescriptionKey: "manifest payload_base64 invalid"]
-      )
-    }
-    let operatorKey = try decodeOperatorPublicKey(manifest.operatorId)
-    let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: operatorKey)
-    guard publicKey.isValidSignature(signature, for: payload) else {
-      throw NSError(
-        domain: "PosManifestLoader",
-        code: 4,
-        userInfo: [NSLocalizedDescriptionKey: "manifest signature verification failed"]
-      )
-    }
+  private static func invalid(_ message: String) -> NSError {
+    NSError(domain: "PosManifestLoader", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message])
   }
-
-  private static func decodeOperatorPublicKey(_ operatorId: String) throws -> Data {
-    let normalized = operatorId.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalized.contains("@") else {
-      throw NSError(
-        domain: "PosManifestLoader",
-        code: 19,
-        userInfo: [NSLocalizedDescriptionKey: "domain-qualified operator account is not canonical"]
-      )
-    }
-    if normalized.lowercased().hasPrefix("ed01") {
-      guard let raw = Data(hexString: normalized) else {
-        throw NSError(domain: "PosManifestLoader", code: 5, userInfo: [NSLocalizedDescriptionKey: "invalid operator key encoding"])
-      }
-      guard raw.count > 3, raw[0] == 0xED, raw[1] == 0x01 else {
-        throw NSError(domain: "PosManifestLoader", code: 6, userInfo: [NSLocalizedDescriptionKey: "unsupported operator key encoding"])
-      }
-      let declaredLen = Int(raw[2])
-      guard declaredLen == raw.count - 3 else {
-        throw NSError(domain: "PosManifestLoader", code: 7, userInfo: [NSLocalizedDescriptionKey: "unexpected operator key length"])
-      }
-      return Data(raw.dropFirst(3))
-    }
-#if canImport(IrohaSwift)
-    let account = try AccountAddress.fromI105(normalized, expectedPrefix: nil)
-    let canonical = try account.canonicalBytes()
-    return try extractSingleSignatoryKey(canonical)
-#else
-    throw NSError(domain: "PosManifestLoader", code: 8, userInfo: [NSLocalizedDescriptionKey: "I105 decoding requires IrohaSwift"])
-#endif
-  }
-
-#if canImport(IrohaSwift)
-  private static func extractSingleSignatoryKey(_ canonical: Data) throws -> Data {
-    guard canonical.count >= 4 else {
-      throw NSError(domain: "PosManifestLoader", code: 9, userInfo: [NSLocalizedDescriptionKey: "invalid canonical address length"])
-    }
-    var cursor = canonical.startIndex
-    let header = canonical[cursor]
-    cursor += 1
-    let extensionFlag = header & 0x01
-    let classBits = (header >> 3) & 0x03
-    guard extensionFlag == 0 else {
-      throw NSError(domain: "PosManifestLoader", code: 10, userInfo: [NSLocalizedDescriptionKey: "address extension flag set"])
-    }
-    guard classBits == 0 || classBits == 1 else {
-      throw NSError(domain: "PosManifestLoader", code: 11, userInfo: [NSLocalizedDescriptionKey: "unknown address class"])
-    }
-    guard cursor < canonical.endIndex else {
-      throw NSError(domain: "PosManifestLoader", code: 12, userInfo: [NSLocalizedDescriptionKey: "invalid canonical address length"])
-    }
-    let controllerTag = canonical[cursor]
-    cursor += 1
-    guard controllerTag == 0x00 else {
-      throw NSError(domain: "PosManifestLoader", code: 15, userInfo: [NSLocalizedDescriptionKey: "unsupported controller tag \(controllerTag)"])
-    }
-    guard cursor + 2 <= canonical.endIndex else {
-      throw NSError(domain: "PosManifestLoader", code: 16, userInfo: [NSLocalizedDescriptionKey: "invalid canonical address length"])
-    }
-    let curveId = canonical[cursor]
-    cursor += 1
-    guard curveId == 0x01 else {
-      throw NSError(domain: "PosManifestLoader", code: 17, userInfo: [NSLocalizedDescriptionKey: "unsupported signing algorithm \(curveId)"])
-    }
-    let keyLen = Int(canonical[cursor])
-    cursor += 1
-    let end = cursor + keyLen
-    guard end == canonical.count else {
-      throw NSError(domain: "PosManifestLoader", code: 18, userInfo: [NSLocalizedDescriptionKey: "unexpected trailing bytes in address payload"])
-    }
-    return Data(canonical[cursor..<end])
-  }
-#endif
-}
 }
 
 private extension UInt64 {

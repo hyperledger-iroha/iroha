@@ -256,7 +256,17 @@ mod tests {
             .is_err()
         );
         let signer = KeyPair::from_seed(vec![0xCF; 32], Algorithm::Ed25519);
-        let changed_signer = TransactionBuilder::from_payload(transaction.payload().clone())
+        assert!(
+            TransactionBuilder::from_payload(transaction.payload().clone())
+                .unwrap()
+                .try_sign(signer.private_key())
+                .is_err(),
+            "another signer cannot construct the original authority's transaction"
+        );
+        let mut foreign_payload = transaction.payload().clone();
+        foreign_payload.authority =
+            iroha_data_model::account::AccountId::new(signer.public_key().clone());
+        let changed_signer = TransactionBuilder::from_payload(foreign_payload)
             .unwrap()
             .sign(signer.private_key());
         assert!(

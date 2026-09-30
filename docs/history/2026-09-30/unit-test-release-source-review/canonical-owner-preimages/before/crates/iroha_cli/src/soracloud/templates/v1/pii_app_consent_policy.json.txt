@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "policy_name": "pii.consent.v1",
+  "jurisdiction": "us",
+  "required_capabilities": [
+    "pii.consent.grant",
+    "pii.consent.revoke"
+  ],
+  "allowed_scopes": [
+    "records.read",
+    "records.write",
+    "health.records.read"
+  ],
+  "audit_tag": "pii.consent.audit"
+}

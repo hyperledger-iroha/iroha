@@ -692,7 +692,7 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 /// Config validation, help, and version introspection remain offline and do not
 /// read the descriptors. Every node-starting invocation resolves exactly the
 /// Soracloud signer and any explicitly configured global-beacon signer through [`crate::run_with_runtime_provider_registry`].
-pub fn main_entry() {
+pub fn main_entry(build: iroha_core::release_identity::CompiledBuildMetadata) {
     if crate::external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
@@ -701,7 +701,8 @@ pub fn main_entry() {
     }
     crate::soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
-        if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
+        if let Err(report) = crate::run_with_config_guard(build, validate_taira_launcher_config_v1)
+        {
             eprintln!("{report:?}");
             std::process::exit(1);
         }
@@ -715,6 +716,7 @@ pub fn main_entry() {
         }
     };
     if let Err(report) = crate::run_with_runtime_provider_registry_and_config_guard(
+        build,
         &registry,
         validate_taira_launcher_config_v1,
         resolve_inherited_mint_finality_runtime,

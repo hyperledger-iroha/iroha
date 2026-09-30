@@ -34,10 +34,6 @@ fn low_cost_test_soranet_handshake() -> SoranetHandshake {
 ///
 /// Callers use struct update syntax for case-specific deviations, keeping the
 /// required network field set explicit in one place without collapsing cases.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the shared integration fixture deliberately lists every network field explicitly"
-)]
 fn test_network_config(
     address: IrohaSocketAddr,
     public_address: IrohaSocketAddr,

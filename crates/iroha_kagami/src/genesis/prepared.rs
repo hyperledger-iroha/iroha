@@ -526,10 +526,6 @@ fn config_set_sha256(digests: &[String]) -> String {
 }
 
 impl<T: Write> RunArgs<T> for Args {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the linear verifier keeps every authenticated input and digest check ordered before receipt emission"
-    )]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Verifying prepared signed genesis bundle");
         let reviewed_bytes = read_genesis_manifest_bytes(&self.reviewed_manifest)
@@ -757,10 +753,6 @@ mod tests {
         expected_hash: HashOf<BlockHeader>,
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture constructs one internally consistent signed bundle whose identities must be derived in order"
-    )]
     fn fixture() -> Fixture {
         iroha_genesis::init_instruction_registry();
         let directory = tempfile::tempdir().expect("create prepared Kagami fixture directory");
@@ -870,6 +862,13 @@ mod tests {
         .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
+        let reviewed = super::super::sign::tests::with_explicit_test_xor_allocations(
+            reviewed,
+            &validator_bindings
+                .iter()
+                .map(|binding| PeerId::new(binding.public_key.clone()))
+                .collect::<Vec<_>>(),
+        );
         let reviewed_bytes =
             norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
         let pre_sign_value = expected_pre_sign_value(&reviewed_bytes, &validator_bindings)
@@ -1040,10 +1039,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the ordered tamper matrix reuses and restores one exact bundle so each rejection remains causally isolated"
-    )]
     fn prepared_verifier_accepts_exact_bundle_and_rejects_signed_divergence() {
         let fixture = fixture();
         run_fixture(&fixture).expect("accept exact prepared genesis bundle");
@@ -1162,6 +1157,9 @@ mod tests {
         );
         std::fs::write(&fixture.manifest, original_manifest).expect("restore bound fixture");
 
+        let original_context = RawGenesisTransaction::from_path(&fixture.manifest)
+            .expect("read original bound policy")
+            .sumeragi_context_parameters();
         for config_index in 1..TAIRA_VALIDATOR_COUNT {
             let config_path = &fixture.configs[config_index];
             let original_config = std::fs::read_to_string(config_path).expect("read peer config");
@@ -1182,7 +1180,27 @@ mod tests {
             .expect("write drifted peer config");
             let context_error = run_fixture(&fixture)
                 .expect_err("reject effective policy drift from signed context");
-            assert!(context_error.to_string().contains("context differs"));
+            let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                expected_execution,
+                actual_execution,
+                expected_nexus,
+                actual_nexus,
+            }) = context_error
+                .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+                .map(Box::as_ref)
+            else {
+                panic!("unexpected original policy drift refusal: {context_error:#}");
+            };
+            assert_eq!(
+                *expected_nexus,
+                Hash::prehashed(original_context.nexus_amx_context_hash)
+            );
+            assert_eq!(
+                *expected_execution,
+                Hash::prehashed(original_context.execution_policy_hash)
+            );
+            assert_ne!(actual_nexus, expected_nexus);
+            assert_ne!(actual_execution, expected_execution);
             std::fs::write(config_path, original_config).expect("restore peer config");
         }
 

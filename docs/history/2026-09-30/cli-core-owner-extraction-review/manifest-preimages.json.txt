@@ -1,0 +1,96 @@
+{
+  "Cargo.lock": {
+    "before_bytes": 304329,
+    "before_sha256": "3ffd0bf792b80d55e76a70688b4a5d275bbb31cac14f2359c1f3eac60e871408",
+    "current_bytes": 306160,
+    "current_sha256": "ef670cd07bde7afed2110e967285bdc8e9719ed4a7420362a46a59a6784bcb43"
+  },
+  "Cargo.toml": {
+    "before_bytes": 21027,
+    "before_sha256": "373906973c8a5ff7381b84adeea0756fb90c609d9304050f64c583a7cc8dd28f",
+    "current_bytes": 21381,
+    "current_sha256": "f35aa85ed475db0fc9a83c4ade5d32805a22f1534a148a8b8c9f0178b2343bbf"
+  },
+  "crates/connect_norito_bridge/Cargo.toml": {
+    "before_bytes": 3437,
+    "before_sha256": "43497df54fb99fd0e84c1dbbaf7dea8b045224de5a37f17b1ce93b9f07a81f8e",
+    "current_bytes": 3571,
+    "current_sha256": "7698dc9185ab4125a54806294e1a950a0c7498800fed01887940be5adde0b18e"
+  },
+  "crates/iroha_cli/Cargo.toml": {
+    "before_bytes": 4544,
+    "before_sha256": "57690a820da14e24065a3015ef8c8ae75f65f95b0473651ab6659300d8fc24ec",
+    "current_bytes": 4112,
+    "current_sha256": "0a7e1daabfa8ae940fb72f89bac10ebc51279120cbe94997ee9059bc0d4ba2f9"
+  },
+  "crates/iroha_cli/bins/Cargo.toml": {
+    "current_bytes": 2883,
+    "current_sha256": "d54bb1a1e682d15c1af62486f50209927a29b35e52c6751f3ce9b59511161fa0"
+  },
+  "crates/iroha_core/Cargo.toml": {
+    "before_bytes": 14233,
+    "before_sha256": "c3817fe9631e3db885f50dd0a425874202715b3c63fde9909ca5d138d82cfec0",
+    "current_bytes": 14457,
+    "current_sha256": "9f5a5837da4869fdfc773a0a0e64ba5468f567bee7f3635057cbe2a1b6bf190f"
+  },
+  "crates/iroha_core_privacy/Cargo.toml": {
+    "current_bytes": 2638,
+    "current_sha256": "7e1a3fb6b3cdd3fe9189e4ce4897d2b1da1b1f0fcf57e24c904d3bd070e3bee3"
+  },
+  "crates/iroha_core_timed_ovn/Cargo.toml": {
+    "current_bytes": 843,
+    "current_sha256": "810c306c892456650de42408a22b060adc3f7d1bbebf60dbccfe01f0b84da6c1"
+  },
+  "crates/iroha_js_host/Cargo.toml": {
+    "before_bytes": 2377,
+    "before_sha256": "5dc17b4041f597d96c81c04a9ef5955d007d02294e428428e6d66201b0e57d10",
+    "current_bytes": 2422,
+    "current_sha256": "c3e59518bfef954e699e434f300f27098d5cb6bf77de53e775fff8634929c33a"
+  },
+  "crates/iroha_kagami/Cargo.toml": {
+    "before_bytes": 2545,
+    "before_sha256": "e6e908c61f2dcd403ce217dad6f47777d26cf1130e7c3d592249ed597456cdcb",
+    "current_bytes": 2587,
+    "current_sha256": "02b8e93c2c6674f80b87f509cb71f1391f9b9ef35cf9f83e7f33324bbab0c33c"
+  },
+  "crates/iroha_test_network/Cargo.toml": {
+    "before_bytes": 1862,
+    "before_sha256": "fbd2fd133947afcb8311f81128b91c1758134700659773a63a68ea4bdfaba81b",
+    "current_bytes": 1886,
+    "current_sha256": "984202aeb8c3c2fceaffdcba3581e85f3fe9f380d65f4f624960b59589eba18e"
+  },
+  "crates/iroha_torii/Cargo.toml": {
+    "before_bytes": 9702,
+    "before_sha256": "ecc64b70d21c31624d61f5f4aa71bbe5fc044bdad653ecf28bee5a9f8d38d2fc",
+    "current_bytes": 9788,
+    "current_sha256": "e31b287ed1569fb1844b2a530a27325d092f62a566e0b8796f65b05f02aba976"
+  },
+  "crates/irohad/Cargo.toml": {
+    "before_bytes": 8504,
+    "before_sha256": "2597aa1b7bb234251ef4d57143cbb7f5e7903a61b9b1a568bb3fa39e67758e74",
+    "current_bytes": 7732,
+    "current_sha256": "6f4085057db6081821f335d037cef16a7047b9d308de00f4e26690a30f202457"
+  },
+  "crates/irohad/bins/Cargo.toml": {
+    "current_bytes": 3513,
+    "current_sha256": "b92ca6d3824a9e88973dcd7d6f7f6414a4a79ff1c95b7d22abc9d9e68a9bacad"
+  },
+  "crates/zk_ace_prover/Cargo.toml": {
+    "before_bytes": 573,
+    "before_sha256": "0e65a373bf961bb848c70e1f47e05793db8c41ff7bcea09d2084ce43c97f3e2b",
+    "current_bytes": 616,
+    "current_sha256": "e3dab9d2002ca072212188c79856b7501f9e69e475f74276fecd5f22c53a808a"
+  },
+  "integration_tests/Cargo.toml": {
+    "before_bytes": 5459,
+    "before_sha256": "7d2b499817e94d859f1fcce285b820933b356516a1e99faedfc43b49e8f83d07",
+    "current_bytes": 5569,
+    "current_sha256": "e2cef12a179ffc938fb8a36cb15ff04dcdd8f09f4483f5c75291bb66110c6aa4"
+  },
+  "python/iroha_python/iroha_python_rs/Cargo.toml": {
+    "before_bytes": 2554,
+    "before_sha256": "7215e9ecd426b2663bdb2e2f0a5456798afd40730fa2051c872071db927e5570",
+    "current_bytes": 2606,
+    "current_sha256": "22e61d315bdf1da35d028f989bc13d36af1e0c7f49dd4836fac3b484a4982dc1"
+  }
+}

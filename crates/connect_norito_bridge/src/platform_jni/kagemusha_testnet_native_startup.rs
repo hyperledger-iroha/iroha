@@ -60,11 +60,20 @@ mod tests {
 
     #[test]
     fn startup_jni_bounds_match_the_native_contract_before_allocation() {
-        assert_eq!(KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1, [1, 1_048_576]);
-        for length in [-1, 0, 1_048_577, i32::MAX] {
+        assert_eq!(
+            KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1,
+            [1, 72_351_744]
+        );
+        let maximum = i32::try_from(KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1)
+            .expect("native bootstrap bound fits JNI length");
+        assert_eq!(
+            maximum as u32,
+            KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1[1]
+        );
+        for length in [-1, 0, maximum + 1, i32::MAX] {
             assert!(!valid_bootstrap_length(length));
         }
         assert!(valid_bootstrap_length(1));
-        assert!(valid_bootstrap_length(1_048_576));
+        assert!(valid_bootstrap_length(maximum));
     }
 }

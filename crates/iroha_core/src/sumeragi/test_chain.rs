@@ -1878,7 +1878,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn npos_boundary_fixture_retains_native_authority_with_signed_currency() {
+    fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
         use iroha_data_model::{
             asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
         };

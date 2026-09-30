@@ -1,0 +1,133 @@
+[package]
+name = "iroha_cli"
+autobins = false
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+build = "../build-support/script.rs"
+
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
+
+[lints]
+workspace = true
+
+[badges]
+is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
+is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
+maintenance = { status = "actively-developed" }
+
+[features]
+default = ["cli"]
+cli = [
+    "bridge",
+    "offline-visual-codecs",
+    "iroha_core/node",
+    "iroha_crypto/consensus",
+    "norito/node-codec",
+]
+dev-tools = ["cli"]
+offline-visual-codecs = ["dep:image"]
+# Experimental selector support. Forwarded to client/data-model crates when enabled.
+ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
+# Hooks used only by integration tests.
+cli_integration_harness = []
+bridge = []
+
+[[bin]]
+name = "iroha"
+path = "src/bin/iroha.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "account_literal_reencode"
+path = "src/bin/account_literal_reencode.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gov_instruction"
+path = "src/bin/gov_instruction.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "taira_fee_sponsor_program"
+path = "src/bin/taira_fee_sponsor_program.rs"
+required-features = ["dev-tools"]
+
+[dependencies]
+iroha_model_base = { workspace = true }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+iroha_service_model = { workspace = true }
+soranet_incentives = { workspace = true }
+iroha = { workspace = true }
+iroha_wallet = { workspace = true }
+iroha_storage_client = { workspace = true }
+iroha_sccp = { workspace = true }
+iroha_sccp_rpc = { workspace = true }
+iroha_sccp_wallet = { workspace = true }
+iroha_primitives = { workspace = true }
+ivm = { workspace = true }
+kotodama_lang = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
+iroha_core = { workspace = true, default-features = false }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_genesis = { workspace = true }
+fastpq_prover = { path = "../fastpq_prover" }
+iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_zkp_halo2 = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
+iroha_deploy = { workspace = true }
+iroha_torii_shared = { workspace = true }
+iroha_version = { workspace = true }
+url = { workspace = true }
+
+thiserror = { workspace = true }
+error-stack = { workspace = true, features = ["eyre"] }
+eyre = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+clap-markdown = "0.1.5"
+humantime = { workspace = true }
+norito = { workspace = true, default-features = false }
+supports-color = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+futures = { workspace = true, features = ["async-await", "std"] }
+base64 = { workspace = true }
+hex = { workspace = true }
+iroha_i18n = { workspace = true }
+rand = { version = "0.9.3", features = ["std"] }
+sorafs_manifest = { workspace = true }
+sorafs_car = { workspace = true, features = ["cli"] }
+sorafs_chunker = { workspace = true }
+sorafs_orchestrator = { workspace = true }
+soranet_pq = { workspace = true }
+time = { workspace = true }
+zeroize = { version = "1.8.2", default-features = false, features = ["std"] }
+blake3 = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "process"] }
+toml = { workspace = true }
+tiny-keccak = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
+png = "0.18.0"
+pathdiff = "0.2.3"
+tempfile = { workspace = true }
+
+[build-dependencies]
+build-support = { path = "../build-support", default-features = false }
+
+[dev-dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
+iroha_sumeragi = { workspace = true }
+assert_cmd = "2.1.1"
+iroha_test_samples = { workspace = true }
+iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }

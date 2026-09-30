@@ -26221,9 +26221,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300, responseBody: data)
         let snapshot = try decodeJSON(ToriiTimeSnapshot.self, from: data)
-        guard snapshot.now > 0 else {
+        guard snapshot.healthyLowerBoundMs != nil else {
             throw ToriiClientError.invalidPayload(
-                "time/now returned a zero server timestamp."
+                "time/now returned an unhealthy or fallback network clock."
             )
         }
         recordObservedServerClock(

@@ -1,20 +1,13 @@
 //! CLI regression tests for error surfaces.
 use std::{
-    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
-fn monitor_bin() -> Option<PathBuf> {
-    std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
-}
 #[test]
 fn invalid_endpoint_surfaces_warning() {
     let _serial = crate::serial_guard();
-    let Some(bin) = monitor_bin() else {
-        eprintln!("skipping: monitor binary path not provided by cargo");
-        return;
-    };
+    let bin = crate::monitor_bin();
     let mut child = Command::new(bin)
         .args([
             "--attach",

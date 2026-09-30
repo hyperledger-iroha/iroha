@@ -1,0 +1,236 @@
+<script setup lang="ts">
+import { onMounted, ref } from "vue";
+
+const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? "/api";
+const dataMode = import.meta.env.VITE_DATA_MODE ?? "local";
+const me = ref("loading");
+const searchStatus = ref("idle");
+const lastSearch = ref<any>(null);
+const preferences = ref({ home_airport: "", cabin_preference: "" });
+const searchForm = ref({ origin: "", destination: "", cabin: "" });
+
+function withApiBase(path: string) {
+  return `${apiBase}${path}`;
+}
+
+function compactRecord(input: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => {
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      return value !== null && value !== undefined;
+    })
+  );
+}
+
+async function requestJson(path: string, init?: RequestInit) {
+  const response = await fetch(withApiBase(path), {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`${path} returned ${response.status}`);
+  }
+  return response.json();
+}
+
+async function refreshMe() {
+  try {
+    const payload = await requestJson("/auth/me");
+    me.value = JSON.stringify(payload, null, 2);
+  } catch (error: any) {
+    me.value = error?.message ?? String(error);
+  }
+}
+
+async function runSearch() {
+  searchStatus.value = "requesting";
+  lastSearch.value = null;
+  try {
+    const payload = await requestJson("/v1/search", {
+      method: "POST",
+      body: JSON.stringify(compactRecord(searchForm.value))
+    });
+    searchStatus.value = payload.status ?? "accepted";
+    lastSearch.value = payload;
+  } catch (error: any) {
+    searchStatus.value = error?.message ?? String(error);
+  }
+}
+
+async function savePreferences() {
+  await requestJson("/v1/user/preferences", {
+    method: "PUT",
+    body: JSON.stringify({ preferences: compactRecord(preferences.value) })
+  });
+  await refreshMe();
+}
+
+onMounted(async () => {
+  await refreshMe();
+});
+</script>
+
+<template>
+  <main class="app-shell">
+    <section class="hero">
+      <p class="eyebrow">Soracloud Split App</p>
+      <h1>__SORACLOUD_APP_NAME__</h1>
+      <p class="lede">
+        Static frontend on SoraFS, a hosted live API on Inrou, and a deterministic
+        wallet vault on IVM, all sharing the same `/api` surface.
+      </p>
+      <p class="eyebrow">Build mode: {{ dataMode }} | API base: {{ apiBase }}</p>
+      <div class="actions">
+        <button @click="runSearch">Run Live Search</button>
+        <button class="secondary" @click="savePreferences">Save Preferences</button>
+      </div>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <h2>Vault</h2>
+        <label>
+          Home airport
+          <input v-model="preferences.home_airport" placeholder="e.g. BNE" />
+        </label>
+        <label>
+          Cabin
+          <select v-model="preferences.cabin_preference">
+            <option value="">Unknown</option>
+            <option value="business">Business</option>
+            <option value="first">First</option>
+            <option value="premium-economy">Premium Economy</option>
+          </select>
+        </label>
+      </article>
+
+      <article class="panel">
+        <h2>Live Search</h2>
+        <label>
+          Origin
+          <input v-model="searchForm.origin" placeholder="e.g. BNE" />
+        </label>
+        <label>
+          Destination
+          <input v-model="searchForm.destination" placeholder="e.g. HND" />
+        </label>
+        <label>
+          Requested cabin
+          <select v-model="searchForm.cabin">
+            <option value="">Unknown</option>
+            <option value="business">Business</option>
+            <option value="first">First</option>
+            <option value="premium-economy">Premium Economy</option>
+          </select>
+        </label>
+        <p>Status: <strong>{ searchStatus }</strong></p>
+        <pre>{ lastSearch ? JSON.stringify(lastSearch, null, 2) : "No search submitted yet." }</pre>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Auth / Me</h2>
+      <pre>{ me }</pre>
+    </section>
+  </main>
+</template>
+
+<style scoped>
+:global(body) {
+  margin: 0;
+  background: radial-gradient(circle at top, #1f3d52 0%, #0b1720 55%, #05080a 100%);
+  color: #f5f3ec;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 3rem 1.5rem 4rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.hero {
+  padding: 2rem 0 3rem;
+}
+
+.eyebrow {
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #b7d7e8;
+  font-size: 0.8rem;
+}
+
+h1 {
+  margin: 0.25rem 0 1rem;
+  font-size: clamp(2.5rem, 8vw, 5rem);
+}
+
+.lede {
+  max-width: 48rem;
+  color: #d7e6ef;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 0;
+  background: #e6b05c;
+  color: #091018;
+  padding: 0.85rem 1.25rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f5f3ec;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.panel-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.panel {
+  background: rgba(5, 12, 18, 0.74);
+  border: 1px solid rgba(183, 215, 232, 0.18);
+  padding: 1.25rem;
+  backdrop-filter: blur(20px);
+}
+
+label {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+input,
+select {
+  padding: 0.7rem 0.85rem;
+  font: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #b7d7e8;
+}
+</style>

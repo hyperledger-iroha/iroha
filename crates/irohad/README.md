@@ -1,6 +1,6 @@
 # Iroha Daemon (irohad)
 
-The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. Portable, release-qualified production capabilities are compiled into the default daemon; runtime configuration controls deployment policy.
+The `irohad` executable package contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. Portable, release-qualified production capabilities are compiled into the default daemon; runtime configuration controls deployment policy.
 
 Pass the `--language <code>` flag to override automatic language detection for informational and error messages.
 
@@ -43,14 +43,14 @@ termination, including namespace construction, before publishing a release.
 By default, the Iroha binary selects the `daemon` aggregate. It includes the portable Core and Torii production surfaces, full Halo2/STARK proof support, GOST and SM algorithms, event and metrics telemetry, schema endpoints, DAG recovery verification, HTTPS/WSS webhooks, and the bounded app/MCP API surface. To construct a deliberately reduced specialist library, disable the aggregate explicitly.
 
 ```bash
-cargo build -p irohad --release --no-default-features --lib
+cargo build -p irohad_lib --release --no-default-features --lib
 ```
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
 
 ### Deployment runtime-provider launcher
 
-`irohad` is also a library target. A deployment-owned binary can use the same
+`irohad_lib` provides the `irohad` library target; the `irohad` package owns the thin executable launchers. A deployment-owned binary can use the same
 CLI/config/bootstrap path as the stock binary while supplying deployment-owned
 signing, custody, authentication, transport, immutable-query, publication, and sealed
 checkpoint adapters:
@@ -59,7 +59,7 @@ checkpoint adapters:
 use irohad::IrohaRuntimeProviderRegistryV1;
 
 fn run(registry: &dyn IrohaRuntimeProviderRegistryV1) -> irohad::ReportResult<(), irohad::MainError> {
-    irohad::run_with_runtime_provider_registry(registry)
+    irohad::run_with_runtime_provider_registry(iroha_core::compiled_build_metadata!(), registry)
 }
 ```
 

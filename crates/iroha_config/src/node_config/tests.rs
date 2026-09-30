@@ -295,10 +295,6 @@ fn every_profile_supplies_its_chain_discriminant() {
 fn checked_in_node_example_parses_with_real_public_bindings() {
     let dir = NodeDir::new("example");
     let mut example = include_str!("../../../../configs/validator.example.toml").to_owned();
-    assert!(
-        example.lines().count() <= 40,
-        "keep the starter config small"
-    );
     let fixture: toml::Table = toml::from_str(&profile_node(&dir, "validator", "")).unwrap();
     let signer = &fixture["soracloud_runtime"]["submission"]["signer"];
     for (placeholder, value) in [

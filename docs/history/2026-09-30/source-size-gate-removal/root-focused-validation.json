@@ -1,0 +1,34 @@
+{
+  "scoped_runs": [
+    {
+      "scope": "root source-policy and retained semantic guards",
+      "log": "target/unit-tests/root/source-line-gate-retirement-final.log",
+      "sha256": "126150f0b5b9ccd8506618c3f54d0d42edff81374ae6ce2a34790a348edf9784",
+      "passed": 1947,
+      "passed_subtests": 60,
+      "failures": 0,
+      "skips": 0
+    },
+    {
+      "scope": "Rust source and authority guards including token-bound scanner",
+      "log": "target/unit-tests/root/rust-source-size-final-scanner.log",
+      "sha256": "6f828510e5f4c820a9475fad9f30c681c8b09f47279d3b70439992dc54c34b15",
+      "passed": 28,
+      "passed_subtests": 0,
+      "failures": 0,
+      "skips": 0
+    },
+    {
+      "scope": "release feature and source controls",
+      "log": "target/unit-tests/root/release-feature-source-size-compiler-final.log",
+      "sha256": "0982a063c23caeb58b40eb7f3bae5034880a02e2cc67070d1e766e09fe553993",
+      "passed": 70,
+      "passed_subtests": 0,
+      "failures": 0,
+      "skips": 0
+    }
+  ],
+  "counts_overlap": true,
+  "complete_workspace_qualified": false,
+  "source_bytes_retired_from_test_scanner": "token/depth resource bounds retained; whitespace/comments above old input byte cap accepted"
+}

@@ -1,7 +1,5 @@
 //! Atomic private-settlement runtime helpers.
 
-/// Auditor-only capsule encryption and decryption.
-pub mod audit;
 /// Online governed auditor validation and approval.
 pub mod auditor;
 /// Fsync-before-share restricted-DA availability certification.
@@ -29,12 +27,6 @@ pub mod sidecar_store;
 /// Validator-derived pool transitions and durable verified-leg tokens.
 pub(crate) mod state;
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
-pub use audit::seal_private_settlement_audit_capsule_v1_with_rng;
-pub use audit::{
-    PrivateSettlementAuditCryptoErrorV1, open_private_settlement_audit_capsule_v1,
-    private_settlement_audit_plaintext_commitment_v1,
-};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use auditor::approve_private_settlement_leg_v1;
 pub use auditor::{
