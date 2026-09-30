@@ -1,0 +1,30 @@
+{
+  "schema": "iroha.unit-source-guard.history.v1",
+  "purpose": "Exact pre-repair source guards and historical indexed setter preimage; retained evidence only, never an operational implementation or current admission contract.",
+  "files": [
+    {
+      "source": "scripts/tests/check_runtime_provider_broker_backend_setters_test.py",
+      "archive": "check_runtime_provider_broker_backend_setters_test.py",
+      "sha256": "c5447eaa08d87cfc4f3c1288d152b92b807871af6f7d5435833934927fd8d43e",
+      "bytes": 12230
+    },
+    {
+      "source": "scripts/tests/irohad_runtime_deps_setter_source_test.py",
+      "archive": "irohad_runtime_deps_setter_source_test.py",
+      "sha256": "3b7818f66e77bfc1e08e84760a6a55a3faba720eb994df6796aea1c80119bcc0",
+      "bytes": 7646
+    },
+    {
+      "source": "scripts/tests/torii_mcp_manual_descriptor_asset_test.py",
+      "archive": "torii_mcp_manual_descriptor_asset_test.py",
+      "sha256": "02e9224cb21f82cc872f18621051b95e2588b196323ce1c5bd022cfc7d8d779f",
+      "bytes": 25063
+    },
+    {
+      "source": "Git blob 5c4b48e9b76ac22c99248263d9ad1153883f0f2b",
+      "archive": "irohad-runtime-deps-indexed-preimage.rs",
+      "sha256": "879b4f9feabf0bc6827ec55120b05a00809a119b1299c904703edd4e633b3caa",
+      "bytes": 37688
+    }
+  ]
+}

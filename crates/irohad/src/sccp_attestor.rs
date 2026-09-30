@@ -84,16 +84,21 @@ pub(crate) fn start(
             return None;
         }
     };
-    let attestor = Arc::new(Attestor {
-        state,
-        queue,
-        peer_key_pair,
-        config,
-        store,
-        memory: Mutex::new(Memory::default()),
-        keeper: Mutex::new(keeper::Keeper::new(keeper_config)),
+    let task = tokio::task::spawn(async move {
+        // The keeper's blocking HTTP clients are built on a blocking worker, never on the
+        // async worker that runs this task.
+        let keeper = keeper::Keeper::build(keeper_config).await;
+        let attestor = Arc::new(Attestor {
+            state,
+            queue,
+            peer_key_pair,
+            config,
+            store,
+            memory: Mutex::new(Memory::default()),
+            keeper: Mutex::new(keeper),
+        });
+        attestor.run(shutdown_signal).await;
     });
-    let task = tokio::task::spawn(attestor.run(shutdown_signal));
     Some(Child::new(task, OnShutdown::Wait(Duration::from_secs(1))))
 }
 

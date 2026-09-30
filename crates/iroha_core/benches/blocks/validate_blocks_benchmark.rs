@@ -8,15 +8,11 @@ fn validate_blocks(c: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime");
     let mut group = c.benchmark_group("validate_blocks");
     group.significance_level(0.1).sample_size(10);
     group.bench_function("validate_blocks", |b| {
-        b.iter_batched(
-            || StateValidateBlocks::setup(rt.handle()),
+        b.iter_batched_ref(
+            StateValidateBlocks::setup,
             StateValidateBlocks::measure,
             criterion::BatchSize::SmallInput,
         );

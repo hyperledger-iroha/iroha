@@ -191,10 +191,14 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
     if !has_work(block) {
         return Err(PayloadError::EmptyBlock);
     }
+    let len = block
+        .resultless_proposal_wire_len()
+        .map_err(|error| PayloadError::Encode(error.to_string()))?;
+    let mut wire = Vec::with_capacity(len);
     block
-        .canonical_resultless_proposal()
-        .encode_wire()
-        .map_err(|error| PayloadError::Encode(error.to_string()))
+        .write_resultless_proposal_wire(&mut wire)
+        .map_err(|error| PayloadError::Encode(error.to_string()))?;
+    Ok(wire)
 }
 
 /// Decode a non-empty payload: the canonical wire of an unsigned, resultless proposal without
@@ -317,6 +321,42 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
     #[test]
+    fn encode_rejects_a_merge_suffix_larger_than_the_input_sequence() {
+        use iroha_data_model::{
+            block::{BlockExecutionContextBundle, ExternalExecutionContext},
+            sumeragi_finality::test_fixtures::NativeFinalityFixture,
+            sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
+        };
+        use iroha_model_base::topology::{DataSpaceId, LaneId};
+
+        let fixture = NativeFinalityFixture::start("invalid-payload-projection");
+        let source = fixture.block_with_submitted_work(fixture.next_header());
+        let input = source.external_transactions().next().unwrap().clone();
+        let mut context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            input.hash_as_entrypoint(),
+            LaneId::new(0),
+            DataSpaceId::new(0),
+        )]);
+        context.lane_merge = Some(SumeragiLaneMergeSection {
+            merges: vec![SumeragiLaneMerge {
+                lane: LaneId::new(16),
+                incarnation: [1; 32],
+                from: 1,
+                to: 2,
+                tip_hash: [2; 32],
+                tip_result: [3; 32],
+            }],
+            time_floor_ms: 0,
+            merged_count: 2,
+        });
+        let mut builder = WireBlockBuilder::new(source.header());
+        builder.push_transaction(input);
+        builder.set_execution_context(Some(context));
+        let malformed = builder.build(BTreeSet::new());
+        assert!(matches!(encode(&malformed), Err(PayloadError::Encode(_))));
+    }
+
+    #[test]
     fn decode_rejects_garbage_and_empty() {
         assert!(matches!(decode(&[]), Err(PayloadError::NotCanonical(_))));
         assert!(matches!(
@@ -397,6 +437,7 @@ mod tests {
         builder.push_transaction(transaction);
         let block = builder.build(BTreeSet::new());
         let bytes = encode(&block).expect("nonempty proposal");
+        assert_eq!(bytes, block.encode_wire().unwrap());
         let decoded = decode(&bytes).expect("canonical nonempty proposal");
         assert_eq!(decoded.network_entrypoint_count(), 1);
         assert_eq!(decoded.encode_wire().unwrap(), bytes);

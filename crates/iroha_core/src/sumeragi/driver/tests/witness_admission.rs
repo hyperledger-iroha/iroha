@@ -28,6 +28,7 @@ fn fixture(
         wake_pending: AtomicBool::new(false),
         alive: AtomicBool::new(true),
         stopped: Mutex::new(None),
+        metrics: None,
     });
     let (inputs, rx) = mpsc::channel();
     (

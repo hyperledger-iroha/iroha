@@ -13,16 +13,18 @@ use super::{
     world::{Inst, World},
 };
 use crate::{
-    api::{Action, ExecOutcome, LocalFault},
+    api::{Action, CoreStatus, ExecOutcome, LocalFault, LocalParams},
     availability::AvailableBody,
     crypto::{Crypto, Signer, verify_attestations, verify_vote_attestation},
     message::{BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
-    pacemaker::{PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, view_timeout},
+    pacemaker::{
+        PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, propose_allowance, view_timeout,
+    },
     preimage::{self, KIND_COMMIT, KIND_ECHO, KIND_PREPARE, KIND_PROPOSAL, KIND_TIMEOUT},
     safety::SafetyRecord,
     testing::{FakeVerifier, fake_sig},
     topology::Topology,
-    types::{Bitmap, Hash32, Millis, PublicKey},
+    types::{Bitmap, ChainParams, Hash32, Millis, PublicKey},
 };
 
 /// A committed block of the reference chain.
@@ -70,6 +72,23 @@ pub struct RepObs {
     pub max_t_retx: Millis,
     /// Highest start level reported (§9.2 adaptation, F15).
     pub max_start_level: u32,
+    /// [`Perf::LeaderTurns`]: the replica's uncommitted height and its bound.
+    pub turn: Option<Turn>,
+}
+
+/// [`Perf::LeaderTurns`] state of a replica at its uncommitted height (Appendix E, E62).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Turn {
+    /// The height.
+    pub height: u64,
+    /// When the replica was first observed at the height.
+    pub entry: Millis,
+    /// `v*(height)` and the machine leading it (`None`: no running holder leads a view).
+    pub first: Option<(u64, usize)>,
+    /// The start level the bound was computed with (the highest reported at the height).
+    pub level: u32,
+    /// `entry` plus the leader-turn bound ([`leader_turns_bound`]).
+    pub deadline: Millis,
 }
 
 /// Oracle state of a world.
@@ -95,6 +114,12 @@ pub struct Oracle {
     live_ok: Vec<bool>,
     /// When the precondition was last evaluated (every 50 virtual ms at most).
     live_eval_at: Option<Millis>,
+    /// [`Perf::LeaderTurns`]: the machine owning `L(h, v)` for `v = 0 ..= a_h` per
+    /// `(instance, height)` (ground-truth topology, one full rotation).
+    turn_leaders: BTreeMap<(usize, u64), Vec<Option<usize>>>,
+    /// [`Perf::LeaderTurns`]: the highest start level an honest replica reported at
+    /// `(instance, height)` (timers are local, §9.1).
+    turn_levels: BTreeMap<(usize, u64), u32>,
 }
 
 impl Oracle {
@@ -164,6 +189,32 @@ pub fn covers(record: &SafetyRecord, slot: &SigSlot) -> bool {
         KIND_TIMEOUT => record.timeout.as_ref().is_some_and(|t| t.view >= slot.view),
         _ => true,
     }
+}
+
+/// [`Perf::LeaderTurns`]: the longest a replica stays at a height whose views `0 .. turns`
+/// fail and whose view `turns` commits (Appendix E, E62). Each view `v ≤ turns` lasts at most
+/// its anchor allowance and timer, `P(v) + T(min(level_cap, start + v))` (§9.1), plus `slack`
+/// for the entry skew and the certificate that ends it (`σ + Δ`, §8.2 L1, L2).
+pub fn leader_turns_bound(
+    local: &LocalParams,
+    params: &ChainParams,
+    t_max_eff: Millis,
+    start: u32,
+    turns: u64,
+    slack: Millis,
+) -> Millis {
+    let cap = level_cap(local.t_base, t_max_eff);
+    (0..=turns)
+        .map(|v| {
+            let level = u32::try_from(v)
+                .unwrap_or(u32::MAX)
+                .saturating_add(start)
+                .min(cap);
+            propose_allowance(v, params, local.build_timeout)
+                .saturating_add(view_timeout(local.t_base, t_max_eff, level))
+                .saturating_add(slack)
+        })
+        .fold(0, Millis::saturating_add)
 }
 
 /// Build a committed chain of `len` transaction blocks at view 0 using one exact quorum
@@ -558,10 +609,13 @@ impl World {
                 jumped || !had_commit,
             );
         }
+        if self.failure.is_none() {
+            self.check_turns(r, &status);
+        }
     }
 
-    /// F35 (`no_view_change`): after heal every height commits in view 0 with a block first
-    /// proposed there (no timer may move because of a local queue).
+    /// `no_view_change` (F9r): after heal every height commits in view 0 with a block first
+    /// proposed there (no timer may move).
     fn check_view_change(&mut self, actions: &[Action]) {
         if !self.checks.no_view_change || self.now < self.heal_at {
             return;
@@ -571,13 +625,143 @@ impl World {
                 && (commit_qc.view > 0 || block.header().origin_view > 0)
             {
                 return self.fail(format!(
-                    "O-PERF F35: height {} committed in view {} (origin view {}); a timer moved",
+                    "O-PERF no view change: height {} committed in view {} (origin view {}); a \
+                     timer moved",
                     block.header().height,
                     commit_qc.view,
                     block.header().origin_view
                 ));
             }
         }
+    }
+
+    /// [`Perf::LeaderTurns`] at honest replica `r` (Appendix E, E62): a replica never passes
+    /// `v*(h)` at its uncommitted height `h`, and it commits `h` by its leader-turn deadline.
+    fn check_turns(&mut self, r: usize, status: &CoreStatus) {
+        let Perf::LeaderTurns(holders) = self.checks.perf else {
+            return;
+        };
+        let inst = self.replicas[r].inst;
+        if self.now < self.heal_of(inst) {
+            return;
+        }
+        let height = status.height;
+        let previous = self.oracle.reps[r].turn;
+        if let Some(turn) = previous
+            && turn.height != height
+        {
+            // The replica left `turn.height` in this handle; it committed it at the latest now.
+            self.oracle.reps[r].turn = None;
+            if status.committed_height >= turn.height && self.now > turn.deadline {
+                return self.turn_late(r, &turn);
+            }
+        }
+        if status.awaiting || height <= status.committed_height {
+            return;
+        }
+        let level = self.oracle.turn_levels.entry((inst, height)).or_default();
+        *level = (*level).max(status.start_level);
+        let level = *level;
+        let first = self.first_holder_turn(inst, height, holders);
+        let turn = match self.oracle.reps[r].turn {
+            Some(turn) if turn.first == first && turn.level == level => turn,
+            other => {
+                let entry = other.map_or(self.now, |turn| turn.entry);
+                let deadline = first.map_or(Millis::MAX, |(view, _)| {
+                    entry.saturating_add(self.turns_budget(inst, r, height, level, view))
+                });
+                Turn {
+                    height,
+                    entry,
+                    first,
+                    level,
+                    deadline,
+                }
+            }
+        };
+        self.oracle.reps[r].turn = Some(turn);
+        if let Some((view, m)) = first
+            && status.view > view
+        {
+            return self.fail(format!(
+                "O-PERF LeaderTurns: replica {r} is in view {} of height {height}, past view \
+                 {view} led by running holder machine {m} (§6.10, §8.2 L4)",
+                status.view
+            ));
+        }
+        if self.now > turn.deadline {
+            self.turn_late(r, &turn);
+        }
+    }
+
+    fn turn_late(&mut self, r: usize, turn: &Turn) {
+        self.fail(format!(
+            "O-PERF LeaderTurns: replica {r} entered height {} at t={} and did not commit it by \
+             t={} (v* {:?}, start level {})",
+            turn.height, turn.entry, turn.deadline, turn.first, turn.level
+        ));
+    }
+
+    /// `v*(height)`: the first view `v ≥ 1` whose leader is a running honest holder that may
+    /// sign, and that machine (`None` if no view of a whole rotation has one).
+    fn first_holder_turn(
+        &mut self,
+        inst: usize,
+        height: u64,
+        holders: u64,
+    ) -> Option<(u64, usize)> {
+        if !self.oracle.turn_leaders.contains_key(&(inst, height)) {
+            let topo = self.ground_topology(inst, height);
+            let committee = self.instances[inst].committee(height);
+            let rotation = topo.n().saturating_sub(topo.demoted().len());
+            let leaders = (0..=u64::try_from(rotation).unwrap_or(u64::MAX))
+                .map(|view| {
+                    committee
+                        .get(topo.leader(view))
+                        .and_then(|key| self.key_owner.get(key).copied())
+                })
+                .collect();
+            self.oracle
+                .turn_leaders
+                .retain(|(i, h), _| *i != inst || h.saturating_add(16) >= height);
+            self.oracle
+                .turn_levels
+                .retain(|(i, h), _| *i != inst || h.saturating_add(16) >= height);
+            self.oracle.turn_leaders.insert((inst, height), leaders);
+        }
+        let leaders = self.oracle.turn_leaders.get(&(inst, height))?;
+        leaders.iter().enumerate().skip(1).find_map(|(view, m)| {
+            let m = (*m)?;
+            let holder = u32::try_from(m)
+                .ok()
+                .and_then(|bit| 1u64.checked_shl(bit))
+                .is_some_and(|bit| holders & bit != 0);
+            let running = self.replica_of(m, inst).is_some_and(|x| {
+                self.honest_running(x)
+                    && self.replicas[x]
+                        .host
+                        .core()
+                        .is_some_and(|core| !core.abstaining())
+            });
+            (holder && running).then(|| (u64::try_from(view).unwrap_or(u64::MAX), m))
+        })
+    }
+
+    /// The leader-turn bound of replica `r` at `height` with start level `level` and
+    /// `v*(height) = turns`, with O-LIVE's 3 % margin for clock drift.
+    fn turns_budget(&self, inst: usize, r: usize, height: u64, level: u32, turns: u64) -> Millis {
+        let instance = &self.instances[inst];
+        let b = self.bounds(inst, self.replicas[r].machine);
+        let t_max = effective_t_max(&instance.local, &instance.config(height));
+        leader_turns_bound(
+            &instance.local,
+            &instance.params,
+            t_max,
+            level,
+            turns,
+            b.sigma + b.delta,
+        ) * 103
+            / 100
     }
 
     fn on_commit(&mut self, r: usize, height: u64, gap: Millis, t_hat: Millis, skip_gap: bool) {
@@ -613,7 +797,8 @@ impl World {
             Perf::P2 => b.g_norm + t_hat.max(b.rebroadcast),
             Perf::P3 => b.g_norm + 2 * t_hat + b.delta,
             Perf::P4 | Perf::OneViewFailure => b.p4 + 2 * t_hat + b.delta,
-            Perf::None | Perf::P5 | Perf::P6 => return,
+            // Bounded per height and view by `check_turns` instead.
+            Perf::None | Perf::P5 | Perf::P6 | Perf::LeaderTurns(_) => return,
         };
         if gap > limit {
             self.fail(format!(
@@ -792,6 +977,8 @@ impl World {
         obs.checked_lock = None;
         obs.checked_tc = None;
         obs.checked_cqc = None;
+        // A restarted replica enters its height anew (§7.4: start level 0).
+        obs.turn = None;
         if self.oracle.heal_seen {
             self.reset_live(r);
         }
@@ -1476,7 +1663,12 @@ impl World {
             let heal = self.heal_of(inst);
             let b = self.bounds(inst, 0);
             // Transactions old enough to be judged: the spec's B_live bound, and a sanity
-            // check that most transactions older than 20 s committed at all.
+            // check that most transactions older than 20 s committed at all. Under sparse
+            // local work a height may take several leader turns (§8.1), so there each
+            // transaction must instead be in a block of the second height first committed
+            // after its submission: that height is entered after the submission, and a holder
+            // builds its block from its whole queue (Appendix E, E62).
+            let turns = matches!(self.checks.perf, Perf::LeaderTurns(_));
             let mut judged = 0usize;
             let mut committed = 0usize;
             for (id, (submitted, poison, at)) in &self.txs[inst] {
@@ -1488,6 +1680,22 @@ impl World {
                     return self.fail(format!(
                         "O-TXP: transaction {id} not committed within B_live"
                     ));
+                }
+                if turns {
+                    let due = self.oracle.refs[inst]
+                        .values()
+                        .map(|block| block.at)
+                        .filter(|t| t > submitted)
+                        .nth(1);
+                    if let Some(due) = due
+                        && at.is_none_or(|t| t > due)
+                    {
+                        return self.fail(format!(
+                            "O-TXP: transaction {id} submitted at t={submitted} not committed \
+                             by t={due}, the second height first committed after it"
+                        ));
+                    }
+                    continue;
                 }
                 if *submitted + 20_000 <= self.now {
                     judged += 1;

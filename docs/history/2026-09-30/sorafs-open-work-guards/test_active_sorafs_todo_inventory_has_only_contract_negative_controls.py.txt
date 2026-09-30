@@ -1,0 +1,29 @@
+def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> None:
+    tracked_files = subprocess.check_output(
+        ["git", "ls-files"], cwd=REPO_ROOT, text=True
+    ).splitlines()
+    offenders: list[str] = []
+
+    for relative_name in tracked_files:
+        relative = Path(relative_name)
+        path = REPO_ROOT / relative
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            if (
+                not ACTIVE_SORAFS_TODO_MARKER_RE.search(line)
+                or ("SoraFS" not in line and "sorafs" not in line)
+            ):
+                continue
+            if relative == ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_RELATIVE_PATH and any(
+                fragment in line
+                for fragment in ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_FRAGMENTS
+            ):
+                continue
+            offenders.append(f"{relative}:{line_number}: {line.strip()}")
+
+    assert offenders == []

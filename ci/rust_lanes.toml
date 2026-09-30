@@ -12,6 +12,7 @@ description = "Foundational codecs, primitives, derives, schemas, and support li
 packages = [
   "build-support",
   "concread",
+  "iroha_allocation",
   "iroha_audio",
   "iroha_config_base",
   "iroha_crypto",
@@ -149,8 +150,8 @@ packages = ["integration_tests"]
 # Cargo's CARGO_BIN_EXE_* paths and do not need downloaded release artifacts.
 # Private-settlement route-control tests run under Cargo and cannot build child
 # programs. Their explicit artifact is built separately with the test feature;
-# it never replaces the shipping daemon. Qualified corridor bundles below keep
-# their own build and provenance protocols.
+# it never replaces the shipping daemon. The qualified corridor bundle below
+# keeps its own build and provenance protocol.
 [package_binaries]
 iroha_test_network = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
 izanami = ["iroha3d", "iroha"]
@@ -181,9 +182,9 @@ packages = ["irohad", "iroha_cli", "iroha_torii"]
 paths = ["pytests/iroha_cli_tests/**", "pytests/iroha_torii_tests/**"]
 binaries = ["iroha3d", "iroha", "kagami"]
 
-# These runners qualify their own source-bound or debug-only program bundles.
+# This runner qualifies its own debug-only program bundle.
 # Empty downloaded-artifact lists are permitted only with an explicit runner;
-# CI must preserve those owners rather than substitute the PR shipping bundle.
+# CI must preserve that owner rather than substitute the PR shipping bundle.
 [consumers.sora_parliament_lifecycle]
 packages = ["integration_tests"]
 paths = ["crates/iroha_crypto/benches/parliament_crypto*", "dashboards/alerts/sora_parliament_rules.yml", "dashboards/alerts/tests/sora_parliament_rules.test.yml"]

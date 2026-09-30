@@ -927,7 +927,7 @@ def test_actual_rust_owned_fixture_is_full_fixed_budget_with_exact_worker_projec
     admitted = parse_run_budget(json.loads(public))
     assert public == canonical_run_budget_bytes(admitted)
     assert len(admitted.experiment.runs) == 10
-    assert sum(len(run.files) for run in admitted.experiment.runs) == 150
+    assert sum(len(run.files) for run in admitted.experiment.runs) == 30
     configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)
     with ExitStack() as owners:
         bound = worker._admit(Path('/unused'), owners, 1000, lambda *_: configured_probe)
@@ -942,7 +942,8 @@ def test_actual_rust_owned_fixture_is_full_fixed_budget_with_exact_worker_projec
     assert reply['admission']['trace'] == {'label': 'pair1.one_lane.trace', 'max_bytes': 8192}
 
 
-@pytest.mark.parametrize('field', RUN_FILE_FIELDS[5:])
+@pytest.mark.parametrize('field', [name for name in RUN_FILE_FIELDS
+                                   if name not in ('collector_journal', 'transaction_trace')])
 def test_worker_rechecks_non_writer_allocations_after_reply(field):
     admitted = allocation()
     configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)

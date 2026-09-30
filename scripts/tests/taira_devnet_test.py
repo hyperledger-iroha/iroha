@@ -589,8 +589,6 @@ class FakeRuntime:
         self.targeted_restart_started = False
         self.initial_sumeragi_transport_unavailable_seen: set[int] = set()
         self.restart_sumeragi_transport_unavailable_seen: set[int] = set()
-        self.restart_required_peer: int | None = None
-        self.sumeragi_blocker_peer: int | None = None
         self.onboarding_proof_required = False
         self.ambiguous_submit_kind: str | None = None
         self.ambiguous_submit_raised = False
@@ -1490,18 +1488,7 @@ class FakeRuntime:
                 ):
                     self.restart_sumeragi_transport_unavailable_seen.add(index)
                     return 0, None
-                if self.sumeragi_status_http != 200:
-                    return self.sumeragi_status_http, None
-                blocker = (
-                    {"blocker": "application_pending", "details": None}
-                    if index == self.sumeragi_blocker_peer
-                    else None
-                )
-                return 200, {
-                    "protocol_version": 4,
-                    "restart_required": index == self.restart_required_peer,
-                    "liveness": {"blocker": blocker},
-                }
+                return self.sumeragi_status_http, None
             if url.endswith("/status"):
                 return 200, {
                     "build": {
@@ -6332,6 +6319,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "taira_devnet.py",
                 "taira_disk_capacity.py",
                 "taira_nginx_logrotate.py",
+                "taira_native_test_inventory.py",
                 "taira_release.py",
                 "taira_release_check.py",
                 "taira_release_transfer.py",
@@ -6354,6 +6342,8 @@ class TairaDevnetTests(unittest.TestCase):
                 "taira_disk_capacity_test.py",
                 "taira_inrou_canary_identity_source_test.py",
                 "taira_public_identity_defaults_test.py",
+                "taira_release_priority_partition_test.py",
+                "taira_retry_live_reference_test.py",
                 "taira_retry_test.py",
                 "taira_seed_observation_test.py",
                 "taira_update_test.py",

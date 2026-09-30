@@ -27,7 +27,7 @@
 //! ending at GST, long enough that the round in progress loses its first sends and both
 //! stage-entry re-sends, and short enough that its view deadline lies well after GST. After GST
 //! only the §6.11 retransmit re-sends those votes: the round must still commit in view 0 (the
-//! F35 `no_view_change` oracle). Without the retransmit its view times out.
+//! `no_view_change` oracle). Without the retransmit its view times out.
 
 use super::{
     byz::NetRule,

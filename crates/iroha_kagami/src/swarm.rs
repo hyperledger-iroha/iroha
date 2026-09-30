@@ -3849,7 +3849,9 @@ mod tests {
             format!("{}\n", NetworkId::from_genesis_hash(signed.hash())),
         )
         .expect("write resultless fixture hash");
-        let resultless = signed.canonical_resultless_proposal();
+        let resultless = signed
+            .canonical_resultless_proposal()
+            .expect("valid original proposal");
         assert_eq!(
             resultless.hash(),
             signed.hash(),

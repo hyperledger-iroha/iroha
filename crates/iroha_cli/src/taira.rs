@@ -9942,7 +9942,10 @@ mod tests {
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
     }
-    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) -> std::io::Result<()> {
+    fn write_mock_response(
+        stream: &mut impl std::io::Write,
+        response: MockResponse,
+    ) -> std::io::Result<()> {
         let reason = match response.status {
             200 => "OK",
             202 => "Accepted",
@@ -9955,8 +9958,11 @@ mod tests {
             _ => "OK",
         };
         let body = response.body.as_slice();
+        // Send the frame together: fragmented header writes trigger Nagle/delayed-ACK
+        // latency on loopback and consume the operation deadlines being tested.
+        let mut frame = Vec::new();
         write!(
-            stream,
+            frame,
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
             response.status,
             reason,
@@ -9964,10 +9970,11 @@ mod tests {
             body.len()
         )?;
         for (name, value) in response.headers {
-            write!(stream, "{name}: {value}\r\n")?;
+            write!(frame, "{name}: {value}\r\n")?;
         }
-        write!(stream, "\r\n")?;
-        stream.write_all(body)
+        write!(frame, "\r\n")?;
+        frame.extend_from_slice(body);
+        stream.write_all(&frame)
     }
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
         server.stop.store(true, Ordering::Release);
@@ -9976,6 +9983,37 @@ mod tests {
             .expect("request references")
             .into_inner()
             .expect("requests")
+    }
+
+    #[test]
+    fn mock_response_preserves_the_exact_frame_in_one_transport_write() {
+        #[derive(Default)]
+        struct TransportWrites(Vec<Vec<u8>>);
+        impl std::io::Write for TransportWrites {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.push(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut transport = TransportWrites::default();
+        write_mock_response(
+            &mut transport,
+            MockResponse {
+                status: 202,
+                content_type: "application/x-norito",
+                headers: vec![("X-Proof", "exact".to_owned())],
+                body: vec![0, 0xff, b'\r', b'\n'],
+            },
+        )
+        .expect("complete mock HTTP frame");
+        assert_eq!(
+            transport.0,
+            [b"HTTP/1.1 202 Accepted\r\nContent-Type: application/x-norito\r\nContent-Length: 4\r\nConnection: close\r\nX-Proof: exact\r\n\r\n\0\xff\r\n".to_vec()],
+            "the fixture must preserve headers and binary body without delaying fragments"
+        );
     }
 
     #[test]

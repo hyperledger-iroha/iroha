@@ -126,19 +126,34 @@ impl BuildIdentity {
 
 /// Wire-schema identity compiled into this binary.
 ///
-/// Combines the compiled consensus-message and block wire schema with the IVM
-/// ABI hash of the sole first-release syscall policy. The value is independent
-/// of the compilation target but not of the enabled features (the crypto
-/// `Algorithm` schema lists feature-gated variants), so release tooling reads it
-/// from a native build of the same commit with the release feature set.
+/// Hashes the compiled schemas of the covered wire roots, in order the block wire
+/// ([`SignedBlock`](iroha_data_model::block::SignedBlock)) and the consensus wire
+/// ([`WireMessage`](iroha_sumeragi::message::WireMessage)), with the IVM ABI hash of
+/// the sole first-release syscall policy through
+/// [`wire_schema_hash_of`](iroha_data_model::wire_schema::wire_schema_hash_of). Each
+/// root is rendered against its own types because the two wires describe different
+/// types under the same schema identifiers (both define a `BlockHeader`). The value
+/// is independent of the compilation target but not of the enabled features (the
+/// crypto `Algorithm` schema lists feature-gated variants), so release tooling reads
+/// it from a native build of the same commit with the release feature set.
 #[must_use]
 pub fn wire_schema_hash() -> [u8; 32] {
     static HASH: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
     *HASH.get_or_init(|| {
-        iroha_data_model::wire_schema_hash(ivm::syscalls::compute_abi_hash(
-            ivm::SyscallPolicy::AbiV1,
-        ))
+        let [block, consensus] = covered_wire_roots();
+        iroha_data_model::wire_schema::wire_schema_hash_of(
+            &[&block, &consensus],
+            ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        )
     })
+}
+
+/// Compiled schemas of the covered wire roots in identity order: block wire, consensus wire.
+fn covered_wire_roots() -> [iroha_schema::MetaMap; 2] {
+    [
+        iroha_data_model::wire_schema::covered_wire_schema(),
+        <iroha_sumeragi::message::WireMessage as iroha_schema::IntoSchema>::schema(),
+    ]
 }
 
 /// Capture the canonical build metadata in the executable invoking this macro.
@@ -187,6 +202,8 @@ pub fn genesis_identity(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::wire_schema::{wire_root_defects, wire_schema_hash_of};
+
     use super::*;
     const SOURCE: &str = "1234567890abcdef1234567890abcdef12345678";
     const OTHER: &str = "2234567890abcdef1234567890abcdef12345678";
@@ -321,18 +338,117 @@ mod tests {
     #[test]
     fn wire_schema_hash_binds_compiled_wire_and_ivm_abi_v1() {
         let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        assert_eq!(wire_schema_hash(), iroha_data_model::wire_schema_hash(abi));
+        let [block, consensus] = covered_wire_roots();
+        let combined = wire_schema_hash_of(&[&block, &consensus], abi);
+        assert_eq!(wire_schema_hash(), combined);
         assert_eq!(
             wire_schema_hash(),
             wire_schema_hash(),
             "cached value is stable"
         );
+        let [block, consensus] = covered_wire_roots();
+        assert_eq!(
+            wire_schema_hash_of(&[&block, &consensus], abi),
+            combined,
+            "rebuilt schemas hash identically"
+        );
         let mut other_abi = abi;
         other_abi[0] ^= 1;
         assert_ne!(
-            wire_schema_hash(),
-            iroha_data_model::wire_schema_hash(other_abi)
+            wire_schema_hash_of(&[&block, &consensus], other_abi),
+            combined
         );
         assert_eq!(hex::encode(wire_schema_hash()).len(), 64);
+    }
+
+    /// Both roots are closed and unambiguous, so every type a consensus frame reaches is
+    /// described, and the schema's message discriminants are the canonical Norito tags.
+    #[test]
+    fn consensus_wire_root_is_closed_and_matches_the_codec_tags() {
+        use iroha_schema::Metadata;
+        use iroha_sumeragi::{
+            message::{PayloadRequest, SyncRequest, WireMessage},
+            types::Hash32,
+        };
+
+        let [block, consensus] = covered_wire_roots();
+        for root in [&block, &consensus] {
+            let defects = wire_root_defects(root);
+            assert!(defects.is_empty(), "{defects:?}");
+        }
+        let Some(Metadata::Enum(message)) = consensus.get::<WireMessage>() else {
+            panic!("the consensus root describes the wire message enum");
+        };
+        for (index, variant) in message.variants.iter().enumerate() {
+            assert_eq!(
+                usize::try_from(variant.discriminant).ok(),
+                Some(index),
+                "{} keeps its declaration-order tag",
+                variant.tag
+            );
+            assert!(variant.ty.is_some(), "{} carries a payload", variant.tag);
+        }
+        let tag = |name: &str| {
+            message
+                .variants
+                .iter()
+                .find(|variant| variant.tag == name)
+                .map(|variant| variant.discriminant)
+        };
+        let instance = Hash32([7; 32]);
+        let sync = WireMessage::SyncRequest(SyncRequest {
+            instance,
+            from_height: 1,
+            max_count: 1,
+            max_bytes: 1,
+        });
+        let payload = WireMessage::PayloadRequest(PayloadRequest {
+            instance,
+            height: 1,
+            block_hash: instance,
+        });
+        assert_eq!(tag("SyncRequest"), Some(sync.wire_tag()));
+        assert_eq!(tag("PayloadRequest"), Some(payload.wire_tag()));
+    }
+
+    /// Dropping the consensus root or changing the type of one consensus field changes the
+    /// identity; the root order is bound.
+    #[test]
+    fn wire_schema_hash_covers_the_consensus_wire() {
+        use iroha_schema::{Metadata, NamedFieldsMeta};
+        use iroha_sumeragi::message::Vote;
+
+        let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        let [block, consensus] = covered_wire_roots();
+        let combined = wire_schema_hash_of(&[&block, &consensus], abi);
+        assert_ne!(
+            wire_schema_hash_of(&[&block], abi),
+            combined,
+            "the consensus root is covered"
+        );
+        assert_ne!(
+            wire_schema_hash_of(&[&consensus, &block], abi),
+            combined,
+            "the roots are hashed in identity order"
+        );
+
+        let Some(Metadata::Struct(vote)) = consensus.get::<Vote>().cloned() else {
+            panic!("a vote is a named-field structure");
+        };
+        let mut declarations = vote.declarations;
+        let view = declarations
+            .iter_mut()
+            .find(|field| field.name == "view")
+            .expect("a vote names its view");
+        view.ty = core::any::TypeId::of::<u32>();
+        let mut changed = consensus.clone();
+        changed.insert::<Vote>(Metadata::Struct(NamedFieldsMeta { declarations }));
+        let defects = wire_root_defects(&changed);
+        assert!(defects.is_empty(), "{defects:?}");
+        assert_ne!(
+            wire_schema_hash_of(&[&block, &changed], abi),
+            combined,
+            "changing a consensus field type changes the identity"
+        );
     }
 }

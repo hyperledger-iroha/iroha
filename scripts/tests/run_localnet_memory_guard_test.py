@@ -31,7 +31,7 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.diagnostic_timeout_seconds == 30.0
 
 
-def test_peer_count_must_have_revision4_geometry():
+def test_peer_count_must_have_sumeragi_committee_geometry():
     for peers in (1, 5, 30, 32):
         try:
             MODULE.parse_args(["--peers", str(peers)])

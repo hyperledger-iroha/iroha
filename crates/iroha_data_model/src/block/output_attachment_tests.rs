@@ -45,7 +45,7 @@ fn executed_wire_budget_ignores_an_attached_commit_certificate() {
         vec![1; 64],
         vec![2; 256],
         vec![3; 512],
-        vec![4; 1024],
+        vec![4; 324],
     )));
     assert!(block.encode_wire().unwrap().len() as u64 > executed_len);
     assert_eq!(block.executed_block_wire_hash().unwrap(), executed_hash);
@@ -144,7 +144,12 @@ fn full_output_attachment_preserves_header_and_exact_proposal() {
     fixture::install(&mut block, outputs, 9).unwrap();
     assert_eq!(block.header(), proposal.header());
     assert_eq!(block.hash(), proposal.hash());
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(
+        block
+            .canonical_resultless_proposal()
+            .expect("valid original proposal"),
+        proposal
+    );
     assert_eq!(
         block.canonical_proposal_wire_hash().unwrap(),
         proposal.canonical_proposal_wire_hash().unwrap()

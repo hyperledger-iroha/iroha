@@ -183,9 +183,20 @@ relay = operator_client.get_kaigi_relay(relays.items[0].relay_id) if relays.item
 health = operator_client.get_kaigi_relays_health()
 ```
 
-The preflight DTO exposes both current IVM cycle limits and validates every fee
-account field as an exact canonical I105 account id. Alias-shaped
-`name@domain` values are rejected instead of interpreted as account identity.
+The preflight DTO parses exactly the fields Torii serves, rejects any other
+field, exposes both current IVM cycle limits and validates every fee account
+field as an exact canonical I105 account id. Alias-shaped `name@domain` values
+are rejected instead of interpreted as account identity.
+
+`preflight.sumeragi` carries only `block_cadence_ms`, the signed-genesis target
+block time. Torii serves no stall threshold, so `preflight.stall_threshold_ms`
+is derived as `PIPELINE_STALL_BLOCK_CADENCES` (20) × `block_cadence_ms`, and
+`preflight.is_status_stalled(status)` reports a stall only when
+`status.queue_size > 0` and the time since the last non-empty block (or since
+the last block, before the first non-empty one) exceeds it. Twenty cadences
+cover one crashed leader's view change at the Sumeragi default timings; call
+`status.is_queue_stalled(threshold_ms)` directly when the deployment's local
+consensus timers are known.
 
 Each helper generates a fresh signature over the exact `GET`, path, query, and
 empty body and dispatches once with redirects and retries disabled. Bearer/API

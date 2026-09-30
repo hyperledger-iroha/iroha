@@ -4527,8 +4527,6 @@ pub struct Telemetry {
     sync_requested: Arc<AtomicBool>,
     time_source: TimeSource,
     soranet_privacy: Arc<SoranetSecureAggregator>,
-    da_slots_total: Arc<AtomicU64>,
-    da_slots_quorum_met: Arc<AtomicU64>,
 }
 impl Clone for Telemetry {
     fn clone(&self) -> Self {
@@ -4540,47 +4538,6 @@ impl Clone for Telemetry {
             sync_requested: Arc::clone(&self.sync_requested),
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
-            da_slots_total: Arc::clone(&self.da_slots_total),
-            da_slots_quorum_met: Arc::clone(&self.da_slots_quorum_met),
-        }
-    }
-}
-#[cfg(test)]
-/// Outcome emitted when planning a missing-block fetch after QC-first arrival.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MissingBlockFetchOutcome {
-    /// A fetch request was issued.
-    Requested,
-    /// No peers were available to target for a fetch.
-    NoTargets,
-    /// A retry backoff window suppressed a fetch attempt.
-    Backoff,
-}
-#[cfg(test)]
-impl MissingBlockFetchOutcome {
-    fn label(self) -> &'static str {
-        match self {
-            MissingBlockFetchOutcome::Requested => "requested",
-            MissingBlockFetchOutcome::NoTargets => "no_targets",
-            MissingBlockFetchOutcome::Backoff => "backoff",
-        }
-    }
-}
-#[cfg(test)]
-/// Target set used when requesting a missing block payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MissingBlockFetchTargetKind {
-    /// Request targets derived from the QC signer set.
-    Signers,
-    /// Request targets derived from the full commit topology.
-    Topology,
-}
-#[cfg(test)]
-impl MissingBlockFetchTargetKind {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            MissingBlockFetchTargetKind::Signers => "signers",
-            MissingBlockFetchTargetKind::Topology => "topology",
         }
     }
 }
@@ -4614,19 +4571,6 @@ macro_rules! telemetry_enabled_metric_methods {
         telemetry_enabled_metric_methods! { $($rest)* }
     };
 }
-macro_rules! telemetry_enabled_metric_methods_early_return {
-    ($( $(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] )+) => {
-        $(
-            $(#[$attr])*
-            pub fn $name(&self $(, $arg: $arg_ty)*) {
-                if !self.enabled {
-                    return;
-                }
-                self.metrics $($op)*
-            }
-        )+
-    };
-}
 impl Telemetry {
     /// Lightweight constructor for tests: does not spawn the background actor.
     pub fn new(metrics: Arc<Metrics>, enabled: bool) -> Self {
@@ -4643,8 +4587,6 @@ impl Telemetry {
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy,
-            da_slots_total: Arc::new(AtomicU64::new(0)),
-            da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         }
     }
     /// Whether telemetry observations are enabled.
@@ -4656,171 +4598,6 @@ impl Telemetry {
     /// Record one bounded Musubi finalized-query cursor failure.
     [record_musubi_cursor_failure(reason: MusubiCursorFailureReasonV1) =>
         .musubi.inc_cursor_failure(reason);]
-    }
-    telemetry_enabled_metric_methods! {
-    /// Record `NEW_VIEW` publish (counter placeholder; wired later).
-    [inc_new_view_publish() => .sumeragi_new_view_publish_total.inc();]
-    /// Record `NEW_VIEW` received (counter placeholder; wired later).
-    [inc_new_view_recv() => .sumeragi_new_view_recv_total.inc();]
-    /// Record `NEW_VIEW` dropped because the peer holds a conflicting lock.
-    [inc_new_view_dropped_by_lock() => .sumeragi_new_view_dropped_by_lock_total.inc();]
-    /// Record commit-conflict detection (safety recovery).
-    [inc_commit_conflict_detected() => .sumeragi_commit_conflict_detected_total.inc();]
-    }
-    #[cfg(test)]
-    /// Record the outcome of planning a missing-block fetch on QC-first arrival.
-    #[allow(clippy::cast_precision_loss)]
-    pub fn note_missing_block_fetch(
-        &self,
-        outcome: MissingBlockFetchOutcome,
-        targets: usize,
-        dwell: Duration,
-        target_kind: Option<MissingBlockFetchTargetKind>,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .sumeragi_missing_block_fetch_total
-            .with_label_values(&[outcome.label()])
-            .inc();
-        let target_label = target_kind.map_or("none", |kind| kind.label());
-        self.metrics
-            .sumeragi_missing_block_fetch_target_total
-            .with_label_values(&[target_label])
-            .inc();
-        self.metrics
-            .sumeragi_missing_block_fetch_targets
-            .observe(targets as f64);
-        self.metrics
-            .sumeragi_missing_block_fetch_dwell_ms
-            .observe(dwell.as_millis() as f64);
-    }
-    telemetry_enabled_metric_methods_early_return! {
-    /// Record that a block-sync QC was quarantined due to missing context.
-    [inc_blocksync_qc_quarantine() => .blocksync_qc_quarantine_total.inc();]
-    /// Record that a quarantined block-sync QC was revalidated.
-    [inc_blocksync_qc_revalidated() => .blocksync_qc_revalidated_total.inc();]
-    /// Record a permanent block-sync QC drop grouped by reason.
-    [inc_blocksync_qc_final_drop(reason: &'static str) =>
-        .blocksync_qc_final_drop_total.with_label_values(&[reason]).inc();]
-    /// Record that a QC was deferred due to missing payload.
-    [inc_qc_deferred_missing_payload() => .qc_deferred_missing_payload_total.inc();]
-    /// Record that a deferred QC was resolved.
-    [inc_qc_deferred_resolved() => .qc_deferred_resolved_total.inc();]
-    /// Record that a deferred QC expired.
-    [inc_qc_deferred_expired() => .qc_deferred_expired_total.inc();]
-    /// Record a consensus defer caused by an empty commit topology.
-    [inc_consensus_empty_commit_topology_defer() =>
-        .consensus_empty_commit_topology_defer_total.inc();]
-    /// Record an empty-topology recovery escalation to forced view change.
-    [inc_consensus_empty_commit_topology_escalation() =>
-        .consensus_empty_commit_topology_escalation_total.inc();]
-    /// Record a transition in the bounded consensus recovery state machine.
-    [inc_consensus_recovery_state_transition(state: &'static str) =>
-        .consensus_recovery_state_transitions_total.with_label_values(&[state]).inc();]
-    /// Record deterministic hard-cap escalations for height-scoped missing-block recovery.
-    [inc_consensus_missing_block_height_escalation() =>
-        .consensus_missing_block_height_escalation_total.inc();]
-    /// Record sidecar mismatch quarantines in fail-closed mode.
-    [inc_consensus_sidecar_quarantine() => .consensus_sidecar_quarantine_total.inc();]
-    /// Record sidecar mismatch final drops after retry/TTL bounds.
-    [inc_consensus_sidecar_final_drop() => .consensus_sidecar_final_drop_total.inc();]
-    /// Record range-pull escalation attempts.
-    [inc_blocksync_range_pull_escalation() => .blocksync_range_pull_escalation_total.inc();]
-    /// Record range-pull recovery success.
-    [inc_blocksync_range_pull_success() => .blocksync_range_pull_success_total.inc();]
-    /// Record range-pull recovery expiry/failure.
-    [inc_blocksync_range_pull_failure() => .blocksync_range_pull_failure_total.inc();]
-    /// Observe how long a recovery round stayed stuck before making progress/escalating.
-    #[allow(clippy::cast_precision_loss)]
-    [observe_consensus_recovery_stuck_round(age: Duration) =>
-        .consensus_recovery_stuck_round_seconds.observe(age.as_secs_f64());]
-    }
-    telemetry_enabled_metric_methods_early_return! {
-    /// Record a QC validation error grouped by reason.
-    [note_qc_validation_error(reason: &'static str) =>
-        .sumeragi_qc_validation_errors_total.with_label_values(&[reason]).inc();]
-    }
-    #[cfg(test)]
-    /// Record a validation-gate reject grouped by reason before voting.
-    pub fn note_validation_reject(&self, reason: &'static str, height: u64, view: u64) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .sumeragi_validation_reject_total
-            .with_label_values(&[reason])
-            .inc();
-        let reason_code = Self::validation_reject_reason_code(reason);
-        self.metrics
-            .sumeragi_validation_reject_last_reason
-            .set(reason_code);
-        self.metrics
-            .sumeragi_validation_reject_last_height
-            .set(height);
-        self.metrics.sumeragi_validation_reject_last_view.set(view);
-        let timestamp_ms = u64::try_from(self.time_source.now().as_millis()).unwrap_or(u64::MAX);
-        self.metrics
-            .sumeragi_validation_reject_last_timestamp_ms
-            .set(timestamp_ms);
-    }
-    #[cfg(test)]
-    #[inline]
-    fn validation_reject_reason_code(reason: &str) -> u64 {
-        match reason {
-            "stateless" => 1,
-            "execution" => 2,
-            "prev_hash" => 3,
-            "prev_height" => 4,
-            "topology" => 5,
-            _ => 0,
-        }
-    }
-    telemetry_enabled_metric_methods_early_return! {
-    /// Record that a block-sync `ShareBlocks` batch was dropped as unsolicited.
-    [note_block_sync_unsolicited_share_blocks_drop() =>
-        .sumeragi_block_sync_share_blocks_unsolicited_total.inc();]
-    }
-    #[cfg(test)]
-    /// Record a view-change trigger grouped by cause.
-    pub fn note_view_change_cause(&self, cause: &'static str) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .sumeragi_view_change_cause_total
-            .with_label_values(&[cause])
-            .inc();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
-        self.metrics
-            .sumeragi_view_change_cause_last_timestamp_ms
-            .with_label_values(&[cause])
-            .set(now_ms);
-    }
-    #[cfg(test)]
-    /// Record the number of QC signers present in the bitmap versus counted for a phase.
-    #[allow(clippy::cast_precision_loss)]
-    pub fn note_qc_signer_counts(&self, phase: &'static str, present: usize, counted: usize) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .sumeragi_qc_signer_counts
-            .with_label_values(&[phase, "present"])
-            .observe(present as f64);
-        self.metrics
-            .sumeragi_qc_signer_counts
-            .with_label_values(&[phase, "counted"])
-            .observe(counted as f64);
-    }
-    telemetry_enabled_metric_methods_early_return! {
-    /// Record an invalid-signature drop grouped by message kind and whether it was logged or throttled.
-    [inc_invalid_signature(kind: &'static str, outcome: &'static str) =>
-        .sumeragi_invalid_signature_total.with_label_values(&[kind, outcome]).inc();]
     }
     /// Record an AXT policy rejection grouped by lane id and reason.
     pub fn note_axt_policy_reject(
@@ -4908,93 +4685,6 @@ impl Telemetry {
         let version = snapshot.version;
         self.metrics.axt_policy_snapshot_version.set(version);
     }
-    telemetry_enabled_metric_methods! {
-    /// Update gauges tracking missing-block retry posture.
-    [set_missing_block_retry_window_ms(retry_window_ms: u64) =>
-        .sumeragi_missing_block_retry_window_ms.set(retry_window_ms);]
-    }
-    #[cfg(test)]
-    /// Update gauges tracking inflight missing-block requests.
-    pub fn set_missing_block_inflight(&self, active: usize, oldest_ms: u64) {
-        if self.enabled {
-            self.metrics
-                .sumeragi_missing_block_requests
-                .set(u64::try_from(active).unwrap_or(u64::MAX));
-            self.metrics.sumeragi_missing_block_oldest_ms.set(oldest_ms);
-        }
-    }
-    #[cfg(test)]
-    /// Record dwell time from first QC arrival until payload observation.
-    pub fn observe_missing_block_dwell(&self, dwell: Duration) {
-        if self.enabled {
-            let ms = dwell.as_secs_f64() * 1_000.0;
-            self.metrics.sumeragi_missing_block_dwell_ms.observe(ms);
-        }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Increment when a Witness-availability QC is assembled (placeholder counter).
-    [inc_wa_qc_assembled() => .sumeragi_wa_qc_assembled_total.inc();]
-    }
-    #[cfg(test)]
-    /// Record a consensus membership mismatch against a peer for the given height/view.
-    pub fn note_membership_mismatch(
-        &self,
-        peer: &iroha_model_base::peer::PeerId,
-        height: u64,
-        view: u64,
-    ) {
-        if self.enabled {
-            let peer_label = peer.to_string();
-            let height_label = height.to_string();
-            let view_label = view.to_string();
-            self.metrics
-                .sumeragi_membership_mismatch_total
-                .with_label_values(&[
-                    peer_label.as_str(),
-                    height_label.as_str(),
-                    view_label.as_str(),
-                ])
-                .inc();
-            self.metrics
-                .sumeragi_membership_mismatch_active
-                .with_label_values(&[peer_label.as_str()])
-                .set(1);
-        }
-    }
-    #[cfg(test)]
-    /// Clear the active membership mismatch gauge for a peer when alignment is confirmed.
-    pub fn clear_membership_mismatch(&self, peer: &iroha_model_base::peer::PeerId) {
-        if self.enabled {
-            let peer_label = peer.to_string();
-            self.metrics
-                .sumeragi_membership_mismatch_active
-                .with_label_values(&[peer_label.as_str()])
-                .set(0);
-        }
-    }
-    #[cfg(test)]
-    /// Update membership view-hash gauges (height/view/epoch context + truncated hash).
-    pub fn set_membership_view_hash(&self, height: u64, view: u64, epoch: u64, hash: [u8; 32]) {
-        if self.enabled {
-            let mut truncated = [0u8; 8];
-            truncated.copy_from_slice(&hash[..8]);
-            let value = u64::from_be_bytes(truncated);
-            self.metrics.sumeragi_membership_view_hash.set(value);
-            self.metrics.sumeragi_membership_height.set(height);
-            self.metrics.sumeragi_membership_view.set(view);
-            self.metrics.sumeragi_membership_epoch.set(epoch);
-        }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Set highest QC height. Placeholder uses existing gauge for visibility.
-    [set_highest_qc_height(h: u64) => .sumeragi_highest_qc_height.set(h);]
-    /// Set current leader index. Placeholder; currently unused.
-    [set_leader_index(idx: u64) => .sumeragi_leader_index.set(idx);]
-    /// Set locked QC height.
-    [set_locked_qc_height(h: u64) => .sumeragi_locked_qc_height.set(h);]
-    /// Set locked QC view.
-    [set_locked_qc_view(v: u64) => .sumeragi_locked_qc_view.set(v);]
-    }
     #[cfg(test)]
     /// Update gauges that track transaction queue load and saturation as observed by consensus.
     pub fn record_tx_queue_backpressure(
@@ -5032,37 +4722,6 @@ impl Telemetry {
             self.metrics
                 .sumeragi_tx_queue_oldest_queued_age_ms
                 .set(oldest_queued_age_ms);
-        }
-    }
-    #[cfg(test)]
-    /// Update gauges that track pending block pressure and commit inflight depth.
-    pub fn record_pending_block_metrics(
-        &self,
-        pending_total: u64,
-        pending_blocking: u64,
-        commit_inflight_queue_depth: u64,
-    ) {
-        if self.enabled {
-            self.metrics
-                .sumeragi_pending_blocks_total
-                .set(pending_total);
-            self.metrics
-                .sumeragi_pending_blocks_blocking
-                .set(pending_blocking);
-            self.metrics
-                .sumeragi_commit_inflight_queue_depth
-                .set(commit_inflight_queue_depth);
-        }
-    }
-    #[cfg(test)]
-    /// Increment post-to-peer counter labeled by peer id (collector routing/backpressure insight)
-    pub fn inc_post_to_peer(&self, peer: &iroha_model_base::peer::PeerId) {
-        if self.enabled {
-            let label = peer.to_string();
-            self.metrics
-                .sumeragi_post_to_peer_total
-                .with_label_values(&[label.as_str()])
-                .inc();
         }
     }
     telemetry_enabled_metric_methods! {
@@ -5307,63 +4966,6 @@ impl Telemetry {
     /// Decrement Torii active connection gauge for the provided scheme label.
     [dec_torii_active_conn(scheme: &'static str) =>
         .torii_active_connections_total.with_label_values(&[scheme]).dec();]
-    }
-    #[cfg(test)]
-    /// Increment background-post enqueued counter labeled by kind {Post,Broadcast}
-    pub fn inc_bg_post_enqueued(&self, kind: &'static str) {
-        if self.enabled {
-            self.metrics
-                .sumeragi_bg_post_enqueued_total
-                .with_label_values(&[kind])
-                .inc();
-            // Update queue depth (global)
-            let cur = self.metrics.sumeragi_bg_post_queue_depth.get();
-            self.metrics
-                .sumeragi_bg_post_queue_depth
-                .set(cur.saturating_add(1));
-        }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Increment background-post overflow counter labeled by kind {Post,Broadcast}
-    [inc_bg_post_overflow(kind: &'static str) =>
-        .sumeragi_bg_post_overflow_total.with_label_values(&[kind]).inc();]
-    /// Increment background-post drop counter labeled by kind {Post,Broadcast}
-    [inc_bg_post_drop(kind: &'static str) =>
-        .sumeragi_bg_post_drop_total.with_label_values(&[kind]).inc();]
-    }
-    telemetry_enabled_metric_methods! {
-    /// Observe background-post age in milliseconds for a given kind {Post,Broadcast}.
-    [observe_bg_post_age_ms(kind: &'static str, ms: f64) =>
-        .sumeragi_bg_post_age_ms.with_label_values(&[kind]).observe(ms.max(0.0));]
-    }
-    #[cfg(test)]
-    /// Set `NEW_VIEW` receipts count for a specific (height, view)
-    pub fn set_new_view_receipts(&self, height: u64, view: u64, count: u64) {
-        if self.enabled {
-            let h = height.to_string();
-            let v = view.to_string();
-            self.metrics
-                .sumeragi_new_view_receipts_by_hv
-                .with_label_values(&[h.as_str(), v.as_str()])
-                .set(count);
-        }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Increment kura persistence failure counter labeled by outcome.
-    [inc_kura_store_failure(outcome: &'static str) =>
-        .sumeragi_kura_store_failures_total.with_label_values(&[outcome]).inc();]
-    }
-    #[cfg(test)]
-    /// Record the most recent kura persistence retry attempt/backoff.
-    pub fn set_kura_store_retry(&self, attempt: u64, backoff_ms: u64) {
-        if self.enabled {
-            self.metrics
-                .sumeragi_kura_store_last_retry_attempt
-                .set(attempt);
-            self.metrics
-                .sumeragi_kura_store_last_retry_backoff_ms
-                .set(backoff_ms);
-        }
     }
     telemetry_enabled_metric_methods! {
     /// Record the latest `SoraFS` metering snapshot for `provider`.
@@ -5756,125 +5358,12 @@ impl Telemetry {
         _latency_ms: Option<f64>,
     ) {
     }
-    telemetry_enabled_metric_methods! {
-    /// Increase dropped messages metric
-    [inc_dropped_messages() => .dropped_messages.inc();]
-    }
-    telemetry_enabled_metric_methods! {
-    /// Set view changes metrics
-    [set_view_changes(value: u64) => .view_changes.set(value);]
-    /// Increment counter: votes accepted at proxy tail
-    [inc_tail_vote() => .sumeragi_tail_votes_total.inc();]
-    /// Increment counter: widen-before-rotate events
-    [inc_widen_before_rotate() => .sumeragi_widen_before_rotate_total.inc();]
-    /// Increment counter: view-change suggestions
-    [inc_view_change_suggest() => .sumeragi_view_change_suggest_total.inc();]
-    /// Increment counter: view-change installs
-    [inc_view_change_install() => .sumeragi_view_change_install_total.inc();]
-    /// Increment counter: view-change rotations after proposal gaps.
-    [inc_proposal_gap() => .sumeragi_proposal_gap_total.inc();]
-    }
     #[cfg(test)]
-    fn inc_view_change_proof_gauge(&self, outcome: &'static str) {
-        if self.enabled {
-            self.metrics
-                .sumeragi_view_change_proof_total
-                .with_label_values(&[outcome])
-                .inc();
-        }
-    }
-    #[cfg(test)]
-    /// Increment counter: view-change proofs accepted (advanced the chain)
-    pub fn inc_view_change_proof_accepted(&self) {
-        self.inc_view_change_proof_gauge("accepted");
-    }
-    #[cfg(test)]
-    /// Increment counter: view-change proofs ignored as stale/outdated
-    pub fn inc_view_change_proof_stale(&self) {
-        self.inc_view_change_proof_gauge("stale");
-    }
-    #[cfg(test)]
-    /// Increment counter: view-change proofs rejected due to validation errors
-    pub fn inc_view_change_proof_rejected(&self) {
-        self.inc_view_change_proof_gauge("rejected");
-    }
-    telemetry_enabled_metric_methods! {
-    /// Increment counter when `BlockCreated` violates the locked QC gate.
-    [inc_block_created_dropped_by_lock() => .sumeragi_block_created_dropped_by_lock_total.inc();]
-    /// Increment counter when `BlockCreated` fails hint validation.
-    [inc_block_created_hint_mismatch() => .sumeragi_block_created_hint_mismatch_total.inc();]
-    /// Increment counter when `BlockCreated` fails proposal validation.
-    [inc_block_created_proposal_mismatch() =>
-        .sumeragi_block_created_proposal_mismatch_total.inc();]
-    /// Increment counter for consensus message drops/deferrals labeled by kind/outcome/reason.
-    [note_consensus_message_handling(kind: &str, outcome: &str, reason: &str) =>
-                        .sumeragi_consensus_message_handling_total
-                        .with_label_values(&[kind, outcome, reason])
-                        .inc();]
-    }
-    #[cfg(test)]
-    /// Record the current PRF context (epoch seed, height, view) if telemetry is enabled.
-    pub fn set_prf_context(&self, seed: Option<[u8; 32]>, height: u64, view: u64) {
-        if self.enabled {
-            {
-                let mut guard = self
-                    .metrics
-                    .sumeragi_prf_epoch_seed_hex
-                    .write()
-                    .expect("sumeragi PRF seed lock poisoned");
-                *guard = seed.map(hex::encode);
-            }
-            self.metrics.sumeragi_prf_height.set(height);
-            self.metrics.sumeragi_prf_view.set(view);
-        }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Observe certificate size distribution (number of signatures)
-    [observe_cert_size(size: u64) => .sumeragi_cert_size.observe(u64_to_f64(size));]
-    }
-    #[cfg(test)]
-    /// Record the latest commit-signature counts (present vs counted vs set-B vs required).
-    pub fn set_commit_signature_totals(
-        &self,
-        present: u64,
-        counted: u64,
-        set_b_signatures: u64,
-        required: u64,
-    ) {
-        if self.enabled {
-            self.metrics.sumeragi_commit_signatures_present.set(present);
-            self.metrics.sumeragi_commit_signatures_counted.set(counted);
-            self.metrics
-                .sumeragi_commit_signatures_set_b
-                .set(set_b_signatures);
-            self.metrics
-                .sumeragi_commit_signatures_required
-                .set(required);
-        }
-    }
-    #[cfg(test)]
-    /// Report the event of block commit, measuring the block time.
+    /// Record a committed block as the latest reported block (the status actor's notification).
     pub fn report_block_commit_blocking(&self, block_header: &BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
-        if self.enabled {
-            let commit_time_u64 = u64::try_from(report.commit_time.as_millis()).unwrap_or(u64::MAX);
-            let commit_time = u64_to_f64(commit_time_u64);
-            self.metrics.commit_time_ms.observe(commit_time);
-            self.metrics.slot_duration_ms.observe(commit_time);
-            self.metrics.slot_duration_ms_latest.set(commit_time_u64);
-            let total = self.da_slots_total.fetch_add(1, Ordering::Relaxed) + 1;
-            // Revision-4 admission makes signed RS16 availability mandatory for every
-            // committed block; failed gates never reach this commit reporter.
-            let successes = self.da_slots_quorum_met.fetch_add(1, Ordering::Relaxed) + 1;
-            let ratio = if total == 0 {
-                1.0
-            } else {
-                (u64_to_f64(successes) / u64_to_f64(total)).clamp(0.0, 1.0)
-            };
-            self.metrics.da_quorum_ratio.set(ratio);
-        }
-        // This runs in the main loop. Avoid `blocking_write`: async tests and runtime-driven
-        // commit paths can execute on a Tokio worker, where blocking the runtime panics.
+        // Tests call this from async and blocking contexts; `blocking_write` would panic on a
+        // Tokio worker.
         match self.last_reported_block.try_write() {
             Ok(mut lock) => *lock = Some(report),
             Err(_) if tokio::runtime::Handle::try_current().is_ok() => {
@@ -6053,8 +5542,6 @@ impl From<StateTelemetry> for Telemetry {
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
-            da_slots_total: Arc::new(AtomicU64::new(0)),
-            da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -6706,8 +6193,6 @@ pub fn start(
             sync_requested: sync_requested.clone(),
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
-            da_slots_total: Arc::new(AtomicU64::new(0)),
-            da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         },
         Child::new(
             tokio::spawn(
@@ -7305,16 +6790,6 @@ mod tests {
         );
     }
     #[test]
-    fn commit_signature_totals_metrics_updated() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.set_commit_signature_totals(5, 3, 2, 4);
-        assert_eq!(metrics.sumeragi_commit_signatures_present.get(), 5);
-        assert_eq!(metrics.sumeragi_commit_signatures_counted.get(), 3);
-        assert_eq!(metrics.sumeragi_commit_signatures_set_b.get(), 2);
-        assert_eq!(metrics.sumeragi_commit_signatures_required.get(), 4);
-    }
-    #[test]
     fn da_chunking_latency_metrics_updated() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
@@ -7369,55 +6844,6 @@ mod tests {
         );
         let histogram = metrics.isi_times.with_label_values(&["register_domain"]);
         assert_eq!(histogram.get_sample_count(), 0);
-    }
-    #[test]
-    fn view_change_cause_metric_increments_for_validation_reject() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_view_change_cause("validation_reject");
-        telemetry.note_view_change_cause("validation_reject");
-        assert_eq!(
-            metrics
-                .sumeragi_view_change_cause_total
-                .with_label_values(&["validation_reject"])
-                .get(),
-            2
-        );
-        let ts = metrics
-            .sumeragi_view_change_cause_last_timestamp_ms
-            .with_label_values(&["validation_reject"])
-            .get();
-        assert!(
-            ts > 0,
-            "view-change cause gauge should record a timestamp for validation_reject"
-        );
-    }
-    #[test]
-    fn consensus_message_handling_metric_increments() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
-        telemetry.note_consensus_message_handling("block_created", "dropped", "hint_mismatch");
-        assert_eq!(
-            metrics
-                .sumeragi_consensus_message_handling_total
-                .with_label_values(&["block_created", "dropped", "hint_mismatch"])
-                .get(),
-            2
-        );
-    }
-    #[test]
-    fn block_sync_unsolicited_share_blocks_metric_increments() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_block_sync_unsolicited_share_blocks_drop();
-        telemetry.note_block_sync_unsolicited_share_blocks_drop();
-        assert_eq!(
-            metrics
-                .sumeragi_block_sync_share_blocks_unsolicited_total
-                .get(),
-            2
-        );
     }
     #[test]
     fn settlement_conversion_metrics_update_when_enabled() {
@@ -7683,184 +7109,6 @@ mod tests {
         assert!(
             (haircut - 0.0).abs() < f64::EPSILON,
             "disabled telemetry does not increment haircut counters"
-        );
-    }
-    #[test]
-    fn missing_block_fetch_telemetry_records_metrics() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_missing_block_fetch(
-            MissingBlockFetchOutcome::Requested,
-            3,
-            Duration::from_millis(25),
-            Some(MissingBlockFetchTargetKind::Signers),
-        );
-        let requested = metrics
-            .sumeragi_missing_block_fetch_total
-            .with_label_values(&["requested"])
-            .get();
-        assert_eq!(requested, 1);
-        assert_eq!(
-            metrics
-                .sumeragi_missing_block_fetch_targets
-                .get_sample_sum(),
-            3.0
-        );
-        let targets = metrics
-            .sumeragi_missing_block_fetch_target_total
-            .with_label_values(&["signers"])
-            .get();
-        assert_eq!(targets, 1);
-        assert_eq!(
-            metrics
-                .sumeragi_missing_block_fetch_dwell_ms
-                .get_sample_sum(),
-            25.0
-        );
-    }
-    #[test]
-    fn validation_reject_telemetry_tracks_last_details() {
-        let metrics = Arc::new(Metrics::default());
-        let mut telemetry = Telemetry::new(metrics.clone(), true);
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1500));
-        telemetry.time_source = time_source;
-        telemetry.note_validation_reject("prev_height", 7, 3);
-        assert_eq!(
-            metrics
-                .sumeragi_validation_reject_total
-                .with_label_values(&["prev_height"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics.sumeragi_validation_reject_last_reason.get(),
-            4,
-            "prev_height should map to code 4"
-        );
-        assert_eq!(metrics.sumeragi_validation_reject_last_height.get(), 7);
-        assert_eq!(metrics.sumeragi_validation_reject_last_view.get(), 3);
-        assert_eq!(
-            metrics.sumeragi_validation_reject_last_timestamp_ms.get(),
-            1500
-        );
-    }
-    #[test]
-    fn missing_block_retry_window_gauge_updates() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.set_missing_block_retry_window_ms(250);
-        assert_eq!(metrics.sumeragi_missing_block_retry_window_ms.get(), 250);
-    }
-    #[test]
-    fn missing_block_inflight_gauges_update_counts_and_oldest() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.set_missing_block_inflight(2, 75);
-        assert_eq!(metrics.sumeragi_missing_block_requests.get(), 2);
-        assert_eq!(metrics.sumeragi_missing_block_oldest_ms.get(), 75);
-    }
-    #[test]
-    fn missing_block_dwell_histogram_records_observation() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.observe_missing_block_dwell(Duration::from_millis(12));
-        assert_eq!(
-            metrics.sumeragi_missing_block_dwell_ms.get_sample_count(),
-            1
-        );
-        assert_eq!(
-            metrics.sumeragi_missing_block_dwell_ms.get_sample_sum(),
-            12.0
-        );
-    }
-    #[test]
-    fn kura_store_failure_metrics_increment_by_outcome() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.inc_kura_store_failure("retry");
-        telemetry.inc_kura_store_failure("abort");
-        assert_eq!(
-            metrics
-                .sumeragi_kura_store_failures_total
-                .with_label_values(&["retry"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_kura_store_failures_total
-                .with_label_values(&["abort"])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn kura_store_retry_gauges_record_attempt_and_backoff() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.set_kura_store_retry(2, 40);
-        assert_eq!(metrics.sumeragi_kura_store_last_retry_attempt.get(), 2);
-        assert_eq!(metrics.sumeragi_kura_store_last_retry_backoff_ms.get(), 40);
-        let disabled = Telemetry::new(metrics.clone(), false);
-        disabled.set_kura_store_retry(5, 99);
-        assert_eq!(metrics.sumeragi_kura_store_last_retry_attempt.get(), 2);
-        assert_eq!(metrics.sumeragi_kura_store_last_retry_backoff_ms.get(), 40);
-    }
-    #[test]
-    fn qc_validation_error_counter_increments_by_reason() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_qc_validation_error("invalid_signature");
-        assert_eq!(
-            metrics
-                .sumeragi_qc_validation_errors_total
-                .with_label_values(&["invalid_signature"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_qc_validation_errors_total
-                .with_label_values(&["missing_votes"])
-                .get(),
-            0
-        );
-    }
-    #[test]
-    fn qc_signer_count_histogram_records_counts() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_qc_signer_counts("commit", 5, 3);
-        let present = metrics
-            .sumeragi_qc_signer_counts
-            .with_label_values(&["commit", "present"]);
-        let counted = metrics
-            .sumeragi_qc_signer_counts
-            .with_label_values(&["commit", "counted"]);
-        assert_eq!(present.get_sample_count(), 1);
-        assert_eq!(present.get_sample_sum(), 5.0);
-        assert_eq!(counted.get_sample_count(), 1);
-        assert_eq!(counted.get_sample_sum(), 3.0);
-    }
-    #[test]
-    fn invalid_signature_counter_tracks_outcomes() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.inc_invalid_signature("vote", "logged");
-        telemetry.inc_invalid_signature("vote", "throttled");
-        assert_eq!(
-            metrics
-                .sumeragi_invalid_signature_total
-                .with_label_values(&["vote", "logged"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_invalid_signature_total
-                .with_label_values(&["vote", "throttled"])
-                .get(),
-            1
         );
     }
     #[test]
@@ -9216,36 +8464,6 @@ mod tests {
         assert_eq!(ds_snapshot.tx_served, 5);
     }
     #[test]
-    fn sumeragi_new_view_counters_and_highest_qc_gauge() {
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let tel = Telemetry::new(metrics.clone(), true);
-        // Ensure initial values are zero
-        assert_eq!(metrics.sumeragi_new_view_publish_total.get(), 0);
-        assert_eq!(metrics.sumeragi_new_view_recv_total.get(), 0);
-        assert_eq!(metrics.sumeragi_highest_qc_height.get(), 0);
-        // Increment publish twice and receive three times
-        tel.inc_new_view_publish();
-        tel.inc_new_view_publish();
-        tel.inc_new_view_recv();
-        tel.inc_new_view_recv();
-        tel.inc_new_view_recv();
-        assert_eq!(metrics.sumeragi_new_view_publish_total.get(), 2);
-        assert_eq!(metrics.sumeragi_new_view_recv_total.get(), 3);
-        // Record per-(height,view) receipt count
-        tel.set_new_view_receipts(7, 3, 5);
-        assert_eq!(
-            metrics
-                .sumeragi_new_view_receipts_by_hv
-                .with_label_values(&["7", "3"])
-                .get(),
-            5
-        );
-        // Set highest QC height
-        tel.set_highest_qc_height(64);
-        assert_eq!(metrics.sumeragi_highest_qc_height.get(), 64);
-    }
-    #[test]
     fn public_mode_tracks_authenticated_native_state_and_clears_without_authority() {
         use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::parameter::system::SumeragiConsensusMode;
@@ -9398,45 +8616,6 @@ mod tests {
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 0);
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 0);
         assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 0);
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn pending_block_metrics_updated() {
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.record_pending_block_metrics(12, 4, 1);
-        assert_eq!(metrics.sumeragi_pending_blocks_total.get(), 12);
-        assert_eq!(metrics.sumeragi_pending_blocks_blocking.get(), 4);
-        assert_eq!(metrics.sumeragi_commit_inflight_queue_depth.get(), 1);
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn prf_context_updates_metrics() {
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        let seed = [0xAB; 32];
-        telemetry.set_prf_context(Some(seed), 42, 3);
-        assert_eq!(metrics.sumeragi_prf_height.get(), 42);
-        assert_eq!(metrics.sumeragi_prf_view.get(), 3);
-        let stored = metrics
-            .sumeragi_prf_epoch_seed_hex
-            .read()
-            .expect("PRF seed lock poisoned")
-            .clone();
-        let expected = hex::encode(seed);
-        assert_eq!(stored.as_deref(), Some(expected.as_str()));
-        telemetry.set_prf_context(None, 0, 0);
-        assert_eq!(metrics.sumeragi_prf_height.get(), 0);
-        assert_eq!(metrics.sumeragi_prf_view.get(), 0);
-        assert!(
-            metrics
-                .sumeragi_prf_epoch_seed_hex
-                .read()
-                .expect("PRF seed lock poisoned")
-                .is_none()
-        );
     }
     #[cfg(feature = "telemetry")]
     #[test]
@@ -10289,12 +9468,22 @@ mod tests {
         .expect("test telemetry resource registration");
         let _ = peers_tx; // keep sender alive
         // Attempt to change metrics via Telemetry API
-        tel.inc_dropped_messages();
-        tel.set_view_changes(42);
+        tel.inc_torii_pre_auth_reject("rate");
+        tel.inc_torii_active_conn("http");
         // Force a sync; actor should no-op when disabled
         let m = tel.metrics().await;
-        assert_eq!(m.dropped_messages.get(), 0);
-        assert_eq!(m.view_changes.get(), 0);
+        assert_eq!(
+            m.torii_pre_auth_reject_total
+                .with_label_values(&["rate"])
+                .get(),
+            0
+        );
+        assert_eq!(
+            m.torii_active_connections_total
+                .with_label_values(&["http"])
+                .get(),
+            0
+        );
         assert!(
             !m.try_to_string().unwrap().contains("iroha_kura_resource_"),
             "disabled telemetry must not fabricate an available resource source"
@@ -10314,42 +9503,6 @@ mod tests {
             metrics.state_commit_write_lock_hold_ms.get_sample_count(),
             1
         );
-    }
-    #[test]
-    fn view_change_proof_metrics_increment() {
-        let metrics = Arc::new(Metrics::default());
-        let tel = Telemetry::new(Arc::clone(&metrics), true);
-        tel.inc_view_change_proof_accepted();
-        tel.inc_view_change_proof_stale();
-        tel.inc_view_change_proof_rejected();
-        assert_eq!(
-            metrics
-                .sumeragi_view_change_proof_total
-                .with_label_values(&["accepted"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_view_change_proof_total
-                .with_label_values(&["stale"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_view_change_proof_total
-                .with_label_values(&["rejected"])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn proposal_gap_metrics_increment() {
-        let metrics = Arc::new(Metrics::default());
-        let tel = Telemetry::new(Arc::clone(&metrics), true);
-        tel.inc_proposal_gap();
-        assert_eq!(metrics.sumeragi_proposal_gap_total.get(), 1);
     }
     #[tokio::test]
     async fn ivm_cache_counters_exposed() {
@@ -10439,46 +9592,6 @@ mod tests {
         refresh_ivm_execution_budget_metrics(&metrics, &budget);
         assert_eq!(metrics.ivm_execution_memory_reserved_bytes.get(), 0);
         assert_eq!(metrics.ivm_execution_memory_peak_bytes.get(), 80);
-    }
-    #[tokio::test]
-    async fn sumeragi_backpressure_counters_increment() {
-        // Build telemetry with metrics enabled
-        let metrics = std::sync::Arc::new(Metrics::default());
-        let tel = Telemetry::new(metrics.clone(), true);
-        // Fake peer id via checked fixture key
-        let peer = checked_peer_id();
-        tel.inc_post_to_peer(&peer);
-        tel.inc_bg_post_enqueued("Post");
-        tel.inc_bg_post_overflow("Post");
-        tel.inc_bg_post_drop("Post");
-        assert_eq!(
-            metrics
-                .sumeragi_post_to_peer_total
-                .with_label_values(&[peer.to_string().as_str()])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_bg_post_enqueued_total
-                .with_label_values(&["Post"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_bg_post_overflow_total
-                .with_label_values(&["Post"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_bg_post_drop_total
-                .with_label_values(&["Post"])
-                .get(),
-            1
-        );
     }
     #[tokio::test]
     async fn set_online_peers() {
@@ -10722,16 +9835,6 @@ mod tests {
         );
         assert_eq!(metrics.last_block_committed_at_ms.get(), 250);
         assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 250);
-        assert_eq!(
-            metrics.slot_duration_ms_latest.get(),
-            metrics.last_commit_time_ms.get(),
-            "slot-duration gauge should mirror last commit latency"
-        );
-        assert_eq!(
-            metrics.slot_duration_ms.get_sample_count(),
-            2,
-            "slot-duration histogram should record each reported block"
-        );
         let accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let rejected = metrics.txs.with_label_values(&["rejected"]).get();
         let total = metrics.txs.with_label_values(&["total"]).get();
@@ -10761,11 +9864,6 @@ mod tests {
         );
         assert_eq!(metrics.last_block_committed_at_ms.get(), 420);
         assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 420);
-        assert_eq!(
-            metrics.slot_duration_ms_latest.get(),
-            metrics.last_commit_time_ms.get()
-        );
-        assert_eq!(metrics.slot_duration_ms.get_sample_count(), 3);
     }
     #[tokio::test]
     async fn tx_counters_ignore_time_trigger_failures() {
@@ -10825,20 +9923,6 @@ mod tests {
         );
         assert_eq!(total, accepted + rejected);
         assert!(total > base_total);
-    }
-    #[tokio::test]
-    async fn da_quorum_ratio_tracks_committed_slots() {
-        let sut = SystemUnderTest::new_native();
-        let block = sut.create_block();
-        sut.mock_time_handle.advance(Duration::from_millis(100));
-        let block = sut.commit_block(block);
-        sut.report_commit_block(&block.block().header()).await;
-        let metrics = sut.telemetry.metrics().await;
-        assert_eq!(metrics.last_commit_time_ms.get(), 0);
-        assert!(
-            (metrics.da_quorum_ratio.get() - 1.0).abs() < f64::EPSILON,
-            "expected quorum ratio to start at 1.0"
-        );
     }
     #[tokio::test]
     async fn p2p_queue_drop_labels_reflect_counters() {
@@ -11083,39 +10167,6 @@ mod tests {
                 );
             }
         }
-    }
-    #[test]
-    fn membership_mismatch_metrics_toggle() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
-        let peer_id = checked_peer_id();
-        let peer_label = peer_id.to_string();
-        let counter = metrics
-            .sumeragi_membership_mismatch_total
-            .with_label_values(&[peer_label.as_str(), "0", "0"]);
-        assert_eq!(counter.get(), 0);
-        telemetry.note_membership_mismatch(&peer_id, 0, 0);
-        assert_eq!(counter.get(), 1);
-        let gauge = metrics
-            .sumeragi_membership_mismatch_active
-            .with_label_values(&[peer_label.as_str()]);
-        assert_eq!(gauge.get(), 1);
-        telemetry.clear_membership_mismatch(&peer_id);
-        assert_eq!(gauge.get(), 0);
-    }
-    #[test]
-    fn membership_view_hash_metrics_update() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
-        let hash = [0xABu8; 32];
-        telemetry.set_membership_view_hash(12, 3, 5, hash);
-        assert_eq!(metrics.sumeragi_membership_height.get(), 12);
-        assert_eq!(metrics.sumeragi_membership_view.get(), 3);
-        assert_eq!(metrics.sumeragi_membership_epoch.get(), 5);
-        let mut truncated = [0u8; 8];
-        truncated.copy_from_slice(&hash[..8]);
-        let expected = u64::from_be_bytes(truncated);
-        assert_eq!(metrics.sumeragi_membership_view_hash.get(), expected);
     }
     #[test]
     #[allow(clippy::too_many_lines)]

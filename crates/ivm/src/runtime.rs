@@ -24,7 +24,7 @@ pub use crate::ivm::{
 pub use crate::stack_policy::IvmStackPolicy;
 use crate::{VMError, host::IVMHost, ivm::IVM};
 use std::any::Any;
-/// Wrapper that enforces syscall policy before delegating to the underlying host.
+/// Wrapper that enforces syscall policy and retains the host's prepared argument owner.
 pub(crate) struct SyscallDispatcher<H> {
     inner: H,
 }
@@ -35,6 +35,9 @@ impl<H> SyscallDispatcher<H> {
     }
 }
 impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
+    fn prepared_entrypoint_arguments(&self) -> Option<crate::PreparedArgumentRecord> {
+        self.inner.prepared_entrypoint_arguments()
+    }
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
@@ -67,5 +70,81 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     }
     fn access_logging_supported(&self) -> bool {
         self.inner.access_logging_supported()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PreparedArgumentRecord;
+    use iroha_primitives::json::Json;
+    use std::sync::Arc;
+
+    struct PreparedHost(PreparedArgumentRecord);
+
+    impl IVMHost for PreparedHost {
+        fn prepared_entrypoint_arguments(&self) -> Option<PreparedArgumentRecord> {
+            Some(self.0.clone())
+        }
+
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            Err(VMError::PermissionDenied)
+        }
+
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            panic!("prepared arguments must not request public input")
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn owned_host_retains_prepared_arguments_and_requires_exact_prepayment() {
+        let (program, _) = crate::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                "seiyaku Prepared { view fn echo(bool ready) -> bool { return ready; } }",
+            )
+            .expect("compile parameterized view");
+        let verified = crate::verify_contract_artifact(&program).expect("verify view");
+        let schema = verified
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "echo")
+            .expect("echo entrypoint")
+            .argument_schema
+            .as_ref()
+            .expect("argument schema");
+        let canonical = crate::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({"ready": true})),
+        )
+        .expect("encode arguments");
+        crate::reset_argument_record_decode_count();
+        let prepared =
+            crate::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), 100_000)
+                .expect("prepare arguments");
+
+        let mut vm = IVM::new(100_000);
+        vm.load_program(&program).expect("load view");
+        vm.select_entrypoint("echo").expect("select view");
+        prepared.precharge_vm(&mut vm).expect("prepay arguments");
+        vm.set_host(PreparedHost(prepared.clone()));
+        vm.run().expect("owned host retains preparation");
+        assert_eq!(vm.call_result_word_count().unwrap(), 1);
+        assert_eq!(vm.public_call_result_word(0).unwrap(), 1);
+        #[cfg(debug_assertions)]
+        assert_eq!(crate::argument_record_decode_count(), 1);
+
+        let mut unpaid = IVM::new(100_000);
+        unpaid.load_program(&program).unwrap();
+        unpaid.select_entrypoint("echo").unwrap();
+        unpaid.set_host(PreparedHost(prepared));
+        assert_eq!(unpaid.run(), Err(VMError::DecodeError));
+        assert!(unpaid.call_result_word_count().is_err());
+        #[cfg(debug_assertions)]
+        assert_eq!(crate::argument_record_decode_count(), 1);
     }
 }

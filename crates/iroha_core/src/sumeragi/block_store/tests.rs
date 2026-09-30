@@ -307,6 +307,7 @@ fn borrowed_comparison_covers_complete_executed_projection_and_canonical_helpers
     assert_eq!(
         f.executed
             .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
             .encode_wire()
             .unwrap(),
         bytes
@@ -597,4 +598,248 @@ fn review_changed_executed_result_must_not_be_served_from_committed_storage() {
         f.store.committed_body(2).is_err(),
         "changed stored execution is not the result authenticated by its original QC"
     );
+}
+
+// The source is signed before expansion. Never derive its bytes with the borrowed
+// projection under test: that would sign the same incorrect suffix and hide the bug.
+// Outputs are explicit synthetic codec fixtures, not evidence of World execution.
+fn merged_execution_fixture() -> Fixture {
+    use crate::sumeragi::crypto::KeyPairSigner;
+    use iroha_allocation::ChargedBuffer;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+        sumeragi_finality::ExecutionResultCommitment,
+        sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
+        transaction::signed::TransactionEntrypoint,
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+    use iroha_sumeragi::{
+        availability::{PayloadAuthoring, PayloadBytes},
+        crypto::Signer,
+        preimage::payload_hash,
+        types::Bitmap,
+    };
+
+    let mut f = fixture();
+    let own = f.executed.external_transactions().next().unwrap().clone();
+    let mut context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        own.hash_as_entrypoint(),
+        LaneId::new(0),
+        DataSpaceId::new(0),
+    )]);
+    context.lane_merge = Some(SumeragiLaneMergeSection {
+        merges: vec![SumeragiLaneMerge {
+            lane: LaneId::new(16),
+            incarnation: [1; 32],
+            from: 1,
+            to: 2,
+            tip_hash: [2; 32],
+            tip_result: [3; 32],
+        }],
+        time_floor_ms: 0,
+        merged_count: 0,
+    });
+    let mut builder = BlockBuilder::new(f.executed.header());
+    builder.push_transaction(own);
+    builder.set_execution_context(Some(context));
+    let proposal = builder.build(Default::default());
+    let original_wire = proposal.encode_wire().unwrap();
+
+    // Another genuinely signed transaction with a distinct creation time. The
+    // descriptor and outputs are structural fixtures, not a lane-finality claim.
+    let chain = NativeFinalityFixture::start("portable-native-fixture");
+    let mut other_header = chain.next_header();
+    other_header.creation_time_ms += 1;
+    let other = chain.block_with_submitted_work(other_header);
+    let merged =
+        TransactionEntrypoint::External(other.external_transactions().next().unwrap().clone());
+    let merged_context =
+        ExternalExecutionContext::new(merged.hash(), LaneId::new(16), DataSpaceId::new(0));
+    let mut executed = proposal
+        .with_merged_entrypoints(vec![merged], vec![merged_context])
+        .expect("append the execution-only lane suffix");
+    NativeFinalityFixture::install_network_results(
+        &mut executed,
+        vec![Ok(Default::default()), Ok(Default::default())],
+    );
+    assert_eq!(executed.merged_entrypoint_count(), 1);
+    assert_eq!(executed.external_transactions().len(), 2);
+    assert_eq!(executed.execution_outputs().len(), 2);
+    assert_eq!(
+        executed
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
+            .encode_wire()
+            .unwrap(),
+        original_wire,
+    );
+
+    let config = f.body.source().config().clone();
+    let mut signers: Vec<_> = (1..=4)
+        .map(|seed| {
+            KeyPairSigner::new(&KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal)).unwrap()
+        })
+        .collect();
+    signers.sort_by(|a, b| a.public_key().as_bytes().cmp(b.public_key().as_bytes()));
+    assert_eq!(
+        signers.iter().map(Signer::public_key).collect::<Vec<_>>(),
+        config.committee.members().iter().collect::<Vec<_>>(),
+    );
+    let budget = &f.store.execution_budget;
+    let mut backing = ChargedBuffer::new(original_wire.len(), budget).unwrap();
+    for byte in &original_wire {
+        backing.push_reserved(*byte);
+    }
+    let payload = PayloadBytes::from_charged(backing, budget)
+        .unwrap_or_else(|_| panic!("original proposal backing admission"));
+    let mut header = f.body.header().clone();
+    header.payload_len = original_wire.len().try_into().unwrap();
+    header.payload_hash = payload_hash(&*f.store.hasher, &original_wire);
+    header.availability_digest = Hash32::ZERO;
+    let signer = &signers[usize::try_from(header.proposer).unwrap()];
+    let authored = PayloadAuthoring::new(header, payload)
+        .complete(
+            f.schedule.instance,
+            &config,
+            budget,
+            &*f.store.hasher,
+            signer,
+        )
+        .unwrap_or_else(|_| panic!("original signed availability authoring"));
+    assert_eq!(authored.body.payload().as_slice(), original_wire);
+
+    let mut result = ExecutionResultCommitment::decode(
+        f.executed.commit_certificate().unwrap().result_preimage(),
+    )
+    .unwrap();
+    let (len, hash) = executed.executed_block_wire_identity().unwrap();
+    result.execution.executed_block_wire_len = len;
+    result.execution.executed_block_wire_hash = hash;
+    result.execution.transaction_input_commitment = executed.network_input_merkle_commitment();
+    result.execution.transaction_output_commitment = executed.output_merkle_commitment();
+    result.validate().unwrap();
+    let mut qc = f.qc.clone();
+    qc.block_hash = authored.body.header().hash(&*f.store.hasher);
+    qc.result = result.result().unwrap();
+    qc.signers = Bitmap::from_indices(4, [0, 1, 2]).unwrap();
+    let shares: Vec<_> = signers[..3]
+        .iter()
+        .map(|signer| signer.sign(&qc.preimage()))
+        .collect();
+    qc.agg_sig = f.store.hasher.aggregate(&shares);
+    let certificate = commit_certificate(
+        authored.body.header(),
+        &qc,
+        result.preimage().unwrap(),
+        norito::encode_canonical(authored.body.availability()).unwrap(),
+    )
+    .unwrap()
+    .admit(budget)
+    .unwrap();
+    executed.set_commit_certificate(Some(certificate));
+    execution::validate(&executed).unwrap();
+    f.executed = Arc::new(executed);
+    f.body = authored.body;
+    f.qc = qc;
+    f
+}
+
+#[test]
+fn merged_execution_publishes_the_exact_original_signed_proposal() {
+    let f = merged_execution_fixture();
+    stage(&f, f.executed.clone());
+    f.store
+        .append(&f.body, &f.qc)
+        .expect("execution-only merged inputs must not change the signed proposal");
+    assert_eq!(f.store.height(), 2);
+    let stored = f
+        .store
+        .kura
+        .get_block(NonZeroUsize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(
+        stored.encode_wire().unwrap(),
+        f.executed.encode_wire().unwrap()
+    );
+    let (body, qc) = f.store.committed_body(2).unwrap().unwrap();
+    assert_eq!(body, f.body);
+    assert_eq!(body.source(), f.body.source());
+    assert_eq!(body.availability(), f.body.availability());
+    assert_eq!(body.payload().as_slice(), f.body.payload().as_slice());
+    assert_eq!(qc, f.qc);
+    f.store.append(&f.body, &f.qc).unwrap();
+    assert_eq!(f.store.height(), 2);
+}
+
+#[test]
+fn merged_execution_cold_read_restores_original_signed_availability() {
+    let f = merged_execution_fixture();
+    // Install the authentic complete stored frame directly so this test reaches
+    // cold restoration independently of the publication comparison regression.
+    f.store.kura.store_block(f.executed.clone()).unwrap();
+    let reopened = KuraBlockStore::new(
+        f.store.kura.clone(),
+        f.store.hasher.clone(),
+        1,
+        Staging::new(),
+        f.store.execution_budget.clone(),
+        f.schedule.clone(),
+        f.store.verifier.clone(),
+    );
+    let (body, qc) = reopened
+        .committed_body(2)
+        .expect("cold projection must remove execution-only merged inputs")
+        .unwrap();
+    assert_eq!(body, f.body);
+    assert_eq!(body.source(), f.body.source());
+    assert_eq!(body.availability(), f.body.availability());
+    assert_eq!(body.payload().as_slice(), f.body.payload().as_slice());
+    assert_eq!(qc, f.qc);
+    assert_eq!(
+        reopened.certified(2).unwrap().unwrap(),
+        (f.body.header().clone(), f.qc)
+    );
+}
+
+#[test]
+fn changed_merged_execution_suffix_cannot_use_the_original_result_certificate() {
+    use iroha_data_model::{
+        block::ExternalExecutionContext, transaction::signed::TransactionEntrypoint,
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+
+    let f = merged_execution_fixture();
+    let chain = NativeFinalityFixture::start("portable-native-fixture");
+    let mut header = chain.next_header();
+    header.creation_time_ms += 2;
+    let other = chain.block_with_submitted_work(header);
+    let replacement =
+        TransactionEntrypoint::External(other.external_transactions().next().unwrap().clone());
+    let context =
+        ExternalExecutionContext::new(replacement.hash(), LaneId::new(16), DataSpaceId::new(0));
+    let mut changed = f
+        .executed
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection")
+        .with_merged_entrypoints(vec![replacement], vec![context])
+        .unwrap();
+    NativeFinalityFixture::install_network_results(
+        &mut changed,
+        vec![Ok(Default::default()), Ok(Default::default())],
+    );
+    changed.set_commit_certificate(f.executed.commit_certificate().cloned());
+    assert_eq!(changed.merged_entrypoint_count(), 1);
+    assert_ne!(
+        changed.executed_block_wire_identity().unwrap(),
+        f.executed.executed_block_wire_identity().unwrap(),
+    );
+    assert!(publication::matches_payload(&changed, f.body.payload().as_slice()).unwrap());
+    assert!(execution::validate(&changed).is_err());
+    let changed = Arc::new(changed);
+    stage(&f, changed.clone());
+    assert!(f.store.append(&f.body, &f.qc).is_err());
+    assert_eq!(f.store.height(), 1);
+    f.store.kura.store_block(changed).unwrap();
+    assert!(f.store.committed_body(2).is_err());
 }

@@ -101,7 +101,9 @@ def test_retired_routes_exist_only_as_catalog_and_openapi_negatives() -> None:
     group = "openapi.retired_sorafs_economics_surface_is_absent.strings.1"
     retired_fixture_paths = tuple(
         bytes.fromhex(value).decode("utf-8")
-        for name, value in (line.split("\t", 1) for line in fixture.read_text().splitlines())
+        for name, value in (
+            line.split("\t", 1) for line in fixture.read_text().splitlines()[1:]
+        )
         if name == group
     )
     assert retired_fixture_paths == RETIRED_PATHS

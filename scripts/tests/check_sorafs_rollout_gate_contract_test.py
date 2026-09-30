@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import pytest
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -431,8 +432,11 @@ COMMON_SENSITIVE_KEYS = (
 )
 SENSITIVE_KEY_LITERAL_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 ACTIVE_SORAFS_TODO_MARKER_RE = re.compile(
-    r"\b(?:TODO|FIXME|XXX|TBD)\b(?=\s*(?::|\(|\[|-|!|$))",
+    r"\b(?:TODO|FIXME|XXX|TBD)\b(?!\s*:\s*\d+\s*[,}])(?=\s*(?::|\(|\[|-|!|$))",
     re.I,
+)
+ACTIVE_SORAFS_OPEN_WORK_INVENTORY = (
+    REPO_ROOT / "fixtures" / "sorafs" / "source_contracts" / "open_work.tsv"
 )
 ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_RELATIVE_PATH = Path(
     "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
@@ -1704,6 +1708,9 @@ def test_active_sorafs_todo_marker_detection_has_negative_controls(
     assert not ACTIVE_SORAFS_TODO_MARKER_RE.search(
         "methodology todo text is not an active marker"
     )
+    assert not ACTIVE_SORAFS_TODO_MARKER_RE.search(
+        "skipped: 0, todo: 0, topLevel: 46, suites: 0 });"
+    )
 
     clean = tmp_path / "clean_sorafs.py"
     clean.write_text("notes = 'methodology todo text is not an active marker'\n")
@@ -1716,14 +1723,33 @@ def test_active_sorafs_todo_marker_detection_has_negative_controls(
     assert "todo: bypass SoraFS source review" in offenders[0]
 
 
-def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> None:
+def reviewed_sorafs_open_work_inventory() -> set[tuple[str, str]]:
+    """Read the exact reviewed markers without allowing wildcard exemptions."""
+    rows = ACTIVE_SORAFS_OPEN_WORK_INVENTORY.read_text().splitlines()
+    assert rows.pop(0) == "path\tmarker"
+    inventory = set()
+    for row in rows:
+        path, marker = row.split("\t", 1)
+        assert path and marker and ACTIVE_SORAFS_TODO_MARKER_RE.search(marker)
+        assert (path, marker) not in inventory
+        inventory.add((path, marker))
+    return inventory
+
+
+def test_active_sorafs_todo_inventory_matches_reviewed_open_work() -> None:
     tracked_files = subprocess.check_output(
         ["git", "ls-files"], cwd=REPO_ROOT, text=True
     ).splitlines()
-    offenders: list[str] = []
+    observed: set[tuple[str, str]] = set()
 
     for relative_name in tracked_files:
         relative = Path(relative_name)
+        if REPO_ROOT / relative == ACTIVE_SORAFS_OPEN_WORK_INVENTORY:
+            continue
+        # Dated incident and implementation history is retained evidence,
+        # never a statement that the active candidate still ships that work.
+        if relative.parts[:2] == ("docs", "history"):
+            continue
         path = REPO_ROOT / relative
         if not path.is_file():
             continue
@@ -1742,9 +1768,14 @@ def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> N
                 for fragment in ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_FRAGMENTS
             ):
                 continue
-            offenders.append(f"{relative}:{line_number}: {line.strip()}")
+            observed.add((str(relative), line.strip()))
 
-    assert offenders == []
+    expected = {
+        (path, marker)
+        for path, marker in reviewed_sorafs_open_work_inventory()
+        if "SoraFS" in marker or "sorafs" in marker
+    }
+    assert observed == expected
 
 
 def test_completed_sorafs_task_inventory_has_no_active_markers() -> None:
@@ -1935,8 +1966,43 @@ def test_active_sorafs_todo_scan_covers_sdk_sorafs_content_sources() -> None:
     assert missing == []
 
 
-def test_active_sorafs_source_todos_stay_closed() -> None:
-    assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []
+def test_active_sorafs_source_todos_match_reviewed_open_work() -> None:
+    paths = active_sorafs_todo_scan_paths()
+    observed = {
+        (active_sorafs_todo_path_label(path), line.strip())
+        for path in paths
+        for line in read(path).splitlines()
+        if ACTIVE_SORAFS_TODO_MARKER_RE.search(line)
+    }
+    scanned = {active_sorafs_todo_path_label(path) for path in paths}
+    expected = {
+        (path, marker)
+        for path, marker in reviewed_sorafs_open_work_inventory()
+        if path in scanned
+    }
+    assert observed == expected
+
+
+@pytest.mark.parametrize("change", ("insert", "remove", "alter"))
+def test_reviewed_sorafs_open_work_inventory_rejects_unreviewed_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    source = tmp_path / "sorafs_work.rs"
+    marker = "// TO" "DO: retain authenticated finalized custody before admission"
+    source.write_text(marker + "\n")
+    inventory = tmp_path / "open_work.tsv"
+    inventory.write_text("path\tmarker\n" + str(source) + "\t" + marker + "\n")
+    monkeypatch.setattr(sys.modules[__name__], "ACTIVE_SORAFS_OPEN_WORK_INVENTORY", inventory)
+    monkeypatch.setattr(sys.modules[__name__], "active_sorafs_todo_scan_paths", lambda: [source])
+    test_active_sorafs_source_todos_match_reviewed_open_work()
+    if change == "insert":
+        source.write_text(marker + "\n// TO" "DO: add an unreviewed bypass\n")
+    elif change == "remove":
+        source.write_text("")
+    else:
+        source.write_text(marker.replace("before", "after") + "\n")
+    with pytest.raises(AssertionError):
+        test_active_sorafs_source_todos_match_reviewed_open_work()
 
 
 def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> None:
@@ -24671,7 +24737,7 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
         "wire_id>=IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()",
         "wire_id<=IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()",
         "any(|binding|!stock_runtime_provider_slot_is_supported(binding.slot()))",
-        "protocol::resolve(bindings)",
+        "protocol::resolve(bindings,&self.endpoint_path)",
     ):
         assert catalog_guard in broker_api
     for slot, wire_id, dependency in slots:

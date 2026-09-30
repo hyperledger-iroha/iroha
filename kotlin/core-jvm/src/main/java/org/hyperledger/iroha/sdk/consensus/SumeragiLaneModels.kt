@@ -77,6 +77,31 @@ class SumeragiDataAvailabilityLayout internal constructor(
     @JvmField val maxPayloadSizeBytes: BigInteger,
     @JvmField val maxChunkCount: BigInteger,
 ) : SumeragiStatusValue() {
+    init {
+        require(encoding == "reed_solomon16") { "lane payload encoding must be Reed-Solomon16" }
+        fun within(value: BigInteger, minimum: Long, maximum: Long): Boolean =
+            value >= BigInteger.valueOf(minimum) && value <= BigInteger.valueOf(maximum)
+        require(within(chunkSizeBytes, 2, 256 * 1024) && !chunkSizeBytes.testBit(0) &&
+            within(dataShards, 1, 16) && within(parityShards, 1, 16) &&
+            within(maxPayloadSizeBytes, 1, 16 * 1024 * 1024) && within(maxChunkCount, 1, 1024)) {
+            "lane data-availability layout exceeds protocol bounds"
+        }
+        // Protocol caps above make every product fit in a signed Long.
+        val data = dataShards.toLong()
+        val chunk = chunkSizeBytes.toLong()
+        val payload = maxPayloadSizeBytes.toLong()
+        val stripeBytes = data * chunk
+        val full = payload / stripeBytes
+        val remainder = payload % stripeBytes
+        val stripes = full + if (remainder > 0) 1 else 0
+        val terminalRow = 2 * ((remainder + 2 * data - 1) / (2 * data))
+        val width = data + parityShards.toLong()
+        require(stripes * width <= maxChunkCount.toLong() &&
+            (full * chunk + terminalRow) * width <= 32 * 1024 * 1024) {
+            "lane data-availability geometry exceeds protocol bounds"
+        }
+    }
+
     override fun equalityFields(): List<Any?> = listOf(
         encoding, chunkSizeBytes, dataShards, parityShards, maxPayloadSizeBytes, maxChunkCount,
     )
@@ -263,22 +288,6 @@ private object NativeLaneParser {
         val parity = SumeragiJsonPrimitives.u32(r["parity_shards"], "$context.parity_shards")
         val payload = SumeragiJsonPrimitives.u64(r["max_payload_size_bytes"], "$context.max_payload_size_bytes")
         val chunks = SumeragiJsonPrimitives.u32(r["max_chunk_count"], "$context.max_chunk_count")
-        fun within(value: BigInteger, minimum: Long, maximum: Long): Boolean =
-            value >= BigInteger.valueOf(minimum) && value <= BigInteger.valueOf(maximum)
-        require(within(chunk, 2, 256 * 1024) && !chunk.testBit(0) && within(data, 1, 16) &&
-            within(parity, 1, 16) && within(payload, 1, 16 * 1024 * 1024) && within(chunks, 1, 1024)) {
-            "$context exceeds protocol bounds"
-        }
-        // Protocol caps above make every product fit in a signed Long.
-        val stripeBytes = data.toLong() * chunk.toLong()
-        val full = payload.toLong() / stripeBytes
-        val remainder = payload.toLong() % stripeBytes
-        val stripes = full + if (remainder > 0) 1 else 0
-        val terminalRow = 2 * ((remainder + 2 * data.toLong() - 1) / (2 * data.toLong()))
-        val width = data.toLong() + parity.toLong()
-        require(stripes * width <= chunks.toLong() && (full * chunk.toLong() + terminalRow) * width <= 32 * 1024 * 1024) {
-            "$context geometry exceeds protocol bounds"
-        }
         return SumeragiDataAvailabilityLayout("reed_solomon16", chunk, data, parity, payload, chunks)
     }
 

@@ -107,6 +107,25 @@ impl<S: ByteStorage> norito::NoritoSchema for ByteSequence<S> {
         Some(S::FRAME)
     }
 }
+// The compiled description of the codec above, bound by the release wire-schema identity: a
+// length-prefixed byte sequence identified by its domain frame and named with the length bounds
+// its decoder admits.
+impl<S: ByteStorage + 'static> iroha_schema::TypeId for ByteSequence<S> {
+    fn id() -> String {
+        S::FRAME.to_owned()
+    }
+}
+impl<S: ByteStorage + 'static> iroha_schema::IntoSchema for ByteSequence<S> {
+    fn type_name() -> String {
+        format!("{}<{}..={}>", S::NAME, S::MIN, S::MAX)
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        let ty = core::any::TypeId::of::<u8>();
+        if map.insert::<Self>(iroha_schema::Metadata::Vec(iroha_schema::VecMeta { ty })) {
+            <u8 as iroha_schema::IntoSchema>::update_schema_map(map);
+        }
+    }
+}
 
 /// Semantic identity of a fixed-capacity byte sequence.
 pub trait ByteDomain {

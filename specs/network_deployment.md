@@ -115,7 +115,7 @@ Deploys never build and never run tests. CI produces a signed release bundle, ga
 
 **Restoration.**
 - Everything ships in one release.
-- Taira comes back once, at P9: four separate Linux hosts plus an edge, Inrou on. Its genesis already carries the dataspace protocol: the new permission tokens, the ingress committee class and the registration budget.
+- Taira comes back once, at P9: four separate Linux hosts plus an edge, Inrou on. Its genesis already carries the dataspace protocol: the new permission tokens and the registration budget.
 - The customer dataspaces are re-registered through `iroha dataspace apply` in the same restore.
 - This is the only planned ledger replacement.
 
@@ -521,13 +521,11 @@ epoch_length_blocks = 3600
 [static]      # consensus-bound, roster-independent -> consensus_digest
 # 155 execution-policy fields (actual.rs:3639-4304), 59 AMX fields (actual.rs:5056-5260), pipeline.gas,
 # crypto, zk, confidential, Nexus baseline catalog (core system lanes + public `nexus` lane only),
-# sumeragi.queues.body_source_bytes = 35651584, block limits, DA/RBC geometry inputs.
+# sumeragi.keys and P2P frame caps. Block limits and payload geometry are signed chain parameters.
 
 [derive]      # inputs to iroha_config::profile::derive(n) -> consensus_digest
-authenticated_non_validator_sources = 4     # arbitrary authenticated observers (first come)
+authenticated_non_validator_sources = 4     # connections for authenticated observers (first come)
 max_external_committee_peers = 12           # on-chain budget; committee_sources = n + 12
-queue_commands = 4096
-queue_bodies = 1024
 # [[derive.dataspace_catalog]]: baseline dataspaces; derive(n) adds fault_tolerance = f to each
 
 [policy]      # not consensus-bound -> policy_digest (changes roll, never reset)
@@ -548,9 +546,7 @@ soracloud_runtime.production_mode = false
 soracloud_runtime.production_mode = false
 ```
 
-`derive(n)` reuses the existing localnet geometry derivation, moved out of `kagami localnet.rs`. It also pins genesis `npos.max_validators = n`, as `localnet.rs:3759` does today. It has to, because irohad validates ingress against the signed NPoS `max_validators`, not the live roster (`irohad/src/main.rs:15084-15125`).
-
-`body_bytes = (n + committee_sources + authenticated) × body_source_bytes`, which for n = 4 is (4 + 16 + 4) × 34 MiB ≈ 816 MiB worst case.
+`derive(n)` reuses the existing localnet geometry derivation, moved out of `kagami localnet.rs`. It computes `f`, the `2f + 1` commit quorum and `network.max_total_connections` (D-4), adds `fault_tolerance = f` to every baseline dataspace, and pins genesis `npos.max_validators = n`, as `localnet.rs:3759` does today. Sumeragi itself takes no roster-dependent node configuration.
 
 `sora-nexus-v1-qual` overrides only these: `epoch_length_blocks = 64`, `block_cadence_ms = 1000`, `snapshot.create_every_ms = 30000`, and a 512 MiB storage budget.
 
@@ -1133,7 +1129,7 @@ The key files the configuration parser reads (`validator.key`, `transport.key`, 
 - **What bounds the exposure:**
   - per-IP and per-prefix accept throttling and `max_incoming` in `iroha_p2p`;
   - the 97-connection core cap;
-  - the fair-ingress classes. Arbitrary observers can occupy only the `authenticated_non_validator_sources` slots, never the committee class (§11.2, D-4).
+  - Sumeragi's bounded ingress: each consensus instance bounds ingress per `(peer, traffic class)` and serves peers round-robin within a class, so an observer flood cannot starve committee traffic; `network.max_total_connections` leaves room for only the `authenticated_non_validator_sources` allowance beyond the committee (§11.2, D-4).
 - **Deferred:** a connection-slot reservation for topology and committee peers (T8). The exposure exists today for any NPoS network, and S2b inherits it.
 - **Torii** is loopback-only behind the mTLS gateway (or on a private address). Only the edge's tcp/443 is public.
 - **G9** probes P2P reachability from the controller's vantage point for every validator whenever S2b dataspaces or observers exist.
@@ -1173,7 +1169,7 @@ manifest.sig = Ed25519("iroha.release.v1\0" || canonical Norito(manifest))
 
 - The release id is the sha256 of the manifest.
 - `build_fingerprint` = `H(version‖commit)` (`release_identity.rs:100-108`). Features and target are compared separately against `/status.build`.
-- `wire_schema_hash` comes from the new `iroha_data_model::wire_schema_hash(ivm_abi_hash)`. It is computed from the compiled `iroha_schema` description of consensus messages and block wire plus the IVM `abi_hash`, and both binaries expose it. The ABI hash is an argument because `ivm_abi` depends on the data model; executables call `iroha_core::release_identity::wire_schema_hash()`, which supplies `compute_abi_hash(AbiV1)`. The value is target-independent but feature-dependent (the crypto `Algorithm` schema lists its `bls`, `gost` and `sm` variants only when compiled in), so xtask reads it from a host-native build of the same commit with the release feature set, and `iroha3d` reports it in `/status.build`. Entries are ordered by schema identifier and then by their full rendering, so the value never depends on process-local `TypeId`s.
+- `wire_schema_hash` comes from `iroha_core::release_identity::wire_schema_hash()`, and both binaries expose it. It hashes the compiled `iroha_schema` descriptions of two wire roots, in order the block wire (`SignedBlock`, `iroha_data_model::wire_schema::covered_wire_schema()`) and the consensus wire (`iroha_sumeragi::message::WireMessage`, including the bounded byte domains its frames carry), plus the IVM `abi_hash`, through `iroha_data_model::wire_schema::wire_schema_hash_of(roots, ivm_abi_hash)`. The ABI hash is an argument because `ivm_abi` depends on the data model; the executable-facing function supplies `compute_abi_hash(AbiV1)`. The value is target-independent but feature-dependent (the crypto `Algorithm` schema lists its `bls`, `gost` and `sm` variants only when compiled in), so xtask reads it from a host-native build of the same commit with the release feature set, and `iroha3d` reports it in `/status.build`. Each root is rendered against its own types, because the two wires define different types under the same schema identifiers (both define a `BlockHeader`); within a root, entries are ordered by schema identifier and then by their full rendering, so the value never depends on process-local `TypeId`s.
 
 **Integrity checks:**
 - the controller verifies the signature and every blob;
@@ -1284,7 +1280,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
     - Delete the `iroha3-taira` `GenesisProfile` and `RETIRED_PUBLIC_CHAIN_ID_ALIASES`.
     - `kagami docker` reads the container render mode.
     - `privacy_bootstrap` `include_bytes!` of the Taira config and template (`privacy_bootstrap/release.rs:55-68`) is re-pointed to the profile files. The privacy plan and NEVO files move to `configs/soranexus/privacy/`.
-13. **Also (P6):** the fair-ingress committee class, topology sync and permissions (§11.2).
+13. **Also (P6):** the committee connection budget, topology sync and permissions (§11.2).
 
 **The seven Taira definitions become one profile plus `networks/taira.toml`.**
 - The config and genesis template, the kagami hidden branch, `defaults::taira`, the `iroha3d_taira` guards, the Python copies (`taira_devnet.py:142-169`, `taira_constants.py`), the CLI constants (`taira_public_reset.rs:39-56`, `taira.rs:53-57`, `taira_dataspace_deploy.rs:1166-1173`) and the rewrite stages are all deleted.
@@ -1343,12 +1339,10 @@ It also has:
 - `nexus.dataspace_registration = permissioned`;
 - `nexus.max_external_committee_peers = 12`.
 
-**D-4. Ingress committee class and budget** (handshake-bound, size M).
-- `FairV2IngressSourceClass` (`sumeragi/mod.rs:835-850`) gains a third class, `Committee`, with a static capacity `committee_sources = n + max_external_committee_peers` computed by `derive(n)`.
-- Two kinds of source use it: native-lane sources from roster validators, and any source whose peer is bound by an active runtime lane manifest (from `State::lane_committee_peers_snapshot()`). Everything else uses the Authenticated class, which the profile sets to 4.
-- `validate_ingress_roster_capacity` then requires `body_bytes ≥ (n + committee_sources + authenticated) × body_source_bytes` (`actual.rs:7020-7070`). For n = 4 that is about 816 MiB worst case, so MemoryMax is 4 GiB.
-- Why: today native-lane messages, including validators', share the first-come pool with arbitrary observers and receive `Full` when it is exhausted (`sumeragi/mod.rs:843-845, 5544-5550, 5911-5922`). Taira's value of 2 would throttle every runtime lane.
-- The on-chain budget (D-1) and the ingress capacity come from the same profile number. `dataspace plan` refuses once the budget is used up. `sora-nexus-v1` allows 12 external peers, meaning three owner committees of 4.
+**D-4. Committee connection budget** (non-consensus, size S).
+- `derive(n)` computes `committee_sources = n + max_external_committee_peers` and `network.max_total_connections = (n − 1) + max_external_committee_peers + authenticated_non_validator_sources`, so every other validator, every external committee peer within the on-chain budget and the profile's authenticated non-validator allowance (4) can hold a connection.
+- Sumeragi needs no ingress byte partition or committee source class: each consensus instance bounds ingress per `(peer, traffic class)`, serves peers round-robin within a class, and owns its queues and network quotas (`specs/sumeragi.md` §12.3 O6, O8, O9), so an observer flood cannot starve a lane committee.
+- The on-chain budget (D-1) and the connection budget come from the same profile number. `dataspace plan` refuses once the budget is used up. `sora-nexus-v1` allows 12 external peers, meaning three owner committees of 4.
 
 **D-5. Topology sync** (non-consensus, size M).
 - `irohad/src/main/peers_gossiper_topology_sync.rs:40-50` publishes `commit_topology ∪ live manifest-bound committee peers`.
@@ -1654,9 +1648,8 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
 |---|---|
 | Deleting ~150k lines loses edge-case fixes | Each fix becomes a named test first (§12). Consumers are ported before the cutover, and container rehearsals cover every strategy. |
 | An upgrade is misjudged as rolling | The seven-value predicate, canary order, `--check-storage` with the prefix hash, per-node rollback, the CI upgrade job, and coordinated checkpoints. |
-| Ingress memory at ~816 MiB worst case | MemoryMax 4 GiB, 8 GiB hosts, and geometry validated at P1 and P6. |
 | Executor and Core disagree on permissions | Identical matrices on both sides (D-2). |
-| Observer floods on public P2P | Accept throttling, class separation (D-4), and T8. |
+| Observer floods on public P2P | Accept throttling, per-peer bounded Sumeragi ingress and the connection budget (D-4), and T8. |
 | Beacon install race | Pre-signed certificates for a range of heights, submitted before the edge exists. Install happens once. |
 | Trust in the card | Genesis plus 2f+1 attestations, the committed signed anchor, and the `network_id` pin. |
 | Two operators with different state dirs | Per-host session locks, the decision hash, and `in_progress` host records. |
@@ -1671,4 +1664,4 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
 1. Should a published snapshot bootstrap for joiners (owner nodes, observers) become a follow-up protocol change, given that replay grows with chain height?
 2. Should release-signer revocation later bind to the not-yet-admitted SoraFS release-manifest authority (`crates/iroha_data_model/src/sorafs/release_manifest_authority.rs`)?
 3. Should Inrou ever be supported for owner lane validators? That would need Soracloud placement beyond global validators.
-4. What should the long-term value of `max_external_committee_peers` be? It is 12 here, and it trades ingress memory against the number of owner committees.
+4. What should the long-term value of `max_external_committee_peers` be? It is 12 here, and it trades validator connection slots against the number of owner committees.

@@ -23,10 +23,9 @@ waits for readiness, and verifies the built-in KAGEMUSHA V1 asset alias.
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
   --out-dir <DIR>            Localnet output directory (default: /tmp/iroha-localnet)
-  --peers <N>                Exact revision-4 committee: 4, 7, ..., 31 (default: 4)
+  --peers <N>                Exact Sumeragi committee: 4, 7, ..., 31 (default: 4)
   --seed <SEED>              Deterministic key seed (default: Iroha)
-  --block-time-ms <MS>       Override block time (ms) in generated configs
-  --commit-time-ms <MS>      Override commit time (ms) in generated configs
+  --block-cadence-ms <MS>    Override the signed block cadence (ms) in generated genesis
   --consensus-mode <MODE>    Override consensus mode (permissioned or npos)
   --perf-profile <NAME>      Apply Kagami localnet perf profile (10k-permissioned or 10k-npos)
   --queue-capacity <N>       Override transaction queue capacity in peer configs
@@ -100,8 +99,7 @@ SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
-BLOCK_TIME_MS=""
-COMMIT_TIME_MS=""
+BLOCK_CADENCE_MS=""
 CONSENSUS_MODE=""
 PERF_PROFILE=""
 QUEUE_CAPACITY=""
@@ -137,12 +135,8 @@ while [[ $# -gt 0 ]]; do
       SEED="$2"
       shift 2
       ;;
-    --block-time-ms)
-      BLOCK_TIME_MS="$2"
-      shift 2
-      ;;
-    --commit-time-ms)
-      COMMIT_TIME_MS="$2"
+    --block-cadence-ms)
+      BLOCK_CADENCE_MS="$2"
       shift 2
       ;;
     --consensus-mode)
@@ -264,12 +258,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! "$PEERS" =~ ^[0-9]+$ || ${#PEERS} -gt 2 ]]; then
-  echo "Invalid --peers value: $PEERS (expected an exact revision-4 3f + 1 committee: 4, 7, ..., 31)" >&2
+  echo "Invalid --peers value: $PEERS (expected an exact Sumeragi 3f + 1 committee: 4, 7, ..., 31)" >&2
   exit 2
 fi
 PEERS=$((10#$PEERS))
 if (( PEERS < 4 || PEERS > 31 || (PEERS - 1) % 3 != 0 )); then
-  echo "Invalid --peers value: $PEERS (expected an exact revision-4 3f + 1 committee: 4, 7, ..., 31)" >&2
+  echo "Invalid --peers value: $PEERS (expected an exact Sumeragi 3f + 1 committee: 4, 7, ..., 31)" >&2
   exit 2
 fi
 
@@ -516,11 +510,8 @@ KAGAMI_ARGS=(
 if [[ "$SAMPLE_ASSET" == true ]]; then
   KAGAMI_ARGS+=(--sample-asset)
 fi
-if [[ -n "$BLOCK_TIME_MS" ]]; then
-  KAGAMI_ARGS+=(--block-time-ms "$BLOCK_TIME_MS")
-fi
-if [[ -n "$COMMIT_TIME_MS" ]]; then
-  KAGAMI_ARGS+=(--commit-time-ms "$COMMIT_TIME_MS")
+if [[ -n "$BLOCK_CADENCE_MS" ]]; then
+  KAGAMI_ARGS+=(--block-cadence-ms "$BLOCK_CADENCE_MS")
 fi
 if [[ -n "$CONSENSUS_MODE" ]]; then
   KAGAMI_ARGS+=(--consensus-mode "$CONSENSUS_MODE")

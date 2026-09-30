@@ -1,5 +1,5 @@
 //! Current four-validator checkpoint and publication authentication regressions.
-use super::super::tests::{Fixture, author_payload, result, sign_qc};
+use super::super::tests::{Fixture, certify_successor, result, sign_qc};
 use super::*;
 use crate::{
     account::AccountId,
@@ -15,7 +15,6 @@ use crate::{
     },
 };
 use iroha_crypto::KeyPair;
-use iroha_sumeragi::types::Bitmap;
 use std::{collections::BTreeSet, num::NonZeroU64};
 
 const CHAIN: &str = "portable-finality-test";
@@ -45,58 +44,15 @@ fn extend(
         ))
     };
     output_test_support::install_network(&mut block, vec![output]).unwrap();
-    let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
     let result = result(&block, &parent.commitment.schedule.current);
-    let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
-    let header = CoreHeader {
-        instance: fixture.verifier().instance(),
-        epoch: core_epoch(&parent.commitment.schedule.current).unwrap().id,
-        height,
-        origin_view: 0,
-        parent_hash: parent.core_hash,
-        parent_result: parent.result,
-        payload_hash: payload_hash(&crypto, &payload),
-        availability_digest: Hash32::ZERO,
-        payload_len: payload.len().try_into().unwrap(),
-        proposer: 0,
-        skipped_leaders: vec![],
-        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-        attest: false,
-    };
-    let authored = author_payload(
-        header,
-        &payload,
-        &parent.commitment.schedule.current,
+    certify_successor(
         &fixture.keys,
-    );
-    let header = authored.body.header().clone();
-    let availability = norito::encode_canonical(authored.body.availability()).unwrap();
-    let mut qc = Qc {
-        kind: VoteKind::Commit,
-        instance: header.instance,
-        epoch: header.epoch,
-        height,
-        view: 0,
-        block_hash: header.hash(&crypto),
-        result: result.result().unwrap(),
-        attest: false,
-        signers: Bitmap::new(4),
-        agg_sig: AggregateSignature([0; 96]),
-        attestations: vec![],
-        attestation_witness: None,
-    };
-    sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
-    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-        norito::encode_canonical(&header).unwrap(),
-        norito::encode_canonical(&qc).unwrap(),
-        result.preimage().unwrap(),
-        availability,
-    )));
-    SumeragiFinalityProof {
-        block_header: block.header(),
-        block_wire: block.encode_wire().unwrap(),
-        committee: fixture.validators.clone(),
-    }
+        &fixture.validators,
+        fixture.verifier().instance(),
+        &parent,
+        block,
+        &result,
+    )
 }
 
 fn transaction(fixture: &Fixture, text: &str) -> SignedTransaction {
@@ -362,13 +318,14 @@ fn publication_proof_rejects_signed_failure_replay_phase_and_output_substitution
     let certificate = block.commit_certificate().unwrap();
     let consensus_header = certificate.consensus_header().to_vec();
     let result_preimage = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
     let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     qc.agg_sig.0[0] ^= 1;
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         consensus_header,
         norito::encode_canonical(&qc).unwrap(),
         result_preimage,
-        certificate.availability().to_vec(),
+        availability,
     )));
     corrupt.lineage[1].block_wire = block.encode_wire().unwrap();
     assert!(verify_sorafs_publication_v1(&fixture.network, &checkpoint, &tx, &corrupt).is_err());
@@ -444,6 +401,7 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
     let mut block = decode_versioned_signed_block(&forged.block_wire).unwrap();
     let cert = block.commit_certificate().unwrap();
     let header = cert.consensus_header().to_vec();
+    let availability = cert.availability().to_vec();
     let mut qc: Qc = norito::decode_canonical(cert.commit_qc()).unwrap();
     let mut result = ExecutionResultCommitment::decode(cert.result_preimage()).unwrap();
     result.execution.parent_state_root = Hash::new(b"different retained execution");
@@ -453,7 +411,7 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
         header,
         norito::encode_canonical(&qc).unwrap(),
         result.preimage().unwrap(),
-        cert.availability().to_vec(),
+        availability,
     )));
     forged.block_wire = block.encode_wire().unwrap();
     assert!(forged.decode_checked().is_ok());

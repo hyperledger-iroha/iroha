@@ -43382,7 +43382,11 @@ pub(crate) fn run_empty_network_owner_fixture(
             iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
                 .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
         },
-        SignedBlock::canonical_resultless_proposal,
+        |source| {
+            source
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
+        },
     );
     assert_eq!(
         source.network_entrypoint_count(),

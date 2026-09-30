@@ -67,4 +67,7 @@ zeroize = { workspace = true }
 expect-test = { workspace = true }
 assertables = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost"] }
+# The checked-in Taira validator template admits the BLS curve id (3) in
+# `crypto.curves.allowed_curve_ids`; the data model's curve registry knows it only with `bls`.
+iroha_data_model = { workspace = true, default-features = false, features = ["bls"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

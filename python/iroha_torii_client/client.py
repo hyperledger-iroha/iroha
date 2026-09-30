@@ -774,6 +774,7 @@ __all__ = [
     "StatusPayload",
     "SumeragiConsensusCaps",
     "StatusSnapshot",
+    "PIPELINE_STALL_BLOCK_CADENCES",
     "PipelinePreflightSumeragi",
     "PipelinePreflightAdmission",
     "PipelinePreflightBlock",
@@ -3875,13 +3876,72 @@ class StatusSnapshot:
 
 
 
+PIPELINE_STALL_BLOCK_CADENCES = 20
+"""Target block cadences a peer with queued work may go without committing a non-empty block.
+
+`GET /v1/pipeline/preflight` serves one consensus timing value, `sumeragi.block_cadence_ms`
+(the signed-genesis target block time), so `PipelinePreflight.stall_threshold_ms` is
+``PIPELINE_STALL_BLOCK_CADENCES * block_cadence_ms``. With work queued a healthy chain commits
+about once per cadence. At the Sumeragi defaults (1 s block time, 5 s payload retry, 2-3 s base
+view timer) one crashed leader delays the next commit by roughly 11-14 s plus execution
+(`specs/sumeragi.md` §8.2 P4, §9.3); twenty cadences keep such a single view change from being
+reported as a stall. Callers that know their deployment's local timers pass their own
+threshold to `StatusPayload.is_queue_stalled`.
+"""
+
+_PIPELINE_PREFLIGHT_ROOT_FIELDS = (
+    "schema_version",
+    "chain_height",
+    "sumeragi",
+    "admission",
+    "block",
+    "pipeline",
+    "queue",
+    "fees",
+)
+# Exact served field set of every `PipelinePreflightResponse` object, in Torii's order.
+_PIPELINE_PREFLIGHT_SECTION_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "sumeragi": ("block_cadence_ms",),
+    "admission": (
+        "max_signatures",
+        "max_instructions",
+        "max_tx_bytes",
+        "max_decompressed_bytes",
+        "max_metadata_depth",
+    ),
+    "block": ("max_transactions",),
+    "pipeline": (
+        "signature_batch_max_ed25519",
+        "signature_batch_max_secp256k1",
+        "signature_batch_max_pqc",
+        "signature_batch_max_bls",
+        "overlay_max_instructions",
+        "ivm_max_cycles_upper_bound",
+        "ivm_admission_cycle_limit",
+        "ivm_max_decoded_instructions",
+    ),
+    "queue": ("size", "queued", "inflight"),
+    "fees": (
+        "fee_asset_id",
+        "fee_sink_account_id",
+        "base_fee",
+        "per_byte_fee",
+        "per_instruction_fee",
+        "per_gas_unit_fee",
+        "sponsor_vault_custody_account_id",
+        "settlement_mode",
+        "successful_claim_fee_exempt_authorities",
+    ),
+}
+_PIPELINE_PREFLIGHT_SETTLEMENT_MODES = ("direct", "lane_relay_burn")
+
+
 @dataclass(frozen=True)
 class PipelinePreflightSumeragi:
-    """Consensus timing limits used by pipeline liveness helpers."""
+    """Consensus timing Torii serves in pipeline preflight."""
 
-    block_time_ms: int
-    commit_time_ms: int
-    stall_threshold_ms: int
+    block_cadence_ms: int
+    """Signed-genesis target block time in milliseconds (always positive)."""
 
 
 @dataclass(frozen=True)
@@ -3927,22 +3987,28 @@ class PipelinePreflightQueue:
 
 @dataclass(frozen=True)
 class PipelinePreflightFees:
-    """Nexus fee configuration advertised by Torii preflight."""
+    """Nexus fee configuration advertised by Torii preflight.
+
+    Fee amounts are canonical decimal quantity strings.
+    """
 
     fee_asset_id: str
     fee_sink_account_id: str
-    base_fee: Any
-    per_byte_fee: Any
-    per_instruction_fee: Any
-    per_gas_unit_fee: Any
+    base_fee: str
+    per_byte_fee: str
+    per_instruction_fee: str
+    per_gas_unit_fee: str
     sponsor_vault_custody_account_id: str
-    settlement_mode: str
+    settlement_mode: Literal["direct", "lane_relay_burn"]
     successful_claim_fee_exempt_authorities: List[str]
 
 
 @dataclass(frozen=True)
 class PipelinePreflight:
-    """Typed response from `GET /v1/pipeline/preflight`."""
+    """Typed response from `GET /v1/pipeline/preflight`.
+
+    Every object carries exactly the fields Torii serves; the parser rejects any other field.
+    """
 
     schema_version: int
     chain_height: int
@@ -3954,10 +4020,16 @@ class PipelinePreflight:
     fees: PipelinePreflightFees
     raw: Dict[str, Any]
 
-    def is_status_stalled(self, status: StatusPayload) -> bool:
-        """Classify status liveness using the preflight stall threshold."""
+    @property
+    def stall_threshold_ms(self) -> int:
+        """SDK-derived stall threshold: `PIPELINE_STALL_BLOCK_CADENCES` served block cadences."""
 
-        return status.is_queue_stalled(self.sumeragi.stall_threshold_ms)
+        return PIPELINE_STALL_BLOCK_CADENCES * self.sumeragi.block_cadence_ms
+
+    def is_status_stalled(self, status: StatusPayload) -> bool:
+        """Report queued work with no non-empty block committed for over `stall_threshold_ms`."""
+
+        return status.is_queue_stalled(self.stall_threshold_ms)
 
 
 
@@ -9705,27 +9777,23 @@ class ToriiClient(
         *,
         context: str,
     ) -> PipelinePreflight:
+        # Every preflight object is closed: a field Torii does not serve is protocol drift,
+        # not an optional extra.
         record = self._ensure_mapping(payload, context)
-        sumeragi = self._ensure_mapping(record.get("sumeragi"), f"{context}.sumeragi")
-        admission = self._ensure_mapping(record.get("admission"), f"{context}.admission")
-        block = self._ensure_mapping(record.get("block"), f"{context}.block")
-        pipeline = self._ensure_mapping(record.get("pipeline"), f"{context}.pipeline")
-        self._reject_unknown_fields(
-            pipeline,
-            {
-                "signature_batch_max_ed25519",
-                "signature_batch_max_secp256k1",
-                "signature_batch_max_pqc",
-                "signature_batch_max_bls",
-                "overlay_max_instructions",
-                "ivm_max_cycles_upper_bound",
-                "ivm_admission_cycle_limit",
-                "ivm_max_decoded_instructions",
-            },
-            f"{context}.pipeline",
-        )
-        queue = self._ensure_mapping(record.get("queue"), f"{context}.queue")
-        fees = self._ensure_mapping(record.get("fees"), f"{context}.fees")
+        self._reject_unknown_fields(record, _PIPELINE_PREFLIGHT_ROOT_FIELDS, context)
+        sections: Dict[str, Mapping[str, Any]] = {}
+        for section_name, section_fields in _PIPELINE_PREFLIGHT_SECTION_FIELDS.items():
+            section = self._ensure_mapping(
+                record.get(section_name), f"{context}.{section_name}"
+            )
+            self._reject_unknown_fields(section, section_fields, f"{context}.{section_name}")
+            sections[section_name] = section
+        sumeragi = sections["sumeragi"]
+        admission = sections["admission"]
+        block = sections["block"]
+        pipeline = sections["pipeline"]
+        queue = sections["queue"]
+        fees = sections["fees"]
         raw = self._clone_json_payload(record, context=context)
 
         def _preflight_unsigned(
@@ -9744,27 +9812,57 @@ class ToriiClient(
                 raise RuntimeError(f"{prefix}.{field} must be {qualifier}")
             return value
 
-        fee_sink_account_id = self._require_exact_i105_account_id(
-            fees.get("fee_sink_account_id"),
-            f"{context}.fees.fee_sink_account_id",
-        )
-        sponsor_vault_custody_account_id = self._require_exact_i105_account_id(
-            fees.get("sponsor_vault_custody_account_id"),
-            f"{context}.fees.sponsor_vault_custody_account_id",
-        )
-        successful_claim_fee_exempt_authorities = [
-            self._require_exact_i105_account_id(
-                authority,
-                f"{context}.fees.successful_claim_fee_exempt_authorities[{index}]",
-            )
-            for index, authority in enumerate(
-                self._parse_string_array(
-                    fees.get("successful_claim_fee_exempt_authorities"),
-                    context=f"{context}.fees.successful_claim_fee_exempt_authorities",
-                )
-            )
-        ]
+        def _preflight_string(field: str) -> str:
+            value = fees.get(field)
+            if not isinstance(value, str) or not value:
+                raise RuntimeError(f"{context}.fees.{field} must be a non-empty string")
+            return value
 
+        def _parse_fees() -> PipelinePreflightFees:
+            fee_asset_id = _preflight_string("fee_asset_id")
+            fee_sink_account_id = self._require_exact_i105_account_id(
+                fees.get("fee_sink_account_id"),
+                f"{context}.fees.fee_sink_account_id",
+            )
+            quantities = {
+                field: _preflight_string(field)
+                for field in ("base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee")
+            }
+            sponsor_vault_custody_account_id = self._require_exact_i105_account_id(
+                fees.get("sponsor_vault_custody_account_id"),
+                f"{context}.fees.sponsor_vault_custody_account_id",
+            )
+            settlement_mode = _preflight_string("settlement_mode")
+            if settlement_mode not in _PIPELINE_PREFLIGHT_SETTLEMENT_MODES:
+                raise RuntimeError(
+                    f"{context}.fees.settlement_mode must be one of: "
+                    + ", ".join(_PIPELINE_PREFLIGHT_SETTLEMENT_MODES)
+                )
+            exempt_authorities = fees.get("successful_claim_fee_exempt_authorities")
+            if not isinstance(exempt_authorities, list):
+                raise RuntimeError(
+                    f"{context}.fees.successful_claim_fee_exempt_authorities must be a list"
+                )
+            return PipelinePreflightFees(
+                fee_asset_id=fee_asset_id,
+                fee_sink_account_id=fee_sink_account_id,
+                base_fee=quantities["base_fee"],
+                per_byte_fee=quantities["per_byte_fee"],
+                per_instruction_fee=quantities["per_instruction_fee"],
+                per_gas_unit_fee=quantities["per_gas_unit_fee"],
+                sponsor_vault_custody_account_id=sponsor_vault_custody_account_id,
+                settlement_mode=cast(Literal["direct", "lane_relay_burn"], settlement_mode),
+                successful_claim_fee_exempt_authorities=[
+                    self._require_exact_i105_account_id(
+                        authority,
+                        f"{context}.fees.successful_claim_fee_exempt_authorities[{index}]",
+                    )
+                    for index, authority in enumerate(exempt_authorities)
+                ],
+            )
+
+        # Keyword arguments evaluate in order, so validation follows Torii's field order and
+        # fee accounts are decoded last.
         return PipelinePreflight(
             schema_version=_preflight_unsigned(
                 record,
@@ -9774,20 +9872,11 @@ class ToriiClient(
             ),
             chain_height=_preflight_unsigned(record, "chain_height", context),
             sumeragi=PipelinePreflightSumeragi(
-                block_time_ms=_preflight_unsigned(
+                block_cadence_ms=_preflight_unsigned(
                     sumeragi,
-                    "block_time_ms",
+                    "block_cadence_ms",
                     f"{context}.sumeragi",
-                ),
-                commit_time_ms=_preflight_unsigned(
-                    sumeragi,
-                    "commit_time_ms",
-                    f"{context}.sumeragi",
-                ),
-                stall_threshold_ms=_preflight_unsigned(
-                    sumeragi,
-                    "stall_threshold_ms",
-                    f"{context}.sumeragi",
+                    positive=True,
                 ),
             ),
             admission=PipelinePreflightAdmission(
@@ -9873,26 +9962,7 @@ class ToriiClient(
                 queued=_preflight_unsigned(queue, "queued", f"{context}.queue"),
                 inflight=_preflight_unsigned(queue, "inflight", f"{context}.queue"),
             ),
-            fees=PipelinePreflightFees(
-                fee_asset_id=str(fees.get("fee_asset_id") or ""),
-                fee_sink_account_id=fee_sink_account_id,
-                base_fee=self._clone_json_value(fees.get("base_fee"), context=f"{context}.fees.base_fee"),
-                per_byte_fee=self._clone_json_value(
-                    fees.get("per_byte_fee"),
-                    context=f"{context}.fees.per_byte_fee",
-                ),
-                per_instruction_fee=self._clone_json_value(
-                    fees.get("per_instruction_fee"),
-                    context=f"{context}.fees.per_instruction_fee",
-                ),
-                per_gas_unit_fee=self._clone_json_value(
-                    fees.get("per_gas_unit_fee"),
-                    context=f"{context}.fees.per_gas_unit_fee",
-                ),
-                sponsor_vault_custody_account_id=sponsor_vault_custody_account_id,
-                settlement_mode=str(fees.get("settlement_mode") or ""),
-                successful_claim_fee_exempt_authorities=successful_claim_fee_exempt_authorities,
-            ),
+            fees=_parse_fees(),
             raw=raw,
         )
 

@@ -112,13 +112,15 @@ def test_retired_routes_exist_only_as_runtime_catalog_and_openapi_negatives() ->
     group = "openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.1"
     retired_fixture_paths = tuple(
         bytes.fromhex(value).decode("utf-8")
-        for name, value in (line.split("\t", 1) for line in fixture.read_text().splitlines())
+        for name, value in (
+            line.split("\t", 1) for line in fixture.read_text().splitlines()[1:]
+        )
         if name == group
     )
     assert retired_fixture_paths == RETIRED_PATHS
     contracts = (openapi_tests / "catalog_and_contracts.rs").read_text()
     assert f'fn exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent()' in contracts
-    assert f'openapi_contract_strings("{group}")' in contracts
+    assert f'openapi_contract_strings("{group}",)' in "".join(contracts.split())
     assert "!paths.contains_key(path)" in contracts
 
     for retired_path in RETIRED_PATHS:

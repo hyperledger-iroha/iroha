@@ -11078,9 +11078,107 @@ class ToriiStatusSnapshot:
         return self.metrics.has_activity
 
 
+PIPELINE_STALL_BLOCK_CADENCES = 20
+"""Target block cadences a peer with queued work may go without committing a non-empty block.
+
+`GET /v1/pipeline/preflight` serves one consensus timing value, `sumeragi.block_cadence_ms`
+(the signed-genesis target block time), so `ToriiPipelinePreflight.stall_threshold_ms` is
+``PIPELINE_STALL_BLOCK_CADENCES * block_cadence_ms``. With work queued a healthy chain commits
+about once per cadence. At the Sumeragi defaults (1 s block time, 5 s payload retry, 2-3 s base
+view timer) one crashed leader delays the next commit by roughly 11-14 s plus execution
+(`specs/sumeragi.md` §8.2 P4, §9.3); twenty cadences keep such a single view change from being
+reported as a stall. Callers that know their deployment's local timers pass their own
+threshold to `ToriiStatusPayload.is_queue_stalled`.
+"""
+
+_PIPELINE_PREFLIGHT_ROOT_FIELDS: Tuple[str, ...] = (
+    "schema_version",
+    "chain_height",
+    "sumeragi",
+    "admission",
+    "block",
+    "pipeline",
+    "queue",
+    "fees",
+)
+# Exact served field set of every `PipelinePreflightResponse` object, in Torii's order.
+_PIPELINE_PREFLIGHT_SECTION_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "sumeragi": ("block_cadence_ms",),
+    "admission": (
+        "max_signatures",
+        "max_instructions",
+        "max_tx_bytes",
+        "max_decompressed_bytes",
+        "max_metadata_depth",
+    ),
+    "block": ("max_transactions",),
+    "pipeline": (
+        "signature_batch_max_ed25519",
+        "signature_batch_max_secp256k1",
+        "signature_batch_max_pqc",
+        "signature_batch_max_bls",
+        "overlay_max_instructions",
+        "ivm_max_cycles_upper_bound",
+        "ivm_admission_cycle_limit",
+        "ivm_max_decoded_instructions",
+    ),
+    "queue": ("size", "queued", "inflight"),
+    "fees": (
+        "fee_asset_id",
+        "fee_sink_account_id",
+        "base_fee",
+        "per_byte_fee",
+        "per_instruction_fee",
+        "per_gas_unit_fee",
+        "sponsor_vault_custody_account_id",
+        "settlement_mode",
+        "successful_claim_fee_exempt_authorities",
+    ),
+}
+_PIPELINE_PREFLIGHT_UNSIGNED_SECTIONS = ("sumeragi", "admission", "block", "pipeline", "queue")
+_PIPELINE_PREFLIGHT_POSITIVE_FIELDS = frozenset(
+    {
+        ("sumeragi", "block_cadence_ms"),
+        ("pipeline", "ivm_max_cycles_upper_bound"),
+        ("pipeline", "ivm_admission_cycle_limit"),
+    }
+)
+_PIPELINE_PREFLIGHT_FEE_STRINGS = (
+    "fee_asset_id",
+    "base_fee",
+    "per_byte_fee",
+    "per_instruction_fee",
+    "per_gas_unit_fee",
+    "settlement_mode",
+)
+_PIPELINE_PREFLIGHT_SETTLEMENT_MODES = ("direct", "lane_relay_burn")
+
+
+def _require_pipeline_preflight_fields(
+    record: Mapping[str, Any],
+    expected: Sequence[str],
+    context: str,
+) -> None:
+    """Reject a preflight object that lacks a served field or carries an unserved one."""
+
+    missing = sorted(name for name in expected if name not in record)
+    unexpected = sorted(str(name) for name in record if name not in expected)
+    if missing or unexpected:
+        details: list[str] = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unsupported " + ", ".join(unexpected))
+        raise ValueError(f"{context} fields are not canonical: " + "; ".join(details))
+
+
 @dataclass(frozen=True)
 class ToriiPipelinePreflight:
-    """Typed response from `GET /v1/pipeline/preflight`."""
+    """Typed response from `GET /v1/pipeline/preflight`.
+
+    `from_payload` requires exactly the fields Torii serves in every object. Torii serves no
+    stall threshold: `stall_threshold_ms` is derived from ``sumeragi["block_cadence_ms"]``.
+    """
 
     schema_version: int
     chain_height: int
@@ -11093,22 +11191,31 @@ class ToriiPipelinePreflight:
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @property
+    def block_cadence_ms(self) -> int:
+        """Signed-genesis target block time served as ``sumeragi.block_cadence_ms``."""
+
+        return int(self.sumeragi["block_cadence_ms"])
+
+    @property
     def stall_threshold_ms(self) -> int:
-        return int(self.sumeragi.get("stall_threshold_ms", 0))
+        """SDK-derived stall threshold: `PIPELINE_STALL_BLOCK_CADENCES` served block cadences."""
+
+        return PIPELINE_STALL_BLOCK_CADENCES * self.block_cadence_ms
 
     def is_status_stalled(self, status: ToriiStatusPayload) -> bool:
+        """Report queued work with no non-empty block committed for over `stall_threshold_ms`."""
+
         return status.is_queue_stalled(self.stall_threshold_ms)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ToriiPipelinePreflight":
+        """Parse the exact preflight body; a missing or unserved field is protocol drift."""
+
         if not isinstance(payload, Mapping):
             raise TypeError("pipeline preflight response must be a JSON object")
-
-        def _mapping(name: str) -> Dict[str, Any]:
-            value = payload.get(name)
-            if not isinstance(value, Mapping):
-                raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
-            return dict(value)
+        _require_pipeline_preflight_fields(
+            payload, _PIPELINE_PREFLIGHT_ROOT_FIELDS, "pipeline preflight"
+        )
 
         def _unsigned(value: Any, context: str, *, positive: bool = False) -> int:
             if isinstance(value, bool) or not isinstance(value, int):
@@ -11119,49 +11226,42 @@ class ToriiPipelinePreflight:
                 raise ValueError(f"{context} must be {qualifier}")
             return value
 
-        pipeline = _mapping("pipeline")
-        pipeline_fields = {
-            "signature_batch_max_ed25519",
-            "signature_batch_max_secp256k1",
-            "signature_batch_max_pqc",
-            "signature_batch_max_bls",
-            "overlay_max_instructions",
-            "ivm_max_cycles_upper_bound",
-            "ivm_admission_cycle_limit",
-            "ivm_max_decoded_instructions",
-        }
-        missing_pipeline_fields = pipeline_fields.difference(pipeline)
-        unexpected_pipeline_fields = set(pipeline).difference(pipeline_fields)
-        if missing_pipeline_fields or unexpected_pipeline_fields:
-            details: list[str] = []
-            if missing_pipeline_fields:
-                details.append("missing " + ", ".join(sorted(missing_pipeline_fields)))
-            if unexpected_pipeline_fields:
-                details.append("unsupported " + ", ".join(sorted(unexpected_pipeline_fields)))
-            raise ValueError(
-                "pipeline preflight `pipeline` fields are not canonical: "
-                + "; ".join(details)
-            )
-        for field_name in pipeline_fields:
-            pipeline[field_name] = _unsigned(
-                pipeline[field_name],
-                f"pipeline preflight pipeline.{field_name}",
-                positive=field_name in {
-                    "ivm_max_cycles_upper_bound",
-                    "ivm_admission_cycle_limit",
-                },
-            )
+        sections: Dict[str, Dict[str, Any]] = {}
+        for name, expected in _PIPELINE_PREFLIGHT_SECTION_FIELDS.items():
+            value = payload.get(name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
+            section = dict(value)
+            _require_pipeline_preflight_fields(section, expected, f"pipeline preflight `{name}`")
+            sections[name] = section
+        for name in _PIPELINE_PREFLIGHT_UNSIGNED_SECTIONS:
+            section = sections[name]
+            for field_name in _PIPELINE_PREFLIGHT_SECTION_FIELDS[name]:
+                section[field_name] = _unsigned(
+                    section[field_name],
+                    f"pipeline preflight {name}.{field_name}",
+                    positive=(name, field_name) in _PIPELINE_PREFLIGHT_POSITIVE_FIELDS,
+                )
 
-        fees = _mapping("fees")
+        fees = sections["fees"]
+        for field_name in _PIPELINE_PREFLIGHT_FEE_STRINGS:
+            value = fees[field_name]
+            if not isinstance(value, str) or not value:
+                raise TypeError(f"pipeline preflight fees.{field_name} must be a non-empty string")
+        if fees["settlement_mode"] not in _PIPELINE_PREFLIGHT_SETTLEMENT_MODES:
+            raise ValueError(
+                "pipeline preflight fees.settlement_mode must be one of: "
+                + ", ".join(_PIPELINE_PREFLIGHT_SETTLEMENT_MODES)
+            )
         fees["fee_sink_account_id"] = _normalize_exact_any_i105_account_id(
-            fees.get("fee_sink_account_id"),
+            fees["fee_sink_account_id"],
             "pipeline preflight fees.fee_sink_account_id",
         )
         fees["sponsor_vault_custody_account_id"] = _normalize_exact_any_i105_account_id(
-            fees.get("sponsor_vault_custody_account_id"),
+            fees["sponsor_vault_custody_account_id"],
             "pipeline preflight fees.sponsor_vault_custody_account_id",
         )
-        authorities = fees.get("successful_claim_fee_exempt_authorities")
+        authorities = fees["successful_claim_fee_exempt_authorities"]
         if not isinstance(authorities, list):
             raise TypeError(
                 "pipeline preflight fees.successful_claim_fee_exempt_authorities must be an array"
@@ -11185,15 +11285,14 @@ class ToriiPipelinePreflight:
                 payload.get("chain_height"),
                 "pipeline preflight chain_height",
             ),
-            sumeragi=_mapping("sumeragi"),
-            admission=_mapping("admission"),
-            block=_mapping("block"),
-            pipeline=pipeline,
-            queue=_mapping("queue"),
+            sumeragi=sections["sumeragi"],
+            admission=sections["admission"],
+            block=sections["block"],
+            pipeline=sections["pipeline"],
+            queue=sections["queue"],
             fees=fees,
             raw=dict(payload),
         )
-
 
 class _ToriiStatusState:
     """Internal helper tracking the previous status sample per client."""

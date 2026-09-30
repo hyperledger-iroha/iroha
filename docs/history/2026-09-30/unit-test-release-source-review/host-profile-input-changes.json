@@ -1,0 +1,37 @@
+[
+  {
+    "path": "Cargo.toml",
+    "old": {
+      "path": "Cargo.toml",
+      "sha256": "25cff7b41e18d5e04142856dbb03ed51c1338ac13c16e24339349dfbbf5ce898",
+      "size": 20445
+    },
+    "new": {
+      "path": "Cargo.toml",
+      "sha256": "b73f1c7e7003a90611488f01715b0d482c13e9736772e1bff0ecbd8c2279b352",
+      "size": 20703
+    }
+  },
+  {
+    "path": "ci/dependency_budget.json",
+    "old": {
+      "path": "ci/dependency_budget.json",
+      "sha256": "e37af9a3be8564106bd957cda2eb88cb65df641e1ab1474b85b6f2a34f75460c",
+      "size": 16272
+    },
+    "new": {
+      "path": "ci/dependency_budget.json",
+      "sha256": "72a566cd38c0312ffb2af913a4733e2f143907b01c6efccf4da37467cb955043",
+      "size": 16272
+    }
+  },
+  {
+    "path": "scripts/tests/cargo_host_proc_macro_profile_test.py",
+    "old": null,
+    "new": {
+      "path": "scripts/tests/cargo_host_proc_macro_profile_test.py",
+      "sha256": "2562153027077c70379fffde0ce6977b0a7ab13b5d141db77b2d02fbb958bb21",
+      "size": 2035
+    }
+  }
+]

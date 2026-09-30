@@ -109,13 +109,8 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         let authority = try AccountId.makeI105(publicKey: key.publicKey())
         let request = try kagemushaTopUpRequest(payer: authority)
         let envelope = try build(request, authority: authority, signingKey: key)
-        let prepared: KagemushaPreparedTopUpSubmissionV1
-        do {
-            prepared = try KagemushaPreparedTopUpSubmissionV1(
-                signedTransaction: envelope.norito, expectedRequest: request)
-        } catch KagemushaTopUpSubmissionErrorV1.bridgeUnavailable {
-            throw XCTSkip("A same-source native bridge is required for ingress validation")
-        }
+        let prepared = try KagemushaPreparedTopUpSubmissionV1(
+            signedTransaction: envelope.norito, expectedRequest: request)
         XCTAssertEqual(prepared.signedTransactionBytes, envelope.norito)
         XCTAssertEqual(prepared.canonicalRequestBytes,
             try KagemushaNoritoV1.encodeTopUpRequestShape(request))

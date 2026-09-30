@@ -63,7 +63,7 @@ def _validate_response_bounds(client: str, torii: str) -> None:
         ),
         (
             "    pub fn post_sorafs_billing_statement_acknowledgement(",
-            "    /// Fetch payload-free `SoraFS` billing delivery reconciliation status.",
+            "        get_sorafs_billing_reconciliation => SorafsEndpoint::account_json_get(",
         ),
         (
             "        get_sorafs_billing_reconciliation => SorafsEndpoint::account_json_get(",
@@ -71,7 +71,7 @@ def _validate_response_bounds(client: str, torii: str) -> None:
         ),
         (
             "    fn get_sorafs_hedging_projection(",
-            "    /// Convenience: GET `/v1/sorafs/moderation/quarantine`",
+            "    sorafs_filtered_get_methods!(",
         ),
     ):
         method = _source_slice(client, start, end)

@@ -20,7 +20,9 @@ pub(crate) fn install_network_index_test_outputs(
             .count(),
     )
     .expect("bounded storage fixture fragment count");
-    let proposal = block.canonical_resultless_proposal();
+    let proposal = block
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     block
         .set_execution_outputs(
             outputs,
@@ -32,7 +34,12 @@ pub(crate) fn install_network_index_test_outputs(
             &limits,
         )
         .expect("canonical bounded storage-fixture outputs");
-    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(
+        block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection"),
+        proposal
+    );
 }
 
 fn network_index_block_at(height: u64, inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
@@ -233,7 +240,9 @@ fn canonical_network_index_refuses_whole_malformed_carrier_before_membership() {
             result.insert("outputs".into(), norito::json::to_value(&outputs).unwrap());
         }
         let malformed: SignedBlock = if mutation == 5 {
-            block.canonical_resultless_proposal()
+            block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
         } else {
             norito::json::from_value(value).unwrap()
         };
@@ -391,12 +400,14 @@ fn canonical_network_index_projects_merged_suffix_once_and_rejects_missing_outpu
 /// Structural storage rows only; these outputs never confer execution or finality authority.
 fn attach_ok_results_to_block(block: &mut SignedBlock) {
     use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
-    let outputs = (0..block.network_entrypoint_count()).map(|index| {
-        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-            input_index: u32::try_from(index).unwrap(),
-            result: TransactionResult::new(Ok(DataTriggerSequence::default())),
-            completions: Vec::new(),
+    let outputs = (0..block.network_entrypoint_count())
+        .map(|index| {
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: u32::try_from(index).unwrap(),
+                result: TransactionResult::new(Ok(DataTriggerSequence::default())),
+                completions: Vec::new(),
+            })
         })
-    }).collect();
+        .collect();
     install_network_index_test_outputs(block, outputs);
 }

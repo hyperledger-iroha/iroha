@@ -37,6 +37,23 @@ class SumeragiLaneModelsTest {
     private val u64Max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val u32Max = BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE)
 
+    @Test fun `layout construction enforces the same invariants as JSON decoding`() {
+        fun layout(
+            encoding: String = "reed_solomon16", chunk: Long = 262144, data: Long = 4,
+            parity: Long = 2, payload: Long = 4194305, chunks: Long = 30,
+        ) = SumeragiDataAvailabilityLayout(
+            encoding, BigInteger.valueOf(chunk), BigInteger.valueOf(data), BigInteger.valueOf(parity),
+            BigInteger.valueOf(payload), BigInteger.valueOf(chunks),
+        )
+        assertEquals(BigInteger.valueOf(4194305), layout().maxPayloadSizeBytes)
+        for (invalid in listOf<() -> SumeragiDataAvailabilityLayout>(
+            { layout(encoding = "legacy") }, { layout(chunk = 0) }, { layout(chunk = 3) },
+            { layout(chunk = 262146) }, { layout(data = -1) }, { layout(data = 17) },
+            { layout(parity = 0) }, { layout(parity = 17) }, { layout(payload = 0) },
+            { layout(payload = 16777217) }, { layout(chunks = 29) }, { layout(chunks = 1025) },
+        )) assertFails { invalid() }
+    }
+
     private fun lanes(name: String = "mixed_lanes"): MutableList<Any?> =
         SumeragiJsonPrimitives.array(
             SumeragiJsonPrimitives.parseValue(NativeLaneFixtures.json(name), "fixture"),

@@ -72,6 +72,7 @@ fn resign_result(
     let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let header = certificate.consensus_header().to_vec();
+    let availability = certificate.availability().to_vec();
     let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     qc.result = commitment.result().unwrap();
     qc.view = decision_view;
@@ -97,7 +98,7 @@ fn resign_result(
         header,
         norito::encode_canonical(&qc).unwrap(),
         commitment.preimage().unwrap(),
-        certificate.availability().to_vec(),
+        availability,
     )));
     let mut proof = proof.clone();
     proof.block_wire = block.encode_wire().unwrap();

@@ -21,8 +21,7 @@ def deploy_network():
         "bash", "scripts/deploy_localnet.sh",
         "--peers", str(PEERS),
         "--out-dir", OUT_DIR,
-        "--block-time-ms", "4000",
-        "--commit-time-ms", "8000",
+        "--block-cadence-ms", "4000",
         "--force"
     ]
     subprocess.check_call(cmd)

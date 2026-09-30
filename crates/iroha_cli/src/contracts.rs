@@ -943,6 +943,9 @@ impl<H> IVMHost for TracingHost<H>
 where
     H: IVMHost + 'static,
 {
+    fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
+        self.inner.prepared_entrypoint_arguments()
+    }
     fn prepare_syscall(&self, number: u32, vm: &ivm::IVM) -> Result<u64, ivm::VMError> {
         self.inner.prepare_syscall(number, vm)
     }
@@ -2592,7 +2595,14 @@ mod tests {
                 payload_file: None,
             },
         };
+        ivm::reset_argument_record_decode_count();
         args.run(&mut ctx).expect("debug call");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "tracing must retain the prepared arguments without decoding them again"
+        );
         let output = ctx.take_output().expect("debug call output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),

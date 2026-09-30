@@ -24,6 +24,19 @@ public_key_hex = "<independently-approved-64-lowercase-hex-signer-key>"
 key_revision = 0 # Sole token key generation: required 1..=u32::MAX.
 policy_revision = 0
 policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-signer-policy>"
+clock_uncertainty_ms = 250 # Common bound for native and external runtime clocks.
+
+# This optional table explicitly selects local native software custody. Omit the
+# entire table when independently supplying external adapters; it is never a fallback.
+[sorafs.storage.stream_tokens.signer.native]
+signer_credential = "<absolute-owner-only-signer-credential>"
+custody_record = "<absolute-owner-only-signed-custody-record>"
+receipt_journal = "<absolute-owner-only-existing-receipt-journal-directory>"
+operator = "<reviewed-canonical-domainless-provider-operator>"
+operator_credential = "<absolute-owner-only-operator-credential>"
+observer_credential = "<absolute-owner-only-observer-credential>"
+fee_payment_json = "<canonical-authorized-norito-json-fee-intent>"
+timeout_ms = 30000
 
 [sorafs.storage.stream_tokens.signer.attester]
 service_id = "signer-custody-certifier"

@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -196,7 +197,6 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=trust-ancestor-secret"
         path_type = type(VERIFIER.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -207,15 +207,12 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(VERIFIER.TrustBundleError) as caught:
                         VERIFIER._reject_symlinked_existing_ancestors(
                             VERIFIER.Path("ancestor") / "leaf",
                             display_label="summary_out",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out ancestors", message)
@@ -247,12 +244,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(VERIFIER.TrustBundleError) as caught:
                         VERIFIER._read_regular_file(path, display_label="trust bundle")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect trust bundle", message)
@@ -268,7 +262,6 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_same_existing_file_stat_failures_return_false(self):
         hidden = "token=trust-alias-stat-secret"
         path_type = type(VERIFIER.Path("."))
-        original_stat = path_type.stat
         cases = (
             OSError(5, hidden),
             RuntimeError(hidden),
@@ -281,16 +274,13 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 def failing_stat(_self, *args, error=failure, **kwargs):
                     raise error
 
-                path_type.stat = failing_stat
-                try:
+                with patch.object(path_type, "stat", failing_stat):
                     self.assertFalse(
                         VERIFIER._same_existing_file(
                             VERIFIER.Path("left"),
                             VERIFIER.Path("right"),
                         )
                     )
-                finally:
-                    path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=trust-resolve-secret"
@@ -311,12 +301,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                         raise error
                     return original_resolve(self, *args, **kwargs)
 
-                path_type.resolve = failing_resolve
-                try:
+                with patch.object(path_type, "resolve", failing_resolve):
                     with self.assertRaises(VERIFIER.TrustBundleError) as caught:
                         VERIFIER._reject_duplicate_paths([target], "--bundle")
-                finally:
-                    path_type.resolve = original_resolve
 
                 message = str(caught.exception)
                 self.assertIn("cannot resolve --bundle[0]", message)
@@ -777,9 +764,6 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_text_output_target_inspection_failures_do_not_echo_detail(self):
         hidden = "token=trust-output-inspect-secret"
         path_type = type(VERIFIER.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
-        original_lstat = path_type.lstat
         cases = (
             ("exists_os", "exists", OSError(5, hidden)),
             ("exists_runtime", "exists", RuntimeError(hidden)),
@@ -800,20 +784,17 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                ):
                     with self.assertRaises(VERIFIER.TrustBundleError) as caught:
                         VERIFIER._ensure_text_output_target(
                             VERIFIER.Path("summary.json"),
                             display_label="summary_out",
                             create_parent=False,
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out parent", message)
@@ -828,7 +809,6 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_text_output_parent_creation_failures_do_not_echo_detail(self):
         hidden = "token=trust-output-create-secret"
         path_type = type(VERIFIER.Path("."))
-        original_mkdir = path_type.mkdir
         cases = (
             ("mkdir_os", OSError(5, hidden)),
             ("mkdir_runtime", RuntimeError(hidden)),
@@ -842,15 +822,12 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with patch.object(path_type, "mkdir", failing_mkdir):
                         with self.assertRaises(VERIFIER.TrustBundleError) as caught:
                             VERIFIER._ensure_text_output_target(
                                 VERIFIER.Path(raw_root) / "out" / "summary.json",
                                 display_label="summary_out",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create summary_out parent", message)

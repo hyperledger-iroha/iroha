@@ -625,7 +625,9 @@ mod tests {
         let mut read = sample_witness();
         read.reads[1].value = b"4".to_vec();
         assert_ne!(r_of(&read, &block, next()), base);
-        let mut other = block.canonical_resultless_proposal();
+        let mut other = block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection");
         other
             .set_execution_outputs(
                 Vec::new(),
@@ -1084,7 +1086,9 @@ mod tests {
     #[test]
     fn unexecuted_or_certified_blocks_are_refused() {
         let block = executed(&KeyPair::random());
-        let proposal = block.canonical_resultless_proposal();
+        let proposal = block
+            .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection");
         assert_eq!(
             execution_commitment(&sample_witness(), &proposal, &transition()),
             Err(CommitmentError::MissingResult)

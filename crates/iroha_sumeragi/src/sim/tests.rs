@@ -198,6 +198,34 @@ scenario_test!(f32_cluster_restart_lock_or_cqc, "F32", scenarios::f32);
 scenario_test!(f33_hidden_pqc, "F33", scenarios::f33);
 scenario_test!(f34_late_entrants, "F34", scenarios::f34);
 scenario_test!(f35_local_queue_asymmetry, "F35", scenarios::f35);
+
+/// The F35 leader-turn bound (Appendix E, E62) is not vacuous: holders whose builders never
+/// return work (each prices payloads at its own 1.5 s base cost, above `exec_budget`, §9.1)
+/// let the first holder turn `v*` fail, and the oracle names that view and its leader.
+#[test]
+fn leader_turns_flags_holders_without_work() {
+    let mut sc = scenarios::f35(0);
+    let Perf::LeaderTurns(holders) = sc.checks.perf else {
+        panic!("F35 checks the leader-turn bound");
+    };
+    for m in (0..sc.n).filter(|m| holders & (1 << m) != 0) {
+        sc.set_profile(
+            m,
+            Profile {
+                exec_base: 1_500,
+                ..Profile::default()
+            },
+        );
+    }
+    let Err(report) = run(sc) else {
+        panic!("holders without work must fail their turn");
+    };
+    assert!(
+        report.contains("O-PERF LeaderTurns") && report.contains("led by running holder"),
+        "{report}"
+    );
+}
+
 #[test]
 fn f36_late_leaders() {
     // `(n, peak start level)` → honest replicas.

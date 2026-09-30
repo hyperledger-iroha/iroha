@@ -2254,10 +2254,10 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetPipelinePreflightAsync() async throws {
-        let canonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
-        let payload = """
-        {"schema_version":1,"chain_height":42,"sumeragi":{"block_time_ms":1000,"commit_time_ms":2000,"stall_threshold_ms":6000},"admission":{"max_signatures":32,"max_instructions":4096,"max_tx_bytes":1048576,"max_decompressed_bytes":1048576,"max_metadata_depth":16},"block":{"max_transactions":512},"pipeline":{"signature_batch_max_ed25519":64,"signature_batch_max_secp256k1":16,"signature_batch_max_pqc":8,"signature_batch_max_bls":16,"overlay_max_instructions":0,"ivm_max_cycles_upper_bound":2000000,"ivm_admission_cycle_limit":1000000,"ivm_max_decoded_instructions":1048576},"queue":{"size":2,"queued":1,"inflight":1},"fees":{"fee_asset_id":"xor#sora","fee_sink_account_id":"\(canonicalAccountId)","base_fee":"0","per_byte_fee":"0","per_instruction_fee":"0","per_gas_unit_fee":"0","sponsor_vault_custody_account_id":"\(canonicalAccountId)","settlement_mode":"direct","successful_claim_fee_exempt_authorities":["\(canonicalAccountId)"]}}
-        """.data(using: .utf8)!
+        // The exact body Torii serves, generated from its Rust DTO.
+        let payload = try PipelinePreflightFixture.data()
+        let served = try PipelinePreflightFixture.object()
+        let servedFees = try XCTUnwrap(served["fees"] as? [String: Any])
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/preflight")
@@ -2270,7 +2270,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         let status = try ToriiStatusPayload(raw: [
             "peers": .number(1),
             "queue_size": .number(2),
-            "time_since_last_non_empty_block_ms": .number(6001),
+            "time_since_last_non_empty_block_ms": .number(20_001),
             "commit_time_ms": .number(30),
             "txs_approved": .number(0),
             "txs_rejected": .number(0),
@@ -2278,18 +2278,22 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         ])
         XCTAssertEqual(preflight.schemaVersion, 1)
         XCTAssertEqual(preflight.chainHeight, 42)
-        XCTAssertEqual(preflight.sumeragi.stallThresholdMs, 6000)
-        XCTAssertEqual(preflight.admission.maxTxBytes, 1048576)
+        XCTAssertEqual(preflight.sumeragi.blockCadenceMs, 1_000)
+        XCTAssertEqual(preflight.stallThresholdMs, 20_000)
+        XCTAssertEqual(preflight.admission.maxTxBytes, 1_048_576)
         XCTAssertEqual(preflight.pipeline.signatureBatchMaxEd25519, 64)
         XCTAssertEqual(preflight.pipeline.ivmMaxCyclesUpperBound, 2_000_000)
         XCTAssertEqual(preflight.pipeline.ivmAdmissionCycleLimit, 1_000_000)
-        XCTAssertEqual(preflight.queue.queued, 1)
-        XCTAssertEqual(preflight.fees.baseFee, .string("0"))
+        XCTAssertEqual(preflight.queue.queued, 2)
+        XCTAssertEqual(preflight.fees.baseFee, "0.1")
         XCTAssertEqual(
             preflight.fees.sponsorVaultCustodyAccountId,
-            canonicalAccountId
+            servedFees["sponsor_vault_custody_account_id"] as? String
         )
-        XCTAssertEqual(preflight.fees.successfulClaimFeeExemptAuthorities, [canonicalAccountId])
+        XCTAssertEqual(
+            preflight.fees.successfulClaimFeeExemptAuthorities,
+            servedFees["successful_claim_fee_exempt_authorities"] as? [String]
+        )
         XCTAssertTrue(preflight.isStatusStalled(status))
     }
 

@@ -39,7 +39,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   mandatory first-release requirement. The Core/worker integration candidate
   replaces raw full-body transport with signed availability metadata, actual
   row acquisition and opaque source-bound custody. Whole-node/network
-  qualification and the unchanged 8,000-line core gate remain open; component
+  qualification remains open; component
   tests alone do not establish release or settlement readiness. Consensus faults are injected only in the
   deterministic simulator, never through node configuration.
 - IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
@@ -205,8 +205,8 @@ Note: First release policy
   mutation killed by a named deterministic test
   (`python3 scripts/sumeragi_mutation_gate.py`, run nightly by
   `.github/workflows/nightly_sumeragi.yml`). A liveness fix lands only with a
-  seed or test that fails before the fix and passes after it. Keep the core
-  within the spec §12.6 line budget. Real-peer coverage is
+  seed or test that fails before the fix and passes after it. Preserve protocol
+  safety, liveness and custody checks. Real-peer coverage is
   `integration_tests/tests/sumeragi.rs` and `sumeragi_lanes.rs`.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and

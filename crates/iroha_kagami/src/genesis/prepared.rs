@@ -789,9 +789,15 @@ mod tests {
                 toml::Value::String(signer.public_key().to_string()),
             );
             genesis.remove("expected_hash_file");
+            // The signed genesis identity exists only after signing, and the config loader
+            // rejects an unresolved placeholder. Bind a provisional canonical identity; the
+            // final verifier configs below replace it with the exact signed genesis hash.
             genesis.insert(
                 "expected_hash".to_owned(),
-                toml::Value::String("REPLACE_WITH_GENESIS_EXPECTED_HASH".to_owned()),
+                toml::Value::String(
+                    "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                        .to_owned(),
+                ),
             );
             let config_dir = directory
                 .path()

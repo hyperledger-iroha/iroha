@@ -412,10 +412,12 @@ impl StateExecutor {
     }
 
     /// Attach the configured archives once, after replay and before starting the driver.
-    /// This synchronously captures the reconciled tip before the executor acknowledges binding.
+    /// This synchronously captures the reconciled tip before the executor acknowledges binding;
+    /// the replayed tip published by startup replay is that tip, not an execution.
     ///
     /// # Errors
-    /// The executor is unavailable, already bound or executing, or the exact tip cannot be captured.
+    /// The executor is unavailable, already bound, recovering or executing beyond the applied
+    /// tip, or the exact tip cannot be captured.
     pub fn attach_finalized_archives(&self, archives: FinalizedArchives) -> Result<(), String> {
         self.call(|reply| Request::AttachFinalizedArchives(archives, reply))
             .unwrap_or_else(|| Err("executor thread stopped".into()))
@@ -501,11 +503,23 @@ impl StateExecutor {
 
 impl Executor for StateExecutor {
     fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome> {
-        if let Err(error) = require_body_admission(block, &self.execution_budget) {
-            return Some(ExecOutcome::Failed(error.to_string()));
+        let outcome = match require_body_admission(block, &self.execution_budget) {
+            Err(error) => Some(ExecOutcome::Failed(error.to_string())),
+            Ok(()) => self
+                .call(|reply| Request::Execute(block.clone(), *block_hash, reply))
+                .unwrap_or_else(|| Some(ExecOutcome::Failed("executor thread stopped".into()))),
+        };
+        // The core reports only `LocalFault::ExecutorFailed { height }` and retries; the
+        // local reason is logged here, once per failed answer.
+        if let Some(ExecOutcome::Failed(reason)) = &outcome {
+            iroha_logger::warn!(
+                height = block.header().height,
+                view = block.header().origin_view,
+                %reason,
+                "sumeragi: local execution failure"
+            );
         }
-        self.call(|reply| Request::Execute(block.clone(), *block_hash, reply))
-            .unwrap_or_else(|| Some(ExecOutcome::Failed("executor thread stopped".into())))
+        outcome
     }
 
     fn discard(&mut self, height: u64, keep: &[Hash32]) {
@@ -878,19 +892,48 @@ impl<'s> Worker<'s> {
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => self.queue = Some(queue),
             Request::AttachFinalizedArchives(archives, reply) => {
-                let result = if self.archives.is_some()
-                    || self.live.is_some()
-                    || self.pending_commit.is_some()
-                {
-                    Err("finalized archives must be bound once before execution starts".into())
-                } else {
-                    archives
-                        .capture(&self.state.view())
-                        .map(|()| self.archives = Some(archives))
-                };
-                let _ = reply.send(result);
+                let _ = reply.send(self.bind_finalized_archives(archives));
             }
         }
+    }
+
+    /// Bind the configured archives once, at the applied tip and before any execution beyond
+    /// it. Startup replay leaves its last block published: that is the applied tip itself, not
+    /// an execution. The binding captures the exact certified tip State (a no-op when startup
+    /// reconciliation already captured it), and every later commit captures its own height, so
+    /// no height is skipped or captured twice.
+    fn bind_finalized_archives(&mut self, archives: FinalizedArchives) -> Result<(), String> {
+        if self.archives.is_some() {
+            return Err("finalized archives are already bound".into());
+        }
+        if let Some(reason) = &self.recovery {
+            return Err(format!(
+                "finalized archives cannot bind during recovery: {reason}"
+            ));
+        }
+        let (height, block_hash) = self.applied;
+        if self.pending_commit.is_some()
+            || self.finishing.is_some()
+            || self.live.as_ref().is_some_and(|live| {
+                (live.height, live.block_hash) != (height, block_hash)
+                    || !matches!(live.phase, PublicationPhase::Published { .. })
+            })
+        {
+            return Err(
+                "finalized archives must be bound before execution beyond the applied tip".into(),
+            );
+        }
+        let view = self.state.view();
+        if u64::try_from(view.height()).ok() != Some(height) {
+            return Err(format!(
+                "committed State height {} differs from the applied tip {height}",
+                view.height()
+            ));
+        }
+        archives.capture(&view)?;
+        drop(view);
+        self.archives = Some(archives);
+        Ok(())
     }
 
     /// Answer an `Execute` (O4): the live overlay or a remembered verdict, `None` while the

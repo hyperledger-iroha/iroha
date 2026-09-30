@@ -95,12 +95,12 @@ class IndependentCheckpointTests(unittest.TestCase):
         copies.release = release_copy
         return copies
 
-    def run_network_fixture(self, _root, fixture_root, env, lock_fds, *, harness, stages):
+    def run_network_fixture(self, _root, fixture_root, env, lock_fds, *, harness, stages, inventories):
         self.events.append("network")
         self.assertTrue(self.checkpoint.exists(), "pre-network pass must precede real network execution")
         self.assertFalse((self.fixture.out / "checks.json").exists())
         self.assertEqual(stages, gate.NETWORK_STAGES)
-        gate.run_stages(harness, fixture_root, env, stages, lock_fds)
+        gate.run_stages(harness, fixture_root, env, stages, lock_fds, inventories=inventories)
 
     def prepare(self, **kwargs):
         return self.fixture.prepare(check=self.actual_checks, source_lane_fd=self.source_lock.fileno(), **kwargs)

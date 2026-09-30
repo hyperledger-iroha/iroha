@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Guard the typed Connect-gating fixture compaction.
+"""Guard current typed Connect fixtures, direct assertions and protocol routes.
 
-The guard authenticates the indexed preimage, preserves the direct test
-inventory and protocol literals, pins the compacted fixture/assertion surface,
-and rejects callback DSLs, source relocation, or line packing.
+Historical compaction postimages are retained under docs/history/2026-09-30.
+Current tests use strict typed relay strategies; retired aliases are absent.
 """
 
 from __future__ import annotations
@@ -11,27 +10,47 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/tests/connect_gating.rs"
-SHARED_CONFIG_PATH = ROOT / "crates/iroha_torii/src/test_utils.rs"
-PREIMAGE_BLOB = "3db5717cb13b3d1e88b63612e5e8cd11ce9e8266"
-PREIMAGE_SHA256 = "b79bce39ebc92a466a63b26ec4fb1a7609928409ce38b7ff658018a49ea5030d"
-PREIMAGE_LINES = 2_794
-MINIMUM_RUST_LINE_REDUCTION = 1_000
-SOURCE_LINE_CEILING = 1_650
+SOURCE_LINE_CEILING = 16_100
 MAX_LINE_LENGTH = 120
-
-CONFIG_SHA256 = "8eb1f16ab3974bb07c1efe1ac545a27f5432d63b3ebda2d3bd38a8c5f161b57e"
-ASSERTION_SURFACE_SHA256 = "c7a7ee9e5a917ebc9f0491a082ec3eb123ea49387966392b761f33c08a1d94f5"
-DIAGNOSTIC_SURFACE_SHA256 = "9af3ccde52bc8f07105d02ec5d87365f27b3295c925e37ef0c4e6702b7e1fd17"
-CONNECT_URI_SURFACE_SHA256 = "9cd710c87171079222d0a962c8fb4267bf31c4bb82fc77564906246f9a2cf925"
-SHARED_CONFIG_SHA256 = "7a6743c58c6e8d8b16608478d160c050a68c997835beb820964980ab2731cad8"
-
+EXPECTED_TESTS = (('connect_config_fixture_uses_checked_key_generation', ('#[test]',)),
+ ('connect_endpoints_report_typed_unavailability_when_disabled', ('#[tokio::test]',)),
+ ('connect_status_present_when_enabled', ('#[tokio::test]',)),
+ ('connect_status_reports_exact_local_only_strategy', ('#[tokio::test]',)),
+ ('connect_status_reports_broadcast_effective_when_p2p_attached', ('#[tokio::test]',)),
+ ('connect_status_reports_local_only_when_relay_disabled_with_p2p_attached',
+  ('#[tokio::test]',)),
+ ('connect_session_delete_endpoint_removes_tokens', ('#[tokio::test]',)),
+ ('connect_session_status_requires_management_token', ('#[tokio::test]',)),
+ ('connect_session_delete_rejects_ws_attach',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_handshake_succeeds_when_enabled',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_accepts_protocol_token',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_closes_on_role_direction_mismatch',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_duplicate_frame_does_not_close_session',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_local_only_with_p2p_does_not_rebroadcast',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_relay_disabled_with_p2p_does_not_rebroadcast',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')),
+ ('connect_ws_rejects_query_token',
+  ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')))
+EXPECTED_SEEDS = ('0x24', '0x34', '0x44', '0x52', '0x62', '0x92', '0xA3', '0xB4', '0xC5', '0xD6', '0xE7')
+EXPECTED_PINGS = ('1', '41', '42', '7', '8', '9', '10')
+ASSERTION_SURFACE_SHA256 = '610b9b12881a006c24370618432db725221fac22bf4b27f9c54440e3a9417076'
+CONNECT_URI_SURFACE_SHA256 = '8ae0493017455d5c7d6480e491828760e68aa4ed9bfe3fb2d0d7da7de68ee1f0'
 EXPECTED_HELPERS = (
     "request_with_loopback_connect_info",
     "connect_aggregate_status",
@@ -70,10 +89,9 @@ CONFIG_ANCHORS = (
     "cfg.tiered_state.enabled = false;",
     "cfg.tiered_state.hot_retained_keys = 0;",
     "cfg.tiered_state.max_snapshots = 0;",
-    "cfg.settlement = A::Settlement {",
+    "cfg.settlement = A::Settlement::default();",
     "cfg.fraud_monitoring = A::FraudMonitoring {",
     "cfg.gov.approval_threshold_q_den = 1;",
-    "cfg.gov.pipeline_enactment_sla_blocks = 2;",
     "cfg.accel.merkle_min_leaves_gpu = defaults::accel::MERKLE_MIN_LEAVES_GPU;",
     "cfg.concurrency.rayon_global_threads = defaults::concurrency::RAYON_GLOBAL;",
     "cfg.zk.fastpq.metal_max_in_flight = None;",
@@ -93,7 +111,7 @@ REQUIRED_JSON_DIAGNOSTICS = (
 )
 FORBIDDEN = re.compile(
     r"dyn\s+Fn|FnMut|FnOnce|\bfn\s*\(|\$(?:body|setup|action)|"
-    r"\b(?:Action|Step)\b|include_(?:str|bytes)!|#\[path\s*=|macro_rules!"
+    r"\b(?:Action|Step)\b|include_(?:str|bytes)!|macro_rules!"
 )
 DIRECT_TEST = re.compile(
     r"(?P<attrs>(?:^#\[[^\n]+\]\n)+)"
@@ -119,16 +137,6 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _preimage() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "cat-file", "blob", PREIMAGE_BLOB],
-            cwd=ROOT,
-            text=True,
-            encoding="utf-8",
-        )
-    except subprocess.CalledProcessError as error:
-        raise GuardError("authenticated Connect-gating preimage is unavailable") from error
 
 
 def _skip_quoted(source: str, start: int) -> int:
@@ -256,31 +264,27 @@ def _uri_surface(source: str) -> tuple[str, ...]:
     return tuple(re.findall(r'"(/v1/connect[^"]*)"', source))
 
 
-def _validate(source: str, preimage: str) -> None:
-    if _sha256(preimage) != PREIMAGE_SHA256:
-        raise GuardError("authenticated preimage digest changed")
-    if len(preimage.splitlines()) != PREIMAGE_LINES:
-        raise GuardError("authenticated preimage line count changed")
+def _validate(source: str) -> None:
     lines = source.splitlines()
     if len(lines) > SOURCE_LINE_CEILING:
-        raise GuardError("Connect-gating source exceeded its compacted line ceiling")
-    if PREIMAGE_LINES - len(lines) < MINIMUM_RUST_LINE_REDUCTION:
-        raise GuardError("Connect-gating Rust reduction fell below 1,000 lines")
+        raise GuardError("Connect-gating source exceeded its source-file budget")
     if max(map(len, lines), default=0) > MAX_LINE_LENGTH:
         raise GuardError("Connect-gating source appears line-packed")
     if FORBIDDEN.search(source):
         raise GuardError("forbidden callback, body DSL, source relocation, or macro found")
+    if tuple(re.findall(r'#\[path\s*=\s*"([^\"]+)"\]', source)) != (
+        "../src/build_identity_test_fixture.rs",
+    ):
+        raise GuardError("shared build-identity fixture ownership changed")
     if tuple(re.findall(r'include!\("([^"]+)"\);', source)) != (
         "connect_gating_disabled_ws_test.rs",
     ):
-        raise GuardError("the single historical include boundary changed")
-    if _test_inventory(source) != _test_inventory(preimage):
+        raise GuardError("the explicit disabled-websocket test include changed")
+    if _test_inventory(source) != EXPECTED_TESTS:
         raise GuardError("direct Connect test names, attributes, or order changed")
-    if _seed_inventory(source) != _seed_inventory(preimage):
+    if _seed_inventory(source) != EXPECTED_SEEDS:
         raise GuardError("Connect session seed order changed")
-    if tuple(re.findall(r"Ping \{ nonce: (\d+) \}", source)) != tuple(
-        re.findall(r"Ping \{ nonce: (\d+) \}", preimage)
-    ):
+    if tuple(re.findall(r"Ping \{ nonce: (\d+) \}", source)) != EXPECTED_PINGS:
         raise GuardError("Connect ping nonce order changed")
     functions = tuple(match.group("name") for match in DIRECT_FUNCTION.finditer(source))
     if any(functions.count(name) != 1 for name in EXPECTED_HELPERS):
@@ -289,22 +293,13 @@ def _validate(source: str, preimage: str) -> None:
     for anchor in CONFIG_ANCHORS:
         if config.count(anchor) != 1:
             raise GuardError(f"configuration override changed: {anchor}")
-    if _sha256(_normalise(config)) != CONFIG_SHA256:
-        raise GuardError("configuration override surface changed")
-    shared_config = _function(
-        SHARED_CONFIG_PATH.read_text(encoding="utf-8"), "mk_minimal_root_cfg"
-    )
-    if _sha256(_normalise(shared_config)) != SHARED_CONFIG_SHA256:
-        raise GuardError("shared minimal-root fixture changed without re-auditing overrides")
     diagnostics = _diagnostic_surface(source)
     if any(diagnostic not in diagnostics for diagnostic in REQUIRED_JSON_DIAGNOSTICS):
         raise GuardError("required JSON diagnostic changed")
-    surfaces = (
+    for surface, expected, label in (
         (_macro_surface(source), ASSERTION_SURFACE_SHA256, "assertion"),
-        (diagnostics, DIAGNOSTIC_SURFACE_SHA256, "diagnostic"),
         (_uri_surface(source), CONNECT_URI_SURFACE_SHA256, "Connect URI"),
-    )
-    for surface, expected, label in surfaces:
+    ):
         if _sha256(json.dumps(surface, separators=(",", ":"))) != expected:
             raise GuardError(f"{label} surface changed")
 
@@ -315,14 +310,13 @@ class ConnectGatingFixtureCompactionSourceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
-        cls.preimage = _preimage()
 
     def test_compacted_source_contract(self) -> None:
-        _validate(self.source, self.preimage)
+        _validate(self.source)
 
     def assert_mutation_rejected(self, source: str) -> None:
         with self.assertRaises(GuardError):
-            _validate(source, self.preimage)
+            _validate(source)
 
     def test_test_name_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(

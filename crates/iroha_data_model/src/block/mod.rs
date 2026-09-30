@@ -67,6 +67,7 @@ pub mod output_budget;
 pub(crate) mod output_test_support;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
+mod proposal;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
@@ -146,6 +147,7 @@ pub enum SetExecutionOutputsError {
     },
 }
 /// Private payload-only forwarding adapter; no extra codec field/frame is introduced.
+#[derive(PartialEq, Eq)]
 struct OutputFieldRef<'a, T>(&'a T);
 impl<T: norito::core::SerializePayload> norito::core::SerializePayload for OutputFieldRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoFrameError> {
@@ -439,7 +441,7 @@ impl SignedBlock {
     }
     /// Return the canonical resultless proposal corresponding to this block.
     ///
-    /// Clone the complete proposal payload, signatures, and proposal-only header without
+    /// Clone the checked original proposal prefix, signatures, and proposal-only header without
     /// cloning execution outputs that the returned proposal must omit.
     ///
     /// The commit certificate is removed as well: a proposal never carries finality.
@@ -447,31 +449,13 @@ impl SignedBlock {
     /// Entrypoints appended from merged lane blocks (`specs/sumeragi_lanes.md` §4.3) are execution
     /// inputs, not proposal content: they are removed and the header roots recomputed.
     #[must_use]
-    pub fn canonical_resultless_proposal(&self) -> Self {
-        let mut payload = self.payload.clone();
-        if payload
-            .execution_context
-            .as_ref()
-            .and_then(|context| context.lane_merge.as_ref())
-            .is_some_and(|section| section.merged_count > 0)
-        {
-            let count = self.merged_entrypoint_count();
-            let keep = payload.external_entrypoints.len().saturating_sub(count);
-            payload.external_entrypoints.truncate(keep);
-            if let Some(context) = payload.execution_context.as_mut() {
-                context.external.truncate(keep);
-                if let Some(section) = context.lane_merge.as_mut() {
-                    section.merged_count = 0;
-                }
-            }
-            Self::refresh_entrypoint_roots(&mut payload);
-        }
-        Self {
-            signatures: self.signatures.clone(),
-            payload,
-            result: None,
-            commit_certificate: None,
-        }
+    /// # Errors
+    /// Rejects an impossible merged suffix, malformed context alignment, encoding error,
+    /// or an original proposal larger than the active archive limit.
+    pub fn canonical_resultless_proposal(&self) -> Result<Self, NoritoFrameError> {
+        let proposal = proposal::Proposal::new(self)?;
+        proposal.checked_payload_len()?;
+        Ok(proposal.materialize())
     }
 
     /// The lane merge section this block carries, if any.
@@ -574,7 +558,7 @@ impl SignedBlock {
     /// Compare the exact canonical resultless proposals while borrowing both source graphs.
     ///
     /// Both proposals undergo real canonical payload counting and the active archive-limit
-    /// check before comparison. All signatures and all seven payload fields participate;
+    /// check before comparison. All signatures and all eight payload fields participate;
     /// only the execution result is ignored. This avoids whole-proposal encoding buffers,
     /// but instruction equality can still allocate each instruction's encoded payload.
     ///
@@ -582,13 +566,13 @@ impl SignedBlock {
     /// Returns a serialization or length error, including an exceeded active archive limit,
     /// from either resultless proposal. Callers must not treat two errors as equality.
     pub fn checked_resultless_proposal_eq(&self, other: &Self) -> Result<bool, NoritoFrameError> {
-        let original_len = self.checked_resultless_payload_len()?;
-        let candidate_len = other.checked_resultless_payload_len()?;
-        Ok(original_len == candidate_len
-            && self.signatures == other.signatures
-            && self.payload == other.payload)
+        let original = proposal::Proposal::new(self)?;
+        let candidate = proposal::Proposal::new(other)?;
+        let original_len = original.checked_payload_len()?;
+        let candidate_len = candidate.checked_payload_len()?;
+        Ok(original_len == candidate_len && original.same_content(&candidate))
     }
-    fn checked_resultless_payload_len(&self) -> Result<usize, NoritoFrameError> {
+    fn checked_raw_resultless_payload_len(&self) -> Result<usize, NoritoFrameError> {
         let proposal = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),
             payload: OutputFieldRef(&self.payload),
@@ -604,13 +588,14 @@ impl SignedBlock {
     }
     /// Exact byte length of this block's canonical resultless, certificate-free proposal wire.
     ///
-    /// Counts the borrowed proposal graph without cloning transactions, execution context,
+    /// Counts the checked original proposal prefix without cloning transactions, execution context,
     /// signatures or allocating a complete encoded payload. Includes the version and header.
     ///
     /// # Errors
     /// A serialization, length overflow or active archive-limit error.
     pub fn resultless_proposal_wire_len(&self) -> Result<usize, NoritoFrameError> {
-        self.checked_resultless_payload_len()?
+        proposal::Proposal::new(self)?
+            .checked_payload_len()?
             .checked_add(1 + norito::core::Header::SIZE)
             .ok_or(NoritoFrameError::LengthMismatch)
     }
@@ -628,13 +613,8 @@ impl SignedBlock {
         &self,
         writer: &mut W,
     ) -> Result<(), NoritoFrameError> {
-        self.resultless_proposal_wire_len()?;
-        let proposal = SignedBlockOutputCandidate {
-            signatures: OutputFieldRef(&self.signatures),
-            payload: OutputFieldRef(&self.payload),
-            result: None,
-            commit_certificate: None,
-        };
+        let proposal = proposal::Proposal::new(self)?;
+        proposal.checked_payload_len()?;
         writer.write_all(&[self.version()])?;
         norito::core::write_canonical_to_writer(&proposal, writer)
     }
@@ -650,7 +630,7 @@ impl SignedBlock {
         if !self.is_resultless_proposal() || wire.first() != Some(&self.version()) {
             return Ok(false);
         }
-        self.checked_resultless_payload_len()?;
+        self.checked_raw_resultless_payload_len()?;
         let proposal = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),
             payload: OutputFieldRef(&self.payload),
@@ -686,13 +666,28 @@ impl SignedBlock {
     }
     /// Consume the original block and discard its execution result and finality certificate.
     ///
-    /// This preserves the proposal payload and signatures without cloning any
+    /// This restores the original proposal prefix and signatures without cloning any
     /// nested transaction or consensus evidence allocation.
     #[must_use]
-    pub fn into_resultless_proposal(mut self) -> Self {
+    /// # Errors
+    /// Rejects the same malformed suffix, encoding and archive-limit conditions as
+    /// [`Self::canonical_resultless_proposal`] before mutating the source graph.
+    pub fn into_resultless_proposal(mut self) -> Result<Self, NoritoFrameError> {
+        let projection = proposal::Proposal::new(&self)?;
+        projection.checked_payload_len()?;
+        let (header, keep, context_keep) = projection.shape();
+        self.payload.header = header;
+        self.payload.external_entrypoints.truncate(keep);
+        if let (Some(context), Some(keep)) = (self.payload.execution_context.as_mut(), context_keep)
+        {
+            context.external.truncate(keep);
+            if let Some(merge) = context.lane_merge.as_mut() {
+                merge.merged_count = 0;
+            }
+        }
         self.result = None;
         self.commit_certificate = None;
-        self
+        Ok(self)
     }
     /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
     /// an owned copy with the certificate cleared.
@@ -2089,7 +2084,12 @@ mod tests {
             original_header.merkle_root(),
             "the executed header binds every executed entrypoint"
         );
-        assert_eq!(executed.canonical_resultless_proposal(), original_proposal);
+        assert_eq!(
+            executed
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+            original_proposal
+        );
         let own_pointer = executed.payload.external_entrypoints.as_ptr();
         let (executed, merged, contexts, reason) = executed
             .with_merged_entrypoints(Vec::new(), Vec::new())
@@ -2576,7 +2576,12 @@ mod tests {
             block.canonical_proposal_wire_hash().unwrap(),
             proposal_wire_hash
         );
-        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(
+            block
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+            proposal
+        );
         assert_ne!(
             block.encode_wire().unwrap(),
             proposal.encode_wire().unwrap()
@@ -3199,7 +3204,7 @@ mod tests {
             vec![0xA1; 97],
             vec![0xB2; 140],
             vec![0xC3; 480],
-            vec![0xD4; 320],
+            vec![0xD4; 324],
         )
     }
     #[test]
@@ -3254,11 +3259,19 @@ mod tests {
         );
         assert!(plain.is_resultless_proposal());
         assert!(!certified.is_resultless_proposal());
-        let proposal = certified.canonical_resultless_proposal();
+        let proposal = certified
+            .canonical_resultless_proposal()
+            .expect("valid original proposal");
         assert!(proposal.commit_certificate().is_none());
         assert!(proposal.is_resultless_proposal());
         assert_eq!(proposal, plain);
-        assert_eq!(certified.clone().into_resultless_proposal(), plain);
+        assert_eq!(
+            certified
+                .clone()
+                .into_resultless_proposal()
+                .expect("valid original proposal"),
+            plain
+        );
         assert!(
             matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
             "a block without a certificate is borrowed, not copied"
@@ -3563,8 +3576,19 @@ mod tests {
         fixture::install(&mut block, vec![], 0).unwrap();
         assert!(block.has_results());
         assert!(!block.is_resultless_proposal());
-        assert_eq!(block.canonical_resultless_proposal(), proposal);
-        assert_eq!(block.clone().into_resultless_proposal(), proposal);
+        assert_eq!(
+            block
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+            proposal
+        );
+        assert_eq!(
+            block
+                .clone()
+                .into_resultless_proposal()
+                .expect("valid original proposal"),
+            proposal
+        );
         assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
         let executed = block.executed_block_wire_hash().unwrap();
         fixture::install(&mut block, vec![], 1).unwrap();

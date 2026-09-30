@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pytests.scripts import iso_audit_notary_adapter_test as audit_test
@@ -716,7 +717,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=evidence-ancestor-secret"
         path_type = type(EVIDENCE.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -727,15 +727,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(EVIDENCE.EvidenceError) as caught:
                         EVIDENCE._reject_symlinked_existing_ancestors(
                             EVIDENCE.Path("ancestor") / "leaf",
                             display_label="summary_out",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out ancestors", message)
@@ -767,12 +764,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(EVIDENCE.EvidenceError) as caught:
                         EVIDENCE._read_regular_file(path, display_label="evidence")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect evidence", message)
@@ -788,7 +782,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
     def test_same_existing_file_stat_failures_return_false(self):
         hidden = "token=evidence-alias-stat-secret"
         path_type = type(EVIDENCE.Path("."))
-        original_stat = path_type.stat
         cases = (
             OSError(5, hidden),
             RuntimeError(hidden),
@@ -801,16 +794,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 def failing_stat(_self, *args, error=failure, **kwargs):
                     raise error
 
-                path_type.stat = failing_stat
-                try:
+                with patch.object(path_type, "stat", failing_stat):
                     self.assertFalse(
                         EVIDENCE._same_existing_file(
                             EVIDENCE.Path("left"),
                             EVIDENCE.Path("right"),
                         )
                     )
-                finally:
-                    path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=evidence-resolve-secret"
@@ -831,12 +821,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         raise error
                     return original_resolve(self, *args, **kwargs)
 
-                path_type.resolve = failing_resolve
-                try:
+                with patch.object(path_type, "resolve", failing_resolve):
                     with self.assertRaises(EVIDENCE.EvidenceError) as caught:
                         EVIDENCE._reject_duplicate_paths([target], "--canary-summary")
-                finally:
-                    path_type.resolve = original_resolve
 
                 message = str(caught.exception)
                 self.assertIn("cannot resolve --canary-summary[0]", message)
@@ -1106,9 +1093,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
     def test_text_output_target_inspection_failures_do_not_echo_detail(self):
         hidden = "token=evidence-output-inspect-secret"
         path_type = type(EVIDENCE.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
-        original_lstat = path_type.lstat
         cases = (
             ("exists_os", "exists", OSError(5, hidden)),
             ("exists_runtime", "exists", RuntimeError(hidden)),
@@ -1129,20 +1113,17 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                ):
                     with self.assertRaises(EVIDENCE.EvidenceError) as caught:
                         EVIDENCE._ensure_text_output_target(
                             EVIDENCE.Path("summary.json"),
                             display_label="summary_out",
                             create_parent=False,
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out parent", message)
@@ -1157,7 +1138,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
     def test_text_output_parent_creation_failures_do_not_echo_detail(self):
         hidden = "token=evidence-output-create-secret"
         path_type = type(EVIDENCE.Path("."))
-        original_mkdir = path_type.mkdir
         cases = (
             ("mkdir_os", OSError(5, hidden)),
             ("mkdir_runtime", RuntimeError(hidden)),
@@ -1171,15 +1151,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with patch.object(path_type, "mkdir", failing_mkdir):
                         with self.assertRaises(EVIDENCE.EvidenceError) as caught:
                             EVIDENCE._ensure_text_output_target(
                                 EVIDENCE.Path(raw_root) / "out" / "summary.json",
                                 display_label="summary_out",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create summary_out parent", message)

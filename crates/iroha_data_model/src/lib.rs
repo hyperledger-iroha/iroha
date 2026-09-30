@@ -206,7 +206,7 @@ pub mod validation_fee;
 pub mod validator;
 /// Verification helper traits and host bindings.
 pub mod verification;
-/// Compiled block wire-schema identity.
+/// Compiled wire-schema identity: canonical root hashing and the block wire root.
 pub mod wire_schema;
 /// Zero-knowledge proof payload types.
 pub mod zk;
@@ -260,7 +260,6 @@ pub use errors::{
 pub use executor::ValidationFail;
 pub use id::{IdBox, NetworkId};
 pub use level::Level;
-pub use wire_schema::wire_schema_hash;
 /// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
 /// This trait should always be derived with `IdEqOrdHash`.
 pub trait Identifiable: Ord + Eq {

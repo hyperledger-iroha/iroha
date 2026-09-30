@@ -152,7 +152,7 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
     mutate(&mut original, 2, "world_publish");
     mutate(&mut reference, 2, "world_publish");
     let prepared = prepare(capture(original), &world);
-    assert_eq!(probes.len(), 311);
+    assert_eq!(probes.len(), 312);
     // Probe each original field separately, so an early busy field cannot hide
     // a missing writer later in the heterogeneous World inventory.
     for probe in probes {
@@ -621,7 +621,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                 },
             )
             .unwrap();
-        assert_eq!(journal.field_count(), 311);
+        assert_eq!(journal.field_count(), 312);
         // A separate read-only capture holds exact original-cut probes for every
         // real field before any unwind can poison its physical writer.
         let probe = capture(world.block());

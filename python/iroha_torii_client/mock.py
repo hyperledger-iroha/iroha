@@ -21,7 +21,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 __all__ = ["ToriiMockServer", "main"]
 
 _CURRENT_DATA_MODEL_VERSION = 4
-_MOCK_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+# Canonical Sora account controlled by the first RFC 8032 Ed25519 test key.
+_MOCK_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
 def _default_governance_proposal_draft() -> Dict[str, Any]:
@@ -233,11 +234,9 @@ class _MockState:
             self.pipeline_preflight = {
                 "schema_version": 1,
                 "chain_height": 0,
-                "sumeragi": {
-                    "block_time_ms": 1000,
-                    "commit_time_ms": 2000,
-                    "stall_threshold_ms": 6000,
-                },
+                # Torii serves only the signed-genesis target block time here; SDKs derive
+                # their stall threshold from it (`PIPELINE_STALL_BLOCK_CADENCES`).
+                "sumeragi": {"block_cadence_ms": 1000},
                 "admission": {
                     "max_signatures": 32,
                     "max_instructions": 4096,

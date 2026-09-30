@@ -32,7 +32,7 @@ pub type AttestationSignature =
     ByteSequence<InlineBytes<MAX_ATTESTATION_SIGNATURE_BYTES, SignatureDomain>>;
 
 /// One source-complete commit share. A certificate keeps its witness only once.
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, iroha_schema::IntoSchema)]
 pub struct CommitAttestation {
     /// Canonical preimage of the exact signed result R.
     pub witness: ResultWitness,

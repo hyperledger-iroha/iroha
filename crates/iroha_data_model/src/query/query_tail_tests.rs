@@ -202,10 +202,14 @@ mod canonical_output_inclusion_tests {
         let (block, committed) = execution_fixture();
         let expected = commitment(&block);
         assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
-        assert!(!committed.verify_inclusion_in_authenticated_execution(
-            &block.canonical_resultless_proposal(),
-            &expected
-        ));
+        assert!(
+            !committed.verify_inclusion_in_authenticated_execution(
+                &block
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal"),
+                &expected
+            )
+        );
         let mut other = block.clone();
         let mut header = other.header();
         header.creation_time_ms += 1;
@@ -341,10 +345,14 @@ mod canonical_output_inclusion_tests {
         let mut wrong = network.clone();
         wrong.entrypoint_proof = MerkleProof::from_audit_path(1, vec![]);
         assert!(!wrong.verify_inclusion_in_authenticated_execution(&block, &expected));
-        assert!(!network.verify_inclusion_in_authenticated_execution(
-            &block.canonical_resultless_proposal(),
-            &expected
-        ));
+        assert!(
+            !network.verify_inclusion_in_authenticated_execution(
+                &block
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal"),
+                &expected
+            )
+        );
     }
     #[test]
     fn committed_query_rejects_retired_parallel_result_and_merge_wire() {

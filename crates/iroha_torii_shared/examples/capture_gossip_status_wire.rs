@@ -1,9 +1,11 @@
-//! Capture the current gossip DTO frames and their composed `/status` fixture.
+//! Capture the current node-status DTO frames and their composed `/status` fixture.
 
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, ensure};
-use iroha_torii_shared::status::{Status, TxGossipCaps, TxGossipSnapshot, TxGossipStatus};
+use iroha_torii_shared::status::{
+    Status, SumeragiConsensusStatus, TxGossipCaps, TxGossipSnapshot, TxGossipStatus,
+};
 use norito::{
     NoritoSchema,
     core::{NoritoDeserialize, NoritoSerialize},
@@ -56,6 +58,7 @@ fn main() -> Result<()> {
     capture::<TxGossipCaps>(&mut fixtures, "TxGossipCaps")?;
     capture::<TxGossipStatus>(&mut fixtures, "TxGossipStatus")?;
     capture::<TxGossipSnapshot>(&mut fixtures, "TxGossipSnapshot")?;
+    capture::<SumeragiConsensusStatus>(&mut fixtures, "SumeragiConsensusStatus")?;
     capture::<Status>(&mut fixtures, "Status")?;
     let rendered = json::to_json_pretty(&fixtures)?;
     ensure!(rendered.len() < 1_048_576, "capture exceeds 1 MiB");

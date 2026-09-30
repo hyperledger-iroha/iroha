@@ -51,7 +51,6 @@ def valid_manifest() -> dict:
                 "validator_id": validator_id,
                 "voting": True,
                 "da_enabled": True,
-                "rbc_enabled": True,
             }
             for validator_id in MODULE.taira_constants.SLUGS
         ],
@@ -229,10 +228,6 @@ def test_schema_complete_production_topology_example_qualifies() -> None:
         (
             lambda payload: payload["validators"][0].update(da_enabled=False),
             "validators[0].da_enabled must be true",
-        ),
-        (
-            lambda payload: payload["validators"][0].update(rbc_enabled=False),
-            "validators[0].rbc_enabled must be true",
         ),
         (
             lambda payload: payload.update(

@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+use iroha_schema::IntoSchema;
+use norito::{Decode, Encode, NoritoSchema};
+
 mod control_witness;
 /// Requested opaque bytes exceeded their fixed protocol capacity.
 pub use crate::bytes::ByteLengthError;
@@ -34,7 +37,7 @@ pub type ValidatorIndex = u32;
 
 /// A 32-byte hash or execution commitment (`Hash32 = [u8; 32]`, §3.1).
 #[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, norito::Encode, norito::Decode,
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Encode, Decode, IntoSchema,
 )]
 pub struct Hash32(pub [u8; 32]);
 
@@ -72,7 +75,7 @@ fn write_hex(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
 ///
 /// The total order is ascending by `kb(pk) = be16(len(raw)) ‖ raw` (§3.1): shorter keys first,
 /// then lexicographic. Committees are kept in this canonical order.
-#[derive(Clone, PartialEq, Eq, Hash, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 pub struct PublicKey(Vec<u8>);
 
 impl PublicKey {
@@ -137,11 +140,11 @@ impl fmt::Display for KeyError {
 impl std::error::Error for KeyError {}
 
 /// An individual signature (canonical compressed encoding, [`SIGNATURE_LEN`] bytes).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct Signature(pub [u8; SIGNATURE_LEN]);
 
 /// An aggregate signature (canonical compressed encoding, [`SIGNATURE_LEN`] bytes).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AggregateSignature(pub [u8; SIGNATURE_LEN]);
 
 impl fmt::Debug for Signature {
@@ -162,7 +165,7 @@ impl fmt::Debug for AggregateSignature {
 /// spare bits zero (§3.4).
 // SPEC: §3.4 does not fix the bit order inside a byte. Bit `i` is `(bytes[i / 8] >> (i % 8)) & 1`
 // (least significant bit first) (Appendix E, E11).
-#[derive(Clone, PartialEq, Eq, Hash, Default, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, Encode, Decode, IntoSchema)]
 pub struct Bitmap(Vec<u8>);
 
 impl Bitmap {
@@ -398,20 +401,9 @@ impl Default for ChainParams {
 /// Scheduling epoch and the digest of its complete authenticated application context.
 /// The application validates the context preimage; consensus binds this identity in every
 /// signature, certificate, durable record and leader permutation.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    norito::Encode,
-    norito::Decode,
-    norito::NoritoSchema,
-)]
+#[derive(Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::EpochId")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EpochId {
     /// Monotonically increasing scheduling epoch.
     pub epoch: u64,

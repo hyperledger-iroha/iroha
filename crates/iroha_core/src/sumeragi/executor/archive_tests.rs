@@ -27,6 +27,11 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanManageSorafsReputationJournalPolicy;
 
 fn chain() -> CertifiedTestChain {
+    CertifiedTestChain::start(config()).unwrap()
+}
+
+/// The same deterministic configuration on every call: a restart rebuilds its pristine State.
+fn config() -> TestChainConfig {
     use iroha_data_model::{
         account::Account,
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
@@ -113,7 +118,7 @@ fn chain() -> CertifiedTestChain {
         })
         .into(),
     ]);
-    CertifiedTestChain::start(config).unwrap()
+    config
 }
 
 fn provider_bounds() -> ProviderIngestFinalizedArchiveBoundsV1 {
@@ -695,4 +700,154 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         generation
     );
     assert!(events.try_recv().is_err());
+}
+
+/// A node killed after Kura's durable append of a height and before that height's archive
+/// capture restarts through the production startup replay: the replayed tip is published, the
+/// archives bind to it, and the one missing height is captured exactly once.
+#[test]
+fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once() {
+    run(restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case);
+}
+
+fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case() {
+    let mut chain = chain();
+    let (directory, archives) = archives();
+    // The original process captured genesis and every committed height before advancing.
+    archives.capture(&chain.state().view()).unwrap();
+    for _ in 0..2 {
+        chain.commit(Vec::new());
+        archives.capture(&chain.state().view()).unwrap();
+    }
+    // It was killed after the next height became durable in Kura, before its capture.
+    chain.commit(Vec::new());
+    let tip = chain.height();
+    assert_eq!(tip, 4);
+    let reputation_root = archives.reputation.as_ref().unwrap().root().to_owned();
+    let reputation_bounds = archives.reputation.as_ref().unwrap().bounds();
+    drop(archives);
+
+    // Restart: a pristine configured State over a Kura holding the same certified blocks.
+    let restarted = CertifiedTestChain::prepare(config()).unwrap();
+    assert_eq!(restarted.genesis.block().hash(), chain.genesis().hash());
+    for height in 1..=tip {
+        let height = std::num::NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap();
+        restarted
+            .kura
+            .store_block(chain.kura().get_block(height).unwrap())
+            .unwrap();
+    }
+    let node = crate::sumeragi::node::prepare(crate::sumeragi::node::PrepareInputs {
+        state: Arc::clone(&restarted.state),
+        kura: Arc::clone(&restarted.kura),
+        events: tokio::sync::broadcast::channel(1024).0,
+        chain_id: restarted.state.chain_id_ref().to_string(),
+        genesis: None,
+        genesis_account: chain.genesis_account().clone(),
+        consensus_mode: ConsensusMode::Permissioned,
+    })
+    .unwrap();
+    assert_eq!(restarted.state.view().height(), 4, "startup replayed Kura");
+    let provider = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(
+            directory.path().join("provider"),
+            provider_bounds(),
+        )
+        .unwrap(),
+    );
+    let reputation = Arc::new(
+        ReputationFinalizedArchive::try_open(&reputation_root, reputation_bounds).unwrap(),
+    );
+    let before = (
+        provider.health_generation().unwrap(),
+        reputation.health_generation().unwrap(),
+    );
+    // The daemon reconciles the provider archive against the replayed tip before binding (the
+    // one committed successor); the reputation archive is left to the binding's own capture.
+    provider
+        .reconcile_certified_state_tip(&restarted.state.view(), &restarted.kura)
+        .unwrap();
+    assert_eq!(provider.health_generation().unwrap(), before.0 + 1);
+    let bound = FinalizedArchives {
+        provider_ingest: Some(Arc::clone(&provider)),
+        reputation: Some(Arc::clone(&reputation)),
+    };
+    node.attach_finalized_archives(bound.clone())
+        .expect("the replayed, published tip is not an execution beyond the applied tip");
+    // Each archive holds the tip once: the reconciled provider tip is not captured again.
+    let captured = (before.0 + 1, before.1 + 1);
+    assert_eq!(
+        (
+            provider.health_generation().unwrap(),
+            reputation.health_generation().unwrap()
+        ),
+        captured
+    );
+    let view = restarted.state.view();
+    let provider_tip = provider
+        .qualify_against_certified_tip(&view, &restarted.kura, 0)
+        .unwrap();
+    assert_eq!(provider_tip.archive_tip().height, tip);
+    assert_eq!(provider_tip.lag_blocks(), 0);
+    let reputation_tip = reputation
+        .qualify_against_certified_tip(&view, &restarted.kura, 0)
+        .unwrap();
+    assert_eq!(reputation_tip.archive_tip().height, tip);
+    assert_eq!(reputation_tip.lag_blocks(), 0);
+    drop(view);
+    assert!(
+        node.attach_finalized_archives(bound).is_err(),
+        "archives bind once per process"
+    );
+    assert_eq!(
+        (
+            provider.health_generation().unwrap(),
+            reputation.health_generation().unwrap()
+        ),
+        captured
+    );
+}
+
+/// An execution beyond the applied tip, executed or prepared, refuses binding: capture would
+/// skip it. Once published it is the applied tip, which the binding captures.
+#[test]
+fn binding_refuses_unpublished_execution_and_captures_the_published_tip() {
+    run(binding_refuses_unpublished_execution_and_captures_the_published_tip_case);
+}
+
+fn binding_refuses_unpublished_execution_and_captures_the_published_tip_case() {
+    let chain = chain();
+    let (_directory, archives) = archives();
+    archives.capture(&chain.state().view()).unwrap();
+    let (context, _events) = context(&chain);
+    let mut worker = worker(&context, archives.clone());
+    worker.archives = None;
+    let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+    let refused = worker
+        .bind_finalized_archives(archives.clone())
+        .unwrap_err();
+    assert!(refused.contains("beyond the applied tip"), "{refused}");
+    prepare_and_append(&mut worker, &block, &qc);
+    assert!(
+        worker.bind_finalized_archives(archives.clone()).is_err(),
+        "a prepared publication is not the applied tip"
+    );
+    worker.commit(&block, &qc).unwrap();
+    assert_eq!(worker.applied, (2, qc.block_hash));
+    let provider = archives.provider_ingest.as_ref().unwrap();
+    let reputation = archives.reputation.as_ref().unwrap();
+    let generation = (
+        provider.health_generation().unwrap(),
+        reputation.health_generation().unwrap(),
+    );
+    worker.bind_finalized_archives(archives.clone()).unwrap();
+    assert_eq!(
+        (
+            provider.health_generation().unwrap(),
+            reputation.health_generation().unwrap()
+        ),
+        (generation.0 + 1, generation.1 + 1),
+        "the published tip is captured once"
+    );
+    assert!(worker.bind_finalized_archives(archives).is_err());
 }

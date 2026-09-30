@@ -50,7 +50,7 @@ fn with_worker_from(
         .spawn(move || {
             let chain = make_chain();
             assert_eq!(chain.validators().len(), 4);
-            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap();
+            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
             assert!(certificate.consensus_header().is_empty());
             assert!(
                 certificate.commit_qc().is_empty(),
@@ -132,15 +132,26 @@ fn with_worker_from(
 }
 
 pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> AvailableBody {
+    proposal_with_transaction(chain, worker, CertifiedTestChain::tick)
+}
+
+fn proposal_with_transaction(
+    chain: &CertifiedTestChain,
+    worker: &Worker<'_>,
+    transaction: impl FnOnce(
+        &CertifiedTestChain,
+        u64,
+    ) -> iroha_data_model::transaction::SignedTransaction,
+) -> AvailableBody {
     let height = worker.applied.0 + 1;
     let certified_parent = chain.committed(worker.applied.0);
     let scheduled = worker.scheduled(height).unwrap().height_config().unwrap();
     let crypto = worker.context.crypto.as_ref().unwrap();
     let view = chain.state().view();
     let parent = view.latest_block().unwrap();
-    let cadence = Duration::from_millis(worker.scheduled(2).unwrap().params.block_time_ms);
+    let cadence = Duration::from_millis(scheduled.params.block_time_ms);
     let block_time = parent.header().creation_time() + cadence;
-    let tx = chain.tick(u64::try_from(block_time.as_millis()).unwrap() - 1);
+    let tx = transaction(chain, u64::try_from(block_time.as_millis()).unwrap() - 1);
     let (_, time) = iroha_primitives::time::TimeSource::new_mock(block_time);
     let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
         tx,
@@ -185,6 +196,14 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Avail
 
 pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (AvailableBody, Qc) {
     let block = proposal(chain, worker);
+    execute_proposal(chain, worker, block)
+}
+
+fn execute_proposal(
+    chain: &CertifiedTestChain,
+    worker: &mut Worker<'_>,
+    block: AvailableBody,
+) -> (AvailableBody, Qc) {
     let crypto = worker.context.crypto.as_ref().unwrap();
     let block_hash = block.hash(&**crypto);
     let Some(ExecOutcome::Valid(result)) = worker.execute(&block, block_hash) else {
@@ -215,70 +234,160 @@ fn original_overlay(worker: &Worker<'_>) -> usize {
 #[cfg(feature = "telemetry")]
 #[test]
 fn canonical_replay_origin_retains_transition_idempotence_through_publication_retry() {
-    use iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1 as Transition;
+    use iroha_data_model::{
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+        },
+        isi::governance::{
+            CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+            SubmitParliamentLifecycleTransitionV1,
+        },
+        permission::Permission,
+        prelude::InstructionBox,
+    };
+    use iroha_executor_data_model::permission::governance::CanManageParliament;
+    use mv::storage::StorageReadOnly as _;
+    use std::collections::BTreeSet;
 
     for origin in [
         CommitTelemetryOrigin::Forward,
         CommitTelemetryOrigin::HistoricalReplay,
     ] {
-        with_worker(move |chain, worker, blocks, _| {
-            let (block, qc) = executed(chain, worker);
-            worker.prepare_with_origin(&block, &qc, origin).unwrap();
-            let original = original_overlay(worker);
-            let other = match origin {
-                CommitTelemetryOrigin::Forward => CommitTelemetryOrigin::HistoricalReplay,
-                CommitTelemetryOrigin::HistoricalReplay => CommitTelemetryOrigin::Forward,
-            };
-            assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
-            assert_eq!(original_overlay(worker), original);
-            // Local closed-label fixture only: all execution, witness, original pool,
-            // genuine quorum and durable source admission still run in production.
-            worker
-                .live
-                .as_mut()
-                .unwrap()
-                .overlay
-                .as_mut()
-                .unwrap()
-                .stage_parliament_transition_observation_for_test(
-                    Transition::CompleteQualification,
+        let manager =
+            iroha_crypto::KeyPair::from_seed(vec![0xCE; 32], iroha_crypto::Algorithm::Ed25519);
+        let manager_account =
+            iroha_data_model::account::AccountId::new(manager.public_key().clone());
+        let create = CreateParliamentGovernanceAttemptV1 {
+            proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: manager_account.clone(),
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .unwrap(),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new([0x41; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            attempt_sequence: 0,
+        };
+        let seeded_proposal = create.proposal.clone();
+        with_worker_from(
+            move || {
+                // Fix the initial proposal and manager in World before the actual
+                // signed genesis is executed. No post-genesis source is replaced.
+                let mut world = World::new();
+                world.account_permissions.insert(
+                    manager_account.clone(),
+                    BTreeSet::from([Permission::from(CanManageParliament)]),
                 );
-            blocks.append(&block, &qc).unwrap();
-            let metric = chain
-                .state()
-                .telemetry
-                .governance_parliament_transitions_total
-                .with_label_values(&["complete_qualification"]);
-            assert_eq!(metric.get(), 0);
-            for _ in 0..2 {
-                chain.state().with_publication_blocked_for_test(|| {
-                    assert!(matches!(
-                        worker.commit(&block, &qc),
-                        Err(PublicationError::Retryable(_))
-                    ));
+                world.governance_proposals.insert(
+                    seeded_proposal.fingerprint(),
+                    crate::state::GovernanceProposalRecord {
+                        proposer: manager_account,
+                        kind: seeded_proposal,
+                        created_height: 1,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                    },
+                );
+                CertifiedTestChain::start(TestChainConfig::new(world, 1_000))
+                    .expect("actual signed genesis with initial governance World")
+            },
+            ConsensusMode::Permissioned,
+            move |chain, worker, blocks, _| {
+                // Signed instructions create the real reducer state and event before
+                // the original execution witness and publication surface are captured.
+                let attempt_id = create.governance_attempt_id();
+                let transition = SubmitParliamentLifecycleTransitionV1 {
+                    governance_attempt_id: attempt_id,
+                    transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+                };
+                let body = proposal_with_transaction(chain, worker, |chain, created_ms| {
+                    chain.sign(
+                        &manager,
+                        [
+                            InstructionBox::from(create),
+                            InstructionBox::from(transition),
+                        ],
+                        created_ms,
+                    )
                 });
+                let (block, qc) = execute_proposal(chain, worker, body);
+                let stage = worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_ref()
+                    .unwrap()
+                    .world
+                    .parliament_attempts
+                    .get(&attempt_id)
+                    .expect("signed Parliament instructions executed")
+                    .attempt()
+                    .stage;
+                assert_ne!(
+                    stage,
+                    iroha_data_model::governance::types::GovernanceStageV1::Qualification,
+                    "the actual reducer completed qualification before witness capture"
+                );
+                worker.prepare_with_origin(&block, &qc, origin).unwrap();
+                let original = original_overlay(worker);
+                let other = match origin {
+                    CommitTelemetryOrigin::Forward => CommitTelemetryOrigin::HistoricalReplay,
+                    CommitTelemetryOrigin::HistoricalReplay => CommitTelemetryOrigin::Forward,
+                };
+                assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+                assert_eq!(original_overlay(worker), original);
+                blocks.append(&block, &qc).unwrap();
+                let metric = chain
+                    .state()
+                    .telemetry
+                    .governance_parliament_transitions_total
+                    .with_label_values(&["complete_qualification"]);
+                assert_eq!(metric.get(), 0);
+                for _ in 0..2 {
+                    chain.state().with_publication_blocked_for_test(|| {
+                        assert!(matches!(
+                            worker.commit(&block, &qc),
+                            Err(PublicationError::Retryable(_))
+                        ));
+                    });
+                    assert_eq!(
+                        metric.get(),
+                        0,
+                        "refusal cannot publish transition observations"
+                    );
+                    assert_eq!(original_overlay(worker), original);
+                    assert_eq!(
+                        worker.prepare_with_origin(&block, &qc, origin).unwrap(),
+                        Some(qc.result)
+                    );
+                    assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+                }
+                worker.commit(&block, &qc).unwrap();
+                assert_eq!(
+                    chain
+                        .state()
+                        .view()
+                        .world()
+                        .parliament_attempts()
+                        .get(&attempt_id)
+                        .unwrap()
+                        .attempt()
+                        .stage,
+                    stage,
+                    "both origins publish the same authenticated transition state"
+                );
+                let expected = u64::from(origin == CommitTelemetryOrigin::Forward);
+                assert_eq!(metric.get(), expected);
+                worker.commit(&block, &qc).unwrap();
                 assert_eq!(
                     metric.get(),
-                    0,
-                    "refusal cannot publish transition observations"
+                    expected,
+                    "the original publication completes once"
                 );
-                assert_eq!(original_overlay(worker), original);
-                assert_eq!(
-                    worker.prepare_with_origin(&block, &qc, origin).unwrap(),
-                    Some(qc.result)
-                );
-                assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
-            }
-            worker.commit(&block, &qc).unwrap();
-            let expected = u64::from(origin == CommitTelemetryOrigin::Forward);
-            assert_eq!(metric.get(), expected);
-            worker.commit(&block, &qc).unwrap();
-            assert_eq!(
-                metric.get(),
-                expected,
-                "the original publication completes once"
-            );
-        });
+            },
+        );
     }
 }
 
@@ -570,7 +679,7 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
     with_worker(|chain, worker, blocks, _| {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
-        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap();
+        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap().unwrap();
         let make_crypto = || {
             let crypto = BlsCrypto::new();
             crypto

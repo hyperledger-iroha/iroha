@@ -1,0 +1,9 @@
+{
+  "previous_digest": "8e97a8c55e6ed48f771b98ade4935b1992c75d2a480406cd00371d3de0b16404",
+  "reviewed_digest": "db3d6515f79a5183000d3c434b0cb219682c7983f5d0257eff4ebe8df0d4c674",
+  "selected_input_count": 7025,
+  "changed_input_count": 9,
+  "manifest_fingerprint": "50c20cafba54d040df41318a191d52a35e53a20b5967f6f8baeb85ee28ea9e48",
+  "head": "0f6e50023a434e6fd171dca5b11e8f427a79882b",
+  "scope": "source review; native and broad runtime qualification remain pending"
+}

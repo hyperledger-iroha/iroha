@@ -19918,7 +19918,7 @@ state_test! { sync direct_execution_identity_is_unchanged_by_canonical_output_at
         with_results.hash(),
         "the consensus header hash intentionally excludes execution results"
     );
-    assert_eq!(with_results.canonical_resultless_proposal(), resultless);
+    assert_eq!(with_results.canonical_resultless_proposal().expect("valid fixture proposal projection"), resultless);
     assert_eq!(
         with_results.canonical_proposal_wire_hash().expect("executed proposal hash"),
         resultless.canonical_proposal_wire_hash().expect("resultless proposal hash"),
@@ -25677,7 +25677,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .sign(ALICE_KEYPAIR.private_key());
         let mut source = iroha_data_model::block::builder::BlockBuilder::new(block.as_ref().header());
         source.push_transaction(signed);
-        let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal();
+        let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal().expect("valid fixture proposal projection");
         let entrypoint_hash = source.external_entrypoints_cloned().next().unwrap().hash();
         source.set_execution_context(Some(iroha_data_model::block::BlockExecutionContextBundle::new(
             vec![iroha_data_model::block::ExternalExecutionContext::new(

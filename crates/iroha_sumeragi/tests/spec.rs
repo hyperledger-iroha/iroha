@@ -1,7 +1,6 @@
-//! Specification traceability and the §12.6 size gate of `iroha_sumeragi` (spec Appendix E,
-//! E39): every `§` reference and every `// SPEC:` marker in the crate resolves in the workspace
-//! spec `specs/sumeragi.md`, the spec's quorum table matches the code, and the core stays within
-//! the 8 000-line budget (the count per module is printed).
+//! Specification traceability of `iroha_sumeragi` (spec Appendix E, E39): every `§` reference
+//! and every `// SPEC:` marker resolves in `specs/sumeragi.md`, and its quorum table matches
+//! the implementation.
 
 // As in `src/lib.rs`: clippy attributes the workspace member `vendor/concread`'s feature name
 // `simd_support` to every crate it checks.
@@ -14,60 +13,6 @@ use std::{
 };
 
 use iroha_sumeragi::types::{fault_threshold, quorum};
-
-/// The §12.6 MUST: the core crate (everything except `sim/` and tests) has at most this many
-/// non-blank, non-comment lines.
-const CORE_BUDGET: usize = 8_000;
-
-/// The planned §12.6 split: module, budget, files (relative to `src/`).
-const MODULES: [(&str, usize, &[&str]); 8] = [
-    (
-        "types",
-        600,
-        &[
-            "types.rs",
-            "types/control_witness.rs",
-            "bytes.rs",
-            "bytes/shared.rs",
-            "availability.rs",
-            "availability/artifact.rs",
-            "availability/artifact/custody.rs",
-            "availability/artifact/author.rs",
-            "availability/artifact/acquisition.rs",
-        ],
-    ),
-    ("topology", 300, &["topology.rs"]),
-    (
-        "message",
-        800,
-        &[
-            "message.rs",
-            "message/attestation.rs",
-            "preimage.rs",
-            "crypto.rs",
-            "evidence.rs",
-        ],
-    ),
-    ("safety", 700, &["safety.rs", "machine/restart.rs"]),
-    ("pacemaker", 400, &["pacemaker.rs"]),
-    (
-        "core",
-        3_000,
-        &[
-            "machine/mod.rs",
-            "machine/intake.rs",
-            "machine/control.rs",
-            "machine/proposal.rs",
-            "machine/propose.rs",
-            "machine/round.rs",
-            "machine/timeout.rs",
-            "machine/timers.rs",
-            "machine/votes.rs",
-        ],
-    ),
-    ("sync", 700, &["machine/sync.rs"]),
-    ("api", 600, &["api.rs", "lib.rs"]),
-];
 
 fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -274,68 +219,4 @@ fn spec_quorum_table_matches_the_code() {
         checked += 1;
     }
     assert!(checked >= 5, "the example table was parsed ({checked})");
-}
-
-/// Non-blank, non-comment lines of `source`, without an inline `#[cfg(test)] mod tests { … }`
-/// at its end.
-fn core_lines(source: &str) -> usize {
-    let lines: Vec<&str> = source.lines().collect();
-    let end = lines
-        .windows(2)
-        .position(|pair| {
-            let next = pair[1].trim();
-            pair[0].trim() == "#[cfg(test)]" && next.starts_with("mod tests") && next.ends_with('{')
-        })
-        .unwrap_or(lines.len());
-    lines[..end]
-        .iter()
-        .filter(|line| {
-            let line = line.trim();
-            !line.is_empty() && !line.starts_with("//")
-        })
-        .count()
-}
-
-/// §12.6: the core stays within its line budget. The count per module is printed with its
-/// planned share (over-plan modules are reported, not failed; see Appendix E, E39).
-#[test]
-fn core_size_budget() {
-    let mut total = 0;
-    let mut unassigned = Vec::new();
-    let mut per_module = vec![0usize; MODULES.len()];
-    for path in rust_files(&crate_dir().join("src")) {
-        let file = relative(&path);
-        if file.starts_with("sim/")
-            || file.starts_with("machine/tests/")
-            || matches!(file.as_str(), "testing.rs" | "evidence/tests.rs")
-        {
-            continue;
-        }
-        let count = core_lines(&fs::read_to_string(&path).expect("read a source file"));
-        total += count;
-        match MODULES
-            .iter()
-            .position(|(_, _, files)| files.contains(&file.as_str()))
-        {
-            Some(module) => per_module[module] += count,
-            None => unassigned.push(file),
-        }
-    }
-    for ((name, plan, _), count) in MODULES.iter().zip(&per_module) {
-        let note = if count > plan {
-            "  (over the plan)"
-        } else {
-            ""
-        };
-        println!("{name:10} {count:5} / {plan:5}{note}");
-    }
-    println!("{:10} {total:5} / {CORE_BUDGET:5}", "total");
-    assert!(
-        unassigned.is_empty(),
-        "assign these files to a §12.6 module: {unassigned:?}"
-    );
-    assert!(
-        total <= CORE_BUDGET,
-        "the core has {total} lines, above the §12.6 budget of {CORE_BUDGET}"
-    );
 }

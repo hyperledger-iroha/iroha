@@ -1,0 +1,32 @@
+{
+  "captured_on": "2026-09-30",
+  "head": "0f6e50023a434e6fd171dca5b11e8f427a79882b",
+  "scope": "Exact working-tree originals immediately before explicitly requested removal of the Sumeragi source-size gate; retained history, not current enforcement or qualification.",
+  "files": [
+    {
+      "path": "crates/iroha_sumeragi/tests/spec.rs",
+      "bytes": 11628,
+      "sha256": "94488f64d6754213cb6aeebd6f715b6cc971ac5f7fca7497283fa27fb2ad8fdd"
+    },
+    {
+      "path": "crates/iroha_sumeragi/src/lib.rs",
+      "bytes": 6481,
+      "sha256": "338959e1f1184ff7d7d56c24078ab259d394d8196cf9740eaaa0ee436159be28"
+    },
+    {
+      "path": "specs/sumeragi.md",
+      "bytes": 339981,
+      "sha256": "b404df228ef6e961c558615464f3445a1f00768373ddde1322538460603fe0d0"
+    },
+    {
+      "path": "specs/sumeragi_goals.md",
+      "bytes": 14971,
+      "sha256": "abc61d30fc2ba98110e64515b99452c83e251c95a4ff8f235732528ddbd72b4e"
+    },
+    {
+      "path": "AGENTS.md",
+      "bytes": 25141,
+      "sha256": "01696442ad36a3c07e450dbb2081503d77a8c454dc9f951b7a6d8f17184537d4"
+    }
+  ]
+}

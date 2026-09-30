@@ -12,15 +12,15 @@ const MAX_BASELINE_FRAME_BYTES: usize = 16 * 1024;
 const MAX_ACCOUNT_FRAME_BYTES: usize = 256 * 1024;
 const MAX_QUERY_RESPONSE_BYTES: usize = 512 * 1024;
 const WORKLOAD_LOGICAL_ID_BYTES: usize = 64;
-const EFFECT_PREFIX: &str = "gscale_";
+const EFFECT_PREFIX: &str = "scaling_";
 pub(super) const WORKLOAD_ID: &str = "self_owned_account_metadata_insert_v1";
-pub(super) const ACCOUNT_SELECTION: &str = "(zero_based_cohort_sequence + first8le(sha256(gscale-account-offset-v1:seed))) modulo pool_length";
+pub(super) const ACCOUNT_SELECTION: &str = "(zero_based_cohort_sequence + first8le(sha256(scaling-account-offset-v1:seed))) modulo pool_length";
 
 pub(super) fn account_offset(seed: &str, account_count: usize) -> Result<usize> {
     if account_count == 0 || account_count > MAX_ACCOUNTS {
         bail!("workload account pool must contain at most {MAX_ACCOUNTS} accounts");
     }
-    let digest = Sha256::digest(format!("gscale-account-offset-v1:{seed}").as_bytes());
+    let digest = Sha256::digest(format!("scaling-account-offset-v1:{seed}").as_bytes());
     let mut selector = [0_u8; 8];
     selector.copy_from_slice(&digest[..8]);
     Ok((u64::from_le_bytes(selector) % account_count as u64) as usize)
@@ -345,8 +345,8 @@ pub(super) fn verify(
                 })
         },
     )
-    // These reads prove useful effects. The deployment's separate canonical evidence owner
-    // must still bind the observed application carrier, route, incarnation and committee.
+    // These reads prove useful effects. Which lanes carried them is observed by the scaling
+    // gate from the nodes' committed lane frontiers, not by this collector.
 }
 
 #[cfg(test)]

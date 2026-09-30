@@ -7,21 +7,18 @@ import argparse
 import csv
 import os
 import re
-import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-TS_RE = re.compile(r"\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)Z")
-HEIGHT_RE = re.compile(r"height:\s*(\d+)")
-MAX_TX_RE = re.compile(r"max_tx_param:\s*(\d+)")
 SUMMARY_RE = re.compile(r"(\w+)=([^\s]+)")
 STATUS_FIELD_RE = re.compile(r"(\w+):\s*([^,\)\s]+)")
-TIME_FMT = "%Y-%m-%dT%H:%M:%S.%f"
+OPTION_RE = re.compile(r"Some\((\d+)\)")
+# Native `SumeragiStatus` fields reported from Izanami's final status digest.
+STATUS_REPORT_FIELDS = ("committed_height_advance", "view", "level", "halted")
 
 
 @dataclass(frozen=True)
@@ -62,76 +59,10 @@ def parse_rows(value: str | None) -> list[MatrixRow]:
     return rows
 
 
-def percentile(sorted_values: list[float], quantile: float) -> float:
-    if not sorted_values:
-        return 0.0
-    rank = int(len(sorted_values) * quantile + 0.999999)
-    return sorted_values[max(0, min(len(sorted_values) - 1, rank - 1))]
-
-
-def parse_peer_gaps(run_dir: Path) -> dict[str, object]:
-    gaps: list[float] = []
-    max_tx: set[int] = set()
-    targeted_payload_total = 0
-    targeted_ready_total = 0
-    deliver_rebroadcast_total = 0
-    ready_quorum_deferral_total = 0
-    for log in (run_dir / "test-network").glob("*/run-1-stdout.log"):
-        commits: dict[int, datetime] = {}
-        for raw in log.read_text(errors="ignore").splitlines():
-            line = ANSI_RE.sub("", raw)
-            if "sending targeted RBC payload to peers missing READY" in line:
-                targeted_payload_total += 1
-            if "sending targeted RBC READY set to ready-repair peers" in line:
-                targeted_ready_total += 1
-            if "rebroadcasting RBC DELIVER to commit topology after delivery" in line:
-                deliver_rebroadcast_total += 1
-            if "deferring RBC DELIVER: READY quorum not reached" in line:
-                ready_quorum_deferral_total += 1
-            if "proposal assembly budget" in line:
-                match = MAX_TX_RE.search(line)
-                if match:
-                    max_tx.add(int(match.group(1)))
-            ts_match = TS_RE.match(line)
-            height_match = HEIGHT_RE.search(line)
-            if (
-                ts_match
-                and height_match
-                and "stored committed block to kura" in line
-            ):
-                commits[int(height_match.group(1))] = datetime.strptime(
-                    ts_match.group(1), TIME_FMT
-                )
-        previous: datetime | None = None
-        for height in sorted(commits):
-            current = commits[height]
-            if previous is not None:
-                gaps.append((current - previous).total_seconds())
-            previous = current
-    values = sorted(gaps)
-    return {
-        "max_tx": ";".join(str(item) for item in sorted(max_tx)),
-        "gap_samples": len(values),
-        "gap_avg_s": statistics.mean(values) if values else 0.0,
-        "gap_p50_s": percentile(values, 0.50),
-        "gap_p95_s": percentile(values, 0.95),
-        "gap_max_s": max(values) if values else 0.0,
-        "gap_over_3s": sum(value > 3.0 for value in values),
-        "rbc_targeted_payload_total": targeted_payload_total,
-        "rbc_targeted_ready_total": targeted_ready_total,
-        "rbc_deliver_rebroadcast_total": deliver_rebroadcast_total,
-        "rbc_ready_quorum_deferral_total": ready_quorum_deferral_total,
-    }
-
-
 def parse_runner_summary(log_path: Path) -> dict[str, str]:
     summary: dict[str, str] = {}
     for raw in log_path.read_text(errors="ignore").splitlines():
         line = ANSI_RE.sub("", raw)
-        if "sumeragi phase timing snapshot at target height" in line:
-            for key, value in SUMMARY_RE.findall(line):
-                summary[key] = value.strip(",")
-            continue
         if (
             "target block height reached" in line
             or "strict block height advanced" in line
@@ -144,10 +75,6 @@ def parse_runner_summary(log_path: Path) -> dict[str, str]:
                 summary["ingress_accepted"] = accepted.strip(",")
             if offered := fields.get("offered"):
                 summary["offered"] = offered.strip(",")
-            if quorum_p95 := fields.get("interval_p95_ms"):
-                summary["final_quorum_block_interval_p95_ms"] = quorum_p95.strip(",")
-            if strict_p95 := fields.get("strict_interval_p95_ms"):
-                summary["final_strict_block_interval_p95_ms"] = strict_p95.strip(",")
         if "izanami run complete" in line:
             summary["_summary_exit_code"] = "0"
         elif "izanami run finished with errors" in line:
@@ -162,8 +89,13 @@ def parse_runner_summary(log_path: Path) -> dict[str, str]:
 
 
 def integer(value: object) -> int | None:
+    """Parse an integer field, accepting Izanami's `Some(N)` rendering of an option."""
+
+    text = str(value)
+    match = OPTION_RE.fullmatch(text)
+    if match:
+        text = match.group(1)
     try:
-        text = str(value)
         return int(text) if text else None
     except ValueError:
         return None
@@ -178,17 +110,22 @@ def collect_result(
     run_dir = output_root / row.name
     runner_log = run_dir / "runner.log"
     summary = parse_runner_summary(runner_log)
-    gaps = parse_peer_gaps(run_dir)
     final_txs = integer(summary.get("final_strict_min_txs_approved", ""))
     committed_tps = "" if final_txs is None else f"{final_txs / args.duration:.2f}"
     if exit_code is None:
         parsed_exit_code = integer(summary.get("_summary_exit_code", ""))
         exit_code = parsed_exit_code if parsed_exit_code is not None else 1
-    peer_gap_p95_pass = (
-        int(gaps["gap_samples"]) > 0
-        and float(gaps["gap_p95_s"]) <= args.peer_gap_p95_threshold_s
+    strict_interval_p95_ms = integer(
+        summary.get("final_strict_block_interval_p95_ms", "")
     )
-    row_pass = exit_code == 0 and peer_gap_p95_pass
+    quorum_interval_p95_ms = integer(
+        summary.get("final_quorum_block_interval_p95_ms", "")
+    )
+    strict_interval_pass = (
+        strict_interval_p95_ms is not None
+        and strict_interval_p95_ms <= args.strict_interval_p95_threshold_ms
+    )
+    row_pass = exit_code == 0 and strict_interval_pass
     return {
         "name": row.name,
         "exit_code": exit_code,
@@ -198,8 +135,8 @@ def collect_result(
         "pipeline_ms": row.pipeline_ms,
         "latency_threshold_s": row.latency_threshold_s,
         "progress_interval_s": args.progress_interval_s,
-        "peer_gap_p95_threshold_s": args.peer_gap_p95_threshold_s,
-        "peer_gap_p95_pass": peer_gap_p95_pass,
+        "strict_interval_p95_threshold_ms": args.strict_interval_p95_threshold_ms,
+        "strict_interval_pass": strict_interval_pass,
         "offered": summary.get("offered", ""),
         "ingress_accepted": summary.get("ingress_accepted", ""),
         "failures": summary.get("failures", ""),
@@ -207,34 +144,13 @@ def collect_result(
         "final_strict_min_height": summary.get("final_strict_min_height", ""),
         "final_strict_min_txs_approved": summary.get("final_strict_min_txs_approved", ""),
         "committed_tps": committed_tps,
-        "runner_quorum_interval_p95_ms": summary.get("final_quorum_block_interval_p95_ms", ""),
-        "runner_strict_interval_p95_ms": summary.get("final_strict_block_interval_p95_ms", ""),
-        "phase_collect_da_ms": summary.get("phase_collect_da_ms", ""),
-        "phase_collect_precommit_ms": summary.get("phase_collect_precommit_ms", ""),
-        "phase_pipeline_total_ms": summary.get("phase_pipeline_total_ms", ""),
-        "phase_collect_da_max_ms": summary.get("phase_collect_da_max_ms", ""),
-        "phase_collect_precommit_max_ms": summary.get("phase_collect_precommit_max_ms", ""),
-        "phase_pipeline_total_max_ms": summary.get("phase_pipeline_total_max_ms", ""),
-        "phase_pipeline_total_ema_ms": summary.get("phase_pipeline_total_ema_ms", ""),
-        "pipeline_conflict_rate_bps": summary.get("pipeline_conflict_rate_bps", ""),
-        "lane_tx_vertices_total": summary.get("lane_tx_vertices_total", ""),
-        "lane_tx_edges_total": summary.get("lane_tx_edges_total", ""),
-        "lane_overlay_count_total": summary.get("lane_overlay_count_total", ""),
-        "lane_overlay_instr_total": summary.get("lane_overlay_instr_total", ""),
-        "detached_prepared_total": summary.get("detached_prepared_total", ""),
-        "detached_merged_total": summary.get("detached_merged_total", ""),
-        "detached_fallback_total": summary.get("detached_fallback_total", ""),
-        "view_change_install_total": summary.get("view_change_install_total", ""),
-        "tx_queue_depth": summary.get("tx_queue_depth", ""),
-        "tx_queue_saturated": summary.get("tx_queue_saturated", ""),
-        "missing_block_fetch_total": summary.get("missing_block_fetch_total", ""),
-        "consensus_missing_qc_reacquire_attempt_total": summary.get(
-            "consensus_missing_qc_reacquire_attempt_total", ""
-        ),
-        "blocksync_range_pull_escalation_total": summary.get(
-            "blocksync_range_pull_escalation_total", ""
-        ),
-        **gaps,
+        "runner_quorum_interval_p95_ms": ""
+        if quorum_interval_p95_ms is None
+        else quorum_interval_p95_ms,
+        "runner_strict_interval_p95_ms": ""
+        if strict_interval_p95_ms is None
+        else strict_interval_p95_ms,
+        **{field: summary.get(field, "") for field in STATUS_REPORT_FIELDS},
     }
 
 
@@ -309,11 +225,10 @@ def write_outputs(rows: list[dict[str, object]], output_root: Path) -> None:
         handle.write("# Izanami Liveness Matrix\n\n")
         handle.write(
             "| row | pass | exit | cap | pipeline | accepted | strict height | "
-            "approved | committed TPS | runner p95 | peer gap p95 | peer max | over 3s | DA ms | "
-            "precommit ms | DA max | precommit max | pipeline max | conflict bps | detached merged | fallback | RBC payload | RBC READY | "
-            "queue depth | view changes |\n"
+            "approved | committed TPS | runner p95 | committed advance | view | "
+            "level | halted |\n"
         )
-        handle.write("| " + " | ".join(["---"] * 25) + " |\n")
+        handle.write("| " + " | ".join(["---"] * 14) + " |\n")
         for row in rows:
             runner_p95 = row["runner_strict_interval_p95_ms"]
             runner_p95_text = "" if runner_p95 == "" else f"{runner_p95}ms"
@@ -322,15 +237,8 @@ def write_outputs(rows: list[dict[str, object]], output_root: Path) -> None:
                 f"{row['pipeline_ms']} | "
                 f"{row['ingress_accepted']} | {row['final_strict_min_height']} | "
                 f"{row['final_strict_min_txs_approved']} | {row['committed_tps']} | "
-                f"{runner_p95_text} | {float(row['gap_p95_s']):.3f}s | "
-                f"{float(row['gap_max_s']):.3f}s | {row['gap_over_3s']} | "
-                f"{row['phase_collect_da_ms']} | {row['phase_collect_precommit_ms']} | "
-                f"{row['phase_collect_da_max_ms']} | {row['phase_collect_precommit_max_ms']} | "
-                f"{row['phase_pipeline_total_max_ms']} | "
-                f"{row['pipeline_conflict_rate_bps']} | {row['detached_merged_total']} | "
-                f"{row['detached_fallback_total']} | "
-                f"{row['rbc_targeted_payload_total']} | {row['rbc_targeted_ready_total']} | "
-                f"{row['tx_queue_depth']} | {row['view_change_install_total']} |\n"
+                f"{runner_p95_text} | {row['committed_height_advance']} | {row['view']} | "
+                f"{row['level']} | {row['halted']} |\n"
             )
 
 
@@ -343,7 +251,7 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
         "--rows",
-        help="Comma-separated revision-4 rows: name:cap:pipeline_ms",
+        help="Comma-separated rows: name:cap:pipeline_ms",
     )
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--tps", type=int, default=20_000)
@@ -358,10 +266,13 @@ def main() -> int:
     )
     parser.add_argument("--rust-log", default="info")
     parser.add_argument(
-        "--peer-gap-p95-threshold-s",
-        type=float,
-        default=3.0,
-        help="Fail matrix rows whose peer-observed committed block gap p95 exceeds this value.",
+        "--strict-interval-p95-threshold-ms",
+        type=int,
+        default=3_000,
+        help=(
+            "Fail matrix rows whose Izanami strict block interval p95 (every peer's "
+            "committed height) exceeds this value."
+        ),
     )
     parser.add_argument(
         "--summarize-existing",
@@ -370,7 +281,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     if not is_admitted_committee_size(args.peers):
-        parser.error("--peers must be an exact revision-4 3f+1 committee in 4..=31")
+        parser.error("--peers must be an exact Sumeragi 3f+1 committee in 4..=31")
     args.repo = args.repo.resolve()
     args.izanami = (args.repo / args.izanami).resolve()
     args.irohad = (args.repo / args.irohad).resolve()
@@ -391,7 +302,7 @@ def main() -> int:
             f"pass={result['row_pass']} "
             f"accepted={result['ingress_accepted']} "
             f"committed_tps={result['committed_tps']} "
-            f"gap_p95={float(result['gap_p95_s']):.3f}s",
+            f"strict_interval_p95_ms={result['runner_strict_interval_p95_ms']}",
             flush=True,
         )
     write_outputs(results, args.output_root)

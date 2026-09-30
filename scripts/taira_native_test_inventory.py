@@ -36,12 +36,15 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_context_archive_failure_preserves_original_bytes_until_durable_acknowledgement',
         'native_context_archive_preparation_refuses_foreign_pool_without_reexecuting',
         'availability_encoding_refusal_retains_original_header_qc_and_execution',
+        'canonical_replay_origin_retains_transition_idempotence_through_publication_retry',
     )),
     ('native durable archive recovery', 'sumeragi/executor.rs', 'sumeragi/executor/archive_tests.rs', 'archive_tests', 'sumeragi::executor::archive_tests', (
         'partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications',
         'pending_capture_rejects_substituted_header_qc_state_and_missing_certificate',
         'archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen',
         'below_quorum_current_frame_cannot_finish_pending_archive_capture',
+        'restart_binds_archives_after_replay_and_captures_the_missing_tip_once',
+        'binding_refuses_unpublished_execution_and_captures_the_published_tip',
     )),
     ('native original execution and undo', 'state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests', (
         'original_genesis_and_worker_publish_exact_tip_with_undo',

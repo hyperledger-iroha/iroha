@@ -77,8 +77,9 @@
 //! for each ID it builds the mutated crate and requires its named deterministic test(s) to fail
 //! (then its randomized scenario, as a second line), and requires the unmutated build to pass.
 //!
-//! CI runs the §12.6 size gate (`tests/spec.rs`) with every pull request's crate tests and the
-//! mutation gate nightly (`.github/workflows/nightly_sumeragi.yml`, `--strict`).
+//! CI runs specification traceability and quorum checks (`tests/spec.rs`) with every pull
+//! request's crate tests and the mutation gate nightly (`.github/workflows/nightly_sumeragi.yml`,
+//! `--strict`).
 //!
 //! TODO: add the §13.5 multi-process soak (the conformance runs of the production driver kernel
 //! in this simulator live in `iroha_core::sumeragi::driver`) and the O-AMX oracle with the AMX

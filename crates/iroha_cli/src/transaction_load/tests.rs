@@ -894,7 +894,7 @@ fn root_command_routes_load_through_the_existing_transaction_surface() {
         "--max-submission-lag-ms",
         "10",
         "--trace-out",
-        "/tmp/gscale-trace.json",
+        "/tmp/scaling-trace.json",
         "--resource-program",
         "/usr/bin/python3",
         "--resource-worker",
@@ -914,7 +914,7 @@ fn root_command_routes_load_through_the_existing_transaction_surface() {
         "--local-observer-config",
         "/tmp/peer3-client.toml",
         "--diagnostic-out",
-        "/tmp/gscale-journal.jsonl",
+        "/tmp/scaling-journal.jsonl",
     ])
     .expect("canonical CLI transaction load command");
     let crate::Command::Tx(crate::transaction::Command::Load(args)) = parsed.command else {

@@ -1,10 +1,13 @@
 """Pure, bounded admission for the ten-run raw resource evidence experiment.
 
-The caller supplies trusted geometry, actual pinned static sizes, and explicit
-maximum sizes for every dynamic control file. This module performs no filesystem,
-process, network, sampler, or replay work. An admitted reservation is not proof
-that writers enforce it or that a bundle's typed resource subtree was scanned.
-Those owners must use this same immutable policy and reject growth beyond it.
+The multilane scaling gate (``scripts/sumeragi_scaling_gate.py``) runs five
+one-lane/four-lane pairs; every run has one resource capture directory and three
+public files. The caller supplies trusted geometry, actual pinned static sizes,
+and explicit maximum sizes for every dynamic control file. This module performs
+no filesystem, process, network, sampler, or replay work. An admitted reservation
+is not proof that writers enforce it: ``iroha tx load`` enforces the
+journal and trace caps it receives from the probe worker's admission receipt, and
+the gate enforces the run receipt, manifest and report caps before it publishes.
 """
 from __future__ import annotations
 
@@ -30,11 +33,7 @@ MAX_FILE_BYTES = 256 * MIB
 MAX_TOTAL_BYTES = 2 * 1024 * MIB
 _VARIANTS = ("one_lane", "four_lane")
 _LABEL = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
-RUN_FILE_FIELDS = (
-    "collector_journal", "transaction_trace", "canonical_proof", "run_receipt", "raw_run",
-    "native_carrier", "native_queries", "native_facts", "native_request", "native_bundle",
-    "genesis_manifest", "signed_genesis", "genesis_context", "genesis_network_record", "genesis_anchors",
-)
+RUN_FILE_FIELDS = ("collector_journal", "transaction_trace", "run_receipt")
 
 
 class BudgetError(ValueError):
@@ -177,11 +176,13 @@ class FileBudget:
 
 @dataclass(frozen=True, slots=True)
 class RunBudget:
-    """One mandatory sampled run with exactly fifteen public file allocations.
+    """One mandatory sampled run with exactly three public file allocations.
 
-    The canonical proof is one of six native outputs and is counted once. Five
-    public genesis copies are separately charged from their private originals;
-    this evidence ledger does not admit the private runtime or mutable stores.
+    ``iroha tx load`` writes the collector journal and the transaction
+    trace; the scaling gate writes the run receipt (network, lane and status
+    observations of the run). The raw resource captures are charged separately
+    from the capture geometry. This evidence ledger does not admit the private
+    runtime (node stores, keys, logs) or other mutable stores.
     """
 
     pair_index: int
@@ -189,19 +190,7 @@ class RunBudget:
     geometry: CaptureGeometry
     collector_journal: FileBudget
     transaction_trace: FileBudget
-    canonical_proof: FileBudget
     run_receipt: FileBudget
-    raw_run: FileBudget
-    native_carrier: FileBudget
-    native_queries: FileBudget
-    native_facts: FileBudget
-    native_request: FileBudget
-    native_bundle: FileBudget
-    genesis_manifest: FileBudget
-    signed_genesis: FileBudget
-    genesis_context: FileBudget
-    genesis_network_record: FileBudget
-    genesis_anchors: FileBudget
 
     def __post_init__(self) -> None:
         _integer(self.pair_index, 1, PAIR_COUNT)

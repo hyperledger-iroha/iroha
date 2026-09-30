@@ -13,7 +13,10 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
         CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
     let committed = chain.committed(2);
     let header = committed.header().unwrap();
-    let proposal = committed.block().canonical_resultless_proposal();
+    let proposal = committed
+        .block()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let payload = proposal.encode_wire().unwrap();
     let source =
         ValidBlock::native_header_source(&proposal, predecessor.state(), header, &payload).unwrap();
@@ -89,7 +92,10 @@ fn native_rejection_after_original_source_publication_is_a_local_refusal() {
         CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
     producer.commit_at(2_000, Vec::new());
     let committed = producer.committed(2);
-    let proposal = committed.block().canonical_resultless_proposal();
+    let proposal = committed
+        .block()
+        .canonical_resultless_proposal()
+        .expect("valid fixture proposal projection");
     let payload = proposal.encode_wire().unwrap();
 
     let mut receiver =

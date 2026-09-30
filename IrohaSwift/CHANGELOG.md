@@ -4,6 +4,15 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- `ToriiPipelinePreflight` decodes exactly the served `GET /v1/pipeline/preflight`
+  body, checked against the Rust-generated `fixtures/torii/pipeline_preflight.json`:
+  `ToriiPipelinePreflightSumeragi` carries only the positive `blockCadenceMs`,
+  every object rejects fields Torii does not serve, unsigned limits reject
+  negative values, fee amounts are `String`s and `settlementMode` is `direct` or
+  `lane_relay_burn`. Torii serves no stall threshold, so
+  `ToriiPipelinePreflight.stallThresholdMs` (`stallBlockCadences` = 20 times the
+  block cadence) now drives `isStatusStalled(_:)`; `blockTimeMs`,
+  `commitTimeMs` and `stallThresholdMs` were removed from the sumeragi section.
 - Added `ToriiClient.getSumeragiLanes()` (async and completion-handler forms)
   for the operator-signed `GET /v1/sumeragi/lanes` list. Responses decode
   fail-closed into `ToriiSumeragiLaneStatus` (exact fields, canonical

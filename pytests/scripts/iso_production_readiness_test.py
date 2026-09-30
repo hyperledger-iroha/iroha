@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pytests.scripts import iso_operator_evidence_verify_test as evidence_test
@@ -486,7 +487,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=readiness-ancestor-secret"
         path_type = type(READINESS.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -497,15 +497,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(READINESS.ReadinessError) as caught:
                         READINESS._reject_symlinked_existing_ancestors(
                             READINESS.Path("ancestor") / "leaf",
                             display_label="summary_out",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out ancestors", message)
@@ -537,12 +534,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(READINESS.ReadinessError) as caught:
                         READINESS._read_regular_file(path, display_label="evidence")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect evidence", message)
@@ -558,7 +552,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
     def test_same_existing_file_stat_failures_return_false(self):
         hidden = "token=readiness-alias-stat-secret"
         path_type = type(READINESS.Path("."))
-        original_stat = path_type.stat
         cases = (
             OSError(5, hidden),
             RuntimeError(hidden),
@@ -571,16 +564,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 def failing_stat(_self, *args, error=failure, **kwargs):
                     raise error
 
-                path_type.stat = failing_stat
-                try:
+                with patch.object(path_type, "stat", failing_stat):
                     self.assertFalse(
                         READINESS._same_existing_file(
                             READINESS.Path("left"),
                             READINESS.Path("right"),
                         )
                     )
-                finally:
-                    path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=readiness-resolve-secret"
@@ -601,12 +591,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         raise error
                     return original_resolve(self, *args, **kwargs)
 
-                path_type.resolve = failing_resolve
-                try:
+                with patch.object(path_type, "resolve", failing_resolve):
                     with self.assertRaises(READINESS.ReadinessError) as caught:
                         READINESS._reject_duplicate_paths([target], "--xsd-summary")
-                finally:
-                    path_type.resolve = original_resolve
 
                 message = str(caught.exception)
                 self.assertIn("cannot resolve --xsd-summary[0]", message)
@@ -882,9 +869,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
     def test_text_output_target_inspection_failures_do_not_echo_detail(self):
         hidden = "token=readiness-output-inspect-secret"
         path_type = type(READINESS.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
-        original_lstat = path_type.lstat
         cases = (
             ("exists_os", "exists", OSError(5, hidden)),
             ("exists_runtime", "exists", RuntimeError(hidden)),
@@ -905,20 +889,17 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                ):
                     with self.assertRaises(READINESS.ReadinessError) as caught:
                         READINESS._ensure_text_output_target(
                             READINESS.Path("summary.json"),
                             display_label="summary_out",
                             create_parent=False,
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out parent", message)
@@ -933,7 +914,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
     def test_text_output_parent_creation_failures_do_not_echo_detail(self):
         hidden = "token=readiness-output-create-secret"
         path_type = type(READINESS.Path("."))
-        original_mkdir = path_type.mkdir
         cases = (
             ("mkdir_os", OSError(5, hidden)),
             ("mkdir_runtime", RuntimeError(hidden)),
@@ -947,15 +927,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with patch.object(path_type, "mkdir", failing_mkdir):
                         with self.assertRaises(READINESS.ReadinessError) as caught:
                             READINESS._ensure_text_output_target(
                                 READINESS.Path(raw_root) / "out" / "summary.json",
                                 display_label="summary_out",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create summary_out parent", message)

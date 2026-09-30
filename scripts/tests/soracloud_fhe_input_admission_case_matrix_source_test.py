@@ -10,15 +10,12 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs"
+SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
 MAX_SOURCE_LINES = 40_506
 
-REGION_START = """    #[derive(Clone, Copy)]
-    enum FheInputAdmissionPayloadShape"""
-REGION_END = """    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof"""
-REGION_HASH = "79725ce363652dc2891ae82f88572123b98101014acb1a4465d5a5389b5dd32a"
+REGION_START = '#[derive(Clone, Copy)]\nenum FheInputAdmissionPayloadShape'
+REGION_END = '#[cfg(feature = "zk-stark")]\n#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
+REGION_HASH = "472eb42b8bb787f4facdd5854e2d57db5175a9f710aa0ea17a7afbcd82fc3d4d"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -108,7 +105,8 @@ VERIFIER_MUTATION_TOKENS = (
 RUNNER_TOKENS = (
     "for &case in cases",
     "configure_fhe_input_admission_rejection_verifier",
-    "deploy_fhe_job_test_service",
+    "deploy_diagnostic_job_test_service",
+    "diagnose_fhe_input_preflight",
     "sample_fhe_input_admission_proof",
     "sample_fhe_input_admission_binding_air_rejection_proof",
     "isi::MutateSoracloudState",
@@ -162,16 +160,22 @@ def _case_arm(region: str, case: str) -> str:
     if region.count(marker) != 1:
         raise GuardError(f"{case}: expected one typed specification arm")
     start = region.index(marker)
-    end_marker = "\n                },"
+    end_marker = '\n            },'
     end = region.find(end_marker, start)
     if end < 0:
         raise GuardError(f"{case}: unterminated specification arm")
     return region[start : end + len(end_marker)]
 
 
+def validate_module_owner(owner: str) -> None:
+    pattern = r'#\[cfg\(test\)\]\s*mod tests\s*\{\s*use iroha_model_base::domain::DomainId;\s*use iroha_model_base::peer::PeerId;\s*include!\("soracloud_tests.rs"\);\s*mod agent_apartment;\s*\}'
+    if len(re.findall(pattern, owner)) != 1 or owner.count('include!("soracloud_tests.rs")') != 1:
+        raise GuardError("Soracloud current test leaf lost its compiled cfg(test) owner")
+
+
 def validate_source(source: str) -> None:
     if len(source.splitlines()) > MAX_SOURCE_LINES:
-        raise GuardError("soracloud.rs exceeded the frozen source budget")
+        raise GuardError("Soracloud test owner exceeded its source budget")
     region = _region(source)
     for test_name, (expected_attributes, expected_cases) in TEST_CASES.items():
         occurrences = len(re.findall(rf"\b{re.escape(test_name)}\b", source))
@@ -208,6 +212,17 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text()
 
+    def test_current_module_owner_and_redirect_controls(self) -> None:
+        owner = (REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs").read_text()
+        validate_module_owner(owner)
+        for old, new in (
+            ('include!("soracloud_tests.rs")', 'include!("uncompiled_tests.rs")'),
+            ('#[cfg(test)]\nmod tests', '#[cfg(any())]\nmod tests'),
+        ):
+            self.assertEqual(owner.count(old), 1)
+            with self.subTest(target=old), self.assertRaises(GuardError):
+                validate_module_owner(owner.replace(old, new, 1))
+
     def test_current_source_preserves_case_matrix(self) -> None:
         validate_source(self.source)
 
@@ -219,14 +234,14 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
 
     def test_ordered_attribute_mutation_is_rejected(self) -> None:
         name = "mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_circuit"
-        old = f'#[cfg(feature = "zk-stark")]\n        #[test]\n        fn {name}'
+        old = f'#[cfg(feature = "zk-stark")]\n    #[test]\n    fn {name}'
         mutated = _replace_once(self.source, old, old.replace("#[test]", "#[ignore]"))
         with self.assertRaises(GuardError):
             validate_source(mutated)
 
     def test_case_wiring_mutation_is_rejected(self) -> None:
         name = next(iter(TEST_CASES))
-        old = f"fn {name} => [\n            FheInputAdmissionRejectionCase::MissingVerifier"
+        old = f"fn {name} => [\n        FheInputAdmissionRejectionCase::MissingVerifier"
         mutated = _replace_once(self.source, old, old.replace("MissingVerifier", "OversizedEnvelope"))
         with self.assertRaises(GuardError):
             validate_source(mutated)
@@ -241,7 +256,7 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
             validate_source(mutated)
 
     def test_adversarial_verifier_mutation_is_rejected(self) -> None:
-        old = '.expect("registered verifier")\n                    .curve = "bn254"'
+        old = '.expect("registered verifier")\n                .curve = "bn254"'
         mutated = _replace_once(self.source, old, old.replace("bn254", "bls12-381"))
         with self.assertRaises(GuardError):
             validate_source(mutated)
@@ -256,7 +271,7 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
             validate_source(mutated)
 
     def test_storage_atomicity_mutation_is_rejected(self) -> None:
-        old = ".is_none(),\n                \"{}\",\n                spec.storage_message"
+        old = '.is_none(),\n            "{}",\n            spec.storage_message'
         mutated = _replace_once(self.source, old, old.replace(".is_none()", ".is_some()"))
         with self.assertRaises(GuardError):
             validate_source(mutated)

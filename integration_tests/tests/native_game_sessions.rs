@@ -304,8 +304,8 @@ async fn finalized_state_observation(
         .first()
         .ok_or_else(|| eyre!("missing original genesis"))?;
     ensure!(
-        first.canonical_resultless_proposal().encode_wire()?
-            == original.0.canonical_resultless_proposal().encode_wire()?,
+        first.canonical_resultless_proposal()?.encode_wire()?
+            == original.0.canonical_resultless_proposal()?.encode_wire()?,
         "peer history replaced the independently signed genesis"
     );
     let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(

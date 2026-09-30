@@ -906,17 +906,6 @@ impl PublicationCaptureProbe {
 
 #[cfg(test)]
 impl StateBlock<'_> {
-    /// Stage a closed local observation for publication tests, without changing execution.
-    /// The real witness, certificate and journal publication remain required.
-    #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_parliament_transition_observation_for_test(
-        &mut self,
-        transition: iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
-    ) {
-        self.pending_parliament_telemetry_events
-            .push((transition, None));
-    }
-
     /// Read the same retained preparation identities without giving mutation authority.
     pub(crate) fn publication_identity_for_test(&self) -> (usize, usize, bool) {
         let p = self

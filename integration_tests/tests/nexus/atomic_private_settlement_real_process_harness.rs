@@ -8135,9 +8135,9 @@ fn certified_native_history_from_proofs(
         let block = iroha::data_model::block::decode_versioned_signed_block(&proof.block_wire)?;
         if at == 1 {
             ensure!(
-                block.canonical_resultless_proposal().encode_wire()?
+                block.canonical_resultless_proposal()?.encode_wire()?
                     == trusted_genesis
-                        .canonical_resultless_proposal()
+                        .canonical_resultless_proposal()?
                         .encode_wire()?,
                 "peer substituted the independently signed genesis"
             );

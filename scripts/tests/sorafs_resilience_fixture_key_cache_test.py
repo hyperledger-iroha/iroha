@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 from unittest import mock
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sorafs_resilience_test_support as fixture
 
 

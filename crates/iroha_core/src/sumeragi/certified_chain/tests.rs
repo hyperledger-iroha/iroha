@@ -555,6 +555,7 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
         // Authenticate the changed header with original proposer custody and actual RS16 rows.
         let payload = original
             .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
             .encode_wire()
             .unwrap();
         let body = chain.author_payload(header, payload);
@@ -811,7 +812,7 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
         CertifiedChain::from_frames(&chain_id, &foreign, &hashes, &frames).err(),
         Some(ChainReadError::ForeignGenesis)
     );
-    let other_chain = ChainId::from("foreign instance");
+    let other_chain = ChainId::from("foreign-instance");
     let reader = CertifiedChain::from_frames(&other_chain, &network, &hashes, &frames).unwrap();
     assert_eq!(
         reader.certified(3).err(),

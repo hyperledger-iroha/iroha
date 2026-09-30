@@ -1193,6 +1193,8 @@ def test_release_pipeline_requires_explicit_image_contract_before_outputs(
         [
             sys.executable,
             str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
+            "--trusted-cuda-key-sha256",
+            "9" * 64,
             "--version",
             version,
             "--output-dir",

@@ -580,6 +580,7 @@ mod tests {
         let payload = certified
             .block
             .canonical_resultless_proposal()
+            .expect("valid original proposal")
             .encode_wire()
             .unwrap();
         let budget = AllocationBudget::new(128 * 1024 * 1024);
@@ -627,13 +628,18 @@ mod tests {
             Duration::from_millis(header.creation_time_ms - 1)
         );
         transaction.verify_signature().unwrap();
-        let original_wire = block.canonical_resultless_proposal().encode_wire().unwrap();
+        let original_wire = block
+            .canonical_resultless_proposal()
+            .expect("valid original proposal")
+            .encode_wire()
+            .unwrap();
         let proof = fixture.certify(block);
         let certified = proof.decode_checked().unwrap();
         assert_eq!(
             certified
                 .block
                 .canonical_resultless_proposal()
+                .expect("valid original proposal")
                 .encode_wire()
                 .unwrap(),
             original_wire

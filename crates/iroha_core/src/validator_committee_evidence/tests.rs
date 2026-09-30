@@ -611,7 +611,7 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
     assert!(
         verify_validator_committee_selection_evidence_v1(
             &evidence,
-            &ChainId::from("foreign configured chain"),
+            &ChainId::from("foreign-configured-chain"),
             network,
             2,
             attempt,
@@ -734,7 +734,7 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
     assert!(
         verify_validator_committee_provisioning_evidence_v1(
             &evidence,
-            &ChainId::from("foreign configured chain"),
+            &ChainId::from("foreign-configured-chain"),
             network,
             2,
             attempt,

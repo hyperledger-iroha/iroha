@@ -2119,15 +2119,13 @@ pub(super) fn revalidate_provider(admitted: &HostAdmission, validator: &Validato
 pub(in super::super) fn fixture_plan(
     validators: &[ValidatorV1],
     clients: &[reset::ValidatorClientV1],
+    network_id: NetworkId,
 ) -> BeaconBootstrapPlanV1 {
     let mut roster = clients
         .iter()
         .map(|client| client.peer_id.parse::<PeerId>().unwrap())
         .collect::<Vec<_>>();
     roster.sort();
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::new(b"fixture next Taira genesis"),
-    ));
     let request = NativeRequestV1 {
         schema: REQUEST_SCHEMA.into(),
         dkg_session: GlobalThresholdBeaconDkgSessionV1 {
@@ -2543,8 +2541,11 @@ mod tests {
         );
         assert!(validated_unit_credential_paths(&inputs).is_err());
         inputs.final_units[0].credential_path = canonical;
-        inputs.authorization_nonce = "differentauthorizationnonce12345678".into();
+        inputs.authorization_nonce = "12345678abcdefghijklmnopqrstuvwx".into();
         assert_eq!(validated_unit_credential_paths(&inputs).unwrap(), paths);
+        inputs.authorization_nonce.push('a');
+        assert!(validated_unit_credential_paths(&inputs).is_err());
+        inputs.authorization_nonce.pop();
         inputs.final_units[1].signer_index = 1;
         assert!(validated_unit_credential_paths(&inputs).is_err());
         inputs.final_units[1].signer_index = 2;
@@ -2617,10 +2618,21 @@ mod tests {
                 selected.clear();
                 selected.push(Log::new(Level::INFO, "substituted instruction".to_owned()).into());
             }
-            let transaction = TransactionBuilder::new(network, authority.clone(), fees.clone())
+            let builder = if case == 1 {
+                // A genuinely signed genesis transaction cannot authorize an
+                // ordinary installation, even with the exact certificate bytes.
+                TransactionBuilder::new_genesis(authority.clone(), fees.clone())
+            } else {
+                TransactionBuilder::new(network, authority.clone(), fees.clone())
+            };
+            let transaction = builder
                 .with_instructions(selected)
                 .try_sign(key.private_key())
                 .unwrap();
+            transaction.verify_signature().unwrap();
+            if case == 1 {
+                assert_eq!(transaction.network_id(), None);
+            }
             let envelope = InstallEnvelopeV1 {
                 schema: "iroha.taira.public-reset.beacon-install-envelope.v1".into(),
                 authorization_sha256: "a".repeat(64),
@@ -2685,7 +2697,8 @@ mod tests {
             assert!(validate_plan(&changed).is_err(), "case {case}");
         }
         let mut alternate_authorization = inventory.clone();
-        alternate_authorization.authorization_nonce = "differentauthorizationnonce12345678".into();
+        alternate_authorization.authorization_nonce = "12345678abcdefghijklmnopqrstuvwx".into();
+        reset::validate_nonce(&alternate_authorization.authorization_nonce).unwrap();
         assert_eq!(
             ceremony_root(&inventory),
             ceremony_root(&alternate_authorization)

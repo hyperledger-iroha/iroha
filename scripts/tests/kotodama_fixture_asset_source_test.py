@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        'd43f3d1e661a5fde51bc0841fb8024270a9115be357bc3ff6e1f108979ceeb0a',
+        '64228020f76318efa67da5cbc704d0d821b04d12bba5eab20fef57c56347bda4',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -327,6 +327,11 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller)',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone())',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
+        b'fn invocation_alias_decoding_preserves_read_deferral_before_test_failure()',
+        b'let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);',
+        b'assert_eq!(host.invoke_entrypoint(&mut vm, false), Err(refusal));',
+        b'assert_eq!(host.last_test_error(), None);',
+        b'assert_eq!(budget.reserved_bytes(), occupied);',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
@@ -366,6 +371,7 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
         b'{{"operation":"{operation}","index":"{index}"}}',
     ),
     'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
+        b'mv::allocation::AllocationBudget',
         b'load_koto_test_prepared',
         b'{{\\"value\\":7,\\"unexpected\\":true}}',
         b'WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new())',
