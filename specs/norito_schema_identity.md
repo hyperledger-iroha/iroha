@@ -349,8 +349,7 @@ little-endian limbs and coefficient checks. Forty-five original complete frames
 cover public roots, Options and vectors; they reproduce exactly and reject
 wrong identities, truncation and suffixes. The retained-layer cache test compares
 opening payload bytes inside `Proof`, which owns their enclosing frame. The nine
-proof wire tests and all 61 backend test declarations remain; the production
-files are now 4,785 and 3,872 lines, with both extracted test modules below 3,000.
+proof wire tests and all 61 backend test declarations remain.
 Telemetry removes its unused duplicate bucket DTO and uses the existing
 `iroha_torii_shared::status::SchedulerLayerWidthBuckets` owner.
 

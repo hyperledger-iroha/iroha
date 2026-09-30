@@ -1017,6 +1017,10 @@ pub struct Args {
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
+    /// Account-address chain prefix written into genesis and client/peer configs.
+    /// Public chain identities retain their fixed prefix.
+    #[arg(long, value_name = "PREFIX")]
+    chain_discriminant: Option<u16>,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
     /// Requires at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
@@ -1083,6 +1087,7 @@ impl<T: Write> RunArgs<T> for Args {
             peers,
             seed,
             chain_id,
+            chain_discriminant,
             sora_profile,
             private_dataspace,
             perf_profile,
@@ -1134,7 +1139,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_inner(&opts, writer, Some(&chain_id))
+        generate_localnet_inner(&opts, writer, Some(&chain_id), chain_discriminant)
     }
 }
 struct Peer {
@@ -1218,7 +1223,7 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_inner(opts, writer, None)
+    generate_localnet_inner(opts, writer, None, None)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions, taira: bool) -> Result<ResolvedHosts> {
@@ -1316,9 +1321,12 @@ fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
+    configured_discriminant: Option<u16>,
 ) -> Outcome {
     init_instruction_registry();
     let chain_id = resolve_localnet_chain_id(chain_id)?;
+    let chain_discriminant =
+        resolve_localnet_chain_discriminant(&chain_id, configured_discriminant)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     let hosts = validate_localnet_options(opts, taira)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
@@ -1346,7 +1354,6 @@ fn generate_localnet_inner<T: Write>(
     tui::status("Copying rANS tables");
     let rans_tables_path = copy_rans_tables(&out_dir)?;
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-    let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
     // generation scoped to the selected chain.  Applying the guard only while
     // rendering/parsing peer configs is too late: the genesis and alias intent
@@ -2337,6 +2344,19 @@ fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
         .wrap_err("`--chain-id` must be canonical")?;
     Ok(chain_id.to_owned())
 }
+fn resolve_localnet_chain_discriminant(
+    chain_id: &str,
+    configured: Option<u16>,
+) -> Result<Option<u16>> {
+    let fixed = known_chain_discriminant_for_chain_id(chain_id);
+    if let (Some(requested), Some(required)) = (configured, fixed) {
+        ensure!(
+            requested == required,
+            "`--chain-discriminant` {requested} conflicts with the fixed prefix {required} for chain {chain_id}"
+        );
+    }
+    Ok(configured.or(fixed))
+}
 #[derive(Clone, Copy)]
 struct RenderPeerFeatures<'a> {
     mcp_enabled: bool,
@@ -2597,7 +2617,7 @@ fn render_peer_config(
         Value::String(gas_account_id.to_owned()),
     );
     nexus.insert("staking".into(), Value::Table(staking));
-    if npos_bootstrap {
+    if npos_bootstrap || chain_discriminant.is_some() {
         let fee_asset_id = localnet_xor_asset_literal();
         let mut fees = Table::new();
         fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));

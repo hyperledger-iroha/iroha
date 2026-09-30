@@ -6934,6 +6934,12 @@ mod tests {
             )),
             "NotPermitted"
         );
+        assert_eq!(
+            transaction_contract_rejection_json(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("permission denied".into()),
+            )),
+            None
+        );
         let schema_hash = [7_u8; 32];
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
             iroha_data_model::executor::ContractRejection {
@@ -6942,6 +6948,7 @@ mod tests {
                 schema_hash,
                 name: "BelowMinimum".into(),
                 code: 18,
+                message: None,
             },
         ));
         assert_eq!(transaction_rejection_code(&contract), "BelowMinimum");
@@ -11833,7 +11840,7 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     let mut value = json::Map::new();
     value.insert(
         "contract".into(),
-        json::Value::String(rejection.contract.clone()),
+        json::Value::String(rejection.contract.to_string()),
     );
     value.insert(
         "error_type".into(),

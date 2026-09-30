@@ -1191,29 +1191,36 @@ fn governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layou
             .expect_err("alternate governed verifier-key layout must be rejected");
         assert_invalid_parameter_contains(error, "non-canonical encoding");
     }
-    let core_payload = norito::encode_canonical(&crate::zk_stark::StarkFriVerifyingKeyV1 {
-        version: 1,
-        circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1.to_owned(),
-        n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-        blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-        fold_arity: 2,
-        queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-        merkle_arity: 2,
-    })
-    .expect("encode retired governed Core STARK verifier-key payload");
-    let mut native_with_core_payload = native_material.clone();
-    native_with_core_payload.native_payload = core_payload;
-    let canonical_core_artifact = canonical_verifier_key_artifact_bytes_with_nested_material(
-        &outer,
-        &key,
-        &material_envelope,
-        &native_with_core_payload,
-    );
-    let error = validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
-        &canonical_core_artifact,
-    )
-    .expect_err("governed Core STARK verifier-key payload must be rejected");
-    assert_invalid_parameter_contains(error, "canonical BFV-native governed V1 format");
+    // The optional Core STARK type is needed only for this retired-payload
+    // rejection specimen; canonical BFV and every alternate layout above run
+    // independently of that feature.
+    #[cfg(feature = "zk-stark")]
+    {
+        let core_payload = norito::encode_canonical(&crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1.to_owned(),
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        })
+        .expect("encode retired governed Core STARK verifier-key payload");
+        let mut native_with_core_payload = native_material.clone();
+        native_with_core_payload.native_payload = core_payload;
+        let canonical_core_artifact = canonical_verifier_key_artifact_bytes_with_nested_material(
+            &outer,
+            &key,
+            &material_envelope,
+            &native_with_core_payload,
+        );
+        let error =
+            validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+                &canonical_core_artifact,
+            )
+            .expect_err("governed Core STARK verifier-key payload must be rejected");
+        assert_invalid_parameter_contains(error, "canonical BFV-native governed V1 format");
+    }
 }
 fn sample_fhe_input_admission_attachment(
     proof_box: iroha_data_model::proof::ProofBox,

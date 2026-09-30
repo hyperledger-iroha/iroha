@@ -42,7 +42,8 @@ const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
 /// the consensus proof cap under the mandatory shared STARK geometry.
 /// TODO: review and install a certificate for the bounded replacement proof.
 pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
-pub(crate) const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
+/// Schema version of the canonical native-resource certificate payload.
+pub const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const RESOURCE_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.native-resource-certificate.payload.v1";
 const RESOURCE_CERTIFICATE_FIELD_COUNT_V1: u16 = 60;
@@ -118,73 +119,130 @@ struct ZkX509SoundnessCertificateV1 {
 }
 /// Exact release-machine identity bound by the resource certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ResourceEnvironmentV1<'a> {
-    pub(crate) operating_system: &'a str,
-    pub(crate) architecture: &'a str,
-    pub(crate) endianness: &'a str,
-    pub(crate) kernel_minimum_major: u16,
-    pub(crate) kernel_minimum_minor: u16,
-    pub(crate) rustc_release: &'a str,
-    pub(crate) rustc_host: &'a str,
-    pub(crate) rustc_commit_hash: &'a str,
-    pub(crate) rustc_commit_date: &'a str,
-    pub(crate) instance_type: &'a str,
-    pub(crate) cpu_model: &'a str,
-    pub(crate) logical_cpu_count: u16,
-    pub(crate) online_cpu_count: u16,
-    pub(crate) affinity_cpu_count: u16,
+pub struct ZkX509ResourceEnvironmentV1<'a> {
+    /// Exact operating-system family.
+    pub operating_system: &'a str,
+    /// Exact target architecture.
+    pub architecture: &'a str,
+    /// Exact target byte order.
+    pub endianness: &'a str,
+    /// Minimum Linux kernel major version required by the isolation contract.
+    pub kernel_minimum_major: u16,
+    /// Minimum Linux kernel minor version required by the isolation contract.
+    pub kernel_minimum_minor: u16,
+    /// Exact `rustc -Vv` release.
+    pub rustc_release: &'a str,
+    /// Exact `rustc -Vv` host triple.
+    pub rustc_host: &'a str,
+    /// Exact `rustc -Vv` commit hash.
+    pub rustc_commit_hash: &'a str,
+    /// Exact `rustc -Vv` commit date.
+    pub rustc_commit_date: &'a str,
+    /// Exact native instance type.
+    pub instance_type: &'a str,
+    /// Exact native CPU model.
+    pub cpu_model: &'a str,
+    /// Exact logical processor count.
+    pub logical_cpu_count: u16,
+    /// Exact online processor count.
+    pub online_cpu_count: u16,
+    /// Exact processor-affinity count.
+    pub affinity_cpu_count: u16,
 }
 /// Reviewed isolation and process ceilings, distinct from observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ResourceProcessLimitsV1 {
-    pub(crate) elapsed_ceiling_millis: u64,
-    pub(crate) peak_rss_ceiling_bytes: u64,
-    pub(crate) address_space_ceiling_bytes: u64,
-    pub(crate) main_thread_stack_bytes: u64,
-    pub(crate) rayon_worker_stack_bytes: u64,
-    pub(crate) watchdog_thread_stack_bytes: u64,
-    pub(crate) rayon_worker_count: u16,
-    pub(crate) max_stage_tasks: u16,
-    pub(crate) max_stage_open_files: u16,
-    pub(crate) core_dump_bytes: u64,
-    pub(crate) landlock_abi_minimum: u16,
-    pub(crate) minimum_effective_memory_bytes: u64,
-    pub(crate) cgroup_v2: bool,
-    pub(crate) cpu_quota_unlimited: bool,
-    pub(crate) landlock_restrict_self: bool,
-    pub(crate) anchored_openat2: bool,
-    pub(crate) memfd_exec: bool,
-    pub(crate) memfd_seal_exec: bool,
-    pub(crate) static_elf_only: bool,
-    pub(crate) seccomp_tsync: bool,
+pub struct ZkX509ResourceProcessLimitsV1 {
+    /// Reviewed wall-clock ceiling, in milliseconds.
+    pub elapsed_ceiling_millis: u64,
+    /// Reviewed peak resident-set ceiling, in bytes.
+    pub peak_rss_ceiling_bytes: u64,
+    /// Reviewed virtual-address-space ceiling, in bytes.
+    pub address_space_ceiling_bytes: u64,
+    /// Exact main-thread stack limit, in bytes.
+    pub main_thread_stack_bytes: u64,
+    /// Exact Rayon-worker stack limit, in bytes.
+    pub rayon_worker_stack_bytes: u64,
+    /// Exact watchdog-thread stack limit, in bytes.
+    pub watchdog_thread_stack_bytes: u64,
+    /// Exact Rayon worker count.
+    pub rayon_worker_count: u16,
+    /// Exact process-task ceiling.
+    pub max_stage_tasks: u16,
+    /// Exact open-file ceiling after isolation.
+    pub max_stage_open_files: u16,
+    /// Exact core-dump byte ceiling.
+    pub core_dump_bytes: u64,
+    /// Minimum accepted Landlock ABI.
+    pub landlock_abi_minimum: u16,
+    /// Minimum effective cgroup memory headroom, in bytes.
+    pub minimum_effective_memory_bytes: u64,
+    /// Whether a cgroup-v2 hierarchy was established.
+    pub cgroup_v2: bool,
+    /// Whether the cgroup CPU quota was unlimited.
+    pub cpu_quota_unlimited: bool,
+    /// Whether Landlock `restrict_self` completed.
+    pub landlock_restrict_self: bool,
+    /// Whether file access used an anchored `openat2` walk.
+    pub anchored_openat2: bool,
+    /// Whether the anonymous runner used `MFD_EXEC`.
+    pub memfd_exec: bool,
+    /// Whether the anonymous runner required `F_SEAL_EXEC`.
+    pub memfd_seal_exec: bool,
+    /// Whether the measured runner was a fully static ELF.
+    pub static_elf_only: bool,
+    /// Whether seccomp was installed with thread synchronization.
+    pub seccomp_tsync: bool,
 }
 /// One exact positive or maximum-shape native observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ResourceObservationV1 {
-    pub(crate) case_kind: u8,
-    pub(crate) elapsed_millis: u64,
-    pub(crate) peak_rss_bytes: u64,
-    pub(crate) peak_address_space_bytes: u64,
-    pub(crate) primary_units: u64,
-    pub(crate) primary_ceiling: u64,
-    pub(crate) secondary_units: u64,
-    pub(crate) secondary_ceiling: u64,
-    pub(crate) relation_depth: u64,
-    pub(crate) relation_depth_ceiling: u64,
+pub struct ZkX509ResourceObservationV1 {
+    /// Closed resource case tag: zero for positive, three for maximum shape.
+    pub case_kind: u8,
+    /// Observed elapsed time, in milliseconds.
+    pub elapsed_millis: u64,
+    /// Observed peak resident set, in bytes.
+    pub peak_rss_bytes: u64,
+    /// Observed peak virtual address space, in bytes.
+    pub peak_address_space_bytes: u64,
+    /// Actual primary relation units.
+    pub primary_units: u64,
+    /// Reviewed primary relation ceiling.
+    pub primary_ceiling: u64,
+    /// Actual secondary relation units.
+    pub secondary_units: u64,
+    /// Reviewed secondary relation ceiling.
+    pub secondary_ceiling: u64,
+    /// Actual relation depth.
+    pub relation_depth: u64,
+    /// Reviewed relation-depth ceiling.
+    pub relation_depth_ceiling: u64,
 }
 /// Complete typed payload authenticated by the native-resource pin.
+///
+/// Constructing or validating this untrusted capture payload confers no activation authority.
+/// Acceptance also requires exact source bindings and the independently installed nonzero pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ResourceCertificateV1<'a> {
-    pub(crate) schema_version: u16,
-    pub(crate) compiled_profile_digest: [u8; 32],
-    pub(crate) environment: ZkX509ResourceEnvironmentV1<'a>,
-    pub(crate) expectations_norito_sha256: [u8; 32],
-    pub(crate) expectations_json_sha256: [u8; 32],
-    pub(crate) kat_proof_bytes: u32,
-    pub(crate) kat_proof_sha256: [u8; 32],
-    pub(crate) process_limits: ZkX509ResourceProcessLimitsV1,
-    pub(crate) positive: ZkX509ResourceObservationV1,
-    pub(crate) maximum: ZkX509ResourceObservationV1,
+pub struct ZkX509ResourceCertificateV1<'a> {
+    /// Canonical certificate schema version.
+    pub schema_version: u16,
+    /// Digest of the exact compiled X.509 profile.
+    pub compiled_profile_digest: [u8; 32],
+    /// Exact native environment identity.
+    pub environment: ZkX509ResourceEnvironmentV1<'a>,
+    /// SHA-256 of the authoritative expectations Norito bytes.
+    pub expectations_norito_sha256: [u8; 32],
+    /// SHA-256 of the typed-equal expectations JSON bytes.
+    pub expectations_json_sha256: [u8; 32],
+    /// Exact encoded byte length of the deterministic X5S1 KAT.
+    pub kat_proof_bytes: u32,
+    /// SHA-256 of the deterministic X5S1 KAT.
+    pub kat_proof_sha256: [u8; 32],
+    /// Reviewed process ceilings and isolation requirements.
+    pub process_limits: ZkX509ResourceProcessLimitsV1,
+    /// Exact positive-stage native observation.
+    pub positive: ZkX509ResourceObservationV1,
+    /// Exact maximum-shape native observation.
+    pub maximum: ZkX509ResourceObservationV1,
 }
 struct CertificateFrameV1(Sha256);
 impl CertificateFrameV1 {
@@ -483,7 +541,7 @@ fn soundness_certificate_matches_pin_v1(
             .is_some_and(|digest| digest == expected_certificate_sha256)
 }
 /// Return the exact reviewed process limits included in every resource payload.
-pub(crate) const fn canonical_resource_process_limits_v1() -> ZkX509ResourceProcessLimitsV1 {
+pub const fn canonical_resource_process_limits_v1() -> ZkX509ResourceProcessLimitsV1 {
     ZkX509ResourceProcessLimitsV1 {
         elapsed_ceiling_millis: ZK_X509_PROVER_TARGET_SECONDS_V1 * 1_000,
         peak_rss_ceiling_bytes: ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
@@ -508,7 +566,7 @@ pub(crate) const fn canonical_resource_process_limits_v1() -> ZkX509ResourceProc
     }
 }
 /// Return the exact release environment included in every resource payload.
-pub(crate) const fn canonical_resource_environment_v1() -> ZkX509ResourceEnvironmentV1<'static> {
+pub const fn canonical_resource_environment_v1() -> ZkX509ResourceEnvironmentV1<'static> {
     ZkX509ResourceEnvironmentV1 {
         operating_system: ZK_X509_RESOURCE_OPERATING_SYSTEM_V1,
         architecture: ZK_X509_RESOURCE_ARCHITECTURE_V1,
@@ -715,7 +773,7 @@ fn observation_is_valid_v1(
 ///
 /// Capture uses this before the independent source pin exists. Final evidence
 /// validation additionally calls [`resource_certificate_matches_source_v1`].
-pub(crate) fn validate_resource_certificate_payload_v1(
+pub fn validate_resource_certificate_payload_v1(
     certificate: ZkX509ResourceCertificateV1<'_>,
 ) -> Option<[u8; 32]> {
     if certificate.schema_version != ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1
@@ -747,7 +805,7 @@ pub(crate) fn validate_resource_certificate_payload_v1(
 }
 /// Require a validated capture payload to equal every installed source field
 /// and the distinct compiled certificate pin.
-pub(crate) fn resource_certificate_matches_source_v1(
+pub fn resource_certificate_matches_source_v1(
     certificate: ZkX509ResourceCertificateV1<'_>,
     claimed_certificate_sha256: [u8; 32],
 ) -> bool {

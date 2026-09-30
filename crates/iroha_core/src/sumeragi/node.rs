@@ -40,12 +40,14 @@ use super::{
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
-    metrics::{InstanceMetrics, MetricsInstance},
     net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress, subscribe},
     records::{FileRecordStore, FreshKeyAssertion, install},
     schedule,
     startup::{self, GENESIS_HEIGHT, GenesisTip, StartupError},
 };
+#[cfg(feature = "telemetry")]
+use crate::sumeragi::metrics::{InstanceMetrics, MetricsInstance};
+
 use crate::{
     EventsSender, IrohaNetwork,
     kura::Kura,
@@ -866,7 +868,7 @@ impl Prepared {
             .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
         let (recovery_publisher, startup_recovery) = crate::snapshot::startup_recovery_channel();
         let recovery_publisher = Arc::new(parking_lot::Mutex::new(recovery_publisher));
-        let running = Driver::new(
+        let driver_owner = Driver::new(
             net,
             records,
             bodies,
@@ -878,25 +880,27 @@ impl Prepared {
                 downstream: observer,
                 recovery: Arc::clone(&recovery_publisher),
             }),
-        )
-        .with_metrics(InstanceMetrics::for_node(
+        );
+        #[cfg(feature = "telemetry")]
+        let driver_owner = driver_owner.with_metrics(InstanceMetrics::for_node(
             &state.telemetry,
             MetricsInstance::Global,
-        ))
-        .spawn(
-            driver,
-            DriverStart {
-                node_gate: state.view().kura().native_consensus_gate(),
-                allocation_budget: budget,
-                local: local_params(n, &config.local),
-                init,
-                signers: vec![Arc::new(signer)],
-                crypto: shared,
-                attestor: Box::new(attestor),
-                verifier: Box::new(verifier),
-            },
-        )
-        .map_err(|error| NodeError::Driver(error.to_string()))?;
+        ));
+        let running = driver_owner
+            .spawn(
+                driver,
+                DriverStart {
+                    node_gate: state.view().kura().native_consensus_gate(),
+                    allocation_budget: budget,
+                    local: local_params(n, &config.local),
+                    init,
+                    signers: vec![Arc::new(signer)],
+                    crypto: shared,
+                    attestor: Box::new(attestor),
+                    verifier: Box::new(verifier),
+                },
+            )
+            .map_err(|error| NodeError::Driver(error.to_string()))?;
         ingress.register(instance, Arc::new(running.handle()));
         recovery_publisher.lock().ready();
         Ok(RunningNode {

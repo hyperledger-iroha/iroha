@@ -70,8 +70,8 @@ fn restore(world: &World) -> Result<World, json::Error> {
     let operation_index_refusal = std::cell::RefCell::new(None);
     let ivm = IVM::new(0);
     let seed = IvmSeed {
-                operation_index_budget: &operation_index_budget,
-                operation_index_refusal: &operation_index_refusal,
+        operation_index_budget: &operation_index_budget,
+        operation_index_refusal: &operation_index_refusal,
         ivm: &ivm,
         _marker: PhantomData,
     };
@@ -135,8 +135,8 @@ fn every_pin_map_is_a_required_first_release_snapshot_field() {
     let operation_index_refusal = std::cell::RefCell::new(None);
     let ivm = IVM::new(0);
     let seed = IvmSeed {
-                operation_index_budget: &operation_index_budget,
-                operation_index_refusal: &operation_index_refusal,
+        operation_index_budget: &operation_index_budget,
+        operation_index_refusal: &operation_index_refusal,
         ivm: &ivm,
         _marker: PhantomData,
     };

@@ -76,11 +76,12 @@ fn expect_absence_aborts_with_the_authenticated_nominal_error() {
         assert_eq!(
             error,
             VMError::ContractAbort {
-                contract: "MissingState".to_owned(),
+                contract: "MissingState".into(),
                 name: "Missing".to_owned(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
                 code: 1101,
+                message: None,
             },
             "missing {ty} must preserve the nominal error identity"
         );
@@ -106,6 +107,202 @@ fn expect_evaluates_a_stateful_receiver_once() {
     );
     vm.run().expect("execute receiver once");
     assert_eq!(vm.public_call_result_word(0), Ok(1));
+}
+
+#[test]
+fn expect_evaluates_its_nominal_error_once_after_the_receiver() {
+    let (mut vm, _) = load(
+        r#"seiyaku EvaluationOrder {
+            error enum Failure { Missing = 1 }
+            state StateMap<int, int> Trace;
+            fn present() -> Option<int> {
+                Trace[0] = 1;
+                return Option::some(7);
+            }
+            fn missing() -> Failure {
+                Trace[0] = Trace.get(0).unwrap_or(0) * 10 + 2;
+                return Failure::Missing;
+            }
+            kotoage fn run() -> bool authorize("WriteState") {
+                let value = present().expect(missing());
+                return value == 7 && Trace.get(0).unwrap_or(0) == 12;
+            }
+        }"#,
+    );
+    vm.run()
+        .expect("evaluate receiver and error in source order");
+    assert_eq!(vm.public_call_result_word(0), Ok(1));
+}
+
+#[test]
+fn expect_rejects_untyped_errors_and_nonoptional_receivers() {
+    for (expression, expected) in [
+        ("value.expect(1)", "requires a nominal error enum value"),
+        (
+            "value.expect(\"missing\")",
+            "requires a nominal error enum value",
+        ),
+        ("value.expect()", "expects one nominal error argument"),
+        (
+            "value.expect(Failure::Missing, Failure::Missing)",
+            "expects one nominal error argument",
+        ),
+        ("(1).expect(Failure::Missing)", "receiver must be Option<T>"),
+        (
+            "result.expect(Failure::Missing)",
+            "receiver must be Option<T>",
+        ),
+    ] {
+        let binding = if expression.starts_with("result") {
+            "let Result<int, Failure> result = Result::ok(1);"
+        } else {
+            "let Option<int> value = Option::some(1);"
+        };
+        let source = format!(
+            "seiyaku Invalid {{ error enum Failure {{ Missing = 1 }} \
+                view fn run() -> int {{ \
+                    {binding} \
+                    return {expression}; \
+                }} }}"
+        );
+        let error = Compiler::new()
+            .compile_source(&source)
+            .expect_err("invalid extraction must fail at compile time");
+        assert!(
+            error.contains(expected),
+            "unexpected diagnostic for {expression}: {error}"
+        );
+    }
+}
+
+#[test]
+fn hex_prefixed_strings_remain_text_through_json_calls_and_state() {
+    for bindings in [
+        r#"let text = "0x6162"; let binary = b"ab";"#,
+        r#"let binary = b"ab"; let text = "0x6162";"#,
+    ] {
+        let source = format!(
+            r#"seiyaku LiteralText {{
+                error enum Failure {{ Missing = 1 }}
+                state StateMap<int, string> Texts;
+                state StateMap<string, int> Keys;
+                fn echo(string text) -> string {{ return text; }}
+                kotoage fn run() -> Json authorize("WriteState") {{
+                    {bindings}
+                    Texts[1] = text;
+                    Keys[text] = 11;
+                    Keys["ab"] = 22;
+                    return json {{
+                        text: text,
+                        binary: binary,
+                        copied: echo(text),
+                        stored: Texts.get(1).expect(Failure::Missing),
+                        literal_key: Keys.get(text).expect(Failure::Missing),
+                        copied_key: Keys.get(echo(text)).expect(Failure::Missing),
+                        other_key: Keys.get("ab").expect(Failure::Missing),
+                        empty_prefix: "0x",
+                        odd_prefix: "0x1",
+                        nonhex_prefix: "0xzz",
+                        nested: json {{ raw: b"0x6162" }},
+                    }};
+                }}
+            }}"#,
+        );
+        let (mut vm, _) = load(&source);
+        vm.run().expect("retain source text and explicit bytes");
+        let pointer = vm
+            .public_call_result_word(0)
+            .expect("completed JSON result");
+        let json: iroha_primitives::json::Json =
+            norito::decode_from_bytes(vm.validate_tlv(pointer).expect("JSON envelope").payload)
+                .expect("decode native JSON");
+        let actual: norito::json::Value = json.try_into_any_norito().expect("JSON value");
+        assert_eq!(
+            actual,
+            norito::json!({
+                "text": "0x6162",
+                "binary": "0x6162",
+                "copied": "0x6162",
+                "stored": "0x6162",
+                "literal_key": "11",
+                "copied_key": "11",
+                "other_key": "22",
+                "empty_prefix": "0x",
+                "odd_prefix": "0x1",
+                "nonhex_prefix": "0xzz",
+                "nested": { "raw": "0x307836313632" },
+            }),
+            "literal pool ordering must not conflate strings with hex-encoded bytes"
+        );
+    }
+}
+
+#[test]
+fn concise_proposal_transition_preserves_record_state_and_nominal_rejections() {
+    let source = r#"seiyaku Proposals {
+        error enum Failure { Missing = 1, NotPending = 2, InvalidAmount = 3, Exists = 4 }
+        struct Proposal {
+            quantity amount, bytes approval_alias, int status, int finalized_at_ms
+        }
+        state StateMap<int, Proposal> Requests;
+        fn create(int id, quantity amount, bytes approval_alias) {
+            require(amount > 0, Failure::InvalidAmount);
+            require(!Requests.contains(id), Failure::Exists);
+            Requests[id] = Proposal { amount, approval_alias, status: 1, finalized_at_ms: 0 };
+        }
+        fn finalize(int id, int finalized_at_ms) {
+            var request = Requests.get(id).expect(Failure::Missing);
+            require(request.status == 1, Failure::NotPending);
+            request.status = 2;
+            request.finalized_at_ms = finalized_at_ms;
+            Requests[id] = request;
+        }
+        kotoage fn run() -> bool authorize("WriteState") {
+            create(1, 25, b"approval");
+            finalize(1, 100);
+            ACTION
+            let saved = Requests.get(1).expect(Failure::Missing);
+            return saved.amount == 25 && saved.approval_alias == b"approval"
+                && saved.status == 2 && saved.finalized_at_ms == 100;
+        }
+    }"#;
+    for (action, rejected) in [
+        ("", None),
+        ("finalize(2, 100);", Some(("Missing", 1))),
+        ("finalize(1, 101);", Some(("NotPending", 2))),
+        ("create(2, 0, b\"approval\");", Some(("InvalidAmount", 3))),
+        ("create(1, 30, b\"replacement\");", Some(("Exists", 4))),
+    ] {
+        let (mut vm, code) = load(&source.replace("ACTION", action));
+        if let Some((name, code_value)) = rejected {
+            let metadata = ProgramMetadata::parse(&code).expect("proposal metadata");
+            let descriptor = metadata
+                .contract_interface
+                .as_ref()
+                .expect("proposal interface")
+                .error_types
+                .iter()
+                .find(|error| error.identity == "Proposals::Failure")
+                .expect("proposal nominal error");
+            assert_eq!(
+                vm.run()
+                    .expect_err("invalid proposal must reject")
+                    .split_metered()
+                    .1,
+                VMError::ContractAbort {
+                    contract: "Proposals".into(),
+                    name: name.into(),
+                    error_type: descriptor.identity.clone(),
+                    schema_hash: descriptor.schema_hash(),
+                    code: code_value,
+                    message: None,
+                }
+            );
+        } else {
+            vm.run().expect("execute concise proposal lifecycle");
+            assert_eq!(vm.public_call_result_word(0), Ok(1));
+        }
+    }
 }
 
 #[test]

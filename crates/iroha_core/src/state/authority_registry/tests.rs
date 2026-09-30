@@ -263,6 +263,18 @@ fn native_execution_tip_is_authenticated_history_without_a_snapshot_decoder() {
 }
 
 #[test]
+fn original_world_cut_retention_has_no_decoded_or_independent_authority() {
+    let fields = fields();
+    let cut = fields["state.native_world_cut"];
+    let Role::Local(retention) = cut.role else {
+        panic!("original journal retention cannot add a canonical State row");
+    };
+    assert!(retention.contains("certified World root/count"));
+    assert!(retention.contains("restoration requires native replay"));
+    assert_eq!(cut.disclosure, Disclosure::NotApplicable);
+}
+
+#[test]
 fn authority_metadata_never_grants_raw_row_disclosure_or_completed_projection() {
     let fields = fields();
     for field in fields.values() {

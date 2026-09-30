@@ -1195,9 +1195,16 @@ impl EditorSnapshot {
     fn type_at<'a>(&'a self, unit: &'a EditorUnit, range: TextRange) -> Option<&'a Type> {
         unit.typed_nodes
             .iter()
-            .filter(|node| node.source.is_some_and(|source| source.range == range))
+            // The token before `.` may end a call, parenthesized expression, or
+            // field access. Select the innermost complete typed receiver ending
+            // there, rather than treating only an identifier as a receiver.
+            .filter(|node| {
+                node.source.is_some_and(|source| {
+                    source.range.end == range.end && source.range.start <= range.start
+                })
+            })
+            .max_by_key(|node| node.source.map(|source| source.range.start))
             .map(|node| &node.ty)
-            .next()
             .or_else(|| {
                 let definition = self.definition(unit.file.id(), range.start)?;
                 let EditorIdentity::Binding(_, binding) = definition.identity else {
@@ -1781,6 +1788,55 @@ fn intrinsic_signatures() -> Vec<EditorSignature> {
     signatures
 }
 fn member_signatures(ty: &Type) -> Vec<EditorSignature> {
+    if let Type::Option(value) | Type::Result(value, _) = ty {
+        let value = render_type_name(value);
+        let option = matches!(ty, Type::Option(_));
+        let mut signatures = vec![
+            editor_signature(
+                if option { "is_some" } else { "is_ok" },
+                vec![],
+                "bool".into(),
+                if option {
+                    "Test whether the optional value is present without extracting it."
+                } else {
+                    "Test whether the result contains a successful value without extracting it."
+                },
+            ),
+            editor_signature(
+                if option { "is_none" } else { "is_err" },
+                vec![],
+                "bool".into(),
+                if option {
+                    "Test whether the optional value is absent."
+                } else {
+                    "Test whether the result contains an error without extracting it."
+                },
+            ),
+            editor_signature(
+                "unwrap_or",
+                vec![("default", value.clone(), false)],
+                value.clone(),
+                "Extract the value, or use the fallback. The fallback is evaluated eagerly.",
+            ),
+        ];
+        if let Type::Result(_, error) = ty {
+            let error = render_type_name(error);
+            signatures.push(editor_signature(
+                "unwrap_err_or",
+                vec![("default", error.clone(), false)],
+                error,
+                "Extract the error, or use the fallback. The fallback is evaluated eagerly.",
+            ));
+        } else {
+            signatures.push(editor_signature(
+                "expect",
+                vec![("error", "error enum".into(), false)],
+                value,
+                "Extract the value or reject with the supplied nominal error, such as Error::Missing. The receiver and error are evaluated once in source order.",
+            ));
+        }
+        return signatures;
+    }
     if let Type::List(element, _) = ty {
         let element = render_type_name(element);
         return [
@@ -1987,7 +2043,11 @@ fn receiver_before(tokens: &[Token], offset: u32) -> Option<TextRange> {
         return None;
     }
     let receiver = before.get(dot.checked_sub(1)?)?;
-    matches!(receiver.kind, TokenKind::Ident(_)).then_some(receiver.range)
+    matches!(
+        receiver.kind,
+        TokenKind::Ident(_) | TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
+    )
+    .then_some(receiver.range)
 }
 fn call_context(tokens: &[Token], offset: u32) -> Option<(String, u32, usize)> {
     let mut stack: Vec<(TokenKind, usize)> = Vec::new();
@@ -2215,6 +2275,82 @@ mod tests {
             crate::parser::parse(incomplete).is_err(),
             "editor recovery must never broaden parser acceptance"
         );
+    }
+    #[test]
+    fn optional_and_result_receivers_offer_concise_typed_extraction() {
+        for (ty, expression, expected, absent) in [
+            (
+                "Option<int>",
+                "value.expect(Failure::Missing)",
+                vec!["expect", "is_none", "is_some", "unwrap_or"],
+                "unwrap_err_or",
+            ),
+            (
+                "Result<int, Failure>",
+                "value.unwrap_or(0)",
+                vec!["is_err", "is_ok", "unwrap_err_or", "unwrap_or"],
+                "expect",
+            ),
+        ] {
+            let source = format!(
+                "module Values {{ error enum Failure {{ Missing = 1 }} \
+                 fn read({ty} value) -> int {{ {expression} }} }}"
+            );
+            let snapshot = EditorSnapshot::single("values.ko", &source, false);
+            assert!(snapshot.is_complete());
+            let members = labels(&snapshot, cursor(&source, "value.") + 6);
+            assert_eq!(members, expected.into_iter().map(str::to_owned).collect());
+            assert!(!members.contains(absent));
+            let (signature, active) = snapshot
+                .signature_help(
+                    SourceId(0),
+                    cursor(&source, expression)
+                        + u32::try_from(expression.len()).expect("short expression")
+                        - 1,
+                )
+                .expect("typed extraction signature");
+            assert_eq!(signature.return_type, "int");
+            assert_eq!(active, 0);
+            assert!(!signature.parameters[0].named);
+        }
+    }
+    #[test]
+    fn chained_state_reads_offer_expect_with_the_record_return_type() {
+        let source = "seiyaku Notes { error enum Failure { Missing = 1 } \
+            struct Note { int amount } state StateMap<int, Note> Values; \
+            view fn read() -> Note { Values.get(1).expect(Failure::Missing) } }";
+        let snapshot = EditorSnapshot::single("notes.ko", source, false);
+        assert!(snapshot.is_complete());
+        let candidates = snapshot.completions(SourceId(0), cursor(source, ".expect") + 1);
+        let expect = candidates
+            .iter()
+            .find(|candidate| candidate.label == "expect")
+            .expect("chained Option receiver offers expect");
+        assert_eq!(expect.insert_text, "expect(${1:error})");
+        assert!(expect.documentation.contains("nominal error"));
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.label == "amount")
+        );
+        let (signature, _) = snapshot
+            .signature_help(SourceId(0), cursor(source, "Failure::Missing)"))
+            .expect("chained extraction signature");
+        assert_eq!(signature.return_type, "Note");
+    }
+    #[test]
+    fn extraction_completion_handles_nested_fields_and_incomplete_chains() {
+        let source = "module Fields { struct Record { Option<int> value } \
+            fn read(Record record) -> bool { record.value.is_some() } }";
+        let snapshot = EditorSnapshot::single("fields.ko", source, false);
+        assert!(snapshot.is_complete());
+        assert!(labels(&snapshot, cursor(source, ".is_some") + 1).contains("expect"));
+        let incomplete = "seiyaku Notes { state StateMap<int, int> Values; \
+            view fn read() { Values.get(1). } }";
+        let snapshot = EditorSnapshot::single("notes.ko", incomplete, false);
+        assert!(!snapshot.is_complete());
+        assert!(labels(&snapshot, cursor(incomplete, ". }") + 1).contains("expect"));
+        assert!(crate::parser::parse(incomplete).is_err());
     }
     #[test]
     fn canonical_builtin_hover_and_nested_argument_context_share_signatures() {
