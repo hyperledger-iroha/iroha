@@ -23,7 +23,7 @@ SELF_TESTS=(
   --self-test-bad-abi
   --self-test-missing-reserve-finality-header-symbol
   --self-test-missing-reserve-finality-rust-symbol
-  --self-test-bad-reserve-finality-height-signature
+  --self-test-bad-reserve-finality-checkpoint-signature
   --self-test-missing-reserve-finality-request-binding
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-close-header-symbol
@@ -51,6 +51,10 @@ SELF_TESTS=(
   --self-test-missing-privacy-rust-symbol
   --self-test-extra-privacy-symbol
   --self-test-missing-parliament-header-symbol
+  --self-test-bad-parliament-page-rust-width
+  --self-test-bad-parliament-page-header-width
+  --self-test-retired-parliament-page-rust-name
+  --self-test-retired-parliament-page-header-name
   --self-test-missing-hijiri-header-symbol
   --self-test-bad-hijiri-signature
   --self-test-bad-hijiri-constant
@@ -569,8 +573,8 @@ for rust_name, rust_type, rust_value, header_name, header_value in (
 require(r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s*:\s*usize\s*=\s*32\s*;", rust, "Parliament seed width")
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s+32\b", header, "C Parliament seed width")
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1\s+8388608\b", header, "C Parliament proof cap")
-require(r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s*:\s*usize\s*=\s*41\s*;", rust, "Parliament page width")
-require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s+41\b", header, "C Parliament page width")
+require(r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1\s*:\s*usize\s*=\s*41\s*;", rust, "Parliament page summary width")
+require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1\s+41\b", header, "C Parliament page summary width")
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1\s+32\b", header, "C Parliament trust anchor width")
 
 if umbrella.strip() != """// Umbrella header for NoritoBridge
@@ -727,6 +731,30 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-bad-parliament-page-rust-width)
+      replace_once "${tmp}/parliament_timed_ovn_ffi.rs" \
+        'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1: usize = 41;' \
+        'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1: usize = 40;'
+      expected_diagnostic="missing or invalid Parliament page summary width"
+      ;;
+    --self-test-bad-parliament-page-header-width)
+      replace_once "${tmp_header}" \
+        '#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1 41' \
+        '#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1 40'
+      expected_diagnostic="missing or invalid C Parliament page summary width"
+      ;;
+    --self-test-retired-parliament-page-rust-name)
+      replace_once "${tmp}/parliament_timed_ovn_ffi.rs" \
+        'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1:' \
+        'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1:'
+      expected_diagnostic="missing or invalid Parliament page summary width"
+      ;;
+    --self-test-retired-parliament-page-header-name)
+      replace_once "${tmp_header}" \
+        '#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1 ' \
+        '#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 '
+      expected_diagnostic="missing or invalid C Parliament page summary width"
+      ;;
     --self-test-missing-reserve-finality-header-symbol)
       replace_once "${tmp_header}" \
         'connect_norito_kagemusha_reserve_finality_hint_v1' \
@@ -737,10 +765,10 @@ if [[ "${MODE}" == --self-test-* ]]; then
         'connect_norito_kagemusha_reserve_finality_verify_v1' \
         'removed_reserve_finality_verify_v1'
       ;;
-    --self-test-bad-reserve-finality-height-signature)
+    --self-test-bad-reserve-finality-checkpoint-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)uint64_t trusted_block_height' \
-        '\g<1>uint32_t trusted_block_height'
+        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)unsigned long trusted_checkpoint_len' \
+        '\g<1>uint32_t trusted_checkpoint_len'
       ;;
     --self-test-missing-reserve-finality-request-binding)
       replace_regex_once "${tmp_header}" \
