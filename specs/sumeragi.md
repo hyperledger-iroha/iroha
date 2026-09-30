@@ -8,9 +8,8 @@ Remaining implementation and qualification work is tracked in
 [`specs/sumeragi_goals.md`](sumeragi_goals.md).
 
 Wire and storage formats have one first-release definition. Retired layouts, raw-body transport
-constructors and alternate decoders are not supported. Revisions 2, 3, 4 and 4.1 applied
-adversarial reviews and the decisions taken on them
-(review logs: Appendices A–D). Appendix E reconciles the text with the implementation: the rules
+constructors and alternate decoders are not supported. Appendix E reconciles the text with
+the implementation: the rules
 the simulator and code review showed to be incomplete are amended in place, and every other
 code-level choice is listed.
 
@@ -3459,12 +3458,6 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    holder-forwarding strategy or larger-committee parity tuning. The recommended `d = 4, p = 2`
    describes erasure geometry; it alone is not a validator-fault bandwidth guarantee.
 8. **Epoch length** of AMX-participating instances (handoff cadence for light clients, §11.7).
-
----
-
-## Appendices A–D. Review logs
-
-md`.
 
 ---
 
