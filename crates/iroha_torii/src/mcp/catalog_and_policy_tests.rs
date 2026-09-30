@@ -2909,6 +2909,17 @@ fn generated_projection_schema_bounds_selector_work() {
 mod registry_security;
 
 #[test]
+fn manual_descriptor_loader_accepts_the_exact_embedded_asset() {
+    // Compact re-serialization hides the indentation bytes included by include_bytes!.
+    let loaded = parse_manual_static_tool_descriptors(MANUAL_STATIC_TOOL_ASSET);
+    assert_eq!(loaded.len(), MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT);
+    for descriptor in loaded.values() {
+        assert!(!descriptor.name.is_empty());
+        assert!(descriptor.input_schema.is_object());
+    }
+}
+
+#[test]
 fn manual_descriptor_loader_accepts_content_updates_and_preserves_policy() {
     let Value::Object(mut root) =
         json::from_slice::<Value>(MANUAL_STATIC_TOOL_ASSET).expect("embedded descriptor JSON")

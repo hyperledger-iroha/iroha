@@ -116,7 +116,7 @@ fn observer_pool_is_charged_and_refusal_preserves_original_source() {
     assert!(retained > 0);
     assert!(!observe(state, &evidence).unwrap());
     assert_eq!(budget.reserved_bytes(), retained);
-    let selected = pending_evidence_admissions_from_world(state, 3, state.view().world());
+    let selected = pending_evidence_admissions_from_view(state, 3, &state.view());
     assert_eq!(selected.len(), 1);
     assert!(
         state
@@ -126,6 +126,35 @@ fn observer_pool_is_charged_and_refusal_preserves_original_source() {
             .iter()
             .next()
             .is_none()
+    );
+}
+
+#[test]
+fn pending_selection_uses_the_original_parent_even_after_successor_admission() {
+    let mut chain = chain();
+    chain.commit(Vec::new());
+    let native = conflict(&chain, 2);
+    let evidence = Evidence::from_native(&native).unwrap();
+    let key = evidence_key(&evidence);
+    let state = std::sync::Arc::clone(chain.state());
+    assert!(observe(&state, &native).unwrap());
+    let parent = state.view();
+    assert_eq!(parent.height(), 2);
+    chain.commit(Vec::new());
+    assert!(
+        state
+            .view()
+            .world()
+            .consensus_evidence()
+            .get(&key)
+            .is_some()
+    );
+    assert!(parent.world().consensus_evidence().get(&key).is_none());
+    let selected = pending_evidence_admissions_from_view(&state, 3, &parent);
+    assert_eq!(
+        selected,
+        [evidence],
+        "selection belongs to the captured parent"
     );
 }
 #[test]

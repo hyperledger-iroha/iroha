@@ -383,16 +383,16 @@ fn fixed_native_asset_alias_and_state_path_key_sets_authenticate_completeness() 
         .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
     let verified = snapshot.authenticate(&certify(&snapshot)).unwrap();
     verified
-        .verify_asset_keys_complete(&[asset.clone()])
+        .verify_asset_keys_complete(std::slice::from_ref(&asset))
         .unwrap();
     verified
-        .verify_asset_definition_alias_binding_keys_complete(&[definition.clone()])
+        .verify_asset_definition_alias_binding_keys_complete(std::slice::from_ref(&definition))
         .unwrap();
     verified
-        .verify_smart_contract_state_keys_complete(&[path.clone()])
+        .verify_smart_contract_state_keys_complete(std::slice::from_ref(&path))
         .unwrap();
     verified
-        .verify_account_alias_keys_complete(&[account_alias.clone()])
+        .verify_account_alias_keys_complete(std::slice::from_ref(&account_alias))
         .unwrap();
     assert!(verified.verify_account_alias_keys_complete(&[]).is_err());
     assert!(
@@ -491,19 +491,19 @@ fn every_fixed_fee_table_absence_and_complete_keys_bind_exact_native_key_types()
         .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
     let verified = snapshot.authenticate(&certify(&snapshot)).unwrap();
     verified
-        .verify_fee_sponsor_program_keys_complete(&[program.clone()])
+        .verify_fee_sponsor_program_keys_complete(std::slice::from_ref(&program))
         .unwrap();
     verified
-        .verify_fee_sponsor_program_revision_keys_complete(&[revision.clone()])
+        .verify_fee_sponsor_program_revision_keys_complete(std::slice::from_ref(&revision))
         .unwrap();
     verified
-        .verify_fee_sponsor_enrollment_keys_complete(&[enrollment.clone()])
+        .verify_fee_sponsor_enrollment_keys_complete(std::slice::from_ref(&enrollment))
         .unwrap();
     verified
-        .verify_fee_sponsor_vault_keys_complete(&[vault.clone()])
+        .verify_fee_sponsor_vault_keys_complete(std::slice::from_ref(&vault))
         .unwrap();
     verified
-        .verify_fee_sponsor_budget_counter_keys_complete(&[counter.clone()])
+        .verify_fee_sponsor_budget_counter_keys_complete(std::slice::from_ref(&counter))
         .unwrap();
     assert!(
         verified

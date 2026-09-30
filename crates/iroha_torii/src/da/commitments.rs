@@ -1066,6 +1066,10 @@ mod tests {
         let lane = LaneId::new(1);
         let records = vec![sample_record(lane.as_u32(), 1, 1)];
         let manifest = records[0].manifest_hash;
+        // An external holder retains the historical proof independently of the
+        // active-lane index, which intentionally drops removed lanes.
+        let historical_proof = build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
+            .expect("proof of the exact historical signed bundle");
         let app = app_with_historical_commitments(records, nexus_for_records(&[]));
         install_uncommitted_autoscale_overlay(&app, lane);
         let JsonBody(list_response) = super::handler_list_commitments(
@@ -1098,11 +1102,7 @@ mod tests {
             proof_response.is_none(),
             "an uncommitted overlay must not authorize public proofs for a historical lane"
         );
-        let proof = {
-            let store = app.state.da_commitments();
-            super::build_proof_from_store(&store, &request)
-                .expect("raw proof fixture should exist in the commitment store")
-        };
+        let proof = historical_proof;
         let JsonBody(verification) =
             super::handler_verify_commitment(State(app), NoritoJson(proof))
                 .await
@@ -1332,16 +1332,12 @@ mod tests {
     async fn verify_handler_uses_historical_policy_after_lane_removal() {
         let stale_lane = LaneId::new(1);
         let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
-        let manifest = records[0].manifest_hash;
+        // An external holder retains the historical proof independently of the
+        // active-lane index, which intentionally drops removed lanes.
+        let historical_proof = build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
+            .expect("proof of the exact historical signed bundle");
         let app = app_with_historical_commitments(records, nexus_for_records(&[]));
-        let proof = build_proof_from_store(
-            &app.state.da_commitments(),
-            &DaCommitmentProofRequest {
-                manifest_hash: Some(manifest),
-                ..DaCommitmentProofRequest::default()
-            },
-        )
-        .expect("historical signed bundle must still have a proof after current lane removal");
+        let proof = historical_proof;
         install_stale_runtime_lane_geometry(&app, stale_lane);
         let JsonBody(verification) =
             super::handler_verify_commitment(State(app), NoritoJson(proof))

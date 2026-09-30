@@ -1379,8 +1379,16 @@ mod tests {
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
-        let borrowed = with_code_bytes(&view, &code_hash, |bytes| (bytes.as_ptr(), bytes.to_vec()))
-            .expect("borrow stored bytes");
+        let borrowed = with_code_bytes(
+            &view,
+            &iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &contract_address,
+                code_hash,
+            )
+            .expect("fixture artifact scope"),
+            |bytes| (bytes.as_ptr(), bytes.to_vec()),
+        )
+        .expect("borrow stored bytes");
         assert_eq!(borrowed.1, code);
         let stored_ptr = view
             .world()

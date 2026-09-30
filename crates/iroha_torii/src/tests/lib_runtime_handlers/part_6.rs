@@ -2789,15 +2789,25 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
         sumeragi_context: context,
     };
     metadata.validate().unwrap();
+    let app = mk_app_state_for_tests_with_world(world);
     {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            Json::new(metadata),
-        )));
-        parameters.commit();
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(CustomParameter::new(
+                consensus_metadata::handshake_meta_id(),
+                Json::new(metadata),
+            )));
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit explicit root scope");
     }
-    mk_app_state_for_tests_with_world(world)
+    app
 }
 
 #[tokio::test]

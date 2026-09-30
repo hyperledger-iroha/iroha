@@ -42,7 +42,9 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{
+    Network, NetworkBuilder, init_instruction_registry, read_on_dedicated_thread,
+};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
@@ -235,10 +237,14 @@ async fn submit_route_probe_with_retry(
 ) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     loop {
-        match client.submit::<InstructionBox>(
-            Log::new(Level::INFO, message.to_owned()).into(),
-            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
+        let client = client.clone();
+        let message = message.to_owned();
+        match read_on_dedicated_thread(move || {
+            client
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), route_probe_fee())
+        })
+        .await
+        {
             Ok(_) => return Ok(true),
             Err(err)
                 if Instant::now() < deadline && err.to_string().contains("route_unavailable") =>
@@ -249,6 +255,35 @@ async fn submit_route_probe_with_retry(
             Err(err) => return Err(err).wrap_err(context.to_owned()),
         }
     }
+}
+fn route_probe_fee() -> iroha_data_model::transaction::FeePaymentIntent {
+    use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit, FeePaymentIntent};
+    FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::Nexus,
+            route_fee_asset_definition_id(),
+            Quantity::from(10_000_u32),
+        )],
+        None,
+    )
+}
+#[test]
+fn route_probe_fee_is_bounded_by_the_funded_canonical_asset() {
+    let intent = route_probe_fee();
+    intent.validate().unwrap();
+    let [limit] = intent.charge_limits() else {
+        panic!("one Nexus fee limit");
+    };
+    assert_eq!(
+        limit.kind(),
+        iroha_data_model::transaction::FeeChargeKind::Nexus
+    );
+    assert_eq!(
+        limit.asset_definition_id(),
+        &route_fee_asset_definition_id()
+    );
+    assert_eq!(limit.max_amount(), &Quantity::from(10_000_u32));
+    assert!(10_000 < ROUTE_VALIDATOR_FEE_SEED_AMOUNT);
 }
 fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
@@ -303,7 +338,7 @@ async fn submit_logs(
                     let payload = throughput_payload(idx, payload_bytes, rng_seed);
                     let client_idx = usize::try_from(idx % client_count).unwrap_or_default();
                     let client = submit_clients[client_idx].clone();
-                    let handle = task::spawn_blocking(move || {
+                    let handle = read_on_dedicated_thread(move || {
                         client
                             .submit::<InstructionBox>(
                                 Log::new(Level::INFO, payload).into(),
@@ -314,7 +349,7 @@ async fn submit_logs(
                             )
                             .wrap_err_with(|| format!("failed to submit log instruction {idx}"))
                     });
-                    handle.await.wrap_err("submit task join failed")?
+                    handle.await.wrap_err("submit worker failed")
                 }
             })
             .buffer_unordered(submit_parallelism)
@@ -440,7 +475,7 @@ async fn fund_realistic_npos_transfer_fee_accounts(
         u64::try_from(instruction_chunks.len()).expect("funding chunk count fits u64"),
     );
     let client = network.client();
-    task::spawn_blocking(move || -> Result<()> {
+    read_on_dedicated_thread(move || -> Result<()> {
         for (chunk_index, instructions) in instruction_chunks.into_iter().enumerate() {
             client
                 .submit_all(
@@ -456,7 +491,7 @@ async fn fund_realistic_npos_transfer_fee_accounts(
         Ok(())
     })
     .await
-    .wrap_err("NPoS fee funding task join failed")??;
+    .wrap_err("NPoS fee funding worker failed")?;
     wait_for_min_txs_approved(network, target_approved, Duration::from_secs(60)).await?;
     Ok(())
 }
@@ -735,7 +770,8 @@ async fn submit_transfers_paced(
         let destination_id = submit_accounts[destination].id.clone();
         let asset_definition_id = asset_definition_id.clone();
         let submitted_counter = Arc::clone(&submitted_counter);
-        pending.push(task::spawn_blocking(move || {
+        pending.push(task::spawn(async move {
+            read_on_dedicated_thread(move || {
             ensure!(
                 !source_account.clients.is_empty(),
                 "transfer submit account has no clients"
@@ -769,6 +805,7 @@ async fn submit_transfers_paced(
             })?;
             submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
+            }).await
         }));
         if pending.len() >= submit_parallelism {
             let result = pending
@@ -2896,12 +2933,27 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     };
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        network.client().submit::<InstructionBox>(
-            Log::new(Level::INFO, "status endpoint bootstrap tick".to_owned()).into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
+        let bootstrap_key = multiroute::universal_route_key_pair();
+        let bootstrap_account = AccountId::new(bootstrap_key.public_key().clone());
+        // Genesis-created lanes activate after G applies H3. Funded universal
+        // work crosses that boundary before either private account route is used.
+        for height in 2..=3 {
+            let client = network.peers()[0]
+                .client_for(&bootstrap_account, bootstrap_key.private_key().clone());
+            read_on_dedicated_thread(move || {
+                client.submit::<InstructionBox>(
+                    Log::new(
+                        Level::INFO,
+                        format!("status endpoint bootstrap tick {height}"),
+                    )
+                    .into(),
+                    route_probe_fee(),
+                )
+            })
+            .await?;
+        }
         let warmup_statuses =
-            wait_for_height_quorum_with_bounded_lag(&network, 2, Duration::from_secs(45)).await?;
+            wait_for_height_quorum_with_bounded_lag(&network, 3, Duration::from_secs(45)).await?;
         let peer = network
             .peers()
             .first()
@@ -2927,34 +2979,39 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             "submit cross-lane route probe from bob",
         )
         .await?;
-        if alice_probe_submitted || bob_probe_submitted {
-            wait_for_height_quorum_with_bounded_lag(
-                &network,
-                before_height.saturating_add(1),
-                Duration::from_secs(45),
-            )
-            .await?;
-        } else {
-            eprintln!(
-                "cross-lane route bindings stayed unavailable within {:?}; continuing with status-endpoint decode coverage only",
-                ROUTE_BINDING_TIMEOUT
-            );
-        }
+        ensure!(
+            alice_probe_submitted && bob_probe_submitted,
+            "both signed native account routes must execute successfully"
+        );
+        wait_for_height_quorum_with_bounded_lag(
+            &network,
+            before_height.saturating_add(1),
+            Duration::from_secs(45),
+        )
+        .await?;
         let status_client = peer.client();
-        let payload = task::spawn_blocking(move || status_client.client().get_sumeragi_status_json())
-            .await
-            .wrap_err("join operator-signed Sumeragi status JSON request")?
-            .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
+        let payload =
+            read_on_dedicated_thread(move || status_client.client().get_sumeragi_status_json())
+                .await
+                .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
         let status: iroha_data_model::sumeragi::SumeragiStatus =
             norito::json::from_value(payload).wrap_err("decode the current native status DTO")?;
         ensure!(
             status.protocol_version == iroha_data_model::sumeragi::PROTOCOL_VERSION,
             "status must report the first-release native protocol"
         );
-        ensure!(status.committed_height >= 2, "status lost the observed committed height");
-        ensure!(status.applied_height <= status.committed_height,
-            "status reports application beyond native commitment");
-        ensure!(status.instance != [0; 32], "native status has an empty instance identity");
+        ensure!(
+            status.committed_height >= 2,
+            "status lost the observed committed height"
+        );
+        ensure!(
+            status.applied_height <= status.committed_height,
+            "status reports application beyond native commitment"
+        );
+        ensure!(
+            status.instance != [0; 32],
+            "native status has an empty instance identity"
+        );
         network.shutdown().await;
         Ok(())
     }

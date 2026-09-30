@@ -621,3 +621,69 @@ fn boundary_attestation_defect_uses_exact_epoch_cutoff() {
         Err(EvidenceError::DefectMismatch)
     );
 }
+
+#[test]
+fn borrowed_demotion_owners_preserve_slice_topology_and_every_interval_rejection() {
+    struct OriginalHeader(Box<BlockHeader>);
+    impl Borrow<BlockHeader> for OriginalHeader {
+        fn borrow(&self) -> &BlockHeader {
+            &self.0
+        }
+    }
+    let fixture = Fixture::new();
+    let parent = CommittedTip {
+        height: 4,
+        ..fixture.parent.clone()
+    };
+    let mut first = fixture.header(0);
+    first.height = 2;
+    first.skipped_leaders = vec![fixture.config.committee.members()[1].clone()];
+    let mut second = first.clone();
+    second.height = 3;
+    second.skipped_leaders = vec![fixture.config.committee.members()[2].clone()];
+    let headers = [first, second];
+    let context = EvidenceContext {
+        instance: I,
+        height: 5,
+        config: &fixture.config,
+        genesis_height: 1,
+        parent: &parent,
+        parent_config: Some(&fixture.config),
+        demotion_window: 2,
+        demotion_headers: &headers,
+    };
+    let expected = context.topology(&fixture.validators.crypto).unwrap();
+    for case in 0..5 {
+        let mut source = headers.to_vec();
+        match case {
+            0 => {}
+            1 => {
+                source.pop();
+            }
+            2 => source[1] = source[0].clone(),
+            3 => source.swap(0, 1),
+            4 => source[1].instance = h(99),
+            _ => unreachable!(),
+        }
+        let owners: Vec<_> = source
+            .into_iter()
+            .map(|header| OriginalHeader(Box::new(header)))
+            .collect();
+        let borrowed = EvidenceContext {
+            instance: context.instance,
+            height: context.height,
+            config: context.config,
+            genesis_height: context.genesis_height,
+            parent: context.parent,
+            parent_config: context.parent_config,
+            demotion_window: context.demotion_window,
+            demotion_headers: &owners,
+        };
+        let actual = borrowed.topology(&fixture.validators.crypto);
+        if case == 0 {
+            assert_eq!(actual, Ok(expected.clone()));
+        } else {
+            assert_eq!(actual, Err(EvidenceError::DemotionHistory), "case {case}");
+        }
+    }
+}

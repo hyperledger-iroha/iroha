@@ -15416,7 +15416,13 @@ seiyaku StaleRuntimeBinding {
         let code = view
             .world()
             .contract_code()
-            .get(&code_hash)
+            .get(
+                &iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                    contract_address,
+                    code_hash,
+                )
+                .expect("fixture artifact scope"),
+            )
             .expect("installed contract code");
         let parsed = ivm::ProgramMetadata::parse(code).expect("parse installed contract");
         let descriptor = parsed
@@ -19904,9 +19910,14 @@ seiyaku EffectfulView {
             .expect("next block height must fit in u64 and be non-zero");
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
-        tx.world
-            .contract_manifests
-            .insert(record.code_hash, malicious_manifest);
+        tx.world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &callee,
+                record.code_hash,
+            )
+            .expect("fixture artifact scope"),
+            malicious_manifest,
+        );
         tx.apply();
         block
             .commit_world_overlay_for_testing()

@@ -379,7 +379,7 @@ mod tests {
         app_auth::CanonicalRequestAuthConfig,
         tests_runtime_handlers::{
             app_auth_test_guard, checked_torii_test_ed25519_keypair,
-            mk_app_state_for_tests_with_world, signed_app_headers,
+            mk_app_state_for_tests_with_world, signed_network_app_headers,
         },
     };
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
@@ -480,6 +480,7 @@ mod tests {
         let block_hash = chain.committed(2).block_hash();
         app.state = chain.state().clone();
         app.kura = chain.kura().clone();
+        app.local_peer_id = Some(chain.validators()[0].0.clone());
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash
     }
@@ -744,7 +745,14 @@ mod tests {
         .await
         .expect_err("anonymous deployment-state read must fail");
         assert!(matches!(missing_auth, Error::AppUnauthorized { .. }));
-        let mismatched_headers = signed_app_headers(&other, &other_key, &method, &uri, &body);
+        let mismatched_headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &other,
+            &other_key,
+            &method,
+            &uri,
+            &body,
+        );
         let mismatch = handler_contract_deployment_state(
             State(app.clone()),
             method.clone(),
@@ -761,8 +769,14 @@ mod tests {
             authority
         )
         .into_bytes();
-        let unknown_headers =
-            signed_app_headers(&authority, &authority_key, &method, &uri, &unknown_body);
+        let unknown_headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &authority,
+            &authority_key,
+            &method,
+            &uri,
+            &unknown_body,
+        );
         let unknown = handler_contract_deployment_state(
             State(app.clone()),
             method.clone(),
@@ -779,7 +793,14 @@ mod tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
             ))
         ));
-        let headers = signed_app_headers(&authority, &authority_key, &method, &uri, &body);
+        let headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &authority,
+            &authority_key,
+            &method,
+            &uri,
+            &body,
+        );
         let response = handler_contract_deployment_state(
             State(app),
             method,
@@ -791,10 +812,11 @@ mod tests {
         .await
         .expect("authenticated deployment-state response")
         .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
         let value: norito::json::Value =
             norito::json::from_slice(&body).expect("strict response JSON");
         let object = value.as_object().expect("response object");

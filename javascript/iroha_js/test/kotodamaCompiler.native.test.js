@@ -166,22 +166,27 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
   // Keep the call unchanged and alter only one declaration marker at a time.
   const signature = "fn combine(int _ value, int minimum, int maximum)";
   assert.equal(source.split(signature).length, 2);
-  for (const [replacement, expectedCode] of [
-    ["fn combine(int value, int minimum, int maximum)", "E_NAMED_ARGUMENTS_REQUIRED"],
-    ["fn combine(int _ value, int _ minimum, int maximum)", "E_POSITIONAL_ARGUMENT_REQUIRED"],
-  ]) {
-    const rejectedRaw = await nativeBinding.compileKotodama({
-      ...request, source: source.replace(signature, replacement),
-    });
-    assert.equal(rejectedRaw.ok, false, replacement);
-    assert.equal(rejectedRaw.output, null);
-    const rejected = normalizeCompilerResult(rejectedRaw);
-    assert.equal(rejected.ok, false);
-    assert.deepEqual(
-      rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-        .map((diagnostic) => diagnostic.code),
-      [expectedCode],
-      replacement,
-    );
-  }
+  // Ordinary parameters accept a positional prefix; `_` prohibits a named value.
+  const optionalLabelsRaw = await nativeBinding.compileKotodama({
+    ...request,
+    source: source.replace(signature, "fn combine(int value, int minimum, int maximum)"),
+  });
+  assert.equal(optionalLabelsRaw.ok, true, optionalLabelsRaw.diagnosticsJson);
+  const optionalLabels = normalizeCompilerResult(optionalLabelsRaw);
+  assert.equal(optionalLabels.ok, true);
+  assert.deepEqual(optionalLabels.output.manifest.entrypoints, manifest.entrypoints);
+
+  const rejectedRaw = await nativeBinding.compileKotodama({
+    ...request,
+    source: source.replace(signature, "fn combine(int _ value, int _ minimum, int maximum)"),
+  });
+  assert.equal(rejectedRaw.ok, false);
+  assert.equal(rejectedRaw.output, null);
+  const rejected = normalizeCompilerResult(rejectedRaw);
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(
+    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => diagnostic.code),
+    ["E_POSITIONAL_ARGUMENT_REQUIRED"],
+  );
 });

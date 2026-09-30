@@ -60,7 +60,7 @@ use iroha_test_network::{
     DisposablePendingCustodyInput, DisposablePreparedBeaconCustody,
     DisposableRetainedBeaconCredential, DisposableRotationDkgOutput, DisposableRotationProofInput,
     NetworkBuilder, NetworkPeer, init_instruction_registry, prepare_disposable_pending_custody,
-    run_disposable_genesis_dkg, run_disposable_rotation_dkg,
+    read_on_dedicated_thread, run_disposable_genesis_dkg, run_disposable_rotation_dkg,
 };
 use iroha_test_samples::ALICE_ID;
 use irohad::{
@@ -74,7 +74,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use tokio::{task::spawn_blocking, time::sleep};
+use tokio::time::sleep;
 use zeroize::Zeroizing;
 
 #[derive(norito::derive::JsonDeserialize)]
@@ -403,14 +403,14 @@ async fn advance_to_height(
         );
         let client = peers[usize::try_from(tick)? % peers.len()].client();
         let message = format!("committee transition progress {target}:{tick}");
-        spawn_blocking(move || {
+        read_on_dedicated_thread(move || {
             client.submit(
                 Log::new(Level::INFO, message),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
         })
         .await
-        .wrap_err("progress submit worker panicked")??;
+        .wrap_err("progress submit worker failed")?;
         tick += 1;
         sleep(POLL).await;
     }
@@ -459,14 +459,14 @@ async fn advance_exact_rotation_phase(
         "rotation DKG phase h{height} started after a voter passed its predecessor: {before:?}"
     );
     let client = peers[0].client();
-    spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         client.submit(
             Log::new(Level::INFO, format!("rotation DKG exact phase h{height}")),
             FeePaymentIntent::authority(Vec::new(), None),
         )
     })
     .await
-    .wrap_err("rotation DKG phase submit worker panicked")??;
+    .wrap_err("rotation DKG phase submit worker failed")?;
     let deadline = Instant::now() + WAIT;
     loop {
         let mut observed = Vec::with_capacity(peers.len());
@@ -505,14 +505,14 @@ async fn advance_exact_genesis_phase(
         "genesis DKG phase h{height} started after a peer passed its predecessor: {before:?}"
     );
     let client = network.validators()[0].client();
-    spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         client.submit(
             Log::new(Level::INFO, format!("genesis DKG exact phase h{height}")),
             FeePaymentIntent::authority(Vec::new(), None),
         )
     })
     .await
-    .wrap_err("genesis DKG phase submit worker panicked")??;
+    .wrap_err("genesis DKG phase submit worker failed")?;
     let deadline = Instant::now() + WAIT;
     loop {
         let mut observed = Vec::new();
@@ -588,6 +588,28 @@ fn read_contiguous_finality_chain(
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     end: u64,
 ) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
+    let deadline = Instant::now() + WAIT;
+    let source = client.client().with_request_deadline(deadline);
+    finality_chain_from_proofs(
+        client.client().chain(),
+        network_id,
+        signed_genesis_hash,
+        end,
+        deadline,
+        |height| source.get_sumeragi_finality_proof(height),
+    )
+}
+
+fn finality_chain_from_proofs(
+    chain_id: &iroha_model_base::chain::ChainId,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    end: u64,
+    deadline: Instant,
+    mut fetch: impl FnMut(
+        NonZeroU64,
+    ) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
+) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
     ensure!(
         (2..=256).contains(&end),
         "committee proof cut exceeds its explicit disposable bound"
@@ -596,36 +618,40 @@ fn read_contiguous_finality_chain(
         network_id.into_genesis_hash() == signed_genesis_hash,
         "network differs from independent signed genesis"
     );
-    // The iterable read has an explicit count bound; no discarded suffix is treated as a trust root.
-    let mut source = client
-        .client()
-        .query(FindBlocks)
-        .with_pagination(iroha::data_model::query::parameters::Pagination::new(
-            NonZeroU64::new(257),
-            0,
-        ))
-        .execute_all()?;
-    ensure!(
-        source.len() <= 256,
-        "disposable source outgrew configured qualification prefix"
-    );
-    source.retain(|block| block.header().height().get() <= end);
-    source.sort_by_key(|block| block.header().height());
-    ensure!(
-        source.len() == usize::try_from(end)?,
-        "native source lacks complete signed-genesis prefix"
-    );
     let limits = finality_limits();
-    let journal = NativeFinalityJournal {
-        blocks: source
-            .iter()
-            .map(|block| {
-                NativeFinalityArtifact::from_block(block, limits).map_err(|error| eyre!(error))
-            })
-            .collect::<Result<Vec<_>>>()?,
-    };
+    let mut journal = NativeFinalityJournal { blocks: Vec::new() };
+    let mut source_bytes = 0_usize;
+    // Fetch each exact canonical carrier through the bounded public proof endpoint.
+    // Candidate proof metadata never chooses the committee or substitutes for the
+    // complete, independently genesis-anchored journal verification below.
+    for height in 1..=end {
+        ensure!(
+            Instant::now() < deadline,
+            "committee proof retrieval deadline elapsed"
+        );
+        let proof = fetch(NonZeroU64::new(height).expect("prefix starts at one"))?;
+        ensure!(
+            proof.height() == height,
+            "committee proof differs from requested height"
+        );
+        ensure!(
+            !proof.block_wire.is_empty() && proof.block_wire.len() <= limits.block_bytes,
+            "committee proof exceeds its block source bound"
+        );
+        source_bytes = source_bytes
+            .checked_add(proof.block_wire.len())
+            .ok_or_else(|| eyre!("committee proof source size overflow"))?;
+        ensure!(
+            source_bytes <= limits.journal_bytes,
+            "committee proof exceeds its journal source bound"
+        );
+        proof.decode_checked()?;
+        journal.blocks.push(NativeFinalityArtifact {
+            block_wire: proof.block_wire,
+        });
+    }
     let cursor = NativeJournalCursor::new(
-        client.client().chain().clone(),
+        chain_id.clone(),
         network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
@@ -633,7 +659,7 @@ fn read_contiguous_finality_chain(
     .map_err(|error| eyre!(error))?;
     let blocks = with_verified_native_journal(
         &journal,
-        client.client().chain(),
+        chain_id,
         &network_id,
         limits,
         cursor.attestations(),
@@ -645,6 +671,10 @@ fn read_contiguous_finality_chain(
         },
     )
     .map_err(|error| eyre!(error))?;
+    ensure!(
+        Instant::now() < deadline,
+        "committee proof verification deadline elapsed"
+    );
     Ok((journal, blocks))
 }
 
@@ -913,12 +943,12 @@ async fn execute_rotation_preparation(
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
     let target_seats = exact_process_roster(network, &target)?;
-    let (finality_journal, certified_chain) = spawn_blocking({
+    let (finality_journal, certified_chain) = read_on_dedicated_thread({
         let admin = admin.clone();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, observed)
     })
     .await
-    .wrap_err("selection finality worker panicked")??;
+    .wrap_err("selection finality worker failed")?;
     let latest = certified_chain
         .last()
         .ok_or_else(|| eyre!("missing observed native tip"))?;
@@ -961,17 +991,17 @@ async fn execute_rotation_preparation(
             let voters = current_roster.clone();
             async move {
                 advance_exact_rotation_phase(network, &voters, height).await?;
-                let observed = spawn_blocking({
+                let observed = read_on_dedicated_thread({
                     let admin = admin.clone();
                     move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
                 })
                 .await
-                .wrap_err("rotation phase status worker panicked")??;
+                .wrap_err("rotation phase status worker failed")?;
                 ensure!(
                     observed == height,
                     "rotation DKG public phase missed exact h{height} observation"
                 );
-                spawn_blocking(move || {
+                read_on_dedicated_thread(move || {
                     Ok(read_contiguous_finality_chain(
                         &admin,
                         network_id,
@@ -981,7 +1011,7 @@ async fn execute_rotation_preparation(
                     .0)
                 })
                 .await
-                .wrap_err("rotation phase finality worker panicked")?
+                .wrap_err("rotation phase finality worker failed")
             }
         },
     )
@@ -998,22 +1028,22 @@ async fn execute_rotation_preparation(
         .ok_or_else(|| eyre!("native rotation instruction is not beacon finalization"))?
         .certificate
         .clone();
-    let at_height = spawn_blocking({
+    let at_height = read_on_dedicated_thread({
         let admin = admin.clone();
         move || -> Result<u64> { Ok(admin.status().get()?.blocks + 1) }
     })
     .await
-    .wrap_err("rotation certificate height worker panicked")??;
+    .wrap_err("rotation certificate height worker failed")?;
     ensure!(
         at_height == certificate_height && certificate.effective_height == certificate_height,
         "native finalization draft is not the exact next execution height"
     );
-    spawn_blocking({
+    read_on_dedicated_thread({
         let admin = admin.clone();
         move || admin.submit_all(finalize, FeePaymentIntent::authority(Vec::new(), None))
     })
     .await
-    .wrap_err("rotation finalization worker panicked")??;
+    .wrap_err("rotation finalization worker failed")?;
     let finalized_status = admin
         .client()
         .nexus()
@@ -1062,14 +1092,14 @@ async fn execute_rotation_preparation(
         .ok_or_else(|| eyre!("first target seat lacks an owning operator"))?
         .client
         .clone();
-    spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         owner.submit(
             SetParameter::new(Parameter::Custom(prepare.into_custom_parameter())),
             FeePaymentIntent::authority(Vec::new(), None),
         )
     })
     .await
-    .wrap_err("rotation credential preparation worker panicked")??;
+    .wrap_err("rotation credential preparation worker failed")?;
     let prepared_status = admin
         .client()
         .nexus()
@@ -1094,12 +1124,12 @@ async fn execute_rotation_preparation(
         .header()
         .height()
         .get();
-    let (custody_journal, _) = spawn_blocking({
+    let (custody_journal, _) = read_on_dedicated_thread({
         let admin = admin.clone();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, proof_end)
     })
     .await
-    .wrap_err("custody finality worker panicked")??;
+    .wrap_err("custody finality worker failed")?;
     let custody_evidence = ValidatorCommitteeProvisioningEvidenceV1 {
         status: prepared_status,
         finality_journal: custody_journal,
@@ -1175,7 +1205,7 @@ async fn execute_rotation_preparation(
             .ok_or_else(|| eyre!("prepared seat lacks a real owning operator"))?
             .client
             .clone();
-        spawn_blocking(move || {
+        read_on_dedicated_thread(move || {
             owner.submit(
                 SetParameter::new(Parameter::Custom(
                     ValidatorCommitteeOperationV1::AdmitSeat(admission).into_custom_parameter(),
@@ -1184,7 +1214,7 @@ async fn execute_rotation_preparation(
             )
         })
         .await
-        .wrap_err("target seat readiness admission worker panicked")??;
+        .wrap_err("target seat readiness admission worker failed")?;
     }
     let readiness = admin
         .client()
@@ -1272,7 +1302,7 @@ async fn run_custody_or_activation_scenario(
                 .get(peer)
                 .ok_or_else(|| eyre!("exiting candidate lacks a real owner"))?
                 .clone();
-            spawn_blocking(move || {
+            read_on_dedicated_thread(move || {
                 owner.client.submit(
                     ExitPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
@@ -1283,14 +1313,14 @@ async fn run_custody_or_activation_scenario(
                 )
             })
             .await
-            .wrap_err("future candidate exit worker panicked")??;
+            .wrap_err("future candidate exit worker failed")?;
         }
-        let before_cutoff = spawn_blocking({
+        let before_cutoff = read_on_dedicated_thread({
             let admin = admin.clone();
             move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
         })
         .await
-        .wrap_err("pre-cutoff height worker panicked")??;
+        .wrap_err("pre-cutoff height worker failed")?;
         ensure!(
             before_cutoff < CUTOFF,
             "future exit requests must precede the E+3 selecting boundary"
@@ -1300,13 +1330,13 @@ async fn run_custody_or_activation_scenario(
         None
     };
     advance_to_height(network, &initial_roster, CUTOFF).await?;
-    let (_, cutoff_chain) = spawn_blocking({
+    let (_, cutoff_chain) = read_on_dedicated_thread({
         let admin = admin.clone();
         let network_id = network.network_id();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, CUTOFF)
     })
     .await
-    .wrap_err("first cutoff finality worker panicked")??;
+    .wrap_err("first cutoff finality worker failed")?;
     let cutoff = cutoff_chain
         .last()
         .ok_or_else(|| eyre!("first cutoff lacks authenticated finality"))?;
@@ -1371,7 +1401,7 @@ async fn run_custody_or_activation_scenario(
         "complete seven-seat custody must activate as one certified boundary effect"
     );
     advance_to_height(network, &first.target, TARGET_FIRST).await?;
-    let (_, activated_chain) = spawn_blocking({
+    let (_, activated_chain) = read_on_dedicated_thread({
         let admin = admin.clone();
         let network_id = network.network_id();
         move || {
@@ -1379,7 +1409,7 @@ async fn run_custody_or_activation_scenario(
         }
     })
     .await
-    .wrap_err("seven-seat activation finality worker panicked")??;
+    .wrap_err("seven-seat activation finality worker failed")?;
     let seven = activated_chain
         .last()
         .ok_or_else(|| eyre!("seven-seat activation lacks finality"))?;
@@ -1412,7 +1442,7 @@ async fn run_custody_or_activation_scenario(
             && return_target.len() == 4,
         "genuine eight-candidate election must freeze the four non-exiting seats for E+3"
     );
-    spawn_blocking({
+    read_on_dedicated_thread({
         let operators = operators.clone();
         let processes = network
             .validators()
@@ -1425,7 +1455,7 @@ async fn run_custody_or_activation_scenario(
         move || publish_selected(&operators, &processes, &return_target, None, network_id, 2)
     })
     .await
-    .wrap_err("return generation key worker panicked")??;
+    .wrap_err("return generation key worker failed")?;
     let seven_current = prepared_current_custody(&first.prepared)?;
     let second = execute_rotation_preparation(
         network,
@@ -1444,7 +1474,7 @@ async fn run_custody_or_activation_scenario(
     );
     let second_cutoff = TARGET_LAST;
     advance_to_height(network, &first.target, second_cutoff).await?;
-    let (_, return_chain) = spawn_blocking({
+    let (_, return_chain) = read_on_dedicated_thread({
         let admin = admin.clone();
         let network_id = network.network_id();
         move || {
@@ -1452,7 +1482,7 @@ async fn run_custody_or_activation_scenario(
         }
     })
     .await
-    .wrap_err("return cutoff finality worker panicked")??;
+    .wrap_err("return cutoff finality worker failed")?;
     let return_boundary = return_chain
         .last()
         .ok_or_else(|| eyre!("return boundary lacks finality"))?;
@@ -1483,13 +1513,13 @@ async fn run_custody_or_activation_scenario(
     );
     let four_first = second_cutoff + 1;
     advance_to_height(network, &second.target, four_first).await?;
-    let (_, four_chain) = spawn_blocking({
+    let (_, four_chain) = read_on_dedicated_thread({
         let admin = admin.clone();
         let network_id = network.network_id();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, four_first)
     })
     .await
-    .wrap_err("four-seat return finality worker panicked")??;
+    .wrap_err("four-seat return finality worker failed")?;
     let four = four_chain
         .last()
         .ok_or_else(|| eyre!("four-seat return lacks finality"))?;
@@ -1608,21 +1638,21 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 let admin = admin.clone();
                 async move {
                     advance_exact_genesis_phase(network_ref, height).await?;
-                    let observed = spawn_blocking({
+                    let observed = read_on_dedicated_thread({
                         let admin = admin.clone();
                         move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
                     })
                     .await
-                    .wrap_err("genesis phase status worker panicked")??;
+                    .wrap_err("genesis phase status worker failed")?;
                     ensure!(
                         observed == height,
                         "genesis DKG public phase missed exact h{height} observation"
                     );
-                    spawn_blocking(move || {
+                    read_on_dedicated_thread(move || {
                         read_genesis_dkg_finality_chain(&admin, network_id, block_hash, height)
                     })
                     .await
-                    .wrap_err("genesis phase finality worker panicked")?
+                    .wrap_err("genesis phase finality worker failed")
                 }
             },
         )
@@ -1630,22 +1660,22 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         let install: Vec<InstructionBox> =
             norito::json::from_slice(&fs::read(&genesis_dkg.install_instruction_path)?)?;
         ensure!(install.len() == 1, "native genesis install must emit one instruction");
-        let next_height = spawn_blocking({
+        let next_height = read_on_dedicated_thread({
             let admin = admin.clone();
             move || -> Result<u64> { Ok(admin.status().get()?.blocks + 1) }
         })
         .await
-        .wrap_err("genesis install height worker panicked")??;
+        .wrap_err("genesis install height worker failed")?;
         ensure!(
             next_height == 5,
             "genesis installation must execute immediately after the exact h4 DKG cutoff"
         );
-        spawn_blocking({
+        read_on_dedicated_thread({
             let admin = admin.clone();
             move || admin.submit_all(install, FeePaymentIntent::authority(Vec::new(), None))
         })
         .await
-        .wrap_err("genesis beacon install worker panicked")??;
+        .wrap_err("genesis beacon install worker failed")?;
         network.shutdown().await;
         let genesis_catalogs = stage_genesis_brokers(&network, &genesis_dkg).await?;
         network.start_all().await?;
@@ -1719,7 +1749,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .iter()
             .map(|peer| operators.get(peer).ok_or_else(|| eyre!("missing candidate operator")))
             .collect::<Result<Vec<_>>>()?;
-        let initial_height = spawn_blocking({
+        let initial_height = read_on_dedicated_thread({
             let admin = admin.clone();
             let xor = xor.clone();
             let escrow = escrow.clone();
@@ -1733,7 +1763,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             }
         })
         .await
-        .wrap_err("candidate admission worker panicked")??;
+        .wrap_err("candidate admission worker failed")?;
         ensure!(initial_height < SELECTION, "candidate pool did not enter the selecting prestate");
         let initial_roster = network.validators().iter().map(|peer| peer.id()).collect::<Vec<_>>();
         advance_to_height(&network, &initial_roster, SELECTION).await?;
@@ -1786,7 +1816,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             None
         };
         let selected_id = preparation.transition_id().map_err(|error| eyre!(error))?;
-        spawn_blocking({
+        read_on_dedicated_thread({
             let target = target.clone();
             let withheld = withheld.clone();
             let operators = operators.clone();
@@ -1806,7 +1836,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             )
         })
         .await
-        .wrap_err("candidate key publication worker panicked")??;
+        .wrap_err("candidate key publication worker failed")?;
         let progress = admin.client().nexus().validator_committee(Some(2)).await?;
         ensure!(
             progress.candidate_keys.len() == seats - usize::from(withheld.is_some())
@@ -1834,13 +1864,13 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .await;
         }
         advance_to_height(&network, &initial_roster, CUTOFF).await?;
-        let (selection_proof, cutoff_proof) = spawn_blocking({
+        let (selection_proof, cutoff_proof) = read_on_dedicated_thread({
             let admin = admin.clone();
             let voters = genesis_voters.clone();
             move || read_finality_chain(&admin, network_id, &voters, CUTOFF)
         })
         .await
-        .wrap_err("boundary finality worker panicked")??;
+        .wrap_err("boundary finality worker failed")?;
         verify_equal_vote_context(&selection_proof, &genesis_voters)?;
         verify_equal_vote_context(&cutoff_proof, &genesis_voters)?;
         ensure!(
@@ -1929,6 +1959,102 @@ fn exact_quorum_uses_only_three_f_plus_one_equal_vote_geometry() {
     assert_eq!(exact_quorum(7).unwrap(), 5);
     assert!(exact_quorum(6).is_err());
     assert!(exact_quorum(8).is_err());
+}
+
+#[test]
+fn committee_history_public_proofs_require_the_exact_genesis_anchored_prefix() -> Result<()> {
+    use iroha_core::{
+        state::{StateReadOnly as _, World},
+        sumeragi::{
+            finality::build_proof,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        },
+    };
+
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000))
+        .map_err(|error| eyre!("native fixture startup failed: {error:?}"))?;
+    chain.commit_at(10_001, Vec::new());
+    chain.commit_at(10_002, Vec::new());
+    let view = chain.state().view();
+    let chain_id = view.chain_id().clone();
+    let proofs = (1..=3)
+        .map(|height| build_proof(&view, height))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let verify = |end, source: &[iroha::data_model::sumeragi_finality::SumeragiFinalityProof]| {
+        let mut requested = Vec::new();
+        let result = finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            chain.genesis().hash(),
+            end,
+            Instant::now() + WAIT,
+            |height| {
+                requested.push(height.get());
+                source
+                    .get(usize::try_from(height.get() - 1)?)
+                    .cloned()
+                    .ok_or_else(|| eyre!("missing requested proof"))
+            },
+        );
+        (result, requested)
+    };
+    let (result, requested) = verify(3, &proofs);
+    let (journal, certified) = result?;
+    assert_eq!(requested, [1, 2, 3]);
+    assert_eq!(certified.len(), 3);
+    for (artifact, proof) in journal.blocks.iter().zip(&proofs) {
+        assert_eq!(artifact.block_wire, proof.block_wire);
+    }
+    assert!(
+        verify(3, &proofs[..2]).0.is_err(),
+        "missing tip must reject"
+    );
+    let mut changed = proofs.clone();
+    changed.swap(1, 2);
+    assert!(
+        verify(3, &changed).0.is_err(),
+        "reordered heights must reject"
+    );
+    let mut changed = proofs.clone();
+    changed[1].block_wire[0] ^= 1;
+    assert!(
+        verify(3, &changed).0.is_err(),
+        "changed canonical wire must reject"
+    );
+    let mut changed = proofs.clone();
+    changed[1].committee.pop();
+    assert!(
+        verify(3, &changed).0.is_err(),
+        "substituted proof metadata must reject"
+    );
+    let foreign = CertifiedTestChain::start(TestChainConfig::new(World::new(), 20_000))
+        .map_err(|error| eyre!("foreign fixture startup failed: {error:?}"))?;
+    let mut changed = proofs.clone();
+    changed[0] = build_proof(&foreign.state().view(), 1)?;
+    assert!(
+        verify(3, &changed).0.is_err(),
+        "foreign signed genesis must reject"
+    );
+    for end in [0, 1, 257] {
+        let (result, requested) = verify(end, &proofs);
+        assert!(result.is_err());
+        assert!(
+            requested.is_empty(),
+            "invalid bounds must reject before fetching"
+        );
+    }
+    assert!(
+        finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            chain.genesis().hash(),
+            3,
+            Instant::now(),
+            |_| panic!("expired reads must not fetch"),
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]

@@ -4,6 +4,8 @@
 //! caller retains that original authority and every source read owner. Advancement borrows
 //! complete available custody and never clones, extracts or replaces it on failure.
 
+use std::borrow::Borrow;
+
 use iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier;
 use iroha_sumeragi::{
     availability::AvailableBody,
@@ -38,9 +40,9 @@ pub enum LaneAncestryError {
 /// Construction consumes the caller's original pinned configuration without cloning it. This
 /// cursor selects a branch but supplies no global occurrence height. The enclosing reader must
 /// independently authenticate its creation record, frontier and original staking provenance.
-pub struct LaneAncestry {
+pub struct LaneAncestry<Config: Borrow<HeightConfig> = HeightConfig> {
     instance: Hash32,
-    config: HeightConfig,
+    config: Config,
     genesis: SumeragiLaneFrontier,
     expected: SumeragiLaneFrontier,
     parent_height: u64,
@@ -48,40 +50,51 @@ pub struct LaneAncestry {
     first: u64,
 }
 
-impl LaneAncestry {
+impl<Config: Borrow<HeightConfig>> LaneAncestry<Config> {
     /// Select the complete native parent/demotion interval beneath an original global anchor.
     /// `genesis`, `frontier`, `instance` and `config` must all be independently authenticated;
     /// an inspected frame or local QC cannot provide any of them.
     ///
     /// # Errors
     /// Inconsistent pinned authority, a zero subject, or a subject whose parent is unanchored.
+    /// Every failure returns the original configuration owner without cloning or refunding it.
     pub fn new(
         instance: Hash32,
-        config: HeightConfig,
+        config: Config,
         genesis: SumeragiLaneFrontier,
         frontier: SumeragiLaneFrontier,
         subject_height: u64,
         window: u64,
-    ) -> Result<Self, LaneAncestryError> {
-        let parent_height = subject_height
-            .checked_sub(1)
-            .ok_or(LaneAncestryError::Uncovered)?;
-        if parent_height > frontier.height {
-            return Err(LaneAncestryError::Uncovered);
-        }
-        if genesis.height != 0
-            || (frontier.height == 0 && frontier != genesis)
-            || config.epoch.id.epoch != 0
-            || config.epoch.id.context != Hash32(genesis.result)
-            || config.epoch.authority_generation != Hash32(genesis.result)
-            || config.epoch.first_height != 0
-            || config.epoch.last_height != u64::MAX
-            || !iroha_data_model::block::consensus::is_valid_committee_size(config.committee.n())
-        {
-            return Err(LaneAncestryError::Authority);
-        }
-        let interval = demotion_window(subject_height, 0, window);
-        let first = interval.map_or(parent_height, |(first, _)| first);
+    ) -> Result<Self, (Config, LaneAncestryError)> {
+        let selected = (|| {
+            let pinned = config.borrow();
+            let parent_height = subject_height
+                .checked_sub(1)
+                .ok_or(LaneAncestryError::Uncovered)?;
+            if parent_height > frontier.height {
+                return Err(LaneAncestryError::Uncovered);
+            }
+            if genesis.height != 0
+                || (frontier.height == 0 && frontier != genesis)
+                || pinned.epoch.id.epoch != 0
+                || pinned.epoch.id.context != Hash32(genesis.result)
+                || pinned.epoch.authority_generation != Hash32(genesis.result)
+                || pinned.epoch.first_height != 0
+                || pinned.epoch.last_height != u64::MAX
+                || !iroha_data_model::block::consensus::is_valid_committee_size(
+                    pinned.committee.n(),
+                )
+            {
+                return Err(LaneAncestryError::Authority);
+            }
+            let interval = demotion_window(subject_height, 0, window);
+            let first = interval.map_or(parent_height, |(first, _)| first);
+            Ok((parent_height, interval, first))
+        })();
+        let (parent_height, interval, first) = match selected {
+            Ok(selected) => selected,
+            Err(error) => return Err((config, error)),
+        };
         Ok(Self {
             instance,
             config,
@@ -121,7 +134,7 @@ impl LaneAncestry {
     /// Borrow the original pinned configuration without cloning its backing.
     #[must_use]
     pub fn config(&self) -> &HeightConfig {
-        &self.config
+        self.config.borrow()
     }
 
     /// Verify one full original frame and advance only along its authenticated parent link.
@@ -138,15 +151,16 @@ impl LaneAncestry {
         qc: &Qc,
     ) -> Result<(), LaneAncestryError> {
         let height = self.next_height().ok_or(LaneAncestryError::Complete)?;
+        let config = self.config.borrow();
         let header = body.header();
         let source = body.source();
         if source.instance() != self.instance
             || source.height() != height
             || source.block_hash() != Hash32(self.expected.block_hash)
-            || source.config() != &self.config
+            || source.config() != config
             || header.height != height
             || header.instance != self.instance
-            || header.epoch != self.config.epoch.id
+            || header.epoch != config.epoch.id
             || header.attest
             || !header.control_witness.is_empty()
             || body.hash(crypto) != Hash32(self.expected.block_hash)
@@ -157,13 +171,8 @@ impl LaneAncestry {
         {
             return Err(LaneAncestryError::Branch);
         }
-        if !Verifier::new(
-            crypto,
-            &self.instance,
-            &self.config.epoch.id,
-            &self.config.committee,
-        )
-        .verify_commit_qc(attestations, qc, Some(header))
+        if !Verifier::new(crypto, &self.instance, &config.epoch.id, &config.committee)
+            .verify_commit_qc(attestations, qc, Some(header))
         {
             return Err(LaneAncestryError::Certificate);
         }

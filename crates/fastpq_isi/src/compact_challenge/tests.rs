@@ -117,7 +117,7 @@ fn query_decoding_checks_raw_acceptance_unbiased_range_occupancy_and_sorted_cens
     assert_eq!(raw.len(), QUERY_RAW_WORDS);
     assert_eq!(
         words(10, raw).decode().unwrap(),
-        RawTapeMessageV1::Queries((0..QUERY_COUNT as u32).collect())
+        RawTapeMessageV1::Queries((0..u32::try_from(QUERY_COUNT).unwrap()).collect())
     );
     // There are already 77 distinct positions, but fewer than 87 accepted field
     // words: accepting here would change the defined whole-message decoder.
@@ -127,6 +127,20 @@ fn query_decoding_checks_raw_acceptance_unbiased_range_occupancy_and_sorted_cens
     assert_eq!(
         words(10, [0; QUERY_RAW_WORDS]).decode(),
         Err(RawTapeErrorV1::Exhausted)
+    );
+}
+
+#[test]
+fn query_decoding_preserves_positions_at_the_upper_domain_boundary() {
+    let limit = FIELD_MODULUS - FIELD_MODULUS % LDE_ROWS as u64;
+    let raw = (1..=QUERY_CANDIDATES as u64)
+        .map(|distance| limit - distance)
+        .chain(std::iter::repeat_n(u64::MAX, 6));
+    let end = u32::try_from(LDE_ROWS).expect("fixed query domain fits u32");
+    let count = u32::try_from(QUERY_COUNT).unwrap();
+    assert_eq!(
+        words(10, raw).decode().unwrap(),
+        RawTapeMessageV1::Queries((end - count..end).collect())
     );
 }
 
@@ -154,7 +168,9 @@ fn raw_unused_suffix_is_retained_even_when_decoded_messages_are_equal() {
 
 #[test]
 fn xof_materializes_the_same_complete_tape_across_cached_prefix_splits() {
-    let input: Vec<_> = (0..512).map(|i| ((i * 37 + 11) & 255) as u8).collect();
+    let input: Vec<_> = (0..512)
+        .map(|i| u8::try_from((i * 37 + 11) & 255).unwrap())
+        .collect();
     for n in 1..=10 {
         let empty = Shake256V1::new();
         let full = RawTapeV1::derive(round(n), &empty, &input).unwrap();
@@ -174,7 +190,7 @@ impl Observation {
         ERASURE.with(|counts| assert_eq!(counts.replace(Some((0, 0))), None));
         Self
     }
-    fn counts(&self) -> (usize, usize) {
+    fn counts() -> (usize, usize) {
         ERASURE.with(|counts| counts.get().unwrap())
     }
 }
@@ -187,13 +203,13 @@ impl Drop for Observation {
 fn entire_owned_raw_tapes_clear_on_return_decode_error_and_unwind() {
     let observation = Observation::start();
     drop(RawTapeV1::from_bytes(round(1), &[0xff; 32]).unwrap());
-    assert_eq!(observation.counts(), (32, 0));
+    assert_eq!(Observation::counts(), (32, 0));
     let error = (|| {
         let tape = RawTapeV1::from_bytes(round(4), &[0xff; 80])?;
         tape.decode()
     })();
     assert_eq!(error, Err(RawTapeErrorV1::Exhausted));
-    assert_eq!(observation.counts(), (112, 0));
+    assert_eq!(Observation::counts(), (112, 0));
     assert!(
         std::panic::catch_unwind(|| {
             let _tape = RawTapeV1::from_bytes(round(10), &[0xff; 744]).unwrap();
@@ -201,5 +217,6 @@ fn entire_owned_raw_tapes_clear_on_return_decode_error_and_unwind() {
         })
         .is_err()
     );
-    assert_eq!(observation.counts(), (856, 0));
+    assert_eq!(Observation::counts(), (856, 0));
+    drop(observation);
 }

@@ -136,6 +136,7 @@ fn validate_value_schema(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::smart_contract::ContractArtifactId;
     use iroha_data_model::{
         isi::{InstructionBox, smart_contract_code::RegisterSmartContractCode},
         smart_contract::entrypoint::{
@@ -143,6 +144,7 @@ mod tests {
             MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::json::{self, Value};
 
     const FIXTURE_NETWORK_PREFIX: u16 = 753;
@@ -188,8 +190,19 @@ mod tests {
         json::from_value(manifest).expect("current model manifest")
     }
 
+    fn artifact_id() -> ContractArtifactId {
+        // These fixtures exercise schema admission independently of deployable
+        // artifact custody; some intentionally omit the manifest code hash.
+        ContractArtifactId::new(
+            DataSpaceId::new(u64::MAX),
+            iroha_crypto::Hash::new(b"manifest schema fixture artifact"),
+        )
+    }
+
     fn instruction_json(manifest: &ContractManifest) -> String {
-        json::to_json(&norito::json!({ "RegisterSmartContractCode": { "manifest": manifest } }))
+        let artifact = crate::lifecycle_instructions::render_artifact_id(&artifact_id())
+            .expect("artifact JSON");
+        json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact, "manifest": manifest } }))
             .expect("manifest instruction JSON")
     }
 
@@ -238,6 +251,7 @@ mod tests {
         // frame/archive remain canonical and checksummed, so rejection exercises
         // the native decoded-manifest schema boundary rather than CRC handling.
         let instruction: InstructionBox = RegisterSmartContractCode {
+            artifact_id: artifact_id(),
             manifest: manifest.clone(),
         }
         .into();
@@ -440,13 +454,21 @@ mod tests {
         let mut malformed = manifest.clone();
         malformed.entrypoints.as_mut().unwrap()[0].return_schema = None;
         let instructions: [InstructionBox; 3] = [
-            RegisterSmartContractCode { manifest }.into(),
             RegisterSmartContractCode {
+                artifact_id: artifact_id(),
+                manifest,
+            }
+            .into(),
+            RegisterSmartContractCode {
+                artifact_id: artifact_id(),
                 manifest: malformed,
             }
             .into(),
             CancelSmartContractCodeUpload {
-                code_hash: iroha_crypto::Hash::new(b"manifest codec cancellation"),
+                artifact_id: ContractArtifactId::new(
+                    DataSpaceId::new(u64::MAX),
+                    iroha_crypto::Hash::new(b"manifest codec cancellation"),
+                ),
             }
             .into(),
         ];

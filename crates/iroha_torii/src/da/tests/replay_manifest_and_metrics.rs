@@ -290,7 +290,7 @@ fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
         .record(lane_epoch, 42)
         .expect_err("symlinked replay cursor root replacement must reject persistence");
     assert!(
-        format!("{err:?}").contains("DA replay snapshot directory"),
+        format!("{err:?}").contains("DA replay journal directory"),
         "unexpected cursor root replacement error: {err:?}"
     );
     assert_replay_cursor_sequences(&store, &[]);
@@ -835,9 +835,33 @@ fn resolve_manifest_applies_enforced_retention_policy() {
         .expect("resolve manifest with enforced retention");
     assert_eq!(artifacts.manifest.retention_policy, enforced);
 }
+fn provided_manifest_request() -> DaIngestRequest {
+    let mut request = sample_request();
+    taikai::apply_taikai_ingest_tags(
+        &mut request.metadata,
+        None,
+        &request.retention_policy,
+        request.total_size,
+    );
+    resign_sample_request(&mut request);
+    request
+}
+#[test]
+fn provided_manifest_roundtrip_preserves_computed_chunks() {
+    let mut fixture = ManifestResolutionFixture::new(provided_manifest_request());
+    let original = fixture
+        .resolve(1_701_000_600)
+        .expect("generate canonical manifest");
+    fixture.request.norito_manifest = Some(to_bytes(&original.manifest).expect("encode manifest"));
+    let supplied = fixture
+        .resolve(1_701_000_601)
+        .expect("admit matching supplied manifest");
+    assert_eq!(supplied.manifest, original.manifest);
+    assert_eq!(supplied.manifest_hash, original.manifest_hash);
+}
 #[test]
 fn provided_manifest_must_match_enforced_retention_policy() {
-    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let mut fixture = ManifestResolutionFixture::new(provided_manifest_request());
     let artifacts = fixture.resolve(1_701_000_600).expect("resolve manifest");
     fixture.request.norito_manifest = Some(to_bytes(&artifacts.manifest).expect("encode manifest"));
     let strict_policy = RetentionPolicy {
@@ -854,7 +878,7 @@ fn provided_manifest_must_match_enforced_retention_policy() {
 }
 #[test]
 fn provided_manifest_with_wrong_parity_is_rejected() {
-    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let mut fixture = ManifestResolutionFixture::new(provided_manifest_request());
     let artifacts = fixture.resolve(1_701_000_222).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
     let first_parity = tampered
@@ -872,7 +896,7 @@ fn provided_manifest_with_wrong_parity_is_rejected() {
 }
 #[test]
 fn provided_manifest_with_parity_role_alias_is_rejected() {
-    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let mut fixture = ManifestResolutionFixture::new(provided_manifest_request());
     let artifacts = fixture.resolve(1_701_000_223).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
     let global_parity = tampered
@@ -886,11 +910,14 @@ fn provided_manifest_with_parity_role_alias_is_rejected() {
         .resolve(1_701_000_334)
         .expect_err("a parity/Data role alias must not bypass IPA field binding");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert!(err.1.contains("role mismatch"));
+    assert!(
+        err.1.contains("role mismatch"),
+        "unexpected rejection: {err:?}"
+    );
 }
 #[test]
 fn provided_manifest_with_zero_group_alias_is_rejected() {
-    let mut request = sample_request();
+    let mut request = provided_manifest_request();
     request.payload = vec![0x5A; 9 * usize::try_from(request.chunk_size).unwrap()];
     request.total_size = u64::try_from(request.payload.len()).unwrap();
     request.payload_hash = BlobDigest::from_hash(blake3_hash(&request.payload));
@@ -908,11 +935,14 @@ fn provided_manifest_with_zero_group_alias_is_rejected() {
         .resolve(1_701_000_335)
         .expect_err("group zero must not act as a wildcard for IPA field binding");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert!(err.1.contains("group_id mismatch"));
+    assert!(
+        err.1.contains("group_id mismatch"),
+        "unexpected rejection: {err:?}"
+    );
 }
 #[test]
 fn provided_manifest_with_wrong_ipa_commitment_is_rejected() {
-    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let mut fixture = ManifestResolutionFixture::new(provided_manifest_request());
     let artifacts = fixture.resolve(1_701_000_920).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
     tampered.ipa_commitment = BlobDigest::new([0xAB; 32]);
@@ -1059,9 +1089,14 @@ fn streaming_chunk_ingest_matches_fixture() {
         .expect("plan derivation succeeds");
     let mut streaming_store = ChunkStore::with_profile(chunk_profile);
     let chunk_dir = tempdir().expect("chunk dir");
+    let chunk_path = chunk_dir
+        .path()
+        .canonicalize()
+        .expect("canonical chunk directory")
+        .join("chunks");
     let mut payload_cursor: &[u8] = canonical_payload.as_slice();
     let stream_output = streaming_store
-        .ingest_plan_stream_to_directory(&plan, &mut payload_cursor, chunk_dir.path())
+        .ingest_plan_stream_to_directory(&plan, &mut payload_cursor, &chunk_path)
         .expect("streaming ingest succeeds");
     assert_eq!(
         stream_output.total_bytes, request.total_size,
@@ -1163,9 +1198,14 @@ fn regenerate_da_ingest_fixtures() {
         .expect("plan derivation succeeds");
     let mut streaming_store = ChunkStore::with_profile(chunk_profile);
     let chunk_dir = tempdir().expect("chunk dir");
+    let chunk_path = chunk_dir
+        .path()
+        .canonicalize()
+        .expect("canonical chunk directory")
+        .join("chunks");
     let mut payload_cursor: &[u8] = canonical_payload.as_slice();
     let stream_output = streaming_store
-        .ingest_plan_stream_to_directory(&plan, &mut payload_cursor, chunk_dir.path())
+        .ingest_plan_stream_to_directory(&plan, &mut payload_cursor, &chunk_path)
         .expect("streaming ingest succeeds");
     let metadata =
         encrypt_governance_metadata(&request.metadata, None, None).expect("encrypt metadata");

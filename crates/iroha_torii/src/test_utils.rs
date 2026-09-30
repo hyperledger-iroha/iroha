@@ -1571,3 +1571,65 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+/// Test-only wire twin of the private core committee record.
+///
+/// The explicit frame identity keeps its Norito header identical to the record
+/// decoded by `State`; field order and types intentionally mirror that record.
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::test_utils::AutoscaleLaneCommitteeFixtureV1",
+    frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
+)]
+pub(crate) struct AutoscaleLaneCommitteeFixtureV1 {
+    version: u8,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<iroha_model_base::peer::PeerId>>,
+    validator_set: Vec<iroha_model_base::peer::PeerId>,
+    validator_pops: Vec<Vec<u8>>,
+    validator_count: u32,
+    min_quorum: u32,
+}
+
+#[cfg(test)]
+/// Attach a canonical, PoP-valid immutable committee to an autoscale fixture.
+pub(crate) fn pin_autoscale_lane_committee_for_test(
+    lane: &mut iroha_data_model::nexus::LaneConfig,
+    keypairs: &[KeyPair],
+) -> Vec<iroha_model_base::peer::PeerId> {
+    let mut members = keypairs
+        .iter()
+        .map(|keypair| {
+            let peer_id = iroha_model_base::peer::PeerId::new(keypair.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("autoscale fixture committee PoP");
+            (peer_id, pop)
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| left.0.cmp(&right.0));
+    members.dedup_by(|left, right| left.0 == right.0);
+    assert_eq!(
+        members.len(),
+        keypairs.len(),
+        "autoscale fixture committee keys must be unique"
+    );
+    let (validator_set, validator_pops): (Vec<_>, Vec<_>) = members.into_iter().unzip();
+    let committee = AutoscaleLaneCommitteeFixtureV1 {
+        version: 1,
+        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_count: u32::try_from(validator_set.len())
+            .expect("autoscale fixture committee length fits u32"),
+        min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("autoscale fixture committee quorum fits u32"),
+        validator_set: validator_set.clone(),
+        validator_pops,
+    };
+    let encoded = norito::to_bytes(&committee).expect("encode autoscale fixture committee");
+    lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE.to_owned(),
+        hex::encode(encoded),
+    );
+    validator_set
+}

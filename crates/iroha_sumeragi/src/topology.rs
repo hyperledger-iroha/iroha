@@ -75,13 +75,14 @@ pub fn demoted_set(
     height: u64,
     genesis_height: u64,
     window: u64,
-    headers: &[BlockHeader],
+    headers: impl IntoIterator<Item = impl std::borrow::Borrow<BlockHeader>>,
 ) -> Vec<ValidatorIndex> {
     let Some((lo, hi)) = demotion_window(height, genesis_height, window) else {
         return Vec::new();
     };
     let mut last: BTreeMap<ValidatorIndex, u64> = BTreeMap::new();
     for header in headers {
+        let header = std::borrow::Borrow::borrow(&header);
         if header.height < lo || header.height > hi {
             continue;
         }

@@ -9915,6 +9915,330 @@ mod tests {
         );
     }
     #[test]
+    fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_authority() {
+        use crate::{
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+            zk::kagemusha_v1_recursion::{
+                derive_kagemusha_mint_finality_validator_keys_v1,
+                prove_kagemusha_mint_finality_candidate_possession_v1,
+            },
+        };
+        use iroha_crypto::{Algorithm, SignatureOf};
+        use iroha_data_model::{
+            isi::{RegisterPublicLaneValidator, SetParameter},
+            nexus::{
+                PublicLaneMonetaryPlanV1, ValidatorCandidateKeyAuthorizationV1,
+                ValidatorCandidateKeysV1, ValidatorCommitteeOperationV1,
+            },
+            parameter::{Parameter, custom::CustomParameter, system::SumeragiNposParameters},
+        };
+        use iroha_model_base::{peer::PeerId, topology::LaneId};
+        let owner_key = checked_keypair();
+        let other_key = checked_keypair();
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let other = AccountId::new(other_key.public_key().clone());
+        let mut validators = (0x51..=0x54)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let peer_key = validators[0].clone();
+        let peer = PeerId::new(peer_key.public_key().clone());
+        let staking = iroha_config::parameters::actual::NexusStaking::default();
+        let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
+        let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+        let amount = Quantity::from(1_000_u32);
+        let source = AssetId::new(definition.clone(), owner.clone());
+        let destination = AssetId::new(definition.clone(), escrow.clone());
+        let world = World::with_assets(
+            [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(other.clone()).build(&other),
+                Account::new(escrow.clone()).build(&escrow),
+            ],
+            [AssetDefinition::numeric(
+                definition,
+                "Staked XOR",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&owner)],
+            [Asset::new(source.clone(), amount.clone())],
+            [],
+        );
+        let mut config = TestChainConfig::new(world, 1_000);
+        config.validator_keys = Some(validators);
+        config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        config.genesis_instructions.push(
+            RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                owner.clone(),
+                peer.clone(),
+                owner.clone(),
+                amount.clone(),
+                Metadata::default(),
+                PublicLaneMonetaryPlanV1::genesis_registration(source, destination, amount),
+            )
+            .into(),
+        );
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        let network = chain.network_id();
+        let candidate = |generation| {
+            let keys = derive_kagemusha_mint_finality_validator_keys_v1(
+                &[0xDD; 32],
+                generation,
+                peer.clone(),
+            )
+            .unwrap();
+            let possession = prove_kagemusha_mint_finality_candidate_possession_v1(
+                &[0xDD; 32],
+                network,
+                generation,
+                &keys,
+            )
+            .unwrap();
+            let authorization = ValidatorCandidateKeyAuthorizationV1::new(
+                network,
+                generation,
+                keys.clone(),
+                possession.clone(),
+            );
+            ValidatorCandidateKeysV1 {
+                network_id: network,
+                generation,
+                keys,
+                possession,
+                peer_signature: SignatureOf::new(peer_key.private_key(), &authorization),
+            }
+        };
+        let publish = |value| {
+            InstructionBox::from(SetParameter::new(Parameter::Custom(
+                ValidatorCommitteeOperationV1::PublishCandidate(value).into_custom_parameter(),
+            )))
+        };
+        let submit =
+            |chain: &mut CertifiedTestChain, key: &KeyPair, instruction, expected: Option<&str>| {
+                let time = (chain.height() + 1) * 1_000;
+                let transaction = chain.sign(key, [instruction], time);
+                let outcome = chain.commit_at(time, vec![transaction]);
+                let committed = chain.committed(chain.height());
+                let error = committed.block().output_error(0);
+                if let Some(expected) = expected {
+                    assert_eq!(outcome, [false]);
+                    assert!(format!("{error:?}").contains(expected), "{error:?}");
+                } else {
+                    assert_eq!(outcome, [true], "{error:?}");
+                }
+            };
+        submit(
+            &mut chain,
+            &other_key,
+            publish(candidate(1)),
+            Some("exact current owner"),
+        );
+        submit(
+            &mut chain,
+            &owner_key,
+            publish(candidate(0)),
+            Some("invalid candidate generation publication"),
+        );
+        submit(
+            &mut chain,
+            &owner_key,
+            publish(candidate(2)),
+            Some("next generation"),
+        );
+        let mut forged = candidate(1);
+        forged.possession.eq_proof_signature.response[0] ^= 1;
+        let time = (chain.height() + 1) * 1_000;
+        let tx = chain.sign(&owner_key, [publish(forged)], time);
+        assert_eq!(chain.commit_at(time, vec![tx]), [false]);
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .validator_candidate_keys()
+                .is_empty()
+        );
+        let valid = candidate(1);
+        submit(&mut chain, &owner_key, publish(valid.clone()), None);
+        let key = ValidatorCandidateKeysV1::key_id(network, 1, &peer);
+        assert_eq!(
+            chain
+                .state()
+                .view()
+                .world()
+                .validator_candidate_keys()
+                .get(&key),
+            Some(&valid)
+        );
+        submit(
+            &mut chain,
+            &owner_key,
+            publish(valid),
+            Some("replays or duplicates"),
+        );
+        let ordinary = SetParameter::new(Parameter::Custom(CustomParameter::new(
+            "ordinary_setting".parse().unwrap(),
+            Json::new(1_u64),
+        )));
+        submit(
+            &mut chain,
+            &owner_key,
+            ordinary.into(),
+            Some("CanSetParameters"),
+        );
+        let view = chain.state().view();
+        assert!(
+            !view
+                .world()
+                .parameters()
+                .custom()
+                .contains_key(&ValidatorCommitteeOperationV1::parameter_id())
+        );
+        assert!(
+            !view
+                .world()
+                .parameters()
+                .custom()
+                .contains_key(&"ordinary_setting".parse().unwrap())
+        );
+    }
+    #[test]
+    fn initial_executor_citizenship_preserves_owner_bond_and_release_checks() {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::isi::governance::{RegisterCitizen, UnregisterCitizen};
+        let owner_key = checked_keypair();
+        let escrow_key = checked_keypair();
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let escrow = AccountId::new(escrow_key.public_key().clone());
+        let domain = DomainId::try_new("citizens", "universal").unwrap();
+        let definition =
+            AssetDefinitionId::derive_from_components(domain.clone(), "bond".parse().unwrap());
+        let owner_asset = AssetId::new(definition.clone(), owner.clone());
+        let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
+        let world = World::with_assets(
+            [Domain::new(domain).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(escrow.clone()).build(&escrow),
+            ],
+            [AssetDefinition::numeric(
+                definition.clone(),
+                "bond",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&owner)],
+            [
+                Asset::new(owner_asset.clone(), Quantity::from(100_u32)),
+                Asset::new(escrow_asset.clone(), Quantity::zero()),
+            ],
+            [],
+        );
+        let mut governance = state_after_genesis(World::new()).gov.clone();
+        governance.citizenship_asset_id = definition;
+        governance.citizenship_bond_amount = Quantity::from(50_u32);
+        governance.citizenship_escrow_account = escrow.clone();
+        let mut config = TestChainConfig::new(world, 1_000);
+        config.governance = Some(governance);
+        let mut chain = CertifiedTestChain::start(config).expect("signed governance policy");
+        let submit =
+            |chain: &mut CertifiedTestChain, key: &KeyPair, instruction, expected: Option<&str>| {
+                let time = (chain.height() + 1) * 1_000;
+                let transaction = chain.sign(key, [instruction], time);
+                let outcome = chain.commit_at(time, vec![transaction]);
+                let committed = chain.committed(chain.height());
+                let error = committed.block().output_error(0);
+                if let Some(expected) = expected {
+                    assert_eq!(outcome, [false]);
+                    assert!(format!("{error:?}").contains(expected), "{error:?}");
+                } else {
+                    assert_eq!(outcome, [true], "{error:?}");
+                    assert!(error.is_none());
+                }
+            };
+        let register = |amount| {
+            InstructionBox::from(RegisterCitizen {
+                owner: owner.clone(),
+                amount: Quantity::from(amount),
+            })
+        };
+        for (key, amount, expected) in [
+            (&escrow_key, 50_u32, "owner must equal authority"),
+            (&owner_key, 49, "citizenship bond below minimum"),
+        ] {
+            submit(&mut chain, key, register(amount), Some(expected));
+            let view = chain.state().view();
+            assert!(view.world().citizens().get(&owner).is_none());
+            assert_eq!(
+                initial_batch_balance(view.world(), &owner_asset),
+                Quantity::from(100_u32)
+            );
+        }
+        submit(&mut chain, &owner_key, register(50_u32), None);
+        let bonded_height = chain.height();
+        {
+            let view = chain.state().view();
+            assert_eq!(
+                view.world().citizens().get(&owner).unwrap().bonded_height,
+                bonded_height
+            );
+            assert_eq!(
+                initial_batch_balance(view.world(), &owner_asset),
+                Quantity::from(50_u32)
+            );
+            assert_eq!(
+                initial_batch_balance(view.world(), &escrow_asset),
+                Quantity::from(50_u32)
+            );
+        }
+        submit(&mut chain, &owner_key, register(60_u32), None);
+        submit(
+            &mut chain,
+            &owner_key,
+            register(50_u32),
+            Some("citizenship bond cannot decrease"),
+        );
+        let unregister = || {
+            InstructionBox::from(UnregisterCitizen {
+                owner: owner.clone(),
+            })
+        };
+        submit(
+            &mut chain,
+            &escrow_key,
+            unregister(),
+            Some("owner must equal authority"),
+        );
+        {
+            let view = chain.state().view();
+            let citizen = view.world().citizens().get(&owner).unwrap();
+            assert_eq!(citizen.bonded_height, bonded_height);
+            assert_eq!(citizen.amount, Quantity::from(60_u32));
+            assert_eq!(
+                initial_batch_balance(view.world(), &owner_asset),
+                Quantity::from(40_u32)
+            );
+            assert_eq!(
+                initial_batch_balance(view.world(), &escrow_asset),
+                Quantity::from(60_u32)
+            );
+        }
+        submit(&mut chain, &owner_key, unregister(), None);
+        let view = chain.state().view();
+        assert!(view.world().citizens().get(&owner).is_none());
+        assert_eq!(
+            initial_batch_balance(view.world(), &owner_asset),
+            Quantity::from(100_u32)
+        );
+        assert!(view.world().assets().get(&escrow_asset).is_none());
+    }
+    #[test]
     fn initial_executor_classifies_verifying_key_bootstrap_as_genesis_only() {
         use iroha_data_model::{
             isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey},

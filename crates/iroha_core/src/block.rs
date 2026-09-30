@@ -9667,10 +9667,15 @@ seiyaku GuardedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        world.contract_code.insert(code_hash, program);
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture artifact scope");
+        world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
-            .insert(code_hash, manifest.signed(&keypair));
+            .insert(artifact_id, manifest.signed(&keypair));
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
@@ -9840,10 +9845,15 @@ seiyaku DynamicAccessCounter {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        world.contract_code.insert(code_hash, program);
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture artifact scope");
+        world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
-            .insert(code_hash, manifest.signed(&alice_keypair));
+            .insert(artifact_id, manifest.signed(&alice_keypair));
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
@@ -10039,10 +10049,15 @@ seiyaku DynamicTarget {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        world.contract_code.insert(code_hash, program);
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture artifact scope");
+        world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
-            .insert(code_hash, manifest.signed(&alice_keypair));
+            .insert(artifact_id, manifest.signed(&alice_keypair));
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);

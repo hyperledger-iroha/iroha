@@ -175,7 +175,17 @@ fn deployment(name: &'static str) -> Value {
         ]),
         _ => panic!("deployment variant"),
     };
-    fields(&mut payload).insert("code_hash".into(), hash());
+    if name == "CommitContractDeployment" {
+        fields(&mut payload).insert("code_hash".into(), hash());
+    } else {
+        fields(&mut payload).insert(
+            "artifact_id".into(),
+            object([
+                ("dataspace_id", Value::String(u64::MAX.to_string())),
+                ("code_hash", hash()),
+            ]),
+        );
+    }
     named(name, payload)
 }
 

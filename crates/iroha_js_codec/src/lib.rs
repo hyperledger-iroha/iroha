@@ -1403,6 +1403,22 @@ fn kagemusha_instruction_to_json(instruction: &InstructionBox) -> Option<CodecRe
 /// Returns an error when the value is not an instruction object, names an unsupported
 /// instruction, or violates the strict contract of the named instruction.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
+    // Check the complete artifact envelope before a generic parser can consume
+    // a different key (including a null/non-object payload) and hide it.
+    if let json::Value::Object(fields) = &value
+        && let Some(name) = [
+            "RegisterSmartContractCode",
+            "RegisterSmartContractBytes",
+            "UploadSmartContractCodeChunk",
+            "FinalizeSmartContractCodeUpload",
+            "CancelSmartContractCodeUpload",
+            "RemoveSmartContractBytes",
+        ]
+        .into_iter()
+        .find(|name| fields.contains_key(*name))
+    {
+        require_exact_json_fields(fields, &[name], "contract artifact instruction envelope")?;
+    }
     if let Some(instruction) = plain_governance::from_json(&value) {
         return instruction;
     }
@@ -1438,6 +1454,8 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("RegisterSmartContractCode")
+                || map.contains_key("RegisterSmartContractBytes")
+                || map.contains_key("RemoveSmartContractBytes")
                 || map.contains_key("CancelAssetLock")
                 || map.contains_key("SetAssetTransferAvailability")
                 || map.contains_key("SetAssetTransferBlacklist")
@@ -1456,6 +1474,8 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
             || staking_instructions::is_staking_instruction(&instruction)
             || instruction.as_any().is::<CancelSmartContractCodeUpload>()
             || instruction.as_any().is::<RegisterSmartContractCode>()
+            || instruction.as_any().is::<RegisterSmartContractBytes>()
+            || instruction.as_any().is::<RemoveSmartContractBytes>()
             || instruction
                 .as_any()
                 .is::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
@@ -1696,10 +1716,10 @@ fn governance_instruction_from_envelope(
         return Some(register_smart_contract_code_from_json(map, fields));
     }
     if let Some(json::Value::Object(fields)) = map.remove("RegisterSmartContractBytes") {
-        return Some(register_smart_contract_bytes_from_json(fields));
+        return Some(register_smart_contract_bytes_from_json(map, fields));
     }
     if let Some(json::Value::Object(fields)) = map.remove("RemoveSmartContractBytes") {
-        return Some(remove_smart_contract_bytes_from_json(fields));
+        return Some(remove_smart_contract_bytes_from_json(map, fields));
     }
     None
 }
@@ -3196,30 +3216,59 @@ fn register_smart_contract_code_from_json(
     mut fields: json::Map,
 ) -> CodecResult<InstructionBox> {
     require_exact_json_fields(envelope, &[], "RegisterSmartContractCode envelope")?;
-    require_exact_json_fields(&fields, &["artifact_id", "manifest"], "RegisterSmartContractCode")?;
-    let artifact_id = lifecycle_instructions::parse_artifact_id(required_value(&mut fields, "artifact_id", "RegisterSmartContractCode")?, "RegisterSmartContractCode.artifact_id")?;
+    require_exact_json_fields(
+        &fields,
+        &["artifact_id", "manifest"],
+        "RegisterSmartContractCode",
+    )?;
+    let artifact_id = lifecycle_instructions::parse_artifact_id(
+        required_value(&mut fields, "artifact_id", "RegisterSmartContractCode")?,
+        "RegisterSmartContractCode.artifact_id",
+    )?;
     let manifest_value = required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
     let manifest: ContractManifest = json::from_value(manifest_value).map_err(codec_error)?;
     manifest::validate_manifest_schemas(&manifest)?;
-    let instruction = RegisterSmartContractCode { artifact_id, manifest };
+    let instruction = RegisterSmartContractCode {
+        artifact_id,
+        manifest,
+    };
     Ok(Box::new(instruction).into_instruction_box())
 }
 
 /// Admit the strict `RegisterSmartContractBytes` instruction payload.
-fn register_smart_contract_bytes_from_json(mut fields: json::Map) -> CodecResult<InstructionBox> {
-    let artifact_id = lifecycle_instructions::parse_artifact_id(required_value(&mut fields, "artifact_id", "RegisterSmartContractBytes")?, "RegisterSmartContractBytes.artifact_id")?;
+fn register_smart_contract_bytes_from_json(
+    envelope: &json::Map,
+    mut fields: json::Map,
+) -> CodecResult<InstructionBox> {
+    require_exact_json_fields(envelope, &[], "RegisterSmartContractBytes envelope")?;
+    let artifact_id = lifecycle_instructions::parse_artifact_id(
+        required_value(&mut fields, "artifact_id", "RegisterSmartContractBytes")?,
+        "RegisterSmartContractBytes.artifact_id",
+    )?;
     let code_value = required_value(&mut fields, "code", "RegisterSmartContractBytes")?;
     let code = parse_base64(code_value, "RegisterSmartContractBytes.code")?;
+    require_exact_json_fields(&fields, &[], "RegisterSmartContractBytes")?;
     let instruction = RegisterSmartContractBytes { artifact_id, code };
     Ok(Box::new(instruction).into_instruction_box())
 }
 
 /// Admit the strict `RemoveSmartContractBytes` instruction payload.
-fn remove_smart_contract_bytes_from_json(mut fields: json::Map) -> CodecResult<InstructionBox> {
-    let artifact_id = lifecycle_instructions::parse_artifact_id(required_value(&mut fields, "artifact_id", "RemoveSmartContractBytes")?, "RemoveSmartContractBytes.artifact_id")?;
+fn remove_smart_contract_bytes_from_json(
+    envelope: &json::Map,
+    mut fields: json::Map,
+) -> CodecResult<InstructionBox> {
+    require_exact_json_fields(envelope, &[], "RemoveSmartContractBytes envelope")?;
+    let artifact_id = lifecycle_instructions::parse_artifact_id(
+        required_value(&mut fields, "artifact_id", "RemoveSmartContractBytes")?,
+        "RemoveSmartContractBytes.artifact_id",
+    )?;
     let reason =
         parse_optional_string_value(fields.remove("reason"), "RemoveSmartContractBytes.reason")?;
-    let instruction = RemoveSmartContractBytes { artifact_id, reason };
+    require_exact_json_fields(&fields, &[], "RemoveSmartContractBytes")?;
+    let instruction = RemoveSmartContractBytes {
+        artifact_id,
+        reason,
+    };
     Ok(Box::new(instruction).into_instruction_box())
 }
 
@@ -4760,7 +4809,10 @@ fn register_smart_contract_code_to_json(
     let manifest_value = json::to_value(&register_code.manifest).map_err(codec_error)?;
     let mut inner = json::Map::new();
     inner.insert("manifest".to_owned(), manifest_value);
-    inner.insert("artifact_id".into(), lifecycle_instructions::render_artifact_id(&register_code.artifact_id)?);
+    inner.insert(
+        "artifact_id".into(),
+        lifecycle_instructions::render_artifact_id(&register_code.artifact_id)?,
+    );
     let mut outer = json::Map::new();
     outer.insert(
         "RegisterSmartContractCode".to_owned(),

@@ -293,24 +293,56 @@ fn verify_input(
     ))
 }
 
-fn write_frame(writer: &mut fs::File, bytes: &[u8], limit: usize) -> Result<()> {
+fn write_frame(writer: &mut fs::File, bytes: &[u8], limit: usize, deadline: Instant) -> Result<()> {
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
+
     ensure!(
         !bytes.is_empty() && bytes.len() <= limit,
         "rotation frame has invalid size"
     );
-    writer.write_all(&u32::try_from(bytes.len())?.to_be_bytes())?;
-    writer.write_all(bytes)?;
-    writer.flush()?;
+    let length = u32::try_from(bytes.len())?.to_be_bytes();
+    // A blocking FIFO write larger than its current capacity can deadlock a
+    // polling reader after the length prefix on Darwin. Keep the original
+    // frame and operation deadline, but send bounded nonblocking pieces.
+    let flags = OFlag::from_bits_retain(fcntl(&*writer, FcntlArg::F_GETFL)?);
+    fcntl(&*writer, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+    for part in [&length[..], bytes] {
+        let mut remaining = part;
+        while !remaining.is_empty() {
+            ensure!(
+                Instant::now() < deadline,
+                "rotation transport deadline elapsed"
+            );
+            match writer.write(&remaining[..remaining.len().min(4_096)]) {
+                Ok(0) => return Err(std::io::Error::from(ErrorKind::WriteZero).into()),
+                Ok(count) => remaining = &remaining[count..],
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(
+                        Duration::from_millis(1)
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
     Ok(())
 }
 
 fn broadcast_public<T: norito::NoritoSerialize>(
     seats: &mut [SeatProcess],
     value: &T,
+    deadline: Instant,
 ) -> Result<()> {
     let bytes = norito::encode_canonical(value)?;
     for seat in seats {
-        write_frame(&mut seat.public_writer, &bytes, MAX_PUBLIC_FRAME_BYTES)?;
+        write_frame(
+            &mut seat.public_writer,
+            &bytes,
+            MAX_PUBLIC_FRAME_BYTES,
+            deadline,
+        )?;
     }
     Ok(())
 }
@@ -387,10 +419,16 @@ fn broadcast_finality(
     seats: &mut [SeatProcess],
     journal: &NativeFinalityJournal,
     limits: NativeFinalityLimits,
+    deadline: Instant,
 ) -> Result<()> {
     let bytes = encode_phase_journal(journal, limits)?;
     for seat in seats {
-        write_frame(&mut seat.finality_writer, &bytes, limits.journal_bytes)?;
+        write_frame(
+            &mut seat.finality_writer,
+            &bytes,
+            limits.journal_bytes,
+            deadline,
+        )?;
     }
     Ok(())
 }
@@ -1599,18 +1637,18 @@ where
 
     let publications = wait_for_snapshots(&mut processes, "publication.norito", deadline).await?;
     let mut public = merge_publications(session, &publications, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?)?;
+    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
     let proof = next_finality(2).await?;
     advance_native_phase(&mut verifier, &proof, 2)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?)?;
+    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
     let proof = next_finality(3).await?;
     advance_native_phase(&mut verifier, &proof, 3)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
@@ -1618,10 +1656,10 @@ where
     let assembled = public
         .finalize(session.acceptances_end_height, &crypto)?
         .clone();
-    broadcast_public(&mut processes, &assembled)?;
+    broadcast_public(&mut processes, &assembled, deadline)?;
     let proof = next_finality(4).await?;
     advance_native_phase(&mut verifier, &proof, 4)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let mut outputs = Vec::with_capacity(processes.len());
@@ -1822,18 +1860,18 @@ where
 
     let publications = wait_for_snapshots(&mut processes, "publication.norito", deadline).await?;
     let mut public = merge_publications(session, &publications, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?)?;
+    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
     let proof = next_finality(session.commitments_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.commitments_end_height)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?)?;
+    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
     let proof = next_finality(session.deliveries_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.deliveries_end_height)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
@@ -1841,10 +1879,10 @@ where
     let assembled = public
         .finalize(session.acceptances_end_height, &crypto)?
         .clone();
-    broadcast_public(&mut processes, &assembled)?;
+    broadcast_public(&mut processes, &assembled, deadline)?;
     let proof = next_finality(session.acceptances_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.acceptances_end_height)?;
-    broadcast_finality(&mut processes, &proof, verifier.limits())?;
+    broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
 
     let mut outputs = Vec::with_capacity(processes.len());
@@ -2043,8 +2081,76 @@ mod tests {
                 .unwrap();
         let path = root.path().join("frame");
         let mut writer = fs::File::create(path).unwrap();
-        assert!(write_frame(&mut writer, b"", 4).is_err());
-        assert!(write_frame(&mut writer, b"oversized", 4).is_err());
+        assert!(write_frame(&mut writer, b"", 4, Instant::now() + PROCESS_TIMEOUT).is_err());
+        assert!(
+            write_frame(
+                &mut writer,
+                b"oversized",
+                4,
+                Instant::now() + PROCESS_TIMEOUT
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn public_frame_fifo_preserves_large_frames_and_bounds_an_unread_peer() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("public.fifo");
+        nix::unistd::mkfifo(
+            &path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let mut reader = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_NONBLOCK)
+            .open(&path)
+            .unwrap();
+        let mut writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let payload = vec![0x5A; 256 * 1024];
+        let expected = payload.clone();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let receiving = std::thread::spawn(move || {
+            let mut observed = Vec::new();
+            let mut scratch = [0_u8; 1_013];
+            while observed.len() < expected.len() + 4 {
+                assert!(
+                    Instant::now() < deadline,
+                    "complete FIFO frame must make progress"
+                );
+                match reader.read(&mut scratch) {
+                    Ok(0) => panic!("writer closed before its complete frame"),
+                    Ok(count) => observed.extend_from_slice(&scratch[..count]),
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("FIFO read failed: {error}"),
+                }
+            }
+            assert_eq!(
+                &observed[..4],
+                &u32::try_from(expected.len()).unwrap().to_be_bytes()
+            );
+            assert_eq!(&observed[4..], expected);
+            reader
+        });
+        write_frame(&mut writer, &payload, payload.len(), deadline).unwrap();
+        let _reader = receiving.join().unwrap();
+        let error = write_frame(
+            &mut writer,
+            &vec![0xA5; 2 * 1024 * 1024],
+            2 * 1024 * 1024,
+            Instant::now() + Duration::from_millis(25),
+        )
+        .expect_err("an open peer that stops reading cannot block the ceremony forever");
+        assert!(
+            error
+                .to_string()
+                .contains("rotation transport deadline elapsed")
+        );
     }
 
     #[test]

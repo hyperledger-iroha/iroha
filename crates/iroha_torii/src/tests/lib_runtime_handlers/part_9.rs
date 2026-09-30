@@ -1132,19 +1132,23 @@ async fn app_api_vk_and_proofs_lists_ok() {
 }
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
-    let app = mk_app_state_for_tests();
+    let app = app_with_root_scope_for_token_test(false);
     let headers = HeaderMap::new();
-    // Contract code by hash (non-existent)
+    // The handler receives the identity already checked by canonical-auth middleware.
+    // Scope and the hash marker remain valid so this exercises absence, not malformed input.
+    let signer = ALICE_KEYPAIR.public_key().clone();
     let resp = super::handler_get_contract_code(
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        axum::extract::Path(
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        ),
+        axum::extract::Path(("0".to_owned(), "11".repeat(32))),
+        axum::Extension(crate::app_auth::VerifiedCanonicalRequest {
+            account: ALICE_ID.clone(),
+            signer: signer.clone(),
+            verified_signers: vec![signer],
+        }),
     )
     .await
-    .expect("ok mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     // VK by backend/name (non-existent)

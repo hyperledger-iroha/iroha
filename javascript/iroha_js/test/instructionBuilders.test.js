@@ -2349,7 +2349,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
       entrypoints: [
         {
           name: "upgrade_ledger",
-          kind: "Kaizen",
+          kind: "Kotoage",
           ...UNIT_RETURN_DESCRIPTOR,
           permission: "can_upgrade",
         },
@@ -2405,7 +2405,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         entrypoints: [
           {
             name: "upgrade_ledger",
-            kind: { kind: "Kaizen", value: null },
+            kind: { kind: "Kotoage", value: null },
             params: [],
             argument_schema: null,
             return_type: "()",
@@ -2857,7 +2857,12 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
+        entrypoints: [{
+          name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
+          kind: canonical,
+          permission: canonical === "Kotoage" ? "can_run" : null,
+          ...UNIT_RETURN_DESCRIPTOR,
+        }],
       },
     }));
     assert.equal(
@@ -2883,7 +2888,12 @@ baseTest("smart-contract branded entrypoint kinds preserve their Norito tag orde
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
+        entrypoints: [{
+          name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
+          kind: canonical,
+          permission: canonical === "Kotoage" ? "can_run" : null,
+          ...UNIT_RETURN_DESCRIPTOR,
+        }],
       },
     }));
     assert.equal(

@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-09-30. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-01. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -26,15 +26,18 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 ## Immediate blockers
 
 Exact finalized-carrier retries now authenticate the original execution and
-acknowledge admission without requeueing or charging again. The rebuilt local
-Nexus happy-day and smoke workloads complete financial, signed RS16 finality and
-exact-retry checks across all 16 peers; smoke also preserves the funded settlement
-through all 16 validator restarts. The measured smoke settlement takes 45.17 seconds.
-Repeated accepted settlements remain unqualified on one fixed source candidate.
-A fresh disjoint-committee run exposed an applied-body pruning race that stops
-the availability worker during an in-flight file read; its correction awaits
-rebuilt node qualification. Restricted native-lane gossip also needs fresh
-daemon/harness qualification with disjoint global and participant committees.
+acknowledge admission without requeueing or charging again. The embedded MCP
+descriptor size drift that prevented daemon startup is corrected with a bounded
+loader and compile-time guard. A fixed local daemon/harness candidate completes
+the Nexus smoke workload's financial, signed RS16 finality and exact-retry checks
+across all 16 peers and preserves the settlement through all 16 restarts. Its
+settlement takes 59.17 seconds. The campaign validator now recognizes the exact
+retry observer's canonical phase label and verifies the retained evidence.
+The rebuilt disjoint-committee workload also preserves progress while one lane
+stops and after every peer restarts, covering the applied-body pruning repair.
+Ten fresh paid-settlement runs also pass on that fixed candidate, each with 16
+signed RS16 observations, exact-retry checks and finality at height 9. Qualification
+of the combined source and the settlement latency target remain open.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding

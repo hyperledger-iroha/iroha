@@ -1997,13 +1997,15 @@ mod tests {
                         .collect(),
                 })
                 .expect("native active policy");
-            let canonical_genesis_hash = raw(0x32);
-            let context = PrivacyStatementContextV1 {
-                network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            let network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
                     iroha_data_model::block::BlockHeader,
                 >::from_untyped_unchecked(
-                    iroha_crypto::Hash::prehashed(canonical_genesis_hash),
-                )),
+                    iroha_crypto::Hash::prehashed(raw(0x32)),
+                ));
+            let canonical_genesis_hash = *network_id.as_bytes();
+            let context = PrivacyStatementContextV1 {
+                network_id,
                 action_index: 3,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(0x21)),
                 parameter_id: PrivacyParameterIdV1::new(raw(0x22)),

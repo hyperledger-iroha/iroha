@@ -26,6 +26,13 @@ The instruction JSON catalog supports every browser transaction allowlist family
 smart-contract deployment, game, NFT market and Kagemusha top-up. Typed native
 owners validate payloads; unsupported envelopes do not fall back to generic JSON.
 
+Contract artifact instructions require an explicit `artifact_id` containing an
+exact decimal-string `dataspace_id` and canonical `code_hash`. All six artifact
+operations preserve the full u64 scope in native frames and archives; equal code
+hashes in different dataspaces produce different instruction bytes. Hash-only,
+numeric-scope and generic instruction envelopes are rejected, as are unknown
+artifact, payload and envelope fields.
+
 `CastPlainBallot` and `UpdatePlainConviction` use one closed native adapter. It
 retains the registered model and exact u64 duration in both frame and archive
 operations; missing, extra, renamed and choice fields on conviction updates are

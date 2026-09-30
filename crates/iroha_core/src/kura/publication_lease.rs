@@ -65,7 +65,7 @@ pub(crate) struct KuraPublicationCleanup {
     _fences: [Option<iroha_allocation::release::DeferredRelease>; 4],
 }
 
-impl<'kura> AcquiredKuraPublicationFences<'kura> {
+impl AcquiredKuraPublicationFences<'_> {
     fn new() -> Self {
         Self {
             sidecar: None,

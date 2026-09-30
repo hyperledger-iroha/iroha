@@ -12985,7 +12985,7 @@ fn canonical_python_account_faucet_claim_v1(
     let nonce = claim.pow_nonce_hex.as_str();
     if nonce.is_empty()
         || nonce.len() > 64
-        || nonce.len() % 2 != 0
+        || !nonce.len().is_multiple_of(2)
         || !nonce
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -13087,6 +13087,10 @@ fn verify_python_prepared_faucet_context_v1(
 #[pyfunction]
 #[pyo3(name = "verify_prepared_transaction_context_v1")]
 /// Authenticate one fixed-V1 prepared transaction and its exact public operation context.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the Python verification boundary binds each independently supplied prepared context field"
+)]
 fn verify_prepared_transaction_context_v1_py(
     signed_transaction_versioned: &[u8],
     network_id: &PyNetworkId,
@@ -14744,7 +14748,7 @@ fn private_settlement_auditor_signing_key_v1(literal: &str) -> PyResult<PublicKe
     Ok(key)
 }
 
-fn private_settlement_response_bytes_v1<'a>(bytes: &'a [u8], maximum: usize) -> PyResult<&'a [u8]> {
+fn private_settlement_response_bytes_v1(bytes: &[u8], maximum: usize) -> PyResult<&[u8]> {
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(PyValueError::new_err(
             "atomic private settlement response is invalid",

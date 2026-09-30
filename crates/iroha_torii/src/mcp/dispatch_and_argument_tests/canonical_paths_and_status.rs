@@ -470,12 +470,17 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
     assert!(!object.contains_key("submit"));
 }
 #[test]
-fn extract_code_hash_argument_requires_canonical_path_field() {
+fn contract_artifact_route_requires_canonical_scoped_path_fields() {
+    let hash = "11".repeat(32);
     let args = norito::json!({
-        "path": { "code_hash": "cafebabe" }
+        "path": { "dataspace_id": "18446744073709551615", "code_hash": (hash.clone()) }
     });
-    let hash = extract_code_hash_argument(args.as_object().expect("object")).expect("hash");
-    assert_eq!(hash, "cafebabe");
+    let route = contract_artifact_route(args.as_object().expect("object"), false)
+        .expect("scoped artifact route");
+    assert_eq!(
+        route,
+        format!("/v1/contracts/artifacts/{}/{hash}", u64::MAX)
+    );
 }
 #[test]
 fn extract_contract_address_argument_requires_canonical_path_field() {
@@ -513,12 +518,12 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
     let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
         (
-            norito::json!({ "code_hash": "cafebabe" }),
-            extract_code_hash_argument,
+            norito::json!({ "dataspace_id": "0", "code_hash": ("11".repeat(32)) }),
+            |arguments| contract_artifact_route(arguments, false),
         ),
         (
-            norito::json!({ "hash": "cafebabe" }),
-            extract_code_hash_argument,
+            norito::json!({ "dataspace_id": "0", "hash": ("11".repeat(32)) }),
+            |arguments| contract_artifact_route(arguments, false),
         ),
         (
             norito::json!({ "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw" }),

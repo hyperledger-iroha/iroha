@@ -26612,6 +26612,10 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -26708,6 +26712,10 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,

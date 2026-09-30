@@ -8,7 +8,8 @@ export function universalArtifactInput(input) {
   delete result.codeHash;
   delete result.code_hash;
   if (manifest && typeof manifest === "object" && manifest.codeHash == null && manifest.code_hash == null) {
-    result.manifest = { ...manifest, codeHash: hash };
+    const hashField = Object.hasOwn(manifest, "code_hash") ? "code_hash" : "codeHash";
+    result.manifest = { ...manifest, [hashField]: hash };
   }
   return result;
 }
