@@ -2393,6 +2393,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
             account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: format!("http://{address}/").parse().unwrap(),
             torii_request_timeout: Duration::from_secs(5),
             transaction_ttl: Duration::from_secs(30),

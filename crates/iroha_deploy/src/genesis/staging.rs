@@ -30,10 +30,15 @@ struct StagedGenesisProjection<T> {
     execution: StagedGenesisExecution,
     projection: T,
 }
-struct StagedGenesisExecution {
-    nexus_amx_context_hash: Hash,
-    execution_policy_hash: Hash,
-    executed_block: SignedBlock,
+/// Exact local execution result used to bind or reverify a signed genesis artifact.
+/// This preparation result is not authority for a committed chain state.
+pub struct StagedGenesisExecution {
+    /// Nexus and atomic-execution policy commitment derived by Core.
+    pub nexus_amx_context_hash: Hash,
+    /// Execution-policy commitment derived by Core.
+    pub execution_policy_hash: Hash,
+    /// Executed signed genesis with its authentic output commitments.
+    pub executed_block: SignedBlock,
 }
 /// Identify the retired synthetic stake definition so real bootstrap rejects it.
 pub fn retired_synthetic_stake_asset_id() -> AssetDefinitionId {
@@ -252,7 +257,11 @@ pub fn bind_and_sign_staged_sumeragi_context(
         .wrap_err("replace provisional genesis signature after execution")?;
     Ok((bound_manifest, GenesisBlock(executed_block)))
 }
-fn verify_final_signed_sumeragi_context(
+/// Reexecute the final signed identity and require the exact expected consensus policy hashes.
+///
+/// # Errors
+/// Returns the concrete Core validation failure or an exact policy-commitment mismatch.
+pub fn verify_final_signed_sumeragi_context(
     bound_manifest: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     signed: &SignedBlock,
@@ -416,7 +425,11 @@ pub fn staged_signed_native_genesis_with_projection<T: Send>(
             .map_err(|_| eyre!("bounded native genesis staging thread panicked"))?
     })
 }
-fn restage_signed_sumeragi_context_hashes(
+/// Reexecute a signed genesis using its exact configuration, or canonical defaults when absent.
+///
+/// # Errors
+/// Returns configuration, signature, execution or output-commitment validation failures.
+pub fn restage_signed_sumeragi_context_hashes(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     signed: &SignedBlock,

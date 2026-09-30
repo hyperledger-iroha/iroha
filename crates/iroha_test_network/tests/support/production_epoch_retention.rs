@@ -149,7 +149,7 @@ pub(super) async fn verify_boundary_chain(
             source.sort_by_key(|block| block.header().height());
             ensure!(source.len() == usize::try_from(height)?, "retention source lacks complete genesis prefix");
             let journal = NativeFinalityJournal { blocks: source.iter().map(|block| NativeFinalityArtifact::from_block(block, native_finality_limits()).map_err(|error| eyre!(error))).collect::<Result<Vec<_>>>()? };
-            let cursor = NativeJournalCursor::new(client.chain().clone(), network, native_finality_limits()).map_err(|error| eyre!(error))?;
+            let cursor = NativeJournalCursor::new(client.chain().clone(), network, iroha_data_model::block::consensus::SumeragiRootScope::Global, native_finality_limits()).map_err(|error| eyre!(error))?;
             let proofs = with_verified_native_journal(&journal, client.chain(), &network, native_finality_limits(), cursor.attestations(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(|error| error.to_string())).map_err(|error| eyre!(error))?;
             let first = proofs.first().ok_or_else(|| eyre!("missing actual signed genesis"))?;
             let context = &first.commitment().schedule.current;

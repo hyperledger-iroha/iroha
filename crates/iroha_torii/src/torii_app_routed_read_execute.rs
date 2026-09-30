@@ -1030,7 +1030,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             {
                 Ok((payloads, diagnostics, routed_by, budget)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_list_response(payloads, routed_by, budget)
+                        merged_list_response(payloads, endpoint, routed_by, budget)
                     })
                 }
                 Err(response) => response,

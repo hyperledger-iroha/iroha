@@ -71,6 +71,22 @@ fn render_model<T: JsonSerialize>(value: &T) -> CodecResult<Value> {
     json::to_value(value).map_err(crate::codec_error)
 }
 
+/// Parse the SDK's exact decimal dataspace projection without narrowing u64.
+pub(crate) fn parse_artifact_id(value: Value, context: &str) -> CodecResult<iroha_data_model::smart_contract::ContractArtifactId> {
+    let mut fields = object(value, &["dataspace_id", "code_hash"], context)?;
+    let dataspace_id = parse_u64_text(take(&mut fields, "dataspace_id", context)?, &format!("{context}.dataspace_id"))?;
+    let code_hash = parse_model(take(&mut fields, "code_hash", context)?, &format!("{context}.code_hash"))?;
+    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_data_model::nexus::DataSpaceId::new(dataspace_id), code_hash))
+}
+
+/// Render the SDK's exact decimal dataspace projection.
+pub(crate) fn render_artifact_id(value: &iroha_data_model::smart_contract::ContractArtifactId) -> CodecResult<Value> {
+    let mut fields = json::Map::new();
+    fields.insert("dataspace_id".into(), Value::String(value.dataspace_id.as_u64().to_string()));
+    fields.insert("code_hash".into(), render_model(&value.code_hash)?);
+    Ok(Value::Object(fields))
+}
+
 fn parse_u64_text(value: Value, context: &str) -> CodecResult<u64> {
     let Value::String(text) = value else {
         return Err(invalid(format!(
@@ -355,14 +371,14 @@ instruction_contracts! {
         expected_offer_hash: parse_model => render_model,
     },
     UploadSmartContractCodeChunk {
-        code_hash: parse_model => render_model,
+        artifact_id: parse_artifact_id => render_artifact_id,
         total_size: parse_u64_text => render_u64_text,
         chunk_index: parse_u32_number => render_model,
         chunk_count: parse_u32_number => render_model,
         chunk: parse_bytes => render_bytes,
     },
     FinalizeSmartContractCodeUpload {
-        code_hash: parse_model => render_model,
+        artifact_id: parse_artifact_id => render_artifact_id,
         total_size: parse_u64_text => render_u64_text,
         chunk_count: parse_u32_number => render_model,
     },

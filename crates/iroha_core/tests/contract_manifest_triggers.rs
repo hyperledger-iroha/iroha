@@ -277,15 +277,29 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (program, manifest) = contract_artifact(vec![entrypoint]);
     let code_hash = manifest.code_hash.expect("manifest code hash");
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
     let manifest = manifest.signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&authority, &mut stx)
-        .expect("register manifest");
+    {
+        let scoped_manifest = manifest;
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
+    }
+    .execute(&authority, &mut stx)
+    .expect("register manifest");
     let missing_lifecycle_error = ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
@@ -426,13 +440,25 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     let (program, manifest) = contract_artifact(vec![entrypoint]);
     let code_hash = manifest.code_hash.expect("manifest code hash");
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-    RegisterSmartContractCode {
-        manifest: manifest.signed(&kp),
+    {
+        let scoped_manifest = manifest.signed(&kp);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register manifest");
@@ -545,15 +571,29 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let (program, manifest) = contract_artifact(vec![entrypoint]);
     let code_hash = manifest.code_hash.expect("manifest code hash");
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
     let manifest = manifest.signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&authority, &mut stx)
-        .expect("register manifest");
+    {
+        let scoped_manifest = manifest;
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
+    }
+    .execute(&authority, &mut stx)
+    .expect("register manifest");
     Register::account(Account::new(contract_subject.clone()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
@@ -732,13 +772,25 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let (target_program, target_manifest) = contract_artifact(vec![target_entrypoint]);
     let target_code_hash = target_manifest.code_hash.expect("target code hash");
     RegisterSmartContractBytes {
-        code_hash: target_code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            target_code_hash,
+        ),
         code: target_program,
     }
     .execute(&authority, &mut stx)
     .expect("register target bytes");
-    RegisterSmartContractCode {
-        manifest: target_manifest.signed(&kp),
+    {
+        let scoped_manifest = target_manifest.signed(&kp);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register target manifest");
@@ -796,13 +848,25 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let (source_program, source_manifest) = contract_artifact(vec![source_entrypoint]);
     let source_code_hash = source_manifest.code_hash.expect("source code hash");
     RegisterSmartContractBytes {
-        code_hash: source_code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            source_code_hash,
+        ),
         code: source_program,
     }
     .execute(&authority, &mut stx)
     .expect("register source bytes");
-    RegisterSmartContractCode {
-        manifest: source_manifest.signed(&kp),
+    {
+        let scoped_manifest = source_manifest.signed(&kp);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register source manifest");
@@ -906,13 +970,25 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let (source_program, source_manifest) = contract_artifact(vec![source_entrypoint]);
     let source_code_hash = source_manifest.code_hash.expect("source code hash");
     RegisterSmartContractBytes {
-        code_hash: source_code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            source_code_hash,
+        ),
         code: source_program,
     }
     .execute(&authority, &mut stx)
     .expect("register source bytes");
-    RegisterSmartContractCode {
-        manifest: source_manifest.signed(&kp),
+    {
+        let scoped_manifest = source_manifest.signed(&kp);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register source manifest");
@@ -979,13 +1055,25 @@ seiyaku Test {{
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-    RegisterSmartContractCode {
-        manifest: manifest.signed(&kp),
+    {
+        let scoped_manifest = manifest.signed(&kp);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register manifest");

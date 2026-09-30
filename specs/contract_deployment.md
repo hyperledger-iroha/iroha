@@ -51,11 +51,16 @@ is `iroha contract derive-address --network-id <NETWORK_ID> ...`.
 
 ## Stored Artifacts & Retention
 
+`ContractArtifactId` contains the full `DataSpaceId` and canonical code hash. All six
+artifact lifecycle instructions carry it explicitly; activation derives the same scope
+from its contract address. Identical bytes in different dataspaces have independent
+registration, manifest provenance, pending uploads, and removal authority.
+
 - `RegisterSmartContractBytes` stores the compiled program under
-  `contract_code[code_hash]` after verifying the self-describing `CNTR`
-  artifact and recomputing its canonical hash. If bytes for a hash already
+  `contract_code[ContractArtifactId { dataspace_id, code_hash }]` after verifying the self-describing `CNTR`
+  artifact and recomputing its canonical hash. If bytes for that exact dataspace and hash already
   exist they must match exactly; differing bytes raise an invariant violation.
-- `RegisterSmartContractCode` inserts a manifest for a given `code_hash` only
+- `RegisterSmartContractCode` inserts a manifest for an exact `ContractArtifactId` only
   after the matching bytecode is already stored. The stored bytes must verify
   as a `CNTR` artifact whose embedded manifest payload matches the submitted
   manifest payload. Repeating the same unsigned payload with another valid
@@ -72,12 +77,12 @@ is `iroha contract derive-address --network-id <NETWORK_ID> ...`.
 User-facing deployment splits every artifact into fixed 65,536-byte chunks.
 The consensus API consists of:
 
-- `UploadSmartContractCodeChunk { code_hash, total_size, chunk_index,
+- `UploadSmartContractCodeChunk { artifact_id, total_size, chunk_index,
   chunk_count, chunk }`;
-- `FinalizeSmartContractCodeUpload { code_hash, total_size, chunk_count }`; and
-- `CancelSmartContractCodeUpload { code_hash }`.
+- `FinalizeSmartContractCodeUpload { artifact_id, total_size, chunk_count }`; and
+- `CancelSmartContractCodeUpload { artifact_id }`.
 
-Pending uploads are owned by `(authority, code_hash)` and survive ordinary
+Pending uploads are owned by `(authority, artifact_id)` and survive ordinary
 state snapshots and tiered-state restoration. The descriptor must use the
 exact ceiling chunk count for `total_size`; every non-final chunk is exactly
 65,536 bytes and the final chunk has the exact remaining length. Checked
@@ -161,8 +166,8 @@ trigger gas budget rather than resetting the cap for each contract-call item.
   derived address, registered artifact, and previous alias target before
   activation and alias rotation. The reserved nonce cannot be written through
   generic account metadata instructions.
-- `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
+- `GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}`
+  - Returns `{ network_id, artifact_id, code_hash, abi_hash, manifest: <ContractManifest> }`. The two
     top-level convenience values are raw lowercase hex; `manifest` uses the
     complete canonical Norito JSON representation, including `seiyaku_name`,
     both checksummed `Hash` literals, exact entrypoint argument/return schemas,
@@ -172,10 +177,14 @@ trigger gas budget rather than resetting the cap for each contract-call item.
     `List` node contains only `capacity`; its exact element subtree immediately
     follows it. Missing or trailing nodes and the retired nested `element`
     representation are rejected.
-- `GET /v1/contracts/code-bytes/{code_hash}`
-  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
+- `GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes`
+  - Returns `{ network_id, artifact_id, code_b64 }` with the stored `.to` image encoded as base64.
 
-The artifact-read endpoints are content-addressed reads. Deployment admission,
+Artifact reads require canonical account authentication and a current read grant for the
+exact full-width dataspace. Signed private roots also enforce the owner listener token
+on every route and reject any foreign dataspace. Responses bind the authenticated
+network and exact artifact identity; there is no hash-only route. Verified source
+records and job files use the same network/dataspace/hash key. Deployment admission,
 fees, permissions, routing, and governance are enforced on the locally signed
 native transactions rather than by a separate Torii deployment limiter.
 

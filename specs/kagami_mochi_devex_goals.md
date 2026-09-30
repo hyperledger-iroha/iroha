@@ -77,6 +77,23 @@ readiness. There are no empty blocks or consensus bypasses to meet these targets
 
 ## Qualification and documentation
 
+Signed genesis context now selects a global or private dataspace root. A private root binds
+the exact parent network and full 64-bit dataspace identifier; its own genesis and chain label
+derive a native Dataspace instance with root index zero. There is no node-local scope toggle
+or missing-field fallback. Routing, execution-time instruction authorization, artifact scope,
+parent registration and whole-network privacy still require qualification together before
+this representation can be exposed as a managed private-dataspace command.
+
+Immutable artifacts use `ContractArtifactId { dataspace_id, code_hash }` throughout
+storage, native instructions, queries and access hints. Equal bytecode hashes in
+different dataspaces do not share uploads, manifests or read authority. REST artifact
+resources include both identifiers and return their exact network binding; there is
+no hash-only lookup fallback. Private roots require an owner-held listener API token
+on every Torii route, including otherwise public gateway resources. Generated private
+node and client contexts retain that credential automatically, while account signatures
+and revocable ledger permissions still authorize individual reads. These source
+boundaries remain subject to the combined private-network qualification above.
+
 `iroha_deploy::bootstrap` now authenticates one canonical native checkpoint
 against an independently installed Ed25519 release authority. Signed metadata
 binds the network label, genesis identity, chain label, reset generation,

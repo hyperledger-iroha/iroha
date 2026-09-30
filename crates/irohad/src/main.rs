@@ -3069,10 +3069,11 @@ impl Iroha {
                     Report::new(StartError::InitKura)
                         .attach("emergency Fast startup found no signed genesis block")
                 })?;
-                iroha_core::sumeragi::node::global_instance(
+                iroha_core::sumeragi::node::root_instance(
                     &genesis.0,
                     &config.common.chain.to_string(),
                 )
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             }
         };
         config_caps.native_config_fingerprint = match prepared_sumeragi.as_ref() {

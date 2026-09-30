@@ -301,6 +301,7 @@ impl ManagedNetwork {
             .ok_or_else(|| color_eyre::eyre::eyre!("unknown validator index"))?
             .torii_url;
         Ok(crate::ToriiClient::builder(endpoint)?
+            .with_api_token(self.config.api_token.clone())
             .with_network_id(self.config.network_id)
             .with_operator_signing_context(crate::OperatorSigningContext::new(
                 self.config.network_id,
@@ -495,6 +496,34 @@ mod tests {
                 .to_string(),
             context.network_id
         );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let wrong_authority = crate::compose_preview_with_options(
+            network.config.network_id,
+            &[crate::InstructionDraft::register_account_from_input(
+                &iroha_test_samples::BOB_ID.to_string(),
+            )
+            .unwrap()],
+            &crate::SigningAuthority::new(
+                "foreign",
+                iroha_test_samples::ALICE_ID.clone(),
+                iroha_test_samples::ALICE_KEYPAIR.clone(),
+            ),
+            &crate::TransactionComposeOptions::default(),
+        )
+        .unwrap();
+        let error = runtime
+            .block_on(network.submit(0, &wrong_authority))
+            .unwrap_err();
+        assert!(error.to_string().contains("another authority"));
+        let mut wrong_network = network.clone();
+        wrong_network.config.network_id = crate::torii::test_network_id();
+        let error = runtime
+            .block_on(wrong_network.submit(0, &preview))
+            .unwrap_err();
+        assert!(error.to_string().contains("another network"));
         let root = desktop.state_root().to_path_buf();
         drop(desktop);
         assert_eq!(

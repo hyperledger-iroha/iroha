@@ -570,28 +570,24 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
             .parse()
             .expect("contract address");
     let instructions: Vec<InstructionBox> = vec![
-        RegisterSmartContractBytes {
-            code_hash,
+        RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             code: Vec::new(),
         }
         .into(),
-        UploadSmartContractCodeChunk {
-            code_hash,
+        UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             total_size: 1,
             chunk_index: 0,
             chunk_count: 1,
             chunk: vec![0],
         }
         .into(),
-        FinalizeSmartContractCodeUpload {
-            code_hash,
+        FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             total_size: 1,
             chunk_count: 1,
         }
         .into(),
-        CancelSmartContractCodeUpload { code_hash }.into(),
-        RegisterSmartContractCode {
-            manifest: ContractManifest {
+        CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)}.into(),
+        { let scoped_manifest = ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: None,
@@ -604,8 +600,7 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
                 error_messages: None,
                 error_types: None,
                 provenance: None,
-            },
-        }
+            }; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .into(),
         ActivateContractInstance {
             contract_address: contract_address.clone(),
@@ -653,8 +648,7 @@ fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
             reason: Some("attempted policy-era rebind".to_owned()),
         }
         .into(),
-        RemoveSmartContractBytes {
-            code_hash,
+        RemoveSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             reason: Some("attempted policy-era removal".to_owned()),
         }
         .into(),

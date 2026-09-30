@@ -271,7 +271,10 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     // Register and activate the exact self-describing artifact so raw dispatch
     // resolves through a live production contract identity.
     iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: prog.clone(),
     }
     .execute(&account_id, &mut stx1)
@@ -282,9 +285,20 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         "verified contract manifest must bind the canonical ABI"
     );
     let manifest = manifest.signed(&kp);
-    iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register exact contract manifest");
+    {
+        let scoped_manifest = manifest;
+        iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
+    }
+    .execute(&account_id, &mut stx1)
+    .expect("register exact contract manifest");
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&account_id, &mut stx1)
         .expect("register non-signable contract-subject account");
@@ -434,7 +448,10 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
     iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: prog.clone(),
     }
     .execute(&account_id, &mut stx1)
@@ -445,9 +462,20 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         "verified V1 contract manifest must bind the canonical ABI"
     );
     let manifest = manifest.signed(&kp);
-    iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register exact V1 contract manifest");
+    {
+        let scoped_manifest = manifest;
+        iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
+    }
+    .execute(&account_id, &mut stx1)
+    .expect("register exact V1 contract manifest");
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&account_id, &mut stx1)
         .expect("register non-signable V1 contract-subject account");

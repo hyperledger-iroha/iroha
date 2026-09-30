@@ -2606,3 +2606,42 @@ async fn managed_status_stream_reports_sumeragi_errors() {
     sleep(Duration::from_millis(10)).await;
     assert!(stream.is_finished());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_listener_token_is_sent_on_observer_http_and_redacted_in_debug() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/status")
+            .header("x-api-token", "runtime-only-test-token");
+        then.status(503);
+    });
+    let builder = ToriiClient::builder(server.url("/"))
+        .unwrap()
+        .with_api_token(Some(iroha::secrecy::SecretString::new(
+            "runtime-only-test-token".into(),
+        )));
+    assert!(!format!("{builder:?}").contains("runtime-only-test-token"));
+    let client = builder.build().unwrap();
+    assert!(matches!(
+        client.fetch_status().await,
+        Err(ToriiError::UnexpectedStatus {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            ..
+        })
+    ));
+    mock.assert();
+}
+
+#[test]
+fn private_listener_invalid_header_error_does_not_echo_secret() {
+    let result = ToriiClient::builder("http://127.0.0.1:8080")
+        .unwrap()
+        .with_api_token(Some(iroha::secrecy::SecretString::new(
+            "secret\ninvalid".into(),
+        )))
+        .build();
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("invalid private listener credential"));
+    assert!(!error.contains("secret"));
+}

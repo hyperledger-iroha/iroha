@@ -1006,6 +1006,7 @@ pub struct ToriiClientBuilder {
     http_base: Url,
     ws_base: Url,
     network_id: Option<NetworkId>,
+    api_token: Option<iroha::secrecy::SecretString>,
     operator_signing_context: Option<OperatorSigningContext>,
 }
 impl ToriiClientBuilder {
@@ -1016,6 +1017,7 @@ impl ToriiClientBuilder {
             http_base,
             ws_base,
             network_id: None,
+            api_token: None,
             operator_signing_context: None,
         })
     }
@@ -1028,6 +1030,12 @@ impl ToriiClientBuilder {
     #[must_use]
     pub fn with_operator_signing_context(mut self, context: OperatorSigningContext) -> Self {
         self.operator_signing_context = Some(context);
+        self
+    }
+    /// Install the runtime-only private listener credential on every HTTP request.
+    #[must_use]
+    pub fn with_api_token(mut self, token: Option<iroha::secrecy::SecretString>) -> Self {
+        self.api_token = token;
         self
     }
     /// Consume the builder and construct a [`ToriiClient`].
@@ -1045,7 +1053,15 @@ impl ToriiClientBuilder {
         };
         // Signed query bodies are one-shot. A redirect could replay the same
         // nonce after the original endpoint already admitted the request.
+        let mut headers = HeaderMap::new();
+        if let Some(token) = self.api_token {
+            let mut value = reqwest::header::HeaderValue::from_str(token.expose_secret())
+                .map_err(|_| ToriiError::Decode("invalid private listener credential".into()))?;
+            value.set_sensitive(true);
+            headers.insert("x-api-token", value);
+        }
         let http = Client::builder()
+            .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .timeout(TORII_HTTP_REQUEST_TIMEOUT_V1)

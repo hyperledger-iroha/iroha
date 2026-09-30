@@ -21,10 +21,11 @@ use iroha_deploy::genesis::staging::{
 };
 #[cfg(test)]
 use iroha_deploy::genesis::staging::{
-    build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
-    staged_default_account_literal, staged_default_pipeline, staged_lane_manifest_registry,
-    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
-    staged_signed_sumeragi_context_hashes,
+    build_signed_genesis, configured_initial_genesis_state, restage_signed_sumeragi_context_hashes,
+    retired_synthetic_stake_asset_id, staged_default_account_literal, staged_default_pipeline,
+    staged_lane_manifest_registry, staged_signed_native_genesis,
+    staged_signed_native_genesis_with_projection, staged_signed_sumeragi_context_hashes,
+    verify_final_signed_sumeragi_context,
 };
 #[cfg(test)]
 use iroha_genesis::GenesisBlock;
@@ -1347,7 +1348,7 @@ pub(crate) mod tests {
 
     #[test]
     fn prepared_native_chain_reuses_original_one_and_four_lane_configuration() {
-        use iroha_core::state::{StateReadOnly, WorldReadOnly};
+        use iroha_core::state::WorldReadOnly;
         for lane_count in [1, 4] {
             let fixture = native_genesis_fixture(lane_count);
             let original = fixture.signed.0.encode_wire().unwrap();
@@ -1458,7 +1459,7 @@ pub(crate) mod tests {
 
     #[test]
     fn final_signed_native_policy_matches_actual_stage_for_one_and_four_lanes() {
-        use iroha_core::state::{StateReadOnly, WorldReadOnly};
+        use iroha_core::state::WorldReadOnly;
         for lane_count in [1, 4] {
             let fixture = native_genesis_fixture(lane_count);
             let wire = fixture.signed.0.encode_wire().unwrap();

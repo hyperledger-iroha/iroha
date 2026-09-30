@@ -103,8 +103,13 @@ fn run(args: Args) -> Result<(), &'static str> {
         .chain_id
         .parse()
         .map_err(|_| "invalid chain identifier")?;
-    let cursor = NativeJournalCursor::new(chain_id.clone(), args.network_id, limits)
-        .map_err(|_| "invalid native chain configuration")?;
+    let cursor = NativeJournalCursor::new(
+        chain_id.clone(),
+        args.network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|_| "invalid native chain configuration")?;
     let transition_id: [u8; 32] = hex::decode(&args.transition_id)
         .map_err(|_| "invalid transition identifier")?
         .try_into()

@@ -11833,7 +11833,7 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     let mut value = json::Map::new();
     value.insert(
         "contract".into(),
-        json::Value::String(rejection.contract.clone()),
+        json::Value::String(rejection.contract.to_string()),
     );
     value.insert(
         "error_type".into(),

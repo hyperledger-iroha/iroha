@@ -302,7 +302,7 @@ const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
     CONTRACT_CODE_ARTIFACT_MAX_BYTES.div_ceil(3) * 4;
 const CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES: usize =
-    CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 128;
+    CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 1024;
 const ZK_VK_DRAFT_MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
@@ -599,7 +599,19 @@ macro_rules! sorafs_reserve_detail_methods {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha::client::ContractCodeBytesResponse")]
 struct ContractCodeBytesResponse {
+    network_id: NetworkId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
     code_b64: String,
+}
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ContractManifestResponse {
+    network_id: NetworkId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+    manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+    code_hash: Option<String>,
+    abi_hash: Option<String>,
+    code_bytes: Option<String>,
 }
 /// Caller-trusted contract-call intent used to validate a Torii unsigned draft.
 ///
@@ -9444,6 +9456,7 @@ mod evidence_http_tests {
             torii_api_url: url,
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
+            api_token: None,
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),
@@ -17374,10 +17387,10 @@ impl Client {
     ///
     /// Pagination and `count_mode=exact` are included before canonical request signing. Exact
     /// counts apply per route; the routed response's `total` is the deduplicated union of the
-    /// current route pages, not a global permission count or an exhaustion witness. Callers must
-    /// keep `offset + limit` within the server's configured fetch budget, require complete
-    /// successful fanout, and independently establish exhaustion before treating the returned
-    /// permissions as a complete policy view.
+    /// current route pages, not a global permission count. Mandatory `has_more` is the OR of
+    /// every successful route's continuation evidence; `false` establishes exhaustion only with
+    /// complete successful fanout. Callers must keep `offset + limit` within the server's
+    /// configured fetch budget and fail closed if the full set exceeds that budget.
     ///
     /// # Errors
     /// Returns an error if request signing, construction, or the HTTP call fails.
@@ -20161,28 +20174,23 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &path);
         self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)
     }
-    /// Account-signed GET `/v1/contracts/code-bytes/{code_hash}` and decode a bounded,
-    /// canonical base64 artifact whose domain-separated contract hash exactly matches `code_hash`.
+    /// Account-signed GET of one exact dataspace-scoped contract artifact.
+    ///
+    /// The bounded closed response must bind this client's network, the requested artifact,
+    /// canonical base64, and the complete domain-separated artifact digest.
     ///
     /// # Errors
-    /// Returns an error if request signing or transport fails, the response is non-OK,
-    /// oversized or not a closed JSON object, base64 is not canonical, or the artifact
-    /// does not match the requested hash.
-    pub fn get_contract_code_bytes(&self, code_hash_hex: &str) -> Result<Vec<u8>> {
-        if code_hash_hex.len() != 64
-            || !code_hash_hex
-                .as_bytes()
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err(eyre!(
-                "contract code hash must be exactly 32 lowercase hexadecimal bytes"
-            ));
-        }
-        let mut expected_hash = [0_u8; 32];
-        hex::decode_to_slice(code_hash_hex, &mut expected_hash)
-            .wrap_err("failed to decode exact contract code hash")?;
-        let path = format!("v1/contracts/code-bytes/{code_hash_hex}");
+    /// Returns an error for failed signing/transport, malformed or oversized responses,
+    /// scope substitution, or an artifact digest mismatch.
+    pub fn get_contract_code_bytes(
+        &self,
+        artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+    ) -> Result<Vec<u8>> {
+        let path = format!(
+            "v1/contracts/artifacts/{}/{}/bytes",
+            artifact_id.dataspace_id.as_u64(),
+            hex::encode(artifact_id.code_hash.as_ref())
+        );
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -20197,6 +20205,11 @@ impl Client {
         }
         let response: ContractCodeBytesResponse = norito::json::from_slice(resp.body())
             .wrap_err("failed to decode closed contract code response")?;
+        if response.network_id != self.network_id || response.artifact_id != *artifact_id {
+            return Err(eyre!(
+                "contract artifact response substitutes the requested network or dataspace identity"
+            ));
+        }
         let code = decode_canonical_base64(
             &response.code_b64,
             "contract code response.code_b64",
@@ -20207,21 +20220,85 @@ impl Client {
                 "contract code artifact exceeds the first-release artifact limit"
             ));
         }
-        if *iroha_data_model::smart_contract::contract_code_hash(&code).as_ref() != expected_hash {
+        if iroha_data_model::smart_contract::contract_code_hash(&code) != artifact_id.code_hash {
             return Err(eyre!(
                 "contract code artifact digest does not match the requested hash"
             ));
         }
         Ok(code)
     }
-    /// GET `/v1/contracts/code/{code_hash}` and return manifest JSON
+    /// Account-signed GET of the manifest for one exact network and dataspace artifact.
+    ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_contract_manifest_json(&self, code_hash_hex: &str) -> Result<norito::json::Value> {
-        let path = format!("v1/contracts/code/{code_hash_hex}");
+    /// Returns an error for failed transport, malformed JSON, or response identity substitution.
+    pub fn get_contract_manifest_json(
+        &self,
+        artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+    ) -> Result<norito::json::Value> {
+        let path = format!(
+            "v1/contracts/artifacts/{}/{}",
+            artifact_id.dataspace_id.as_u64(),
+            hex::encode(artifact_id.code_hash.as_ref())
+        );
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        Self::decode_json_ok(resp, "Failed to get contract manifest")
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get contract manifest",
+            " ",
+        )?;
+        if resp.body().len() > CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "contract manifest response exceeds the artifact response limit"
+            ));
+        }
+        let response: ContractManifestResponse = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode closed contract manifest response")?;
+        if response.network_id != self.network_id
+            || response.artifact_id != *artifact_id
+            || response.manifest.code_hash != Some(artifact_id.code_hash)
+        {
+            return Err(eyre!(
+                "contract manifest response substitutes the requested network or artifact identity"
+            ));
+        }
+        if response
+            .code_hash
+            .as_ref()
+            .is_some_and(|hash| hash != &hex::encode(artifact_id.code_hash.as_ref()))
+            || response.abi_hash.as_ref().is_some_and(|hash| {
+                response
+                    .manifest
+                    .abi_hash
+                    .as_ref()
+                    .is_none_or(|expected| hash != &hex::encode(expected.as_ref()))
+            })
+        {
+            return Err(eyre!(
+                "contract manifest response has conflicting convenience hashes"
+            ));
+        }
+        if let Some(encoded) = &response.code_bytes {
+            let bytes = decode_canonical_base64(
+                encoded,
+                "contract manifest response.code_bytes",
+                CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES,
+            )?;
+            if bytes.len() > CONTRACT_CODE_ARTIFACT_MAX_BYTES
+                || iroha_data_model::smart_contract::contract_code_hash(&bytes)
+                    != artifact_id.code_hash
+            {
+                return Err(eyre!(
+                    "contract manifest response has substituted code bytes"
+                ));
+            }
+        }
+        norito::json::to_value(&response).map_err(Into::into)
     }
 }
 
@@ -28397,28 +28474,38 @@ mod tests {
         );
         artifact
     }
+    fn artifact_response_json(
+        client: &Client,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+        code: &[u8],
+    ) -> String {
+        norito::json::to_json(&ContractCodeBytesResponse {
+            network_id: client.network_id,
+            artifact_id,
+            code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+        })
+        .expect("scoped artifact response")
+    }
     #[test]
     fn contract_code_artifact_read_is_signed_canonical_bounded_and_hash_bound() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let code = compiled_contract_code_artifact_fixture();
-        let code_hash =
-            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
-        assert_ne!(
-            code_hash,
-            hex::encode(iroha_crypto::Hash::new(code).as_ref()),
-            "the complete artifact's contract identity is not its generic byte hash"
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            iroha_data_model::smart_contract::contract_code_hash(code),
         );
-        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
-        let response = json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
+        assert_ne!(artifact_id.code_hash, iroha_crypto::Hash::new(code));
+        let response = json_response(
+            StatusCode::OK,
+            &artifact_response_json(&client, artifact_id, code),
+        );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-
             client
-                .get_contract_code_bytes(&code_hash)
-                .expect("signed exact contract artifact read")
+                .clone()
+                .with_test_http_transport(mock_transport)
+                .get_contract_code_bytes(&artifact_id)
+                .expect("signed exact artifact read")
         });
         assert_eq!(decoded, code);
         let snapshots = store.lock().expect("snapshot store");
@@ -28426,7 +28513,11 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/contracts/code-bytes/{code_hash}")
+            format!(
+                "/v1/contracts/artifacts/{}/{}/bytes",
+                u64::MAX,
+                hex::encode(artifact_id.code_hash.as_ref())
+            )
         );
         assert!(snapshot.body.is_empty());
         assert_eq!(
@@ -28439,101 +28530,189 @@ mod tests {
     fn contract_code_artifact_read_rejects_generic_hash_and_header_substitution() {
         let client = client_with_base_url(base_url());
         let code = compiled_contract_code_artifact_fixture();
-        let canonical_hash =
-            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
-        let generic_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
-        assert_ne!(canonical_hash, generic_hash);
+        let canonical_hash = iroha_data_model::smart_contract::contract_code_hash(code);
+        let generic_hash = iroha_crypto::Hash::new(code);
         let mut changed_header = code.to_vec();
-        assert_eq!(&changed_header[..4], b"IVM\0");
-        assert!(changed_header.len() > 8);
         changed_header[8] ^= 1;
         for (requested_hash, returned_artifact) in [
             (generic_hash, code.to_vec()),
             (canonical_hash, changed_header),
         ] {
+            let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                requested_hash,
+            );
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let code_b64 = base64::engine::general_purpose::STANDARD.encode(returned_artifact);
-            let response =
-                json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
+            let response = json_response(
+                StatusCode::OK,
+                &artifact_response_json(&client, artifact_id, &returned_artifact),
+            );
             let error = with_mock_http(respond_with(&store, response), |mock_transport| {
                 client
                     .clone()
                     .with_test_http_transport(mock_transport)
-                    .get_contract_code_bytes(&requested_hash)
-                    .expect_err("generic hashing or header substitution must fail")
+                    .get_contract_code_bytes(&artifact_id)
+                    .expect_err("substituted artifact must fail")
             });
             assert!(
                 error
                     .to_string()
                     .contains("artifact digest does not match the requested hash"),
-                "the authenticated response must fail at artifact identity validation: {error:#}"
+                "{error:#}"
             );
-            let snapshots = store.lock().expect("snapshot store");
-            assert_eq!(snapshots.len(), 1);
-            let snapshot = snapshots.first().expect("snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(
-                snapshot.url.path(),
-                format!("/v1/contracts/code-bytes/{requested_hash}")
-            );
-            assert!(snapshot.body.is_empty());
-            assert_canonical_account_signed_request(&client, snapshot);
+            assert_eq!(store.lock().expect("snapshots").len(), 1);
         }
     }
     #[test]
-    fn contract_code_artifact_read_rejects_nonexact_inputs_and_hostile_responses() {
+    fn contract_code_artifact_read_rejects_scope_substitution_and_hostile_responses() {
         let client = client_with_base_url(base_url());
         let code = compiled_contract_code_artifact_fixture();
-        let code_hash =
-            hex::encode(iroha_data_model::smart_contract::contract_code_hash(code).as_ref());
-        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, "{}")),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                for invalid in [
-                    format!("A{}", &code_hash[1..]),
-                    format!(" {code_hash}"),
-                    code_hash[..63].to_owned(),
-                ] {
-                    let _ = client
-                        .get_contract_code_bytes(&invalid)
-                        .expect_err("non-exact code hash must fail before I/O");
-                }
-            },
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            iroha_data_model::smart_contract::contract_code_hash(code),
         );
-        assert!(
-            store.lock().expect("snapshot store").is_empty(),
-            "invalid hashes must not issue HTTP requests"
-        );
+        let canonical = artifact_response_json(&client, artifact_id, code);
+        let mut foreign_dataspace: ContractCodeBytesResponse =
+            norito::json::from_str(&canonical).unwrap();
+        foreign_dataspace.artifact_id.dataspace_id =
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL;
+        let mut foreign_network = foreign_dataspace.clone();
+        foreign_network.artifact_id = artifact_id;
+        foreign_network.network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"different artifact network"),
+            ));
+        let mut invalid_base64 = foreign_dataspace.clone();
+        invalid_base64.artifact_id = artifact_id;
+        invalid_base64.code_b64 = "AA".into();
         for hostile in [
             "{}".to_owned(),
-            r#"{"code_b64":"AA"}"#.to_owned(),
-            format!(r#"{{"code_b64":"{code_b64}","unexpected":true}}"#),
-            format!(r#"{{"code_b64":"{code_b64}","code_b64":"{code_b64}"}}"#),
+            format!("{},\"unexpected\":true}}", canonical.trim_end_matches('}')),
             format!(
-                r#"{{"code_b64":"{}"}}"#,
-                base64::engine::general_purpose::STANDARD.encode(b"different artifact")
+                "{},\"code_b64\":\"AA==\"}}",
+                canonical.trim_end_matches('}')
             ),
+            norito::json::to_json(&foreign_dataspace).unwrap(),
+            norito::json::to_json(&foreign_network).unwrap(),
+            norito::json::to_json(&invalid_base64).unwrap(),
+            artifact_response_json(&client, artifact_id, b"different artifact"),
         ] {
             let response = json_response(StatusCode::OK, &hostile);
             with_mock_http(
                 move |_| Ok(response.clone()),
                 |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-
                     let _ = client
-                        .get_contract_code_bytes(&code_hash)
-                        .expect_err("hostile artifact response must fail closed");
+                        .clone()
+                        .with_test_http_transport(mock_transport)
+                        .get_contract_code_bytes(&artifact_id)
+                        .expect_err("hostile response must fail closed");
                 },
             );
         }
+    }
+    #[test]
+    fn contract_manifest_read_is_signed_and_rejects_scope_or_payload_substitution() {
+        let client = client_with_base_url(base_url());
+        let code = b"manifest response binding fixture";
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::new(u64::MAX),
+            iroha_data_model::smart_contract::contract_code_hash(code),
+        );
+        let manifest = norito::json::from_str(
+            r#"{
+            "code_hash":null,"abi_hash":null,"compiler_fingerprint":null,
+            "features_bitmap":null
+        }"#,
+        )
+        .expect("minimal manifest shape");
+        let mut canonical = ContractManifestResponse {
+            network_id: client.network_id,
+            artifact_id,
+            manifest,
+            code_hash: Some(hex::encode(artifact_id.code_hash.as_ref())),
+            abi_hash: None,
+            code_bytes: Some(base64::engine::general_purpose::STANDARD.encode(code)),
+        };
+        canonical.manifest.code_hash = Some(artifact_id.code_hash);
+        let body = norito::json::to_json(&canonical).expect("manifest envelope");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            client
+                .clone()
+                .with_test_http_transport(mock_transport)
+                .get_contract_manifest_json(&artifact_id)
+                .expect("scoped manifest");
+        });
+        let snapshots = store.lock().expect("snapshots");
+        let snapshot = snapshots.first().expect("signed request");
+        assert_canonical_account_signed_request(&client, snapshot);
+        assert_eq!(
+            snapshot.url.path(),
+            format!(
+                "/v1/contracts/artifacts/{}/{}",
+                u64::MAX,
+                hex::encode(artifact_id.code_hash.as_ref())
+            )
+        );
+        assert_eq!(
+            snapshot.max_response_bytes,
+            CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES
+        );
+        drop(snapshots);
+        let mut foreign_scope = canonical.clone();
+        foreign_scope.artifact_id.dataspace_id = DataSpaceId::UNIVERSAL;
+        let mut foreign_network = canonical.clone();
+        foreign_network.network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"foreign manifest network"),
+            ));
+        let mut foreign_manifest = canonical.clone();
+        foreign_manifest.manifest.code_hash = Some(iroha_crypto::Hash::new(b"foreign manifest"));
+        let mut foreign_bytes = canonical.clone();
+        foreign_bytes.code_bytes =
+            Some(base64::engine::general_purpose::STANDARD.encode(b"foreign bytes"));
+        let mut foreign_convenience_hash = canonical;
+        foreign_convenience_hash.code_hash = Some("00".repeat(32));
+        for hostile in [
+            norito::json::to_json(&foreign_scope).unwrap(),
+            norito::json::to_json(&foreign_network).unwrap(),
+            norito::json::to_json(&foreign_manifest).unwrap(),
+            norito::json::to_json(&foreign_bytes).unwrap(),
+            norito::json::to_json(&foreign_convenience_hash).unwrap(),
+            format!("{},\"unknown\":true}}", body.trim_end_matches('}')),
+            format!("{},\"code_bytes\":null}}", body.trim_end_matches('}')),
+        ] {
+            let response = json_response(StatusCode::OK, &hostile);
+            with_mock_http(
+                move |_| Ok(response.clone()),
+                |mock_transport| {
+                    let _ = client
+                        .clone()
+                        .with_test_http_transport(mock_transport)
+                        .get_contract_manifest_json(&artifact_id)
+                        .expect_err("substitution must fail");
+                },
+            );
+        }
+    }
+    #[test]
+    fn maximum_artifact_response_has_room_for_full_network_and_u64_dataspace_binding() {
+        let client = client_with_base_url(base_url());
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            iroha_crypto::Hash::new(b"maximum artifact"),
+        );
+        let code = vec![0; CONTRACT_CODE_ARTIFACT_MAX_BYTES];
+        let response = artifact_response_json(&client, artifact_id, &code);
+        assert!(response.len() <= CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES);
+        let decoded: ContractCodeBytesResponse =
+            norito::json::from_str(&response).expect("maximum envelope");
+        assert_eq!(decoded.artifact_id, artifact_id);
+        assert_eq!(
+            decoded.code_b64.len(),
+            CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES
+        );
     }
     #[test]
     fn multisig_reads_are_account_signed_for_concrete_selectors() {
@@ -28675,6 +28854,7 @@ mod tests {
             torii_api_url: "http://127.0.0.1:8080".parse().unwrap(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
+            api_token: None,
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),
@@ -31976,6 +32156,40 @@ mod tests {
             .expect("Expected canonical `authorization` header");
         let expected_value = format!("Basic {ENCRYPTED_CREDENTIALS}");
         assert_eq!(value, &expected_value);
+    }
+    #[test]
+    fn owner_api_token_is_retained_once_in_client_context() {
+        let token = "owner-only-listener-token-for-client-test";
+        let config = Config {
+            api_token: Some(SecretString::new(token.to_owned())),
+            ..config_factory()
+        };
+        let builder = Client::builder(config).headers(HashMap::from([
+            ("x-api-token".to_owned(), "discarded".to_owned()),
+            ("X-API-TOKEN".to_owned(), "also-discarded".to_owned()),
+        ]));
+        assert!(!format!("{builder:?}").contains(token));
+        let client = builder.build().expect("valid token-bound client");
+        assert_eq!(
+            client.headers.get("x-api-token").map(String::as_str),
+            Some(token)
+        );
+        assert_eq!(client.headers.len(), 1);
+        assert!(!format!("{client:?}").contains(token));
+        let rebuilt = ClientBuilder::from_client(&client).build().unwrap();
+        assert_eq!(rebuilt.headers, client.headers);
+    }
+    #[test]
+    fn owner_api_token_rejects_header_injection_without_echoing_secret() {
+        let token = "secret\r\nx-extra: injected";
+        let config = Config {
+            api_token: Some(SecretString::new(token.to_owned())),
+            ..config_factory()
+        };
+        let error = Client::builder(config)
+            .build()
+            .expect_err("invalid token header");
+        assert!(!format!("{error:?}").contains(token));
     }
     include!("client/canonical_request_auth_tests.rs");
     pub(super) fn assert_operator_signature_headers(snapshot: &RequestSnapshot) {

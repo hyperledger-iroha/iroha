@@ -31,7 +31,8 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, is_valid_committee_size,
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, SumeragiRootScope,
+            is_valid_committee_size,
         },
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
@@ -62,6 +63,7 @@ use iroha_data_model::{
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     prelude::*,
+    private_dataspace::PrivateDataspaceAdmissionPolicy,
     proof::{VerifyingKeyId, VerifyingKeyRecord},
 };
 use iroha_executor_data_model::permission::{
@@ -103,6 +105,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
+
+mod private_root;
+pub use private_root::{PrivateRootSpec, prepare_private_root};
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
@@ -1227,6 +1232,7 @@ fn generate_localnet_runtime<T: Write>(
     let gas_account_id = localnet_gas_account_id(&genesis_public_key);
     let mut genesis =
         generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id, &peers)?;
+    genesis = append_localnet_private_root_admission_policy(genesis, &chain_id)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
             genesis,
@@ -2376,7 +2382,7 @@ fn render_peer_config(
     );
     sumeragi.insert("keys".into(), Value::Table(keys));
     let mut nexus = Table::new();
-    if npos_bootstrap {
+    {
         let mut storage = Table::new();
         let storage_budget = if taira {
             taira_defaults::NEXUS_STORAGE_BUDGET_BYTES
@@ -3437,6 +3443,28 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
         .map_or_else(|| requested.clone(), |params| params.min_self_bond);
     requested.max(min_self_bond).max(Quantity::from(1_u64))
 }
+fn append_localnet_private_root_admission_policy(
+    genesis: RawGenesisTransaction,
+    chain_id: &str,
+) -> Result<RawGenesisTransaction> {
+    // Parent admission is explicitly enabled only on disposable global localnets.
+    // Public Taira requires its own qualified operator release; child roots cannot
+    // admit descendants through the global parent registry.
+    if chain_id == PUBLIC_TAIRA_CHAIN_ID
+        || genesis.sumeragi_context_parameters().root_scope != SumeragiRootScope::Global
+    {
+        return Ok(genesis);
+    }
+    let policy = PrivateDataspaceAdmissionPolicy {
+        max_registered_roots: 64,
+        max_roots_per_owner: 8,
+    };
+    genesis
+        .into_builder()
+        .append_parameter(Parameter::Custom(policy.into_custom_parameter()?))
+        .build_raw()
+}
+
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
     peers: NonZeroU16,
@@ -6198,6 +6226,11 @@ mod managed_tests {
             let node = managed_node_dir(&root, index);
             assert_eq!(table["data_dir"].as_str(), node.to_str());
             assert!(table["sumeragi"].get("mint_finality_seed_fd").is_none());
+            assert_eq!(
+                table["nexus"]["storage"]["local_budget_bytes"].as_integer(),
+                Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES as i64),
+                "every managed validator needs its finite developer storage cap"
+            );
             assert_eq!(
                 iroha_fs::read_private(node.join("secrets/mint_finality.seed"), 32)
                     .unwrap()

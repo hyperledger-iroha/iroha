@@ -63,9 +63,8 @@ class KotodamaCallTableTest {
             "return_type" to returns.first,
             "return_schema" to mapOf("nodes" to returns.second),
         )
-        val payload = JsonEncoder.encode(mapOf("manifest" to mapOf("entrypoints" to listOf(descriptor))))
-        return ContractJsonParser.parseManifestRecord(payload.toByteArray(Charsets.UTF_8))
-            .manifest.entrypoints!!.single()
+        return ContractManifestJsonParser.parseManifest(mapOf("entrypoints" to listOf(descriptor)))
+            .entrypoints!!.single()
     }
 
     private fun tuple(width: Int): Pair<String, List<Map<String, Any?>>> =

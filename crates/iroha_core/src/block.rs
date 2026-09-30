@@ -2103,7 +2103,7 @@ impl AuthenticatedGenesisTransaction {
 }
 
 #[allow(clippy::too_many_lines)]
-fn authenticate_genesis_block_intents(
+pub(crate) fn authenticate_genesis_block_intents(
     block: &SignedBlock,
     genesis_account: &iroha_data_model::account::AccountId,
 ) -> Result<AuthenticatedGenesisOutputSource, InvalidGenesisError> {

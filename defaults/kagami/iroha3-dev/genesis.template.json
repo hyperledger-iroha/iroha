@@ -576,6 +576,10 @@
   "wire_protocol_version": 1,
   "consensus_fingerprint": null,
   "sumeragi_context": {
+    "root_scope": {
+      "kind": "global",
+      "value": null
+    },
     "da_layout": {
       "encoding": {
         "encoding": "reed_solomon16",

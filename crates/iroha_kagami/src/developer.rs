@@ -37,6 +37,21 @@ pub(crate) struct StoreArgs {
 }
 
 impl StoreArgs {
+    fn resolve_path(&self, path: &Path) -> Result<PathBuf> {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+        let workspace = self
+            .workspace
+            .clone()
+            .map_or_else(std::env::current_dir, Ok)?;
+        let workspace = workspace
+            .canonicalize()
+            .wrap_err("open selected workspace")?;
+        ensure!(workspace.is_dir(), "selected workspace must be a directory");
+        Ok(workspace.join(path))
+    }
+
     fn open(&self) -> Result<ManagedStore> {
         let root = match &self.state {
             Some(path) => path.clone(),
@@ -283,9 +298,17 @@ impl<T: Write> RunArgs<T> for ContractCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self::Deploy(args) = self;
         // Reject local input mistakes before provisioning a network or selecting an identity.
-        let input = if args.resume.is_none() {
+        let resume = args
+            .resume
+            .as_ref()
+            .map(|path| args.store.resolve_path(path))
+            .transpose()?;
+        let input = if resume.is_none() {
+            let path = args
+                .store
+                .resolve_path(args.input.as_deref().unwrap_or(Path::new(".")))?;
             Some(ContractInput::from_path(
-                args.input.as_deref().unwrap_or(Path::new(".")),
+                &path,
                 args.package,
                 args.contract,
                 args.locked,
@@ -301,7 +324,7 @@ impl<T: Write> RunArgs<T> for ContractCommand {
         let runtime = InstalledRuntime::discover()?;
         // Recovery must retain an explicit or previously selected identity. It never creates
         // another default environment merely because its original selection disappeared.
-        if args.resume.is_some() {
+        if resume.is_some() {
             store.context(args.context.as_deref())?;
         }
         let context = store
@@ -326,7 +349,7 @@ impl<T: Write> RunArgs<T> for ContractCommand {
                 args.max_fee.as_ref(),
             )
         };
-        let deployed = if let Some(journal) = args.resume {
+        let deployed = if let Some(journal) = resume {
             runtime.resume(&journal, &mut review, &mut progress)?
         } else {
             let input = input.ok_or_else(|| eyre!("deployment input is missing"))?;
@@ -450,6 +473,31 @@ fn write_json(writer: &mut impl Write, value: &impl norito::json::JsonSerialize)
 mod tests {
     use super::*;
     use clap::Parser as _;
+
+    #[test]
+    fn relative_inputs_and_journals_use_the_selected_workspace() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("project");
+        std::fs::create_dir(&workspace).unwrap();
+        let args = StoreArgs {
+            workspace: Some(workspace.clone()),
+            state: None,
+            json: false,
+        };
+        for relative in ["hello.ko", "Musubi.toml", "journals/original"] {
+            assert_eq!(
+                args.resolve_path(Path::new(relative)).unwrap(),
+                workspace.canonicalize().unwrap().join(relative)
+            );
+        }
+        let absolute = temporary.path().join("elsewhere.to");
+        assert_eq!(args.resolve_path(&absolute).unwrap(), absolute);
+        let missing = StoreArgs {
+            workspace: Some(workspace.join("missing")),
+            ..args
+        };
+        assert!(missing.resolve_path(Path::new("hello.ko")).is_err());
+    }
 
     #[test]
     fn localnet_up_needs_no_configuration() {

@@ -10239,29 +10239,35 @@ fn record_smart_contract_lifecycle_access(
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
             let request: DMScode::RegisterSmartContractCode =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            let code_hash = request.manifest.code_hash.as_ref()?;
-            add_contract_code_r(access_set, code_hash);
-            add_contract_manifest_rw(access_set, code_hash);
+            if request.manifest.code_hash != Some(request.artifact_id.code_hash) {
+                return None;
+            }
+            add_contract_code_r(access_set, &request.artifact_id);
+            add_contract_manifest_rw(access_set, &request.artifact_id);
         }
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
             let request: DMScode::RegisterSmartContractBytes =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_rw(access_set, &request.code_hash);
+            add_contract_code_rw(access_set, &request.artifact_id);
         }
         syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
             let request: DMScode::ActivateContractInstance =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_r(access_set, &request.code_hash);
-            add_contract_manifest_r(access_set, &request.code_hash);
+            let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+                request.contract_address.dataspace_id().ok()?,
+                request.code_hash,
+            );
+            add_contract_code_r(access_set, &artifact_id);
+            add_contract_manifest_r(access_set, &artifact_id);
             add_contract_instance_rw(access_set, &request.contract_address);
-            add_contract_instance_code_hash_rw(access_set, &request.code_hash);
+            add_contract_instance_code_hash_rw(access_set, &artifact_id);
         }
         syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
             let request: DMScode::RemoveSmartContractBytes =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_rw(access_set, &request.code_hash);
-            add_contract_manifest_r(access_set, &request.code_hash);
-            add_contract_instance_code_hash_r(access_set, &request.code_hash);
+            add_contract_code_rw(access_set, &request.artifact_id);
+            add_contract_manifest_r(access_set, &request.artifact_id);
+            add_contract_instance_code_hash_r(access_set, &request.artifact_id);
         }
         _ => return None,
     }
@@ -11146,17 +11152,33 @@ fn key_zk_asset(id: &AssetDefinitionId) -> String {
 fn key_peer(id: &iroha_model_base::peer::PeerId) -> String {
     format!("peer:{id}")
 }
-fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.manifest:{code_hash}")
+fn key_contract_manifest(
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) -> String {
+    format!(
+        "contract.manifest:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
-fn key_contract_code(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.code:{code_hash}")
+fn key_contract_code(artifact_id: &iroha_data_model::smart_contract::ContractArtifactId) -> String {
+    format!(
+        "contract.code:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
 fn key_contract_instance(address: &iroha_data_model::smart_contract::ContractAddress) -> String {
     format!("contract.instance:{address}")
 }
-fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.instance.code_hash:{code_hash}")
+fn key_contract_instance_code_hash(
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) -> String {
+    format!(
+        "contract.instance.code_hash:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
@@ -11265,19 +11287,31 @@ fn add_peer_rw(set: &mut AccessSets, id: &iroha_model_base::peer::PeerId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_manifest_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_manifest(code_hash));
+fn add_contract_manifest_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads.insert(key_contract_manifest(artifact_id));
 }
-fn add_contract_manifest_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_manifest(code_hash);
+fn add_contract_manifest_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_manifest(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_code_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_code(code_hash));
+fn add_contract_code_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads.insert(key_contract_code(artifact_id));
 }
-fn add_contract_code_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_code(code_hash);
+fn add_contract_code_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_code(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -11289,11 +11323,18 @@ fn add_contract_instance_rw(
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_instance_code_hash(code_hash));
+fn add_contract_instance_code_hash_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads
+        .insert(key_contract_instance_code_hash(artifact_id));
 }
-fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_instance_code_hash(code_hash);
+fn add_contract_instance_code_hash_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_instance_code_hash(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }

@@ -1,10 +1,14 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
+import java.math.BigInteger
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import java.util.concurrent.CompletionException
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -17,7 +21,7 @@ class ContractManifestTest {
         fun decode(code: Int = 1, message: String = "残高が不足しています", duplicate: Boolean = false): ContractManifest {
             val entry = """{"error_type":"Vault::Failure","code":$code,"message":"$message"}"""
             val messages = if (duplicate) "$entry,$entry" else entry
-            return ContractJsonParser.parseManifestRecord(
+            return parseManifestFixture(
                 """{"manifest":{"error_types":[{"identity":"Vault::Failure","variants":[{"name":"Missing","code":1}]}],"error_messages":[$messages]}}""".toByteArray(StandardCharsets.UTF_8),
             ).manifest
         }
@@ -34,7 +38,7 @@ class ContractManifestTest {
 
     @Test
     fun durableEmptyProductsPreserveNominalNamesAndExactGrammar() {
-        fun decode(typeName: String) = ContractJsonParser.parseManifestRecord(
+        fun decode(typeName: String) = parseManifestFixture(
             """{"manifest":{"states":[{"name":"Stored","type_name":"$typeName"}]}}"""
                 .toByteArray(StandardCharsets.UTF_8),
         ).manifest
@@ -60,7 +64,7 @@ class ContractManifestTest {
         val vectors = JsonParser.parse(java.io.File(directory, "exported_struct_names_v1.json").readText(Charsets.UTF_8)) as Map<*, *>
         val identity = "std/math@1.0.0::Math::Receipt"
         for (name in vectors["valid"] as List<*>) {
-            val manifest = ContractJsonParser.parseManifestRecord(payload.replace(identity, name as String).toByteArray(StandardCharsets.UTF_8)).manifest
+            val manifest = parseManifestFixture(payload.replace(identity, name as String).toByteArray(StandardCharsets.UTF_8)).manifest
             val entrypoint = manifest.entrypoints!!.first()
             assertEquals("struct $name", entrypoint.returnSchema!!.canonicalTypeName)
             assertEquals("struct $name", entrypoint.argumentSchema!!.fields.first().valueType.canonicalTypeName)
@@ -72,7 +76,7 @@ class ContractManifestTest {
             for (removed in listOf("states", "entrypoints")) {
                 val isolated = manifest.filterKeys { it != removed }
                 assertFailsWith<IllegalStateException>("invalid $removed-independent struct identity: $name") {
-                    ContractJsonParser.parseManifestRecord(JsonEncoder.encode(mapOf("manifest" to isolated)).toByteArray(StandardCharsets.UTF_8))
+                    parseManifestFixture(JsonEncoder.encode(mapOf("manifest" to isolated)).toByteArray(StandardCharsets.UTF_8))
                 }
             }
         }
@@ -88,10 +92,10 @@ class ContractManifestTest {
             ""","return_schema":{"nodes":[{"kind":"Unit","value":null}]}""",
         )) {
             assertFailsWith<IllegalStateException> {
-                ContractJsonParser.parseManifestRecord(response(returns).toByteArray(StandardCharsets.UTF_8))
+                parseManifestFixture(response(returns).toByteArray(StandardCharsets.UTF_8))
             }
         }
-        val unit = ContractJsonParser.parseManifestRecord(response(
+        val unit = parseManifestFixture(response(
             ""","return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}""",
         ).toByteArray(StandardCharsets.UTF_8)).manifest.entrypoints!!.single()
         assertEquals("()", unit.returnType)
@@ -110,7 +114,7 @@ class ContractManifestTest {
             List(14) { leafNode("Int") }).joinToString(",")
         val payload =
             """{"manifest":{"entrypoints":[{"name":"wide","kind":{"kind":"View","value":null},"params":[$parameters],"argument_schema":{"fields":[$fields]},"return_type":"${wideTupleType(14)}","return_schema":{"nodes":[$returnNodes]}}]}}"""
-        val entrypoint = ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+        val entrypoint = parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8))
             .manifest.entrypoints!!.single()
         assertEquals(14, entrypoint.parameters.size)
         assertEquals(14, entrypoint.argumentSchema!!.wordCount)
@@ -122,7 +126,7 @@ class ContractManifestTest {
         val overLimit =
             """{"manifest":{"entrypoints":[{"name":"wide","kind":{"kind":"View","value":null},"params":[$overLimitParameters],"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}}]}}"""
         val error = assertFailsWith<IllegalStateException> {
-            ContractJsonParser.parseManifestRecord(overLimit.toByteArray(StandardCharsets.UTF_8))
+            parseManifestFixture(overLimit.toByteArray(StandardCharsets.UTF_8))
         }
         assertTrue(error.message!!.contains("V1 argument limit"))
     }
@@ -132,7 +136,7 @@ class ContractManifestTest {
         val file = generateSequence(java.io.File(".").absoluteFile) { it.parentFile }
             .map { java.io.File(it, "fixtures/kotodama/nominal_errors_v1.json") }.first { it.isFile }
         val payload = file.readText(Charsets.UTF_8)
-        val manifest = ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8)).manifest
+        val manifest = parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8)).manifest
         val schema = manifest.entrypoints!!.first().returnSchema!!
         assertEquals("Result<(), example/vault@1.0.0::金庫::拒否>", schema.canonicalTypeName)
         assertEquals(1, schema.wordCount)
@@ -147,22 +151,22 @@ class ContractManifestTest {
         assertEquals("StatePage<int, bool, 8>", manifest.entrypoints[2].returnSchema!!.canonicalTypeName)
         assertEquals(2, manifest.entrypoints[2].returnSchema!!.wordCount)
         assertFailsWith<IllegalStateException> {
-            ContractJsonParser.parseManifestRecord(payload.replaceFirst("CapacityExceeded", "DifferentMeaning").toByteArray(StandardCharsets.UTF_8))
+            parseManifestFixture(payload.replaceFirst("CapacityExceeded", "DifferentMeaning").toByteArray(StandardCharsets.UTF_8))
         }
         assertFailsWith<IllegalStateException> {
-            ContractJsonParser.parseManifestRecord(payload.replaceFirst("\"code\": 1", "\"code\": 0").toByteArray(StandardCharsets.UTF_8))
+            parseManifestFixture(payload.replaceFirst("\"code\": 1", "\"code\": 0").toByteArray(StandardCharsets.UTF_8))
         }
         val stateOnlyUnknown = payload.replace(
             "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
             "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"",
         )
         val stateError = assertFailsWith<IllegalStateException> {
-            ContractJsonParser.parseManifestRecord(stateOnlyUnknown.toByteArray(StandardCharsets.UTF_8))
+            parseManifestFixture(stateOnlyUnknown.toByteArray(StandardCharsets.UTF_8))
         }
         assertTrue(stateError.message!!.contains("error_types catalog"))
         for (forged in listOf("StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}")) {
             assertFailsWith<IllegalStateException> {
-                ContractJsonParser.parseManifestRecord(payload.replace(
+                parseManifestFixture(payload.replace(
                     "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", forged,
                 ).toByteArray(StandardCharsets.UTF_8))
             }
@@ -298,7 +302,7 @@ class ContractManifestTest {
             val legal = statePayload(legalType)
             assertEquals(
                 legalType,
-                ContractJsonParser.parseManifestRecord(legal.toByteArray(StandardCharsets.UTF_8))
+                parseManifestFixture(legal.toByteArray(StandardCharsets.UTF_8))
                     .manifest.states!!.single().typeName,
             )
         }
@@ -316,7 +320,7 @@ class ContractManifestTest {
                 "\"key_type\":\"$invalidHint\"",
             )
             assertFailsWith<IllegalStateException> {
-                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+                parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8))
             }
         }
 
@@ -353,7 +357,7 @@ class ContractManifestTest {
         ).forEach { retiredType ->
             val payload = statePayload(retiredType)
             assertFailsWith<IllegalStateException> {
-                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+                parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8))
             }
         }
     }
@@ -362,7 +366,7 @@ class ContractManifestTest {
     fun dynamicAccessHintsEnforceTheExactV1Policy() {
         fun parse(payload: String): ContractDynamicAccessHint {
             val manifest =
-                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+                parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8))
                     .manifest
             val accessSetHints = manifest.accessSetHints ?: error("missing access-set hints")
             return accessSetHints.dynamicReads.single()
@@ -522,8 +526,8 @@ class ContractManifestTest {
             }
             """.trimIndent()
 
-        fun parse(value: String): ContractManifestRecord =
-            ContractJsonParser.parseManifestRecord(value.toByteArray(StandardCharsets.UTF_8))
+        fun parse(value: String): ManifestFixture =
+            parseManifestFixture(value.toByteArray(StandardCharsets.UTF_8))
 
         val canonical = hint()
         listOf(
@@ -554,20 +558,63 @@ class ContractManifestTest {
         val executor = ManifestExecutor(fullResponse().toByteArray(StandardCharsets.UTF_8))
         val transport = HttpClientTransport(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api"))
+                .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical())).build(),
         )
 
-        val record = transport.getContractManifest("b".repeat(64)).join()
+        val artifact = ContractArtifactId(BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE),
+            "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2")
+        val record = transport.getContractManifest(artifact, applicationAuth()).join()
+        assertEquals(artifact, record.artifactId)
+        assertEquals(TestNetworkIds.canonical(), record.networkId)
 
         assertEquals("Ledger", record.manifest.seiyakuName)
         assertEquals(
-            "https://torii.example/api/v1/contracts/code/${"b".repeat(64)}",
+            "https://torii.example/api/v1/contracts/artifacts/${artifact.dataspaceId}/${"b".repeat(64)}",
             executor.lastRequest.uri.toString(),
         )
         val requests = executor.requestCount
-        assertFailsWith<IllegalArgumentException> { transport.getContractManifest("abc") }
-        assertFailsWith<IllegalArgumentException> { transport.getContractManifest("0x${"b".repeat(64)}") }
+        assertFailsWith<IllegalArgumentException> { ContractArtifactId(BigInteger.ZERO, "abc") }
+        assertFailsWith<IllegalArgumentException> { ContractArtifactId(BigInteger.ZERO, "0x${"b".repeat(64)}") }
         assertEquals(requests, executor.requestCount)
+        assertTrue(executor.lastRequest.headers.containsKey(CanonicalRequestSigner.HEADER_ACCOUNT))
+        assertTrue(executor.lastRequest.headers.containsKey(CanonicalRequestSigner.HEADER_SIGNATURE))
+    }
+
+    @Test
+    fun artifactIdentityAndEnvelopeRejectRetiredAndForeignScopes() {
+        val hash = "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+        val maximum = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        assertEquals(maximum, ContractArtifactId(maximum, hash).dataspaceId)
+        for (invalid in listOf(BigInteger.valueOf(-1), maximum.add(BigInteger.ONE))) {
+            assertFailsWith<IllegalArgumentException> { ContractArtifactId(invalid, hash) }
+        }
+        for (replacement in listOf("-1", "18446744073709551616", "\"17\"", "1.0")) {
+            assertFails { ContractJsonParser.parseManifestRecord(
+                fullResponse().replace("18446744073709551615", replacement).toByteArray(StandardCharsets.UTF_8)) }
+        }
+        val response = fullResponse()
+        val malformed = listOf(
+            response.replaceFirst("\"network_id\"", "\"retired_network\""),
+            response.replaceFirst("\"artifact_id\"", "\"retired_artifact\""),
+            response.replaceFirst(hash, "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"),
+        )
+        malformed.forEach { payload -> assertFails { ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8)) } }
+        val artifact = ContractArtifactId(maximum, hash)
+        for (payload in listOf(
+            response.replace(TestNetworkIds.canonical().literal, TestNetworkIds.fromSeed(97).literal),
+            response.replace("18446744073709551615", "17"),
+        )) {
+            val transport = HttpClientTransport(ManifestExecutor(payload.toByteArray(StandardCharsets.UTF_8)),
+                ClientConfig.builder().setBaseUri(URI.create("https://torii.example"))
+                    .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical())).build())
+            assertFailsWith<CompletionException> { transport.getContractManifest(artifact, applicationAuth()).join() }
+        }
+        val executor = ManifestExecutor(response.toByteArray(StandardCharsets.UTF_8))
+        val unsigned = HttpClientTransport(executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build())
+        assertFailsWith<IllegalStateException> { unsigned.getContractManifest(artifact, applicationAuth()) }
+        assertEquals(0, executor.requestCount)
     }
 
     @Test
@@ -742,7 +789,15 @@ class ContractManifestTest {
         }
     }
 
+    private class ManifestFixture(val manifest: ContractManifest)
+
     companion object {
+        @Suppress("UNCHECKED_CAST")
+        private fun parseManifestFixture(payload: ByteArray): ManifestFixture {
+            val root = JsonParser.parse(String(payload, StandardCharsets.UTF_8)) as Map<String, Any?>
+            return ManifestFixture(ContractManifestJsonParser.parseManifest(root["manifest"] as Map<String, Any?>))
+        }
+
         private val triggerFilter =
             "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
 
@@ -761,7 +816,7 @@ class ContractManifestTest {
         ): EntrypointValueTypeV1 {
             val payload =
                 """{"manifest":{"entrypoints":[{"name":"inspect","kind":{"kind":"View","value":null},"params":[{"name":"value","type_name":"$typeName"}],"argument_schema":{"fields":[{"name":"value","ty":{"nodes":[$nodes]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}}]}}"""
-            return ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+            return parseManifestFixture(payload.toByteArray(StandardCharsets.UTF_8))
                 .manifest.entrypoints!!.single().argumentSchema!!.fields.single().valueType
         }
 
@@ -837,6 +892,8 @@ class ContractManifestTest {
         private fun fullResponse(): String =
             """
             {
+              "network_id":"${TestNetworkIds.canonical()}",
+              "artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},
               "manifest":{
                 "seiyaku_name":"Ledger",
                 "code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",

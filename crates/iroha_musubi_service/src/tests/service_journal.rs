@@ -1388,6 +1388,7 @@ fn client() -> (Client, KeyPair) {
         torii_request_timeout: Duration::from_secs(5),
         account,
         basic_auth: None,
+        api_token: None,
         transaction_add_nonce: false,
         sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy::new(
             Duration::from_secs(1),

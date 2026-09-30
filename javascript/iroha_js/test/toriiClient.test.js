@@ -1,3 +1,12 @@
+import { withArtifactResponseIdentity } from "./contractArtifactReadTestHelpers.js";
+import { buildRegisterSmartContractCodeInstruction } from "../src/instructionBuilders.js";
+import { canonicalHashLiteral } from "../src/instructionBuilderPrimitives.js";
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
+
+async function normalizeArtifactManifestFixture(input) {
+  return buildRegisterSmartContractCodeInstruction(universalArtifactInput(input)).RegisterSmartContractCode;
+}
+
 import { sorafsReplicationProjectionFixture, sorafsReplicationAttestationFixture } from "./helpers/sorafsReplicationProjection.js";
 import { sorafsPinDetailFixture, typedSorafsPinDetailFixture } from "./helpers/sorafsPinDetail.js";
 import { sorafsAliasProjectionFixture, sorafsAliasAttestationFixture } from "./helpers/sorafsAliasProjection.js";
@@ -135,6 +144,11 @@ class ToriiClient extends SourceToriiClient {
     });
   }
 }
+
+const ARTIFACT_READ_FIXTURE = JSON.parse(readFileSync(new URL("./fixtures/current_rust_contract_artifact.json", import.meta.url), "utf8"));
+const ARTIFACT_READ_HASH = ARTIFACT_READ_FIXTURE.artifact_semantics.code_hash_hex;
+const ARTIFACT_READ_RESPONSE = withArtifactResponseIdentity({ code_b64: ARTIFACT_READ_FIXTURE.artifact_base64 }, ARTIFACT_READ_HASH);
+
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
   Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
 const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
@@ -17948,20 +17962,17 @@ test("Connect admin wrappers reject unsupported option fields", async () => {
   );
 });
 
-test("registerContractCode posts manifest JSON", async () => {
-  let captured;
+test("local manifest builder normalizes a scoped manifest without forwarding credentials", async () => {
+
   const signer = `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
   const signature = `ed25519:${"22".repeat(64)}`;
   const signerCanonical = signer.split(":")[1];
   const signatureCanonical = signature.split(":")[1].toUpperCase();
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({ status: 202 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.registerContractCode({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
+
+
+  const body = await normalizeArtifactManifestFixture({
+
+
     manifest: {
       seiyakuName: "Ledger",
       codeHash: "ab".repeat(32),
@@ -18004,18 +18015,19 @@ test("registerContractCode posts manifest JSON", async () => {
         signature,
       },
     },
-    codeBytes: Buffer.from("hello"),
+
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/contracts/code`);
-  assert.equal(captured.init.method, "POST");
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  const body = JSON.parse(captured.init.body);
+
+
+
+
   assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
+    artifact_id: { dataspace_id: "0", code_hash: canonicalHashLiteral(Buffer.alloc(32, 0xab)) },
+
+
     manifest: {
       seiyaku_name: "Ledger",
-      code_hash: "ab".repeat(32),
+      code_hash: canonicalHashLiteral(Buffer.alloc(32, 0xab)),
       compiler_fingerprint: "rustc",
       abi_hash: null,
       features_bitmap: null,
@@ -18071,22 +18083,17 @@ test("registerContractCode posts manifest JSON", async () => {
         signature: signatureCanonical,
       },
     },
-    code_bytes: Buffer.from("hello").toString("base64"),
+
   });
 });
 
-test("registerContractCode enforces exact V1 dynamic access hints", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder enforces exact V1 dynamic access hints", async () => {
+
+
   const submit = (hint) =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest: {
         states: [
           { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
@@ -18198,17 +18205,12 @@ test("registerContractCode enforces exact V1 dynamic access hints", async () => 
       /contains conflicting .* aliases/u,
     );
   }
-  assert.equal(called, true);
+
 });
 
-test("registerContractCode resolves dynamic hints to declared StateMaps per list", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder resolves dynamic hints to declared StateMaps per list", async () => {
+
+
   const hint = {
     baseKey: "state:Balances",
     keyType: "AccountId",
@@ -18220,9 +18222,9 @@ test("registerContractCode resolves dynamic hints to declared StateMaps per list
     dynamicWrites = [],
     states = [{ name: "Balances", typeName: "StateMap<AccountId, quantity>" }],
   }) =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest: {
         states,
         accessSetHints: { dynamicReads, dynamicWrites },
@@ -18273,23 +18275,18 @@ test("registerContractCode resolves dynamic hints to declared StateMaps per list
     }],
     states: [{ name: "amount", typeName: "StateMap<quantity, int>" }],
   });
-  assert.equal(called, true);
+
 });
 
-test("registerContractCode rejects retired English entrypoint kinds", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder rejects retired English entrypoint kinds", async () => {
+
+
 
   for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
     await assert.rejects(
-      client.registerContractCode({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
+      normalizeArtifactManifestFixture({
+
+
         manifest: {
           entrypoints: [{ name: "legacy", kind: retired }],
         },
@@ -18297,21 +18294,16 @@ test("registerContractCode rejects retired English entrypoint kinds", async () =
       /must be Kotoage, View, Hajimari, or Kaizen/,
     );
   }
-  assert.equal(called, false);
+
 });
 
-test("registerContractCode preserves branded romanized and Japanese lifecycle selectors", async () => {
+test("local manifest builder preserves branded romanized and Japanese lifecycle selectors", async () => {
   let body;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      body = JSON.parse(init.body);
-      return createResponse({ status: 202 });
-    },
-  });
 
-  await client.registerContractCode({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
+
+  body = await normalizeArtifactManifestFixture({
+
+
     manifest: {
       seiyakuName: "BrandedLedger",
       entrypoints: [
@@ -18370,17 +18362,15 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
   assert.equal(body.manifest.error_types[0].variants[0].name, "amount");
 });
 
-test("registerContractCode requires agreeing parameter and state type aliases", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 202 }),
-  });
+test("local manifest builder requires agreeing parameter and state type aliases", async () => {
+
   const quantity = {
     nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }],
   };
   const submit = (param, state) =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest: {
         entrypoints: [{
           name: "read",
@@ -18483,14 +18473,9 @@ function queryPageNodes(name) {
   ];
 }
 
-test("registerContractCode accepts all exact query views, pages, and ordinary structs", async () => {
+test("local manifest builder accepts all exact query views, pages, and ordinary structs", async () => {
   let body;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      body = JSON.parse(init.body);
-      return createResponse({ status: 202 });
-    },
-  });
+
   const entrypoints = [];
   for (const name of QUERY_VIEW_LAYOUTS.keys()) {
     entrypoints.push(
@@ -18526,9 +18511,9 @@ test("registerContractCode accepts all exact query views, pages, and ordinary st
     },
   });
 
-  await client.registerContractCode({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
+  body = await normalizeArtifactManifestFixture({
+
+
     manifest: { seiyakuName: "QuerySchemas", entrypoints },
   });
 
@@ -18539,18 +18524,13 @@ test("registerContractCode accepts all exact query views, pages, and ordinary st
   );
 });
 
-test("registerContractCode rejects every forged reserved query view and page", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder rejects every forged reserved query view and page", async () => {
+
+
   const submit = (returnType, nodes) =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest: {
         entrypoints: [
           { name: "read", kind: "View", returnType, returnSchema: { nodes } },
@@ -18581,17 +18561,12 @@ test("registerContractCode rejects every forged reserved query view and page", a
       /forged QueryPage/u,
     );
   }
-  assert.equal(called, false);
+
 });
 
-test("registerContractCode accepts the flat List tape at depth 256", async () => {
+test("local manifest builder accepts the flat List tape at depth 256", async () => {
   let body;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      body = JSON.parse(init.body);
-      return createResponse({ status: 202 });
-    },
-  });
+
   const listNodes = Array.from({ length: 255 }, () => ({
     kind: "List",
     value: { capacity: 1 },
@@ -18602,9 +18577,9 @@ test("registerContractCode accepts the flat List tape at depth 256", async () =>
     returnType = `List<${returnType}, 1>`;
   }
 
-  await client.registerContractCode({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
+  body = await normalizeArtifactManifestFixture({
+
+
     manifest: {
       seiyakuName: "DeepList",
       entrypoints: [
@@ -18624,18 +18599,13 @@ test("registerContractCode accepts the flat List tape at depth 256", async () =>
   });
 });
 
-test("registerContractCode rejects malformed and over-depth flat List tapes before fetch", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder rejects malformed and over-depth flat List tapes before encoding", async () => {
+
+
   const submit = (nodes, returnType = "List<int, 1>") =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest: {
         entrypoints: [
           { name: "read", kind: "View", returnType, returnSchema: { nodes } },
@@ -18664,21 +18634,16 @@ test("registerContractCode rejects malformed and over-depth flat List tapes befo
     ]),
     /nodes must contain 1\.\.256 canonical type nodes/u,
   );
-  assert.equal(called, false);
+
 });
 
-test("registerContractCode rejects forged branded manifest declarations before fetch", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({ status: 202 });
-    },
-  });
+test("local manifest builder rejects forged branded manifest declarations before encoding", async () => {
+
+
   const submit = (manifest) =>
-    client.registerContractCode({
-      authority: FIXTURE_ALICE_ID,
-      privateKey: "ed25519:deadbeef",
+    normalizeArtifactManifestFixture({
+
+
       manifest,
     });
 
@@ -18902,7 +18867,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
     submit({ codeHash: "aa".repeat(32) }),
     /must set the Iroha Hash marker bit/u,
   );
-  assert.equal(called, false);
+
 });
 
 test("setContractAlias posts payload and returns response", async () => {
@@ -20880,7 +20845,7 @@ test("getContractManifest returns normalized payload", async () => {
   const fetchImpl = async () =>
     createStreamedJsonResponse({
       status: 200,
-      jsonData: {
+      jsonData: withArtifactResponseIdentity({
         manifest: {
           seiyaku_name: "Ledger",
           code_hash:
@@ -20905,11 +20870,11 @@ test("getContractManifest returns normalized payload", async () => {
         },
         code_hash: "11".repeat(32),
         abi_hash: null,
-      },
+      }, "11".repeat(32)),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const manifest = await client.getContractManifest("11".repeat(32));
+  const manifest = await client.getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, canonicalReadOptions());
   assert.ok(manifest);
   assert.equal(manifest?.manifest.seiyaku_name, "Ledger");
   assert.equal(manifest?.manifest.code_hash, "11".repeat(32));
@@ -20936,7 +20901,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
       fetchImpl: async () =>
         createResponse({
           status: 200,
-          jsonData: payload,
+          jsonData: withArtifactResponseIdentity(payload, "bb".repeat(32)),
           headers: { "content-type": "application/json" },
         }),
     });
@@ -20947,7 +20912,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
         manifest: { code_hash: canonical.toLowerCase(), abi_hash: null },
         code_hash: "bb".repeat(32),
         abi_hash: null,
-      }).getContractManifest("bb".repeat(32)),
+      }).getContractManifest({ dataspaceId: "0", codeHash: "bb".repeat(32) }, canonicalReadOptions()),
     /canonical uppercase Norito Hash literal/u,
   );
   await assert.rejects(
@@ -20956,7 +20921,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
         manifest: { code_hash: canonical, abi_hash: null },
         code_hash: "dd".repeat(32),
         abi_hash: null,
-      }).getContractManifest("bb".repeat(32)),
+      }).getContractManifest({ dataspaceId: "0", codeHash: "bb".repeat(32) }, canonicalReadOptions()),
     /does not match manifest.code_hash/u,
   );
   await assert.rejects(
@@ -20966,8 +20931,8 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
         code_hash: "bb".repeat(32),
         abi_hash: null,
         code_bytes: null,
-      }).getContractManifest("bb".repeat(32)),
-    /must contain exactly/u,
+      }).getContractManifest({ dataspaceId: "0", codeHash: "bb".repeat(32) }, canonicalReadOptions()),
+    /bounded artifact byte count/u,
   );
   await assert.rejects(
     () =>
@@ -20979,7 +20944,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
         },
         code_hash: "aa".repeat(32),
         abi_hash: null,
-      }).getContractManifest("bb".repeat(32)),
+      }).getContractManifest({ dataspaceId: "0", codeHash: "bb".repeat(32) }, canonicalReadOptions()),
     /must set the Iroha Hash marker bit/u,
   );
 });
@@ -21242,12 +21207,12 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
       fetchImpl: async () =>
         createStreamedJsonResponse({
           status: 200,
-          jsonData: payload,
+          jsonData: withArtifactResponseIdentity(payload, "11".repeat(32)),
           headers: { "content-type": "application/json" },
         }),
     });
     await assert.rejects(
-      () => client.getContractManifest("11".repeat(32)),
+      () => client.getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, canonicalReadOptions()),
       /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or page|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|canonical Kotodama V1 identifier/u,
       label,
     );
@@ -21261,11 +21226,11 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
     fetchImpl: async () =>
       createStreamedJsonResponse({
         status: 200,
-        jsonData: lowercaseAmount,
+        jsonData: withArtifactResponseIdentity(lowercaseAmount, "11".repeat(32)),
         headers: { "content-type": "application/json" },
       }),
   });
-  const accepted = await client.getContractManifest("11".repeat(32));
+  const accepted = await client.getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, canonicalReadOptions());
   const parsedTrigger = accepted?.manifest.entrypoints[0].triggers[0];
   assert.equal(parsedTrigger?.id, "amount");
   assert.equal(parsedTrigger?.callback.namespace, "RemoteLedger");
@@ -21275,7 +21240,7 @@ test("getContractManifest returns null on 404", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const result = await client.getContractManifest("11".repeat(32));
+  const result = await client.getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, canonicalReadOptions());
   assert.equal(result, null);
 });
 
@@ -21289,12 +21254,12 @@ test("contract code lookups reject hashes without the Iroha marker before fetch"
   });
 
   await assert.rejects(
-    () => client.getContractManifest("aa".repeat(32)),
+    () => client.getContractManifest({ dataspaceId: "0", codeHash: "aa".repeat(32) }, canonicalReadOptions()),
     /must set the Iroha Hash marker bit/u,
   );
   await assert.rejects(
     () =>
-      client.getContractCodeBytes("22".repeat(32), canonicalReadOptions()),
+      client.getContractCodeBytes({ dataspaceId: "0", codeHash: "22".repeat(32) }, canonicalReadOptions()),
     /must set the Iroha Hash marker bit/u,
   );
   assert.equal(called, false);
@@ -21305,17 +21270,17 @@ test("getContractCodeBytes returns a bounded record and forwards AbortSignal", a
   let capturedSignal;
   const fetchImpl = async (_url, init) => {
     capturedSignal = init.signal;
-    return new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
+    return new Response(JSON.stringify(ARTIFACT_READ_RESPONSE), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getContractCodeBytes(
-    "1".repeat(64),
+    { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
     canonicalReadOptions({ signal: controller.signal }),
   );
-  assert.deepEqual(result, { code_b64: "Y29kZQ==" });
+  assert.deepEqual(result, ARTIFACT_READ_RESPONSE);
   assertRequestSignal(capturedSignal, controller.signal);
 });
 
@@ -21330,7 +21295,7 @@ test("getContractCodeBytes validates options before fetch", async () => {
   await assert.rejects(
     () =>
       client.getContractCodeBytes(
-        "1".repeat(64),
+        { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
         canonicalReadOptions({ limit: 1 }),
       ),
     /getContractCodeBytes options contains unsupported fields: limit/,
@@ -21338,7 +21303,7 @@ test("getContractCodeBytes validates options before fetch", async () => {
   await assert.rejects(
     () =>
       client.getContractCodeBytes(
-        "1".repeat(64),
+        { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
         canonicalReadOptions({ signal: {} }),
       ),
     /signal.*AbortSignal/i,
@@ -21352,7 +21317,7 @@ test("bounded code-byte responses cancel on early rejection and 404", async () =
       name: "wrong content type",
       status: 200,
       headers: { "content-type": "text/plain" },
-      error: /must use application\/json/,
+      error: /must use (?:the )?application\/json/,
     },
     {
       name: "oversized Content-Length",
@@ -21391,7 +21356,7 @@ test("bounded code-byte responses cancel on early rejection and 404", async () =
       }),
     });
     const operation = client.getContractCodeBytes(
-      "1".repeat(64),
+      { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
       canonicalReadOptions(),
     );
     if (entry.error) {
@@ -21413,17 +21378,17 @@ test("bounded JSON responses require one exact application/json media type", asy
   ]) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
-        new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
+        new Response(JSON.stringify(ARTIFACT_READ_RESPONSE), {
           status: 200,
           headers: { "content-type": contentType },
         }),
     });
     assert.deepEqual(
       await client.getContractCodeBytes(
-        "1".repeat(64),
+        { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
         canonicalReadOptions(),
       ),
-      { code_b64: "Y29kZQ==" },
+      ARTIFACT_READ_RESPONSE,
       contentType,
     );
   }
@@ -21465,10 +21430,10 @@ test("bounded JSON responses require one exact application/json media type", asy
     });
     await assert.rejects(
       () => client.getContractCodeBytes(
-        "1".repeat(64),
+        { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
         canonicalReadOptions(),
       ),
-      /must use application\/json/,
+      /must use (?:the )?application\/json/,
       contentType,
     );
     assert.equal(bodyReads, 0, `${contentType} body reads`);
@@ -21509,7 +21474,7 @@ test("bounded code-byte response reads enforce timeout and caller abort", async 
     await assert.rejects(
       () =>
         client.getContractCodeBytes(
-          "1".repeat(64),
+          { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
           canonicalReadOptions({
             ...(mode === "abort" ? { signal: controller.signal } : {}),
           }),
@@ -21534,7 +21499,7 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
         return reads === 1
           ? {
               done: false,
-              value: new TextEncoder().encode('{"code_b64":"Y29kZQ=="}'),
+              value: new TextEncoder().encode(JSON.stringify(ARTIFACT_READ_RESPONSE)),
             }
           : { done: true, value: undefined };
       },
@@ -21567,7 +21532,7 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
     await assert.rejects(
       () =>
         client.getContractCodeBytes(
-          "1".repeat(64),
+          { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
           canonicalReadOptions({ signal: controller.signal }),
         ),
       new RegExp(`abort from ${abortPoint}`),
@@ -21601,7 +21566,7 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
   await assert.rejects(
     () =>
       shadowClient.getContractCodeBytes(
-        "1".repeat(64),
+        { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
         canonicalReadOptions({ signal: shadowedController.signal }),
       ),
     /intrinsic aborted state wins/,
@@ -21647,7 +21612,7 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
     await assert.rejects(
       () =>
         client.getContractCodeBytes(
-          "1".repeat(64),
+          { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
           canonicalReadOptions({ signal: customSignal }),
         ),
       mode === "add throws" ? /listener boom/ : /non-byte chunk/,
@@ -21675,7 +21640,7 @@ test("bounded readers cancel when custom header methods throw", async () => {
     }),
   });
   await assert.rejects(
-    () => client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+    () => client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
     /hostile header getter/,
   );
   assert.equal(cancelCalls, 1);
@@ -21713,7 +21678,7 @@ test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async 
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       expected,
     );
     assert.equal(bodyCancelCalls, 1);
@@ -21721,7 +21686,7 @@ test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async 
 });
 
 test("bounded contract-code response copies never consult buffer species", async () => {
-  const responseChunk = new TextEncoder().encode('{"code_b64":"Y29kZQ=="}');
+  const responseChunk = new TextEncoder().encode(JSON.stringify(ARTIFACT_READ_RESPONSE));
   let responseConstructorReads = 0;
   Object.defineProperty(responseChunk.buffer, "constructor", {
     get() {
@@ -21751,10 +21716,10 @@ test("bounded contract-code response copies never consult buffer species", async
   });
   assert.deepEqual(
     await responseClient.getContractCodeBytes(
-      "1".repeat(64),
+      { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
       canonicalReadOptions(),
     ),
-    { code_b64: "Y29kZQ==" },
+    ARTIFACT_READ_RESPONSE,
   );
   assert.equal(responseConstructorReads, 0);
 });
@@ -21790,7 +21755,7 @@ test("bounded response readers reject accessor read results without invoking the
     }),
   });
   await assert.rejects(
-    () => client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+    () => client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
     /done must be an enumerable data property/,
   );
   assert.equal(getterCalls, 0);
@@ -21821,7 +21786,7 @@ test("getContractCodeBytes rejects oversized declared bodies before reading", as
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       /Content-Length|response limit/,
     );
     assert.equal(bodyReads, 0);
@@ -21849,7 +21814,7 @@ test("getContractCodeBytes bounds actual streamed bytes with absent or lying hea
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       /exceeds the .*response limit/,
     );
     assert.equal(cancelled, true);
@@ -21862,15 +21827,15 @@ test("getContractCodeBytes fails closed without a bounded byte stream", async ()
     fetchImpl: async () => ({
       status: 200,
       headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ code_b64: "Y29kZQ==" }),
+      json: async () => (ARTIFACT_READ_RESPONSE),
       text: async () => {
         textCalls += 1;
-        return JSON.stringify({ code_b64: "Y29kZQ==" });
+        return JSON.stringify(ARTIFACT_READ_RESPONSE);
       },
     }),
   });
   await assert.rejects(
-    () => client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+    () => client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
     /requires a byte-stream response body/,
   );
   assert.equal(textCalls, 0);
@@ -21914,7 +21879,7 @@ test("getContractCodeBytes rejects shared and snapshots reused stream chunks", a
     await assert.rejects(
       () =>
         sharedClient.getContractCodeBytes(
-          "1".repeat(64),
+          { dataspaceId: "0", codeHash: ARTIFACT_READ_HASH },
           canonicalReadOptions(),
         ),
       /must not use SharedArrayBuffer-backed chunks/,
@@ -21922,7 +21887,7 @@ test("getContractCodeBytes rejects shared and snapshots reused stream chunks", a
     assert.equal(cancelled, true);
   }
 
-  const first = new TextEncoder().encode('{"code_b64":"');
+  const first = new TextEncoder().encode(JSON.stringify(ARTIFACT_READ_RESPONSE).slice(0, 40));
   Object.defineProperties(first, {
     buffer: {
       get() {
@@ -21940,7 +21905,7 @@ test("getContractCodeBytes rejects shared and snapshots reused stream chunks", a
       },
     },
   });
-  const second = new TextEncoder().encode('Y29kZQ=="}');
+  const second = new TextEncoder().encode(JSON.stringify(ARTIFACT_READ_RESPONSE).slice(40));
   let readIndex = 0;
   const response = {
     status: 200,
@@ -21966,8 +21931,8 @@ test("getContractCodeBytes rejects shared and snapshots reused stream chunks", a
     fetchImpl: async () => response,
   });
   assert.deepEqual(
-    await client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
-    { code_b64: "Y29kZQ==" },
+    await client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
+    ARTIFACT_READ_RESPONSE,
   );
 });
 
@@ -22002,7 +21967,7 @@ test("getContractCodeBytes cancels non-progress and fragmented streams", async (
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       mode === "empty" ? /empty non-progress chunk/ : /too many fragmented chunks/,
     );
     assert.equal(cancelled, true);
@@ -22022,14 +21987,14 @@ test("getContractCodeBytes rejects oversized base64 before decoding", async () =
   for (const code_b64 of attacks) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
-        new Response(JSON.stringify({ code_b64 }), {
+        new Response(JSON.stringify(withArtifactResponseIdentity({ code_b64 }, ARTIFACT_READ_HASH)), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       /exceeds the 4194304-byte artifact limit/,
     );
   }
@@ -22039,14 +22004,14 @@ test("getContractCodeBytes rejects non-string code_b64 JSON values", async () =>
   for (const code_b64 of [null, [], {}, [89, 50, 57, 107, 90, 81]]) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
-        new Response(JSON.stringify({ code_b64 }), {
+        new Response(JSON.stringify(withArtifactResponseIdentity({ code_b64 }, ARTIFACT_READ_HASH)), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
     });
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
       /code_b64 must be a base64 string/,
     );
   }
@@ -22062,7 +22027,7 @@ test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => 
       return "Y29kZQ==";
     },
   });
-  const withSymbol = { code_b64: "Y29kZQ==" };
+  const withSymbol = ARTIFACT_READ_RESPONSE;
   withSymbol[Symbol("attacker")] = true;
   for (const payload of [
     {},
@@ -22073,11 +22038,11 @@ test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => 
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () => ({ status: 200 }),
     });
-    client._maybeBoundedJson = async () => payload;
+    client._readBoundedLosslessIntegerJson = async () => payload;
     await assert.rejects(
       () =>
-        client.getContractCodeBytes("1".repeat(64), canonicalReadOptions()),
-      /exactly the code_b64 field|enumerable data property/,
+        client.getContractCodeBytes({ dataspaceId: "0", codeHash: ARTIFACT_READ_HASH }, canonicalReadOptions()),
+      /must contain exactly|enumerable data property/,
     );
   }
   assert.equal(accessorReads, 0, "accessor payload must be rejected without invocation");

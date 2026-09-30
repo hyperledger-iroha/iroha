@@ -376,20 +376,18 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
             + subject_permissions.len(),
     );
     for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
-        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
-            code_hash: verified.code_hash,
+        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
             total_size,
             chunk_index: u32::try_from(index).expect("chunk index fits u32"),
             chunk_count,
             chunk: chunk.to_vec(),
         }));
     }
-    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-        code_hash: verified.code_hash,
+    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
         total_size,
         chunk_count,
     }));
-    instructions.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
+    instructions.push(InstructionBox::from({ let scoped_manifest = manifest; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }));
     instructions.push(InstructionBox::from(Register::account(Account::new(
         contract_address.subject_id(),
     ))));

@@ -40,6 +40,7 @@ fn stream_reader_for_network(
         key_pair: signer.key_pair().clone(),
         account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
         basic_auth: None,
+        api_token: None,
         torii_api_url: format!("http://{addr}/").parse().unwrap(),
         torii_request_timeout: Duration::from_secs(5),
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,

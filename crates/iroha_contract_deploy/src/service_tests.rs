@@ -72,10 +72,15 @@ pub fn fixture() -> Result<(Config, PlanRecord)> {
         fee_payment: &fee,
         metadata: &metadata,
     };
-    let upload = build_native_upload_transaction_plan(&signing, verified.code_hash, &artifact)?;
+    let upload = build_native_upload_transaction_plan(
+        &signing,
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
+        &artifact,
+    )?;
     let mut uploads = upload.pre_stage;
     uploads.push(upload.finalize);
     let register = signing.sign([InstructionBox::from(RegisterSmartContractCode {
+        artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
         manifest: verified.manifest.try_signed(&config.key_pair)?,
     })])?;
     let commit = build_commit_deployment_transaction(

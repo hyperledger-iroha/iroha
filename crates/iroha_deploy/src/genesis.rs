@@ -17,3 +17,6 @@ pub fn private_dataspace_reader_role_id(alias: &str, dataspace: DataSpaceId) -> 
     .parse()
     .expect("private localnet aliases must produce a valid role id")
 }
+
+#[cfg(test)]
+mod tests;

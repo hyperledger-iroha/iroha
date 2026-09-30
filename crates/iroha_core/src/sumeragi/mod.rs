@@ -2,6 +2,7 @@
 
 /// AMX two-phase commit on the global chain (`specs/sumeragi.md` §11).
 pub mod amx;
+pub mod private_dataspace;
 /// Native source-complete Pasta Commit attestations.
 pub mod attestation;
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.

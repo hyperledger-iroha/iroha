@@ -95,10 +95,10 @@ mod public_contract_creation_fees {
                     iroha_data_model::transaction::FeePaymentIntent::authority(limits, None);
                 let stages: Vec<Vec<InstructionBox>> = vec![
                     vec![
-                        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk { code_hash, total_size: artifact.len() as u64, chunk_index: 0, chunk_count: 1, chunk: artifact.clone() }.into(),
-                        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload { code_hash, total_size: artifact.len() as u64, chunk_count: 1 }.into(),
+                        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), total_size: artifact.len() as u64, chunk_index: 0, chunk_count: 1, chunk: artifact.clone() }.into(),
+                        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), total_size: artifact.len() as u64, chunk_count: 1 }.into(),
                     ],
-                    vec![iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest: manifest.clone().try_signed(&key).unwrap() }.into()],
+                    vec![{ let scoped_manifest = manifest.clone().try_signed(&key).unwrap(); iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }.into()],
                 ];
                 let transactions = stages
                     .into_iter()
@@ -167,14 +167,14 @@ mod public_contract_creation_fees {
                         "ordinary paid artifact creation failed (parallel_apply={parallel_apply}): {errors:?}"
                     );
                     assert_eq!(
-                        state_block.world.contract_code().get(&code_hash),
+                        state_block.world.contract_code().get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)),
                         Some(&artifact)
                     );
                     assert!(
                         state_block
                             .world
                             .contract_manifests()
-                            .get(&code_hash)
+                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash))
                             .is_some()
                     );
                     assert_eq!(
@@ -200,12 +200,12 @@ mod public_contract_creation_fees {
                         2,
                         "both stages must fail fee admission: {errors:?}"
                     );
-                    assert!(state_block.world.contract_code().get(&code_hash).is_none());
+                    assert!(state_block.world.contract_code().get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
                     assert!(
                         state_block
                             .world
                             .contract_manifests()
-                            .get(&code_hash)
+                            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash))
                             .is_none()
                     );
                     assert!(state_block.world.contract_code_uploads().is_empty());

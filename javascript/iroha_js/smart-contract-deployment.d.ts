@@ -23,6 +23,7 @@ export function deriveContractAddress(
 ): string;
 
 export interface BrowserContractArtifactInput {
+  dataspaceId: BrowserTransactionUnsigned;
   artifactBytes: Uint8Array | ArrayBuffer | ArrayBufferView | Buffer;
   manifest: Record<string, unknown>;
   compilerCodeHash: string | Uint8Array | ArrayBuffer | ArrayBufferView | Buffer;
@@ -40,6 +41,7 @@ export interface BrowserContractDeploymentStep {
 }
 
 export interface PreparedBrowserContractArtifact {
+  readonly artifactId: { readonly dataspaceId: string; readonly codeHash: string };
   readonly artifactBytes: Uint8Array;
   readonly artifactSha256Hex: string;
   readonly codeHash: string;
@@ -124,7 +126,7 @@ export interface BrowserDeploymentStateResponse {
 }
 
 export interface BrowserContractDeploymentOptions
-  extends BrowserContractArtifactInput {
+  extends Omit<BrowserContractArtifactInput, "dataspaceId"> {
   /** Exact genesis-derived domain for every deployment transaction. */
   networkId: NetworkId;
   chain?: never;

@@ -144,14 +144,24 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let code_hash = ivm::contract_code_hash(&prog);
     // Register bytes
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: prog.clone(),
     }
     .execute(&auth, &mut stx)
     .expect("register code bytes");
     stx.apply();
     // Verify stored (uncommitted block scope)
-    let got = block.world.contract_code().get(&code_hash).cloned();
+    let got = block
+        .world
+        .contract_code()
+        .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ))
+        .cloned();
     assert_eq!(got.as_deref(), Some(prog.as_slice()));
     block
         .commit_world_overlay_for_testing()
@@ -166,7 +176,10 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     ));
     let mut stx2 = block2.transaction();
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: prog.clone(),
     }
     .execute(&auth, &mut stx2)
@@ -210,7 +223,10 @@ fn register_contract_code_bytes_respects_size_cap() {
     let code_hash = ivm::contract_code_hash(&prog);
     // Register should fail due to cap
     let err = RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: prog,
     }
     .execute(&auth, &mut stx)
@@ -263,7 +279,10 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     let last_index = chunk_count - 1;
     let last_chunk = chunks[usize::try_from(last_index).unwrap()].clone();
     let upload_last = UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_index: last_index,
         chunk_count,
@@ -279,7 +298,10 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     let mut conflicting = last_chunk;
     conflicting[0] ^= 0x80;
     let conflict = UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_index: last_index,
         chunk_count,
@@ -289,7 +311,10 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     .expect_err("conflicting duplicate must fail");
     assert!(format!("{conflict}").contains("conflicting duplicate"));
     let missing = FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_count,
     }
@@ -301,12 +326,21 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     );
     let progress = stx
         .world()
-        .contract_code_upload_progress(&auth, &code_hash)
+        .contract_code_upload_progress(
+            &auth,
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        )
         .expect("failed finalization retains progress");
     assert_eq!(progress.received_chunks, 1);
     for (chunk_index, chunk) in chunks.iter().enumerate().rev().skip(1) {
         UploadSmartContractCodeChunk {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             total_size,
             chunk_index: u32::try_from(chunk_index).unwrap(),
             chunk_count,
@@ -316,7 +350,10 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         .expect("upload remaining chunk");
     }
     FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_count,
     }
@@ -330,7 +367,7 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
                 if matches!(
                     data.as_ref(),
                     DataEvent::SmartContract(SmartContractEvent::CodeRegistered(registered))
-                        if registered.code_hash == code_hash && registered.registrar == auth
+                        if registered.artifact_id.code_hash == code_hash && registered.registrar == auth
                 )
         )
     }));
@@ -339,14 +376,23 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         block
             .world
             .contract_code()
-            .get(&code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash
+            ))
             .map(Vec::as_slice),
         Some(program.as_slice())
     );
     assert!(
         block
             .world
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none(),
         "successful finalization must remove descriptor and chunks"
     );
@@ -389,7 +435,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .expect("set code cap");
     let first_hash = iroha_crypto::Hash::new(b"quota-first");
     UploadSmartContractCodeChunk {
-        code_hash: first_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            first_hash,
+        ),
         total_size: 60,
         chunk_index: 0,
         chunk_count: 1,
@@ -398,7 +447,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .execute(&auth, &mut stx)
     .expect("first pending upload");
     let descriptor_error = UploadSmartContractCodeChunk {
-        code_hash: first_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            first_hash,
+        ),
         total_size: 61,
         chunk_index: 0,
         chunk_count: 1,
@@ -408,7 +460,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .expect_err("descriptor changes must fail");
     assert!(format!("{descriptor_error}").contains("descriptor cannot change"));
     let count_shape_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"wrong-chunk-count"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"wrong-chunk-count"),
+        ),
         total_size: 60,
         chunk_index: 0,
         chunk_count: 2,
@@ -421,7 +476,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         "contract upload chunk_count mismatch: expected 1, got 2",
     );
     let zero_size_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"zero-sized-upload"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"zero-sized-upload"),
+        ),
         total_size: 0,
         chunk_index: 0,
         chunk_count: 0,
@@ -434,7 +492,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         "contract upload total_size must be non-zero",
     );
     let portable_size_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"non-portable-upload"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"non-portable-upload"),
+        ),
         total_size: 2_147_483_648,
         chunk_index: 0,
         chunk_count: u32::MAX,
@@ -444,7 +505,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .expect_err("non-portable descriptors must fail deterministically");
     assert!(format!("{portable_size_error}").contains("portable consensus limit"));
     let index_shape_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"wrong-chunk-index"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"wrong-chunk-index"),
+        ),
         total_size: 1,
         chunk_index: 1,
         chunk_count: 1,
@@ -457,7 +521,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         "contract upload chunk_index 1 is outside chunk_count 1",
     );
     let aggregate_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"quota-second"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"quota-second"),
+        ),
         total_size: 41,
         chunk_index: 0,
         chunk_count: 1,
@@ -467,7 +534,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .expect_err("aggregate declarations above cap must fail");
     assert!(format!("{aggregate_error}").contains("declared bytes exceed authority cap"));
     let malformed = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"malformed-shape"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"malformed-shape"),
+        ),
         total_size: 2,
         chunk_index: 0,
         chunk_count: 1,
@@ -481,29 +551,47 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     );
     let other = AccountId::new(checked_random_contract_code_keypair().public_key().clone());
     CancelSmartContractCodeUpload {
-        code_hash: first_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            first_hash,
+        ),
     }
     .execute(&other, &mut stx)
     .expect("another owner cancellation is an idempotent no-op");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &first_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    first_hash
+                )
+            )
             .is_some(),
         "owner-scoped cancellation must not remove another authority's upload"
     );
     CancelSmartContractCodeUpload {
-        code_hash: first_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            first_hash,
+        ),
     }
     .execute(&auth, &mut stx)
     .expect("owner cancellation");
     CancelSmartContractCodeUpload {
-        code_hash: first_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            first_hash,
+        ),
     }
     .execute(&auth, &mut stx)
     .expect("owner cancellation is idempotent");
     for index in 0u8..4 {
         UploadSmartContractCodeChunk {
-            code_hash: iroha_crypto::Hash::new(&[index]),
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                iroha_crypto::Hash::new(&[index]),
+            ),
             total_size: 1,
             chunk_index: 0,
             chunk_count: 1,
@@ -513,7 +601,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         .expect("pending upload within count quota");
     }
     let count_error = UploadSmartContractCodeChunk {
-        code_hash: iroha_crypto::Hash::new(b"fifth-pending-upload"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            iroha_crypto::Hash::new(b"fifth-pending-upload"),
+        ),
         total_size: 1,
         chunk_index: 0,
         chunk_count: 1,
@@ -553,7 +644,10 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
     let code_hash = ivm::contract_code_hash(&code);
     let code_size = u64::try_from(code.len()).expect("test artifact size fits u64");
     let upload = UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size: code_size,
         chunk_index: 0,
         chunk_count: 1,
@@ -572,7 +666,13 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
     ));
     assert!(
         stx.world()
-            .contract_code_upload_progress(&unregistered, &code_hash)
+            .contract_code_upload_progress(
+                &unregistered,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none(),
         "rejected upload must not create staging"
     );
@@ -580,7 +680,10 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
         .execute(&auth, &mut stx)
         .expect("registered account stages code without management permission");
     let finalize_error = FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size: code_size,
         chunk_count: 1,
     }
@@ -594,12 +697,21 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
     ));
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_some(),
         "rejected finalization must retain the owner's staging"
     );
     FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size: code_size,
         chunk_count: 1,
     }
@@ -608,19 +720,31 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
     assert_eq!(
         stx.world()
             .contract_code()
-            .get(&code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash
+            ))
             .map(Vec::as_slice),
         Some(code.as_slice())
     );
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none(),
         "successful finalization clears staging"
     );
     let pending_hash = iroha_crypto::Hash::new(b"owner-cleanup-upload");
     UploadSmartContractCodeChunk {
-        code_hash: pending_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            pending_hash,
+        ),
         total_size: 1,
         chunk_index: 0,
         chunk_count: 1,
@@ -629,13 +753,22 @@ fn native_contract_upload_allows_registered_owner_without_code_management_permis
     .execute(&auth, &mut stx)
     .expect("registered owner stages a second upload");
     CancelSmartContractCodeUpload {
-        code_hash: pending_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            pending_hash,
+        ),
     }
     .execute(&auth, &mut stx)
     .expect("owner cleanup does not require management permission");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &pending_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    pending_hash
+                )
+            )
             .is_none()
     );
 }
@@ -682,7 +815,10 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     let total_size = u64::try_from(program.len()).unwrap();
     let chunk_count = u32::try_from(chunks.len()).unwrap();
     UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_index: 0,
         chunk_count,
@@ -691,7 +827,10 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .execute(&auth, &mut stx)
     .expect("stage a chunk before atomic registration wins");
     RegisterSmartContractBytes {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         code: program.clone(),
     }
     .execute(&auth, &mut stx)
@@ -704,14 +843,17 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
                 if matches!(
                     data.as_ref(),
                     DataEvent::SmartContract(SmartContractEvent::CodeRegistered(registered))
-                        if registered.code_hash == code_hash && registered.registrar == auth
+                        if registered.artifact_id.code_hash == code_hash && registered.registrar == auth
                 )
         )
     }));
     let mut conflicting_chunk = chunks[0].clone();
     conflicting_chunk[0] ^= 0x80;
     let conflicting_duplicate = UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_index: 0,
         chunk_count,
@@ -722,7 +864,10 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     assert!(format!("{conflicting_duplicate}").contains("conflicting duplicate"));
     for chunk_index in 1..chunk_count {
         UploadSmartContractCodeChunk {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             total_size,
             chunk_index,
             chunk_count,
@@ -733,12 +878,21 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     }
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_some(),
         "the prior descriptor models the registration/upload race"
     );
     FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_count,
     }
@@ -746,11 +900,20 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .expect("finalization recognizes registered matching code and clears old staging");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none()
     );
     FinalizeSmartContractCodeUpload {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size,
         chunk_count,
     }
@@ -764,7 +927,10 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     let mut staged_corruption = corrupted_program.clone();
     staged_corruption[0] ^= 0x80;
     UploadSmartContractCodeChunk {
-        code_hash: corrupted_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            corrupted_hash,
+        ),
         total_size: corrupted_size,
         chunk_index: 0,
         chunk_count: 1,
@@ -773,13 +939,19 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .execute(&auth, &mut stx)
     .expect("stage corruption before direct registration");
     RegisterSmartContractBytes {
-        code_hash: corrupted_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            corrupted_hash,
+        ),
         code: corrupted_program.clone(),
     }
     .execute(&auth, &mut stx)
     .expect("direct registration wins the corrupt staging race");
     let conflicting_duplicate = UploadSmartContractCodeChunk {
-        code_hash: corrupted_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            corrupted_hash,
+        ),
         total_size: corrupted_size,
         chunk_index: 0,
         chunk_count: 1,
@@ -789,7 +961,10 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .expect_err("matching registered code cannot overwrite a conflicting staged chunk");
     assert!(format!("{conflicting_duplicate}").contains("conflicting duplicate"));
     FinalizeSmartContractCodeUpload {
-        code_hash: corrupted_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            corrupted_hash,
+        ),
         total_size: corrupted_size,
         chunk_count: 1,
     }
@@ -797,18 +972,33 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .expect_err("finalization must verify staged bytes even after direct registration");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &corrupted_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    corrupted_hash
+                )
+            )
             .is_some(),
         "failed race finalization retains corrupt staging for explicit cleanup"
     );
     CancelSmartContractCodeUpload {
-        code_hash: corrupted_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            corrupted_hash,
+        ),
     }
     .execute(&auth, &mut stx)
     .expect("owner cancels corrupt race staging");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &corrupted_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    corrupted_hash
+                )
+            )
             .is_none()
     );
 }
@@ -844,7 +1034,10 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     let malformed = vec![0xFF; 32];
     let malformed_hash = iroha_crypto::Hash::new(b"declared malformed artifact hash");
     UploadSmartContractCodeChunk {
-        code_hash: malformed_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            malformed_hash,
+        ),
         total_size: u64::try_from(malformed.len()).unwrap(),
         chunk_index: 0,
         chunk_count: 1,
@@ -853,7 +1046,10 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     .execute(&auth, &mut stx)
     .expect("stage malformed artifact");
     FinalizeSmartContractCodeUpload {
-        code_hash: malformed_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            malformed_hash,
+        ),
         total_size: u64::try_from(malformed.len()).unwrap(),
         chunk_count: 1,
     }
@@ -861,14 +1057,23 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     .expect_err("malformed artifact must fail finalization");
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &malformed_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    malformed_hash
+                )
+            )
             .is_some()
     );
     let program = minimal_ivm_program(1);
     let wrong_hash = iroha_crypto::Hash::new(b"wrong complete artifact hash");
     let program_size = u64::try_from(program.len()).unwrap();
     UploadSmartContractCodeChunk {
-        code_hash: wrong_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            wrong_hash,
+        ),
         total_size: program_size,
         chunk_index: 0,
         chunk_count: 1,
@@ -877,7 +1082,10 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     .execute(&auth, &mut stx)
     .expect("stage valid artifact under wrong hash");
     let wrong_hash_error = FinalizeSmartContractCodeUpload {
-        code_hash: wrong_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            wrong_hash,
+        ),
         total_size: program_size,
         chunk_count: 1,
     }
@@ -886,12 +1094,21 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     assert!(format!("{wrong_hash_error}").contains("code_hash"));
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &wrong_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    wrong_hash
+                )
+            )
             .is_some()
     );
     let correct_hash = ivm::contract_code_hash(&program);
     UploadSmartContractCodeChunk {
-        code_hash: correct_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            correct_hash,
+        ),
         total_size: program_size,
         chunk_index: 0,
         chunk_count: 1,
@@ -929,7 +1146,13 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     assert!(format!("{cap_error}").contains("below pending declared bytes"));
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &correct_hash)
+            .contract_code_upload_progress(
+                &auth,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    correct_hash
+                )
+            )
             .is_some()
     );
 }

@@ -1659,6 +1659,7 @@ mod tests {
                     iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
+                api_token: None,
                 torii_api_url: Url::parse("http://localhost/").expect("url"),
                 torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,

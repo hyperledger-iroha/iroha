@@ -299,22 +299,6 @@ fn runtime_build_args(profile: &str) -> Vec<OsString> {
 fn mochi_ui_manifest_path() -> PathBuf {
     workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
-fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
-    let mut command = Command::new("cargo");
-    command.arg("build");
-    if profile == "release" {
-        command.arg("--release");
-    } else if profile != "debug" {
-        command.args(["--profile", profile]);
-    }
-    command.args(["-p", "iroha_kagami"]);
-    command.current_dir(workspace_root());
-    let status = command.status()?;
-    if !status.success() {
-        return Err("cargo build -p iroha_kagami failed".into());
-    }
-    Ok(())
-}
 fn profile_directory(profile: &str) -> &str {
     match profile {
         "release" => "release",
@@ -346,34 +330,6 @@ fn copy_runtime_binaries(source: &Path, bundle_root: &Path) -> Result<(), Box<dy
         )?;
     }
     Ok(())
-}
-pub(crate) fn resolve_kagami_path(
-    profile: &str,
-    override_path: Option<&Path>,
-) -> Result<PathBuf, Box<dyn Error>> {
-    if let Some(path) = override_path {
-        if !path.exists() {
-            return Err(format!("kagami override {} does not exist", path.display()).into());
-        }
-        if !path.is_file() {
-            return Err(format!("kagami override {} must point to a file", path.display()).into());
-        }
-        return Ok(path.to_path_buf());
-    }
-    let profile_dir = profile_directory(profile);
-    let candidate = cargo_target_dir()
-        .join(profile_dir)
-        .join(format!("kagami{}", env::consts::EXE_SUFFIX));
-    build_kagami(profile)?;
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(format!(
-            "expected kagami binary at {} after build",
-            candidate.display()
-        )
-        .into())
-    }
 }
 fn copy_into_bundle(source_rel: &str, destination: &Path) -> Result<(), Box<dyn Error>> {
     let source = workspace_root().join(source_rel);

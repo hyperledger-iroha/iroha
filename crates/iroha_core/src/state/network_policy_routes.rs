@@ -20,14 +20,15 @@ use crate::{
 };
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_data_model::{
-    block::ExternalExecutionRouteRole, transaction::error::TransactionRejectionReason,
+    block::{ExternalExecutionRouteRole, consensus::SumeragiRootScope},
+    transaction::error::TransactionRejectionReason,
 };
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
 enum PolicyProjection {
     Signed(Result<PhysicalExecutionPolicyRoute, PhysicalPolicyRouteRejection>),
-    Genesis,
+    Genesis(SumeragiRootScope),
     SealedCommitment,
 }
 
@@ -40,7 +41,63 @@ pub(crate) struct CapturedNetworkPolicyRoute {
     projection: PolicyProjection,
 }
 
+/// Opaque instruction bootstrap authority for one original authenticated Network input.
+/// Its scope cannot be constructed from a height-one header or mutable local configuration.
+pub(crate) struct GenesisExecutionScope {
+    scope: SumeragiRootScope,
+    header: BlockHeader,
+    entrypoint: HashOf<TransactionEntrypoint>,
+    index: u64,
+}
+
+impl GenesisExecutionScope {
+    /// Keep nested effects within the original authenticated genesis input's overlay.
+    pub(crate) fn for_transaction(
+        &self,
+        state: &StateTransaction<'_, '_>,
+    ) -> Option<SumeragiRootScope> {
+        (state._curr_block == self.header
+            && state.block_hashes.is_empty()
+            && state.current_network_entrypoint_hash == Some(self.entrypoint)
+            && state.current_entrypoint_index == Some(self.index))
+        .then_some(self.scope)
+    }
+}
+
 impl CapturedNetworkPolicyRoute {
+    /// Bind the signed genesis route to the separately authenticated original input.
+    pub(crate) fn genesis_execution_scope(
+        self,
+        tx: &SignedTransaction,
+        state: &StateTransaction<'_, '_>,
+        genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
+    ) -> Result<Option<GenesisExecutionScope>, TransactionRejectionReason> {
+        match (self.projection, genesis) {
+            (PolicyProjection::Genesis(scope), Some(genesis)) => {
+                genesis.validate(tx, state).map_err(policy_rejection)?;
+                if self.signed_hash != Some(tx.hash())
+                    || self.native.dataspace_id != scope.dataspace_id()
+                {
+                    return Err(policy_rejection(
+                        "genesis instruction scope lost its original source",
+                    ));
+                }
+                Ok(Some(GenesisExecutionScope {
+                    scope,
+                    header: state._curr_block,
+                    entrypoint: tx.hash_as_entrypoint(),
+                    index: state.current_entrypoint_index.ok_or_else(|| {
+                        policy_rejection("genesis instruction source index is absent")
+                    })?,
+                }))
+            }
+            (PolicyProjection::Genesis(_), None) | (_, Some(_)) => Err(policy_rejection(
+                "genesis instruction scope requires its exact authenticated source",
+            )),
+            (_, None) => Ok(None),
+        }
+    }
+
     pub(crate) fn for_signed(
         self,
         tx: &SignedTransaction,
@@ -54,7 +111,7 @@ impl CapturedNetworkPolicyRoute {
         }
         let route = match self.projection {
             PolicyProjection::Signed(result) => result,
-            PolicyProjection::Genesis if state.block_height() == 1 => {
+            PolicyProjection::Genesis(scope) if state.block_height() == 1 => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
                 PhysicalExecutionPolicyRoute::genesis(
                     &state.nexus,
@@ -62,7 +119,13 @@ impl CapturedNetworkPolicyRoute {
                     &accepted,
                     state.block_unix_timestamp_ms(),
                 )
-                .and_then(|route| route.require_dataspace(native))
+                .and_then(|route| match scope {
+                    // The authenticated global genesis provisions child dataspaces before
+                    // their native lanes exist. Only this original genesis capability
+                    // permits physical bootstrap execution outside its root dataspace.
+                    SumeragiRootScope::Global => Ok(route),
+                    SumeragiRootScope::Dataspace { .. } => route.require_dataspace(native),
+                })
             }
             _ => {
                 return Err(policy_rejection(
@@ -194,8 +257,24 @@ impl CapturedNetworkPolicyRoutes {
             .latest_block()
             .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
             .unwrap_or(0);
+        let root_scope = if genesis {
+            // A height-one header alone is not genesis authority. Reuse the canonical
+            // original-signature/domain/committee verifier before reading its scope.
+            iroha_data_model::sumeragi_finality::genesis_epoch(source)
+                .map_err(|_| "Network genesis has no authenticated original authority")?;
+            Some(
+                iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                    .map_err(|_| "Network genesis has no valid signed root scope")?
+                    .sumeragi_context
+                    .root_scope,
+            )
+        } else {
+            crate::sumeragi::lanes::routing::committed_root_scope(&state.world)
+        };
+        let root_scope = root_scope.ok_or("Network source has no immutable root scope")?;
         let policy = crate::sumeragi::lanes::lane_policy(&state.world);
         let routes = crate::sumeragi::lanes::routing::RoutingInputs {
+            root_scope: Some(root_scope),
             policy: policy.as_ref(),
             lanes: state.world.sumeragi_lanes(),
             dataspaces: &state.nexus.dataspace_catalog,
@@ -204,9 +283,16 @@ impl CapturedNetworkPolicyRoutes {
         };
         for (index, input) in source.network_entrypoints().enumerate() {
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input));
-            let native = routes
-                .execution_route(&accepted, height)
-                .ok_or("Network source has no exact active native lane")?;
+            let native = if genesis {
+                RoutingDecision::new(
+                    crate::sumeragi::lanes::routing::GLOBAL_LANE,
+                    root_scope.dataspace_id(),
+                )
+            } else {
+                routes
+                    .execution_route(&accepted, height)
+                    .ok_or("Network source has no exact active native lane")?
+            };
             if let Some(context) = context {
                 let embedded = &context.external[index];
                 if embedded.entrypoint_hash != input.hash()
@@ -223,7 +309,7 @@ impl CapturedNetworkPolicyRoutes {
                 if !matches!(input, TransactionEntrypoint::External(_)) {
                     return Err("authenticated genesis contains a non-signed Network source");
                 }
-                PolicyProjection::Genesis
+                PolicyProjection::Genesis(root_scope)
             } else if accepted.external().is_some() {
                 PolicyProjection::Signed(
                     PhysicalExecutionPolicyRoute::resolve(

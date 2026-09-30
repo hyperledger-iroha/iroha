@@ -1277,6 +1277,7 @@ fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinality
     let mut cursor = NativeJournalCursor::new(
         native.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(native.genesis.expected_hash),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         native_finality_limits(),
     )
     .map_err(|error| eyre!(error))?;
@@ -1355,6 +1356,7 @@ fn verify_pulse(
         let cursor = NativeJournalCursor::new(
             native.common.chain.clone(),
             record.session.network_id,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             native_finality_limits(),
         )
         .map_err(|error| eyre!(error))?;

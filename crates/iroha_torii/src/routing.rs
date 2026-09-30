@@ -10262,10 +10262,22 @@ mod nts_tests {
         assert!(val.get("note").is_some(), "missing note");
     }
 }
+/// Parse the exact first-release artifact path without aliases or numeric normalization.
+pub(crate) fn parse_contract_artifact_path(
+    dataspace_id: &str,
+    code_hash: &str,
+) -> Result<iroha_data_model::smart_contract::ContractArtifactId> {
+    <iroha_data_model::smart_contract::ContractArtifactId as norito::json::JsonKeyCodec>::decode_json_key(&format!("{dataspace_id}|{code_hash}"))
+        .map_err(|error| conversion_error(format!("invalid contract artifact path: {error}")))
+}
 fn contract_manifest_response_body(
+    network_id: iroha_data_model::NetworkId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
     manifest: &manifest::ContractManifest,
 ) -> core::result::Result<String, norito::json::Error> {
     let response = ContractCodeRecordDto {
+        network_id,
+        artifact_id,
         code_hash: manifest
             .code_hash
             .as_ref()
@@ -10279,44 +10291,28 @@ fn contract_manifest_response_body(
     };
     norito::json::to_json_pretty(&response)
 }
-/// Fetch on-chain contract manifest by code_hash.
+/// Fetch an on-chain contract manifest by its exact dataspace-scoped identity.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
     state: Arc<CoreState>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<impl IntoResponse> {
-    let parse_hash = |s: &str| -> core::result::Result<iroha_crypto::Hash, String> {
-        if s.len() != 64
-            || !s
-                .as_bytes()
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err("code hash must be exactly 32 lowercase hexadecimal bytes".to_owned());
-        }
-        let mut arr = [0_u8; 32];
-        hex::decode_to_slice(s, &mut arr)
-            .map_err(|e| format!("failed to decode exact code hash `{s}`: {e}"))?;
-        Ok(iroha_crypto::Hash::prehashed(arr))
-    };
-    let h = parse_hash(&code_hash).map_err(|e| {
-        // Treat bad path parameter as a query conversion error (HTTP 400)
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
-        ))
-    })?;
     let world = state.world_view();
-    let manifest = world.contract_manifests().get(&h).cloned().ok_or_else(|| {
-        // Map absence to a query NotFound (HTTP 404)
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))
-    })?;
-    let body = contract_manifest_response_body(&manifest).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to serialize the complete contract manifest: {error}"
-        )))
-    })?;
+    let manifest = world
+        .contract_manifests()
+        .get(&artifact_id)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let body = contract_manifest_response_body(*state.network_id_ref(), artifact_id, &manifest)
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to serialize the complete contract manifest: {error}"
+            )))
+        })?;
     Ok(application_json_response(body))
 }
 #[cfg(test)]
@@ -10331,6 +10327,16 @@ mod contract_manifest_response_tests {
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
         KotobaTranslationEntry, StateDescriptor,
     };
+    routing_test! { sync artifact_paths_bind_full_dataspace_and_reject_noncanonical_components
+        let hash = hex::encode(Hash::new(b"artifact path").as_ref());
+        let artifact = parse_contract_artifact_path(&u64::MAX.to_string(), &hash).unwrap();
+        assert_eq!(artifact.dataspace_id.as_u64(), u64::MAX);
+        for dataspace in ["00", "-1", "18446744073709551616", "../1"] {
+            assert!(parse_contract_artifact_path(dataspace, &hash).is_err());
+        }
+        assert!(parse_contract_artifact_path("0", &hash.to_ascii_uppercase()).is_err());
+        assert!(parse_contract_artifact_path("0", &format!("{hash}0")).is_err());
+    }
     routing_test! { sync response_serializes_the_complete_canonical_manifest
         let expected_manifest = ContractManifest {
             seiyaku_name: Some("Treasury".to_owned()),
@@ -10392,7 +10398,8 @@ mod contract_manifest_response_tests {
             }]),
             provenance: None,
         };
-        let body = contract_manifest_response_body(&expected_manifest)
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(u64::MAX), expected_manifest.code_hash.unwrap());
+        let body = contract_manifest_response_body(crate::test_utils::signed_query_network_id(), artifact_id, &expected_manifest)
             .expect("serialize manifest response");
         let value = norito::json::parse_value(&body).expect("parse manifest response");
         assert_eq!(
@@ -10604,8 +10611,9 @@ fn collect_contract_state_schemas(
 ) -> core::result::Result<BTreeMap<String, Option<ivm::EmbeddedStateType>>, ()> {
     let mut registry = BTreeMap::new();
     let mut retained_canonical_bytes = 0usize;
-    let mut register_schemas_for = |code_hash: &iroha_crypto::Hash| {
-        let Some(code_bytes) = world.contract_code().get(code_hash) else {
+    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| {
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(address, *code_hash).map_err(|_| ())?;
+        let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
         };
         let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
@@ -10628,12 +10636,12 @@ fn collect_contract_state_schemas(
     };
     if let Some(contract_address) = contract_address {
         if let Some(code_hash) = world.contract_instances().get(contract_address) {
-            register_schemas_for(code_hash)?;
+            register_schemas_for(contract_address, code_hash)?;
         }
         return Ok(registry);
     }
-    for (_, code_hash) in world.contract_instances().iter() {
-        register_schemas_for(code_hash)?;
+    for (contract_address, code_hash) in world.contract_instances().iter() {
+        register_schemas_for(contract_address, code_hash)?;
     }
     Ok(registry)
 }
@@ -13357,44 +13365,22 @@ mod contract_state_tests {
         );
     }
 }
-/// Fetch on-chain contract code bytes (base64) by code_hash.
+/// Fetch on-chain contract bytes with an explicit network and dataspace binding.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code_bytes(
     state: Arc<CoreState>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<impl IntoResponse> {
-    let parse_hash = |s: &str| -> core::result::Result<iroha_crypto::Hash, String> {
-        if s.len() != 64
-            || !s
-                .as_bytes()
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err("code hash must be exactly 32 lowercase hexadecimal bytes".to_owned());
-        }
-        let mut arr = [0_u8; 32];
-        hex::decode_to_slice(s, &mut arr)
-            .map_err(|e| format!("failed to decode exact code hash `{s}`: {e}"))?;
-        Ok(iroha_crypto::Hash::prehashed(arr))
-    };
-    let h = parse_hash(&code_hash).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
-        ))
-    })?;
     let world = state.world_view();
-    let code = world.contract_code().get(&h).cloned().ok_or_else(|| {
+    let code = world.contract_code().get(&artifact_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
     })?;
     let mut obj = norito::json::Map::new();
-    obj.insert(
-        "code_b64".into(),
-        norito::json::Value::from(
-            base64::engine::general_purpose::STANDARD.encode(code.as_slice()),
-        ),
-    );
+    obj.insert("network_id".into(), norito::json::to_value(state.network_id_ref()).map_err(|error| conversion_error(error.to_string()))?);
+    obj.insert("artifact_id".into(), norito::json::to_value(&artifact_id).map_err(|error| conversion_error(error.to_string()))?);
+    obj.insert("code_b64".into(), norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode(code.as_slice())));
     let body = norito::json::to_vec(&obj)
         .map_err(|error| conversion_error(format!("failed to serialize code bytes: {error}")))?;
     Ok(application_json_response(body))
@@ -18259,9 +18245,10 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     if binding != &invocation.expected_code_hash {
         return None;
     }
-    let code = world.contract_code().get(binding)?;
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&invocation.contract_address, *binding).ok()?;
+    let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
-    let stored_manifest = world.contract_manifests().get(binding)?;
+    let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
         return None;
     }
@@ -18549,9 +18536,10 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
         return None;
     }
     let binding = world.contract_instances().get(&parsed.contract_address)?;
-    let code = world.contract_code().get(binding)?;
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&parsed.contract_address, *binding).ok()?;
+    let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
-    let stored_manifest = world.contract_manifests().get(binding)?;
+    let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
         return None;
     }
@@ -20916,13 +20904,13 @@ mod multisig_selector_tests {
             .expect("grant CanEnactGovernance");
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
-            register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
+            register_code_bytes(authority,contract_address.dataspace_id().expect("test contract dataspace"), code, &mut stx).expect("register contract bytes");
         assert_eq!(
             verified.code_hash, code_hash,
             "verified code hash must match stored bytes"
         );
         let manifest = verified.manifest.signed(authority_keypair);
-        register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        register_manifest(authority,contract_address.dataspace_id().expect("test contract dataspace"), manifest, &mut stx).expect("register manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
             authority.clone(),
@@ -26706,6 +26694,10 @@ derived_items! {
 /// DTO used by Torii for POST/GET registry endpoints.
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 pub struct ContractCodeRecordDto {
+    /// Exact network serving the authenticated registry.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Exact dataspace and complete artifact content identity.
+    pub artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
     /// Optional hex-encoded `code_hash` (from manifest) for convenience
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -26776,7 +26768,8 @@ fn prepare_contract_call(
                 format!("contract instance `{contract_address}` is not active"),
             )
         })?;
-    let code_bytes = world.contract_code().get(&binding).ok_or_else(|| {
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(contract_address, binding).map_err(|error| conversion_error(error.to_string()))?;
+    let code_bytes = world.contract_code().get(&artifact_id).ok_or_else(|| {
         contract_not_found_error(
             "contract_code_not_found",
             format!(
@@ -26811,7 +26804,7 @@ fn prepare_contract_call(
         })?;
     let manifest = world
         .contract_manifests()
-        .get(&binding)
+        .get(&artifact_id)
         .cloned()
         .ok_or_else(|| {
             contract_not_found_error(
@@ -45254,13 +45247,13 @@ mod validation_fee_torii_ingress_tests {
         let (contract_artifact, contract_manifest) = payout_contract_artifact();
         let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-            contract_artifact,
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_artifact,
             &mut stx,
         )
         .expect("register payout-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-            contract_manifest.signed(authority_key_pair),
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed payout-contract manifest");
@@ -45279,13 +45272,13 @@ mod validation_fee_torii_ingress_tests {
         let (pool_artifact, pool_manifest) = pool_contract_artifact();
         let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-            pool_artifact,
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_artifact,
             &mut stx,
         )
         .expect("register pool-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-            pool_manifest.signed(authority_key_pair),
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed pool-contract manifest");

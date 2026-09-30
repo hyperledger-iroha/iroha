@@ -222,7 +222,7 @@ impl Worker<'_> {
         let genesis = crate::sumeragi::certified_chain::committed_block(&view, 1)
             .map_err(|error| error.to_string())?;
         let instance =
-            crate::sumeragi::node::global_instance(genesis.block(), &view.chain_id().to_string());
+            crate::sumeragi::node::root_instance(genesis.block(), &view.chain_id().to_string())?;
         let scheduled = view
             .world()
             .consensus_schedule()

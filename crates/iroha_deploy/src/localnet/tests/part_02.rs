@@ -2280,9 +2280,10 @@ fn permissioned_localnet_uses_mandatory_nexus_default() {
         !nexus.contains_key("enabled"),
         "generated configs must not expose the retired Nexus availability switch"
     );
-    assert!(
-        nexus.get("storage").is_none(),
-        "disabled nexus localnet should not emit a storage budget"
+    assert_eq!(
+        nexus["storage"]["local_budget_bytes"].as_integer(),
+        Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES as i64),
+        "mandatory Nexus storage must have a finite developer cap in permissioned mode"
     );
 }
 #[test]

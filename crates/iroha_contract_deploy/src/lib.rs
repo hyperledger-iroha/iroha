@@ -17,7 +17,7 @@ use iroha::{
             SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
         prelude::*,
-        smart_contract::{ContractAddress, ContractAlias},
+        smart_contract::{ContractAddress, ContractAlias, ContractArtifactId},
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
@@ -679,13 +679,17 @@ impl DeploymentService {
             fee_payment: &request.fee_payment,
             metadata: &metadata,
         };
-        let upload = build_native_upload_transaction_plan(&signing, code_hash, &request.artifact)
+        let artifact_id = ContractArtifactId::new(state.dataspace_id, code_hash);
+        let upload = build_native_upload_transaction_plan(&signing, artifact_id, &request.artifact)
             .map_err(|source| preflight_error("native upload plan", source))?;
         debug_assert_eq!(upload.chunk_count as usize, upload.pre_stage.len() + 1);
         let mut uploads = upload.pre_stage;
         uploads.push(upload.finalize);
         let register = signing
-            .sign([InstructionBox::from(RegisterSmartContractCode { manifest })])
+            .sign([InstructionBox::from(RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            })])
             .map_err(|source| preflight_error("manifest registration", source))?;
         let commit = build_commit_deployment_transaction(
             &signing,
@@ -757,7 +761,10 @@ impl DeploymentService {
         let stored = self
             .client
             .client()
-            .get_contract_code_bytes(&hex::encode(preflight.code_hash.as_ref()))
+            .get_contract_code_bytes(&ContractArtifactId::new(
+                preflight.dataspace_id,
+                preflight.code_hash,
+            ))
             .map_err(DeploymentError::Readback)?;
         if hex::encode(&stored) != record.artifact_hex {
             return Err(DeploymentError::Readback(eyre!(

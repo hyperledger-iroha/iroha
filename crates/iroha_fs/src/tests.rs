@@ -351,7 +351,19 @@ fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
     second.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"owner");
     drop(first);
-    second.try_lock().unwrap();
+    // Another parallel test may be between fork/posix_spawn and exec. CLOEXEC keeps this
+    // descriptor out of the executed child, but the inherited open-file description can
+    // briefly retain its lock until exec completes. Ownership must remain excluded then.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match second.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("released lock remained unavailable: {error}"),
+        }
+    }
 }
 
 #[test]

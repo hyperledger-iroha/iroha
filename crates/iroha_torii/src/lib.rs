@@ -3611,8 +3611,18 @@ impl AppState {
         &self,
         headers: &HeaderMap,
     ) -> Option<limits::ApiTokenPrincipal> {
-        evaluate_api_token(self.require_api_token, &self.api_token_digests, headers)
+        evaluate_api_token(self.requires_api_token(), &self.api_token_digests, headers)
             .authenticated_principal()
+    }
+    /// Immutable signed genesis scope closes every private-root listener route.
+    fn is_private_root(&self) -> bool {
+        matches!(
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(self.state.view().world()),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { .. })
+        )
+    }
+    fn requires_api_token(&self) -> bool {
+        self.require_api_token || self.is_private_root()
     }
     fn check_norito_rpc_allowed(
         &self,
@@ -4152,7 +4162,7 @@ fn evaluate_api_token(
 }
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
     api_token_rejection_with_policy(
-        app.require_api_token,
+        app.requires_api_token(),
         app.api_token_digests.as_ref(),
         headers,
     )
@@ -4392,10 +4402,10 @@ async fn enforce_api_token(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    if is_public_sorafs_gateway_route(&req) {
+    if !app.is_private_root() && is_public_sorafs_gateway_route(&req) {
         return Ok(next.run(req).await);
     }
-    let api_token_required = app.require_api_token;
+    let api_token_required = app.requires_api_token();
     if let Some(mut response) = api_token_rejection(&app, req.headers()) {
         if api_token_required {
             response.headers_mut().insert(
@@ -4416,7 +4426,7 @@ async fn enforce_api_token(
 }
 /// Prevent a shared intermediary from replaying responses protected by the
 /// deployment API token. The exact public SoraFS local-gateway allowlist keeps
-/// its immutable content responses anonymously cacheable.
+/// its immutable content responses anonymously cacheable only on a global root.
 async fn enforce_required_api_token_private_no_store(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -4429,7 +4439,7 @@ async fn enforce_required_api_token_private_no_store(
             .extensions()
             .get::<MatchedRouteMetadata>()
             .is_some_and(is_public_sorafs_gateway_metadata);
-    if app.require_api_token && !public_sorafs_gateway {
+    if app.is_private_root() || (app.requires_api_token() && !public_sorafs_gateway) {
         response.headers_mut().insert(
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("private, no-store"),
@@ -6307,7 +6317,7 @@ fn validate_api_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<ApiTokenEvaluation, Error> {
     let evaluation = evaluate_api_token(
-        app.require_api_token,
+        app.requires_api_token(),
         app.api_token_digests.as_ref(),
         headers,
     );
@@ -26035,27 +26045,62 @@ async fn handler_sumeragi_bls_keys(
 }
 // ---------------- Contracts/VK GET handlers ----------------
 #[cfg(feature = "app_api")]
-async fn handler_get_contract_code_bytes(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
+fn require_contract_artifact_visibility(
+    app: &SharedAppState,
+    caller: &AccountId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+) -> Result<(), Error> {
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+    let root = iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                "contract artifact reads require authenticated root scope".into(),
+            ))
+        })?;
+    if matches!(root, SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id != artifact_id.dataspace_id)
+        || !torii_dataspace_read_visibility(app, Some(caller))
+            .allows_dataspace(artifact_id.dataspace_id)
+    {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "contract artifact dataspace is not readable by this account".into(),
+            ),
+        ));
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+async fn admit_contract_artifact_read(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    remote: std::net::SocketAddr,
+    caller: &AccountId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+) -> Result<(), Error> {
+    require_contract_artifact_visibility(app, caller, artifact_id)?;
     let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/code-bytes/{code_hash}",
-        app.authenticated_api_token_principal(&headers),
+        headers,
+        Some(remote.ip()),
+        "v1/contracts/artifacts",
+        app.authenticated_api_token_principal(headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    require_signed_account_request(
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+async fn handler_get_contract_code_bytes(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path((dataspace_id, code_hash)): axum::extract::Path<(String, String)>,
+) -> Result<impl IntoResponse, Error> {
+    let caller = require_signed_account_request(
         &app,
         &headers,
         &method,
@@ -26064,114 +26109,53 @@ async fn handler_get_contract_code_bytes(
         "contract_code_auth_required",
         "signed account headers are required to read contract artifacts",
     )?;
-    crate::routing::handle_get_contract_code_bytes(
-        app.state.clone(),
-        axum::extract::Path(code_hash),
-    )
-    .await
+    let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
+    admit_contract_artifact_read(&app, &headers, remote, &caller, artifact_id).await?;
+    routing::handle_get_contract_code_bytes(app.state.clone(), artifact_id).await
 }
-// internal handler; tests should use routing::handle_get_contract_code_bytes via re-export below
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    axum::extract::Path((dataspace_id, code_hash)): axum::extract::Path<(String, String)>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return crate::routing::handle_get_contract_code(
-            app.state.clone(),
-            axum::extract::Path(code_hash),
-        )
+    let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
+    admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
+    routing::handle_get_contract_code(app.state.clone(), artifact_id)
         .await
-        .map(axum::response::IntoResponse::into_response);
-    }
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/code:get",
-        app.authenticated_api_token_principal(&headers),
-    );
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_get_contract_code(
-        app.state.clone(),
-        axum::extract::Path(code_hash),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
-        Err(e) => Err(e),
-    }
+        .map(IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code_view(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    axum::extract::Path((dataspace_id, code_hash)): axum::extract::Path<(String, String)>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return crate::contract_sources::handle_get_contract_code_view(
-            app.state.clone(),
-            code_hash,
-        )
+    let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
+    admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
+    crate::contract_sources::handle_get_contract_code_view(app.state.clone(), artifact_id)
         .await
-        .map(axum::response::IntoResponse::into_response);
-    }
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/code/{code_hash}/contract-view:get",
-        app.authenticated_api_token_principal(&headers),
-    );
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::contract_sources::handle_get_contract_code_view(app.state.clone(), code_hash).await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
-        Err(e) => Err(e),
-    }
+        .map(IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_verified_source_job(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    axum::extract::Path((dataspace_id, code_hash)): axum::extract::Path<(String, String)>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     Extension(compile_admission): Extension<VerifiedSourceCompileAdmission>,
     crate::utils::extractors::NoritoJson(payload): crate::utils::extractors::NoritoJson<
         crate::contract_sources::SubmitVerifiedContractSourceDto,
     >,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/code/{code_hash}/verified-source/jobs",
-    )
-    .await?;
+    let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
+    admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
+    let network_id = *app.state.network_id_ref();
     let compile_permit = compile_admission.take()?;
     let sorafs_node = app.sorafs_node.clone();
     let ((status, body), compile_permit) = run_transaction_ingress_compute_job(
@@ -26179,7 +26163,8 @@ async fn handler_post_contract_verified_source_job(
         "verified_source_compile_worker_failed",
         move || {
             crate::contract_sources::handle_post_verified_source_job(
-                code_hash,
+                network_id,
+                artifact_id,
                 payload,
                 sorafs_node,
             )
@@ -26187,6 +26172,8 @@ async fn handler_post_contract_verified_source_job(
     )
     .await?;
     drop(compile_permit);
+    // The exact dataspace grant can be revoked while compilation runs.
+    require_contract_artifact_visibility(&app, &verified.account, artifact_id)?;
     Ok((status, body).into_response())
 }
 #[cfg(feature = "app_api")]
@@ -26194,19 +26181,22 @@ async fn handler_get_contract_verified_source_job(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path((code_hash, job_id)): axum::extract::Path<(String, String)>,
+    axum::extract::Path((dataspace_id, code_hash, job_id)): axum::extract::Path<(
+        String,
+        String,
+        String,
+    )>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
+    let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
+    admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
+    crate::contract_sources::handle_get_verified_source_job(
+        *app.state.network_id_ref(),
+        artifact_id,
+        job_id,
     )
-    .await?;
-    crate::contract_sources::handle_get_verified_source_job(code_hash, job_id)
-        .await
-        .map(axum::response::IntoResponse::into_response)
+    .await
+    .map(IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_state(
@@ -38380,7 +38370,7 @@ impl Torii {
         let contracts_body_limit = DefaultBodyLimit::max(transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, contracts_and_verification_keys;
-            CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => layered_canonical_signature_get(handler_get_contract_code_bytes, contracts_body_limit);
+            CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET => layered_canonical_signature_get(handler_get_contract_code_bytes, contracts_body_limit);
             CONTRACTS_ALIASES_POST => layered_canonical_account_post(handler_post_contract_alias_set, app_state, contracts_body_limit, transaction_max_content_len);
             CONTRACTS_ALIASES_RESOLVE_POST => limited_canonical_signature_post(handler_contract_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             CONTRACTS_DEPLOYMENT_STATE_POST => limited_canonical_signature_post(deployment_state::handler_contract_deployment_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
@@ -38524,11 +38514,11 @@ impl Torii {
             ZK_PROOFS_GET => public_get(handler_list_proofs);
             ZK_PROOFS_COUNT_GET => public_get(handler_count_proofs);
             ZK_PROOF_BY_BACKEND_BY_HASH_GET => public_get(handler_get_proof_by_backend_hash);
-            CONTRACTS_CODE_BY_CODE_HASH_GET => public_get(handler_get_contract_code);
-            CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET => canonical_account_get(handler_get_contract_code_view, app_state, 0);
+            CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_GET => canonical_account_get(handler_get_contract_code, app_state, 0);
+            CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_CONTRACT_VIEW_GET => canonical_account_get(handler_get_contract_code_view, app_state, 0);
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST,
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST,
             catalog_post(handler_post_contract_verified_source_job)
                 .authenticated_canonical_account_verified_source_body(
                     app_state.clone(),
@@ -38536,7 +38526,7 @@ impl Torii {
                 ),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET,
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET,
             catalog_get(handler_get_contract_verified_source_job)
                 .authenticated_canonical_account_body(app_state, 0),
         );
@@ -43260,9 +43250,9 @@ async fn handler_mcp_jsonrpc(
     let authenticated_rate_key = app
         .authenticated_api_token_principal(&headers)
         .map(limits::ApiTokenPrincipal::rate_limit_key);
-    let dynamic_rate_key = (!app.require_api_token)
+    let dynamic_rate_key = (!app.requires_api_token())
         .then(|| limits::key_from_headers(&headers, Some(remote_ip), Some("mcp"), None));
-    let initial_rate_allowed = if app.require_api_token {
+    let initial_rate_allowed = if app.requires_api_token() {
         match authenticated_rate_key.as_deref() {
             Some(token) => rate_limiters.authenticated_ordinary.allow(token).await,
             None => false,
@@ -43359,7 +43349,7 @@ async fn handler_mcp_jsonrpc(
         }
     };
     let additional_dispatch_cost = mcp::jsonrpc_dispatch_cost(&payload).saturating_sub(1);
-    let additional_rate_allowed = if app.require_api_token {
+    let additional_rate_allowed = if app.requires_api_token() {
         match authenticated_rate_key.as_deref() {
             Some(token) => {
                 rate_limiters

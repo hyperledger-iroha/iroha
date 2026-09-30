@@ -6011,6 +6011,10 @@ fn manifest_access_set_hints_preserve_global_wildcard_for_opaque_host_calls() {
 #[test]
 fn internal_lifecycle_access_derivation_decodes_typed_requests() {
     let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::new(u64::MAX - 1),
+        code_hash,
+    );
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -6020,7 +6024,7 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         &network_id,
         &sample_account_id(),
         0,
-        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        artifact_id.dataspace_id,
     )
     .expect("contract address");
     let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
@@ -6038,12 +6042,15 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         provenance: None,
     };
     let register_code = norito::to_bytes(
-        &iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest },
+        &iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode {
+            artifact_id,
+            manifest,
+        },
     )
     .expect("register manifest request");
     let register_bytes = norito::to_bytes(
         &iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
-            code_hash,
+            artifact_id,
             code: vec![0, 1, 2, 3],
         },
     )
@@ -6058,7 +6065,7 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
     .expect("activate request");
     let remove = norito::to_bytes(
         &iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes {
-            code_hash,
+            artifact_id,
             reason: Some("test cleanup".to_owned()),
         },
     )
@@ -6083,10 +6090,10 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         );
     }
     for key in [
-        super::key_contract_code(&code_hash),
-        super::key_contract_manifest(&code_hash),
+        super::key_contract_code(&artifact_id),
+        super::key_contract_manifest(&artifact_id),
         super::key_contract_instance(&contract_address),
-        super::key_contract_instance_code_hash(&code_hash),
+        super::key_contract_instance_code_hash(&artifact_id),
     ] {
         assert!(
             access.reads.contains(&key),
@@ -6095,10 +6102,10 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         );
     }
     for key in [
-        super::key_contract_code(&code_hash),
-        super::key_contract_manifest(&code_hash),
+        super::key_contract_code(&artifact_id),
+        super::key_contract_manifest(&artifact_id),
         super::key_contract_instance(&contract_address),
-        super::key_contract_instance_code_hash(&code_hash),
+        super::key_contract_instance_code_hash(&artifact_id),
     ] {
         assert!(
             access.writes.contains(&key),
@@ -6106,7 +6113,26 @@ fn internal_lifecycle_access_derivation_decodes_typed_requests() {
             access.writes
         );
     }
+    let foreign_artifact = iroha_data_model::smart_contract::ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code_hash,
+    );
+    for key in [
+        super::key_contract_code(&foreign_artifact),
+        super::key_contract_manifest(&foreign_artifact),
+        super::key_contract_instance_code_hash(&foreign_artifact),
+    ] {
+        assert!(
+            !access.reads.contains(&key),
+            "foreign artifact read key {key}"
+        );
+        assert!(
+            !access.writes.contains(&key),
+            "foreign artifact write key {key}"
+        );
+    }
 }
+
 #[test]
 fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
     let src = include_str!("fixtures/v1/c153.ko");

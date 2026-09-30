@@ -58,7 +58,7 @@ fn verifier(journal: &NativeFinalityJournal, network: NetworkId) -> NativePastaV
     let genesis = journal.blocks[0].decode_block(limits()).unwrap();
     assert_eq!(genesis.hash(), network.into_genesis_hash());
     NativePastaVerifier::new(
-        crate::sumeragi::node::global_instance(&genesis, &chain_id().to_string()),
+        crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap(),
         network,
     )
 }
@@ -210,7 +210,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     )
     .unwrap();
     let network = NetworkId::from_genesis_hash(genesis.hash());
-    let instance = crate::sumeragi::node::global_instance(&genesis, &chain_id().to_string());
+    let instance = crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap();
     let mut current = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
     let state = crate::state::State::new_with_chain_and_network_id_for_testing(
         World::new(),

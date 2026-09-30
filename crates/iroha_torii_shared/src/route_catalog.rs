@@ -4255,7 +4255,7 @@ pub mod contracts_and_verification_keys {
         };
     }
     declare_routes! {
-        CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_account_read_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET => app_account_read_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_bytes_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes");
         CONTRACTS_ALIASES_POST => app_account_mutation_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
         CONTRACTS_ALIASES_RESOLVE_POST => app_account_read_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
         CONTRACTS_DEPLOYMENT_STATE_POST => app_account_read_post("contracts.contracts_deployment_state_post", "/v1/contracts/deployment-state");
@@ -4396,10 +4396,10 @@ pub mod contracts_and_verification_keys {
         ZK_PROOFS_GET => app_get("contracts.zk_proofs_get", "/v1/zk/proofs");
         ZK_PROOFS_COUNT_GET => app_get("contracts.zk_proofs_count_get", "/v1/zk/proofs/count");
         ZK_PROOF_BY_BACKEND_BY_HASH_GET => app_get("contracts.zk_proof_by_backend_by_hash_get", "/v1/zk/proof/{backend}/{hash}");
-        CONTRACTS_CODE_BY_CODE_HASH_GET => app_get("contracts.contracts_code_by_code_hash_get", "/v1/contracts/code/{code_hash}");
-        CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET => app_account_read_sdk_get("contracts.contracts_code_by_code_hash_contract_view_get", "/v1/contracts/code/{code_hash}/contract-view");
-        CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST => app_account_mutation_sdk_post("contracts.contracts_code_by_code_hash_verified_source_jobs_post", "/v1/contracts/code/{code_hash}/verified-source/jobs");
-        CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET => app_account_read_sdk_get("contracts.contracts_code_by_code_hash_verified_source_jobs_by_job_id_get", "/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_CONTRACT_VIEW_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_contract_view_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/contract-view");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST => app_account_mutation_sdk_post("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_post", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source/jobs");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_by_job_id_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source-jobs/{job_id}");
     }
 }
 /// Protocol-native `SoraCloud` public gateway routes.

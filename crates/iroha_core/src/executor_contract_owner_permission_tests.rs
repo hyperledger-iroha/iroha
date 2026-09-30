@@ -206,10 +206,20 @@ seiyaku OwnerPermission {
     )
     .unwrap();
     let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-    world.contract_code.insert(code_hash, program);
-    world
-        .contract_manifests
-        .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+    world.contract_code.insert(
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            address.dataspace_id().unwrap(),
+            code_hash,
+        ),
+        program,
+    );
+    world.contract_manifests.insert(
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            address.dataspace_id().unwrap(),
+            code_hash,
+        ),
+        manifest.signed(&ALICE_KEYPAIR),
+    );
     bind_executor_test_contract(&mut world, &address, &authority, code_hash);
     let state = state_for_testing(world);
     let permission = owner_entrypoint_permission(&address, "write");

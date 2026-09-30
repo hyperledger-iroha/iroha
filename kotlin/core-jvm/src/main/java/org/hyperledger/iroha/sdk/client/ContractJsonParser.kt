@@ -11,7 +11,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 object ContractJsonParser {
 
-    /** Parse the complete `/v1/contracts/code/{code_hash}` manifest response. */
+    /** Parse the complete `/v1/contracts/artifacts/{dataspace_id}/{code_hash}` manifest response. */
     @JvmStatic
     fun parseManifestRecord(payload: ByteArray): ContractManifestRecord =
         ContractManifestJsonParser.parseRecord(payload)

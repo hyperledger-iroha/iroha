@@ -610,6 +610,7 @@ mod tests {
             account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: "http://127.0.0.1:8080".parse().expect("test URL"),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             transaction_ttl: std::time::Duration::from_secs(5),

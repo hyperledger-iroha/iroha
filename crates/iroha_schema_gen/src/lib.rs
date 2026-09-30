@@ -50,6 +50,17 @@ macro_rules! schema_types {
             iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint,
             iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
+            // Independent private roots and body-free parent anchoring.
+            iroha_data_model::block::consensus::SumeragiRootScope,
+            iroha_data_model::private_dataspace::PrivateDataspaceRegistration,
+            iroha_data_model::private_dataspace::PrivateDataspaceAnchor,
+            iroha_data_model::private_dataspace::PrivateDataspaceAnchorState,
+            iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy,
+            iroha_data_model::private_dataspace::PrivateDataspaceRecord,
+            iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+            iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace,
+            iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace,
+            iroha_data_model::smart_contract::ContractArtifactId,
             // Durable cross-service DA spool envelope.
             iroha_data_model::da::ingest::StoredDaReceipt,
             iroha_data_model::fastpq::TransferTranscript,
@@ -234,6 +245,7 @@ mod tests {
     mod final_promotion;
     mod final_promotion_account_custody;
     mod privacy_qualification;
+    mod private_dataspace;
     mod sorafs_publication;
     mod stream_token_authority;
     mod stream_token_custody;

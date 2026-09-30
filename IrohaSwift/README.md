@@ -868,8 +868,8 @@ Hijiri binding.
 
 ### Kotodama contract manifests
 
-`ToriiClient.fetchContractManifest(codeHashHex:)` reads
-`/v1/contracts/code/{hash}` as a strict `ToriiContractManifestRecord`. The model preserves
+`ToriiClient.fetchContractManifest(artifactId:canonicalAuth:)` reads
+`/v1/contracts/artifacts/{dataspace_id}/{hash}` with canonical account authentication and verifies the configured network and exact artifact identity before returning a strict `ToriiContractManifestRecord`. The model preserves
 the `seiyaku`/`誓約` identity, the branded `kotoage`/`言挙げ`, `hajimari`/`始まり`, and
 `kaizen`/`改善` lifecycle surface, exact flat-preorder argument and return schemas, bounded
 access hints, triggers, state and error declarations, `kotoba`, and provenance. Unknown

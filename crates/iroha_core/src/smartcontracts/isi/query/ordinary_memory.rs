@@ -888,7 +888,7 @@ define_singular_source_admission! {
     FindAccountRecoveryPolicyByAlias: ProvenBounded,
     FindAccountRecoveryRequestByAlias: ProvenBounded,
     FindProofRecordById: ProvenBounded,
-    FindContractManifestByCodeHash: ProvenBounded,
+    FindContractManifestByArtifactId: ProvenBounded,
     FindAbiVersion: ProvenBounded,
     FindAssetById: ProvenBounded,
     FindAssetDefinitionById: ProvenBounded,
@@ -1190,8 +1190,8 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(record, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindContractManifestByCodeHash(query) => {
-            if let Some(manifest) = world.contract_manifests().get(&query.code_hash) {
+        SingularQueryBox::FindContractManifestByArtifactId(query) => {
+            if let Some(manifest) = world.contract_manifests().get(&query.artifact_id) {
                 charge(manifest, &mut remaining)?;
             }
         }

@@ -903,6 +903,7 @@ mod tests {
                     iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair: kp,
                 basic_auth: None,
+                api_token: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
                 torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,

@@ -104,6 +104,32 @@ impl NativeBeaconProducer {
             return Err(NativeBeaconError::Context);
         }
         let world = state.world();
+        let root_scope =
+            crate::sumeragi::lanes::routing::committed_root_scope(world).ok_or_else(|| {
+                NativeBeaconError::Source("native readiness requires immutable root scope".into())
+            })?;
+        if !super::super::owns_global_control(root_scope, world, current)
+            .map_err(NativeBeaconError::Source)?
+        {
+            *reporting
+                .0
+                .lock()
+                .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))? =
+                Some(Observation {
+                    generation,
+                    height: context.height,
+                    applied: applied.0,
+                    horizon: BeaconHorizonStatusV1 {
+                        epoch_length_blocks: 0,
+                        next_required_pulse_height: None,
+                        active_session_id: None,
+                        session_covers_next_pulse: false,
+                        local_provider_ready: false,
+                    },
+                    ready: true,
+                });
+            return Ok(());
+        }
         let boundary_pulse = (current.mode == ConsensusMode::Npos)
             .then(|| current.authorization.last_height.checked_sub(1))
             .flatten()

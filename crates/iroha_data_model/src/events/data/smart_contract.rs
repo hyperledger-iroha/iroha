@@ -65,8 +65,8 @@ mod model {
         name = "iroha_data_model::events::data::smart_contract::model::ContractCodeRegistered"
     )]
     pub struct ContractCodeRegistered {
-        /// Code hash of the registered program.
-        pub code_hash: iroha_crypto::Hash,
+        /// Exact dataspace-scoped identity of the registered program.
+        pub artifact_id: crate::smart_contract::ContractArtifactId,
         /// Account that submitted the registration.
         pub registrar: crate::account::AccountId,
     }
@@ -87,8 +87,8 @@ mod model {
         name = "iroha_data_model::events::data::smart_contract::model::ContractCodeRemoved"
     )]
     pub struct ContractCodeRemoved {
-        /// Code hash of the removed program.
-        pub code_hash: iroha_crypto::Hash,
+        /// Exact dataspace-scoped identity of the removed program.
+        pub artifact_id: crate::smart_contract::ContractArtifactId,
         /// Account that requested removal.
         pub removed_by: crate::account::AccountId,
         /// Optional human-readable reason for auditability.

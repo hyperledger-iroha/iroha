@@ -420,7 +420,10 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
         &fixture.state,
         vec![
             InstructionBox::from(RegisterSmartContractBytes {
-                code_hash: Hash::new(&code),
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    CONTRACT_DATASPACE,
+                    Hash::new(&code),
+                ),
                 code,
             }),
             InstructionBox::from(ActivateContractInstance {

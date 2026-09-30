@@ -2677,6 +2677,65 @@ pub(crate) fn native_execution_target<W: WorldReadOnly>(
         global: control_plane || target.coordinator_route,
     })
 }
+/// Resolve an actually executed instruction using the same native scope rules as admission.
+/// Deferred multisig bodies and composite settlement legs retain their coordinator identity.
+pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspaces: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    let mut target = TransactionDataspaceTarget::default();
+    let fx_overlay = FxCorridorRoutingOverlay::default();
+    merge_top_level_instruction_dataspace_target_with_world(
+        &mut target,
+        instruction,
+        0,
+        &[],
+        Some(dataspaces),
+        world,
+        Some(ledger_time_ms),
+        false,
+        &fx_overlay,
+    )?;
+    collect_instruction_native_amx_participants(
+        instruction,
+        dataspaces,
+        world,
+        Some(ledger_time_ms),
+        &mut target.participants,
+        &fx_overlay,
+        &mut MultisigProposalRoutingStack::default(),
+    )?;
+    apply_settlement_routing_target(
+        &mut target,
+        instruction_settlement_dataspace_target_with_world(
+            instruction,
+            Some(dataspaces),
+            world,
+            Some(ledger_time_ms),
+            &fx_overlay,
+        )?,
+    );
+    if target.participants.len() > 1 {
+        target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        target.coordinator_route = true;
+    } else if target.dataspace_id.is_none() {
+        target.dataspace_id = target.participants.iter().next().copied();
+    }
+    if target.has_universal_target && !target.participants.is_empty() {
+        target.coordinator_route = true;
+    }
+    Ok(NativeExecutionTarget {
+        dataspace: target.dataspace_id,
+        global: target.coordinator_route
+            || instruction
+                .as_any()
+                .is::<iroha_data_model::isi::SetParameter>()
+            || instruction_routes_to_universal_dataspace(instruction),
+    })
+}
+
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the
@@ -3396,11 +3455,47 @@ fn instruction_uses_universal_alias_registry(instruction: &dyn Instruction) -> b
         || any.is::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
 }
 /// Instructions that always execute in the universal dataspace: the universal alias registry
-/// and every SCCP v1 instruction, which executes serially in one context so outbound nonces
+/// private-root admission/anchoring, and every SCCP v1 instruction, which execute serially so outbound nonces
 /// and leaf indices are deterministic (`specs/sccp.md` §4.5, §4.19).
 fn instruction_routes_to_universal_dataspace(instruction: &dyn Instruction) -> bool {
     instruction_uses_universal_alias_registry(instruction)
         || crate::smartcontracts::isi::sccp::is_sccp_instruction(instruction)
+        || instruction
+            .as_any()
+            .is::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace>()
+        || instruction
+            .as_any()
+            .is::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace>()
+}
+
+/// Artifact custody is explicitly scoped even before a contract address is deployed.
+fn contract_artifact_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    use iroha_data_model::isi::smart_contract_code::{
+        CancelSmartContractCodeUpload, RemoveSmartContractBytes,
+    };
+    let any = instruction.as_any();
+    any.downcast_ref::<RegisterSmartContractCode>()
+        .map(|value| value.artifact_id.dataspace_id)
+        .or_else(|| {
+            any.downcast_ref::<RegisterSmartContractBytes>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<UploadSmartContractCodeChunk>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<FinalizeSmartContractCodeUpload>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<CancelSmartContractCodeUpload>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<RemoveSmartContractBytes>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
 }
 
 fn instruction_transaction_dataspace_target(
@@ -3408,6 +3503,9 @@ fn instruction_transaction_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
         return Ok(merge_instruction_dataspace_targets(
@@ -3796,6 +3894,9 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
         return Ok(merge_instruction_dataspace_targets(
@@ -9105,6 +9206,85 @@ mod tests {
     use nonzero_ext::nonzero;
     use std::collections::{BTreeMap, BTreeSet};
     #[test]
+    fn every_artifact_operation_routes_its_exact_full_width_dataspace() {
+        use iroha_data_model::{
+            isi::smart_contract_code::*,
+            smart_contract::{ContractArtifactId, manifest::ContractManifest},
+        };
+        let own = DataSpaceId::new((1_u64 << 40) + 7);
+        let artifact_id = ContractArtifactId::new(own, Hash::new(b"artifact"));
+        let manifest = ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(artifact_id.code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_messages: None,
+            error_types: None,
+            provenance: None,
+        };
+        let operations: Vec<InstructionBox> = vec![
+            RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            }
+            .into(),
+            RegisterSmartContractBytes {
+                artifact_id,
+                code: vec![1],
+            }
+            .into(),
+            UploadSmartContractCodeChunk {
+                artifact_id,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                artifact_id,
+                total_size: 1,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { artifact_id }.into(),
+            RemoveSmartContractBytes {
+                artifact_id,
+                reason: None,
+            }
+            .into(),
+        ];
+        let world = World::new();
+        let catalog = DataSpaceCatalog::default();
+        for operation in operations {
+            assert_eq!(
+                instruction_transaction_dataspace_target(&*operation, Some(&catalog), None)
+                    .unwrap(),
+                Some(own)
+            );
+            assert_eq!(
+                instruction_transaction_dataspace_target_with_world(
+                    &*operation,
+                    Some(&catalog),
+                    &world.view(),
+                    Some(0)
+                )
+                .unwrap(),
+                Some(own)
+            );
+            let target =
+                native_instruction_execution_target(&*operation, &catalog, &world.view(), 0)
+                    .unwrap();
+            assert_eq!(target.dataspace, Some(own));
+            assert!(!target.global);
+        }
+    }
+    #[test]
     fn routing_plan_frame_and_leg_payload_preserve_their_boundaries() {
         let leg = RouteLeg::new(RoutingDecision::default(), RouteLegRole::Coordinator);
         let plan = RoutingPlan::Single(leg);
@@ -11928,18 +12108,27 @@ mod tests {
         let code_hash = Hash::new(&code);
         let cases = [
             InstructionBox::from(RegisterSmartContractBytes {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 code: code.clone(),
             }),
             InstructionBox::from(UploadSmartContractCodeChunk {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 total_size: u64::try_from(code.len()).unwrap(),
                 chunk_index: 0,
                 chunk_count: 1,
                 chunk: code,
             }),
             InstructionBox::from(FinalizeSmartContractCodeUpload {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 total_size: 4,
                 chunk_count: 1,
             }),
@@ -12711,7 +12900,10 @@ mod tests {
         .expect("contract address");
         let instructions = vec![
             InstructionBox::from(RegisterSmartContractBytes {
-                code_hash: Hash::new(&code),
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    contract_dataspace,
+                    Hash::new(&code),
+                ),
                 code,
             }),
             InstructionBox::from(
@@ -12802,7 +12994,10 @@ mod tests {
         .expect("contract address");
         let instructions = vec![
             InstructionBox::from(RegisterSmartContractBytes {
-                code_hash: Hash::new(&code),
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    Hash::new(&code),
+                ),
                 code,
             }),
             InstructionBox::from(
@@ -13000,14 +13195,13 @@ mod tests {
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
-        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(RegisterSmartContractBytes {
-                code_hash: Hash::new(&code),
-                code,
-            })],
+            vec![InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "untargeted authority".into(),
+            ))],
         );
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
@@ -13040,14 +13234,13 @@ mod tests {
             DataSpaceCatalog::default(),
             lane_catalog,
         );
-        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(RegisterSmartContractBytes {
-                code_hash: Hash::new(&code),
-                code,
-            })],
+            vec![InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "untargeted authority".into(),
+            ))],
         );
         let mut state = blank_state();
         let account = Account::new(alice_id.clone()).build(&alice_id);
@@ -15983,7 +16176,10 @@ mod tests {
                     DomainId::try_new("merchant", "universal").expect("universal domain"),
                 ))),
                 InstructionBox::from(RegisterSmartContractBytes {
-                    code_hash: Hash::new(&code),
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        DataSpaceId::UNIVERSAL,
+                        Hash::new(&code),
+                    ),
                     code,
                 }),
                 settlement_instruction,
@@ -16062,7 +16258,10 @@ mod tests {
             authority_keypair.private_key(),
             vec![
                 InstructionBox::from(RegisterSmartContractBytes {
-                    code_hash: Hash::new(&code),
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        DataSpaceId::UNIVERSAL,
+                        Hash::new(&code),
+                    ),
                     code,
                 }),
                 settlement_instruction,
@@ -16124,7 +16323,10 @@ mod tests {
             authority_keypair.private_key(),
             vec![
                 InstructionBox::from(RegisterSmartContractBytes {
-                    code_hash: Hash::new(&code),
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        source_dataspace,
+                        Hash::new(&code),
+                    ),
                     code,
                 }),
                 settlement_instruction,
@@ -16270,7 +16472,10 @@ mod tests {
             authority_keypair.private_key(),
             vec![
                 InstructionBox::from(RegisterSmartContractBytes {
-                    code_hash: Hash::new(&code),
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        deploy_dataspace,
+                        Hash::new(&code),
+                    ),
                     code,
                 }),
                 settlement_instruction,
@@ -16355,7 +16560,10 @@ mod tests {
             authority_keypair.private_key(),
             vec![
                 InstructionBox::from(RegisterSmartContractBytes {
-                    code_hash: Hash::new(&code),
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        contract_dataspace,
+                        Hash::new(&code),
+                    ),
                     code,
                 }),
                 InstructionBox::from(

@@ -1379,7 +1379,7 @@ mod tests {
             AdmissionPolicy::AuthenticatedAccount
         );
         for route in [
-            contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
+            contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET,
             contracts_and_verification_keys::MULTISIG_SPEC_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,

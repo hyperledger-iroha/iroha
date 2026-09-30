@@ -65,11 +65,11 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     .expect("grant contract lifecycle authority");
     let (code, manifest) = minimal_bound_contract_artifact();
     let code_hash =
-        crate::smartcontracts::code::register_code_bytes(&deployer, code.clone(), &mut state_tx)
+        crate::smartcontracts::code::register_code_bytes(&deployer,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code.clone(), &mut state_tx)
             .expect("register contract bytes");
     crate::smartcontracts::code::register_manifest(
         &deployer,
-        manifest.signed(&deployer_key),
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&deployer_key),
         &mut state_tx,
     )
     .expect("register signed contract manifest");

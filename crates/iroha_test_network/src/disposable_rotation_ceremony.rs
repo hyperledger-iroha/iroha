@@ -207,6 +207,7 @@ fn verify_input(
     let mut verifier = NativeJournalCursor::new(
         input.chain_id.clone(),
         input.network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         input.finality_limits,
     )
     .map_err(|error| eyre!(error))?;
@@ -725,8 +726,13 @@ fn verify_genesis_input(
             && available.len() == roster.len(),
         "disposable genesis DKG lacks an exact real process for each signed voter"
     );
-    let verifier = NativeJournalCursor::new(network.chain_id(), network_id, limits)
-        .map_err(|error| eyre!(error))?;
+    let verifier = NativeJournalCursor::new(
+        network.chain_id(),
+        network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
     GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
     Ok((bundle, session, roster, verifier))
@@ -1261,9 +1267,13 @@ pub async fn prepare_disposable_pending_custody(
         .chain_id
         .parse::<ChainId>()
         .map_err(|error| eyre!("invalid chain identifier: {error}"))?;
-    let cursor =
-        NativeJournalCursor::new(chain_id.clone(), input.network_id, input.finality_limits)
-            .map_err(|error| eyre!(error))?;
+    let cursor = NativeJournalCursor::new(
+        chain_id.clone(),
+        input.network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        input.finality_limits,
+    )
+    .map_err(|error| eyre!(error))?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         evidence,
         &chain_id,
@@ -1478,8 +1488,13 @@ where
         roster.len() == 4 && seats.iter().map(|seat| &seat.validator).eq(roster.iter()),
         "native config seats differ from exact signed-genesis voter order"
     );
-    let verifier = NativeJournalCursor::new(chain_id.clone(), network_id, limits)
-        .map_err(|error| eyre!(error))?;
+    let verifier = NativeJournalCursor::new(
+        chain_id.clone(),
+        network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
     let _ =
         GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
@@ -1985,8 +2000,13 @@ mod tests {
         let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             CryptoHash::new(b"native phase refusal"),
         ));
-        let mut cursor =
-            NativeJournalCursor::new(ChainId::from("phase-refusal"), network, limits).unwrap();
+        let mut cursor = NativeJournalCursor::new(
+            ChainId::from("phase-refusal"),
+            network,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            limits,
+        )
+        .unwrap();
         let journal = NativeFinalityJournal { blocks: Vec::new() };
         assert!(advance_native_phase(&mut cursor, &journal, 2).is_err());
         assert!(cursor.tip().is_none());

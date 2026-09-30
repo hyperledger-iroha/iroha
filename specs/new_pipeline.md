@@ -298,12 +298,10 @@ Access‑set hints
 - Contract manifests may include optional `access_set_hints { read_keys, write_keys }`. WSV-facing keys use canonical prefixes (`account:…`, `asset:…`, `domain:…`, `*.detail:…`), while contract-local durable state uses `state:<name>` or `state:<name>[*]`. Deployed state is stored only under the contract-instance namespace `sc/<address-hash>/…`; it never falls through to raw IVM state, and unscoped raw bytecode cannot address the reserved `sc` namespace. Dynamic/opaque access emits wildcard hints: `state:*` for unknown state paths and `*` for global ISI fallbacks. Hint keys are parsed into `CanonicalStateKey`/`StateAccessSetAdvisory`, canonicalized, and re-emitted into scheduler keys; invalid hint keys fall back to entrypoint hints or conservative scheduling. Derived access sets are cached by `(code_hash, entrypoint)` and invalidated when the manifest signing payload changes; disable with `pipeline.access_set_cache_enabled` for diagnostics.
 - A dynamic prepass merges queued ISI keys with complete concrete host logs, but a block-start execution is not itself proof that a target stays unchanged. The scheduler therefore derives a second fence from validated bytecode: unproven durable-state access adds `state:*`, while ledger reads/writes, nested calls, and unclassified syscalls add `*`. Durable reads are fingerprinted by concrete contract scope and selectively re-executed when a predecessor changes them. Ledger access and opaque/nested calls are always re-executed against the ordered live state. Incomplete custom-host logs fingerprint the complete durable map and fail closed.
 
-Torii APIs (suggested)
-- `POST /contracts/code` → register code package (manifest+bytes or manifest only).
-- `GET /contracts/code/{code_hash}` → fetch manifest (and bytes if stored).
-- `POST /contracts/instances` → deploy instance.
-- `GET /contracts/instances/{contract_id}` → instance metadata and active version.
-- `POST /contracts/call` → invoke a contract entrypoint; reply contains result and events.
+Torii contract APIs
+- Artifact registration and deployment are client-signed native transaction operations.
+- Account-signed `GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}` and `/bytes` read the exact scoped artifact with network and artifact identity bindings.
+- `POST /v1/contracts/call` prepares a caller-validated unsigned transaction; `POST /v1/contracts/view` executes a read-only invocation. See `torii_contracts_api.md` for authentication and response validation.
 
 Testing & CI
 - Golden vectors for ABI encoding/decoding; reproducible build checks; deterministic execution across backends. Access‑set coverage tests compare hints vs observed RW‑keys.

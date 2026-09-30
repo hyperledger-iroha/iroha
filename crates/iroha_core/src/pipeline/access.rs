@@ -30,6 +30,7 @@ use iroha_data_model::{
     prelude::*,
     role::RoleId,
     rwa::RwaId,
+    smart_contract::ContractArtifactId,
     smart_contract::manifest::{
         ContractManifest, DynamicAccessHint, EntrypointDescriptor, MANIFEST_METADATA_KEY,
     },
@@ -106,7 +107,7 @@ pub(crate) enum AccessSetSource {
 }
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct AccessSetCacheKey {
-    code_hash: IrohaHash,
+    artifact_id: ContractArtifactId,
     entrypoint: Option<String>,
 }
 struct AccessSetCacheEntry {
@@ -152,17 +153,15 @@ fn manifest_signature_hash(manifest: &ContractManifest) -> IrohaHash {
 }
 fn prepared_contract_for_access<R>(
     state_ro: &R,
-    code_hash: IrohaHash,
+    artifact_id: ContractArtifactId,
 ) -> Option<ivm::PreparedContract>
 where
     R: StateReadOnly,
 {
     let cache = state_ro.prepared_contract_cache();
-    if let Some(contract) = cache.get(code_hash) {
-        return Some(contract.as_ref().clone());
-    }
-    code::with_code_bytes(state_ro, &code_hash, |bytecode| {
-        cache.get_or_prepare(code_hash, bytecode)
+    // A warm content cache never substitutes for custody in this exact dataspace.
+    code::with_code_bytes(state_ro, &artifact_id, |bytecode| {
+        cache.get_or_prepare(artifact_id.code_hash, bytecode)
     })?
     .ok()
     .map(|contract| contract.as_ref().clone())
@@ -475,12 +474,12 @@ fn apply_contract_call_execution_context(
 }
 fn manifest_access_set(
     manifest: &ContractManifest,
-    code_hash: IrohaHash,
+    artifact_id: ContractArtifactId,
     contract: &ivm::PreparedContract,
     cache_enabled: bool,
     requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
-    if contract.code_hash() != code_hash {
+    if contract.code_hash() != artifact_id.code_hash {
         return None;
     }
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
@@ -494,7 +493,7 @@ fn manifest_access_set(
             return None;
         }
         let key = AccessSetCacheKey {
-            code_hash,
+            artifact_id,
             entrypoint: Some(entrypoint.name.clone()),
         };
         if let Some(hash) = manifest_hash.as_ref() {
@@ -525,7 +524,7 @@ fn manifest_access_set(
             return None;
         }
         let key = AccessSetCacheKey {
-            code_hash,
+            artifact_id,
             entrypoint: selected_entrypoint_name,
         };
         if let Some(hash) = manifest_hash.as_ref() {
@@ -611,15 +610,18 @@ where
                 && let Some(identity) =
                     code::fetch_bound_contract_identity(view, &call.contract_address)
                 && identity.code_hash == call.expected_code_hash
+                && let Ok(artifact_id) =
+                    ContractArtifactId::for_address(&call.contract_address, identity.code_hash)
+                && view.world().contract_code().get(&artifact_id).is_some()
                 && let Some(contract) = prepared_contract
                     .filter(|contract| contract.code_hash() == identity.code_hash)
                     .cloned()
-                    .or_else(|| prepared_contract_for_access(view, identity.code_hash))
-                && let Some(manifest) = view.world().contract_manifests().get(&identity.code_hash)
+                    .or_else(|| prepared_contract_for_access(view, artifact_id))
+                && let Some(manifest) = view.world().contract_manifests().get(&artifact_id)
             {
                 if let Some((set, source)) = manifest_access_set(
                     manifest,
-                    identity.code_hash,
+                    artifact_id,
                     &contract,
                     view.pipeline().access_set_cache_enabled,
                     Some(call.entrypoint.as_str()),
@@ -709,12 +711,17 @@ where
             if let Some(contract) = prepared.as_ref() {
                 debug_assert_eq!(contract.artifact(), bytecode_ref);
                 let code_hash = contract.code_hash();
-                // 1) Try static hints from on-chain manifest (by code_hash)
+                let artifact_id = state_ro.and_then(|view| {
+                    super::overlay::routed_artifact_id(view, tx.payload(), code_hash).ok()
+                });
+                // 1) Try static hints from the exact routed registry entry.
                 if let Some(view) = state_ro {
-                    if let Some(manifest) = view.world().contract_manifests().get(&code_hash) {
+                    if let Some(artifact_id) = artifact_id
+                        && let Some(manifest) = view.world().contract_manifests().get(&artifact_id)
+                    {
                         if let Some((set, source)) = manifest_access_set(
                             manifest,
-                            code_hash,
+                            artifact_id,
                             contract,
                             view.pipeline().access_set_cache_enabled,
                             requested_entrypoint.as_deref(),
@@ -724,13 +731,28 @@ where
                     }
                 }
                 // 1b) Fallback to manifest provided in transaction metadata.
-                if let Some(manifest) = manifest_from_metadata(tx) {
+                let metadata_artifact_id = artifact_id.or_else(|| {
+                    state_ro
+                        .is_none()
+                        .then(|| {
+                            crate::executor::requested_contract_address(tx.metadata())
+                                .ok()
+                                .flatten()
+                        })
+                        .flatten()
+                        .and_then(|address| {
+                            ContractArtifactId::for_address(&address, code_hash).ok()
+                        })
+                });
+                if let Some(manifest) = manifest_from_metadata(tx)
+                    && let Some(artifact_id) = metadata_artifact_id
+                {
                     if manifest.code_hash == Some(code_hash)
                         && manifest_matches_prepared_contract(contract, &manifest)
                     {
                         if let Some((set, source)) = manifest_access_set(
                             &manifest,
-                            code_hash,
+                            artifact_id,
                             contract,
                             false,
                             requested_entrypoint.as_deref(),
@@ -745,6 +767,12 @@ where
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let mut set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
+                            let artifact_id = super::overlay::routed_artifact_id(
+                                view,
+                                tx.payload(),
+                                ivm::contract_code_hash(bytecode_ref),
+                            )
+                            .map_err(|error| error.to_string())?;
                             if let Some(contract) = prepared.as_ref() {
                                 derive_from_prepared_ivm_dynamic(
                                     contract,
@@ -752,6 +780,7 @@ where
                                     tx.metadata(),
                                     view,
                                     gas_limit,
+                                    artifact_id,
                                 )
                             } else {
                                 derive_from_ivm_dynamic(
@@ -760,6 +789,7 @@ where
                                     tx.metadata(),
                                     view,
                                     gas_limit,
+                                    artifact_id,
                                 )
                             }
                         })
@@ -1128,7 +1158,10 @@ fn manifest_access_set_from_bytecode(
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
     manifest_access_set(
         manifest,
-        code_hash,
+        ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         &prepared,
         cache_enabled,
         requested_entrypoint,
@@ -1897,14 +1930,15 @@ where
             if let Some(identity) =
                 code::fetch_bound_contract_identity(state_ro, &invocation.contract_address)
                 && identity.code_hash == invocation.expected_code_hash
-                && let Some(contract) = prepared_contract_for_access(state_ro, identity.code_hash)
-                && let Some(manifest) = state_ro
-                    .world()
-                    .contract_manifests()
-                    .get(&identity.code_hash)
+                && let Ok(artifact_id) = ContractArtifactId::for_address(
+                    &invocation.contract_address,
+                    identity.code_hash,
+                )
+                && let Some(contract) = prepared_contract_for_access(state_ro, artifact_id)
+                && let Some(manifest) = state_ro.world().contract_manifests().get(&artifact_id)
                 && let Some((hinted, _source)) = manifest_access_set(
                     manifest,
-                    identity.code_hash,
+                    artifact_id,
                     &contract,
                     state_ro.pipeline().access_set_cache_enabled,
                     Some(invocation.entrypoint.as_str()),
@@ -1922,12 +1956,17 @@ where
                 return set;
             };
             let requested_entrypoint = requested_contract_entrypoint(&metadata);
-            if let Some(hinted) = derive_access_from_ivm_trigger(
-                code,
-                code_hash,
-                requested_entrypoint.as_deref(),
-                state_ro,
-            ) {
+            if let Some(address) = crate::executor::requested_contract_address(&metadata)
+                .ok()
+                .flatten()
+                && let Ok(artifact_id) = ContractArtifactId::for_address(&address, code_hash)
+                && let Some(hinted) = derive_access_from_ivm_trigger(
+                    code,
+                    artifact_id,
+                    requested_entrypoint.as_deref(),
+                    state_ro,
+                )
+            {
                 set.union_with(hinted);
             } else {
                 set.union_with(AccessSet::global());
@@ -1938,7 +1977,7 @@ where
 }
 fn derive_access_from_ivm_trigger<R>(
     bytecode: &iroha_data_model::transaction::IvmBytecode,
-    code_hash: IrohaHash,
+    artifact_id: ContractArtifactId,
     requested_entrypoint: Option<&str>,
     state_ro: &R,
 ) -> Option<AccessSet>
@@ -1946,12 +1985,14 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     let bytecode_ref = bytecode.as_ref();
-    let manifest = state_ro.world().contract_manifests().get(&code_hash)?;
+    let manifest = state_ro.world().contract_manifests().get(&artifact_id)?;
     let cache = state_ro.prepared_contract_cache();
-    let contract = cache.get_or_prepare(code_hash, bytecode_ref).ok()?;
+    let contract = cache
+        .get_or_prepare(artifact_id.code_hash, bytecode_ref)
+        .ok()?;
     manifest_access_set(
         manifest,
-        code_hash,
+        artifact_id,
         &contract,
         state_ro.pipeline().access_set_cache_enabled,
         requested_entrypoint,
@@ -2137,6 +2178,7 @@ fn derive_from_ivm_dynamic<R>(
     metadata: &Metadata,
     state_ro: &R,
     gas_limit: u64,
+    artifact_id: ContractArtifactId,
 ) -> Result<AccessSet, String>
 where
     R: StateReadOnly + QueryStateSource,
@@ -2170,7 +2212,7 @@ where
         crate::smartcontracts::ivm::validate_generic_execution_context(
             state_ro.world(),
             metadata,
-            ivm::contract_code_hash(bytecode),
+            artifact_id,
         )
         .map_err(|error| error.to_string())?;
         None
@@ -2191,6 +2233,7 @@ fn derive_from_prepared_ivm_dynamic<R>(
     metadata: &Metadata,
     state_ro: &R,
     gas_limit: u64,
+    artifact_id: ContractArtifactId,
 ) -> Result<AccessSet, String>
 where
     R: StateReadOnly + QueryStateSource,
@@ -2218,7 +2261,7 @@ where
         crate::smartcontracts::ivm::validate_generic_execution_context(
             state_ro.world(),
             metadata,
-            contract.code_hash(),
+            artifact_id,
         )
         .map_err(|error| error.to_string())?;
         None
@@ -2915,7 +2958,11 @@ mod tests {
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(authority);
         let account = build_wonderland_account(authority);
         State::new(
-            World::with([domain], [account], []),
+            crate::pipeline::overlay::test_support::with_global_root(World::with(
+                [domain],
+                [account],
+                [],
+            )),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         )
@@ -2943,6 +2990,10 @@ mod tests {
             &metadata,
             &block,
             TEST_GAS_LIMIT,
+            ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                ivm::contract_code_hash(&generic_state_get_test_program()),
+            ),
         )
         .expect_err("generic prepass must reject contract-owned durable-state access");
         assert!(
@@ -2962,9 +3013,15 @@ mod tests {
                 reserved_key.parse().expect("reserved metadata key"),
                 iroha_primitives::json::Json::new("forged"),
             );
-            let error =
-                derive_from_ivm_dynamic(&halt, &alice, &metadata, &state.view(), TEST_GAS_LIMIT)
-                    .expect_err("generic prepass must reject contract provenance metadata");
+            let error = derive_from_ivm_dynamic(
+                &halt,
+                &alice,
+                &metadata,
+                &state.view(),
+                TEST_GAS_LIMIT,
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, ivm::contract_code_hash(&halt)),
+            )
+            .expect_err("generic prepass must reject contract provenance metadata");
             assert!(
                 error.contains("generic IVM programs cannot carry") && error.contains(reserved_key),
                 "unexpected rejection for `{reserved_key}`: {error}"
@@ -2978,9 +3035,15 @@ mod tests {
         let block = state.block(prepass_test_header());
         let mut halt = ivm::ProgramMetadata::default().encode();
         halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let set =
-            derive_from_ivm_dynamic(&halt, &alice, &Metadata::default(), &block, TEST_GAS_LIMIT)
-                .expect("stateless generic prepass must remain executable");
+        let set = derive_from_ivm_dynamic(
+            &halt,
+            &alice,
+            &Metadata::default(),
+            &block,
+            TEST_GAS_LIMIT,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, ivm::contract_code_hash(&halt)),
+        )
+        .expect("stateless generic prepass must remain executable");
         assert!(set.write_keys.contains("*"));
     }
     #[test]
@@ -3080,7 +3143,11 @@ mod tests {
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let state = State::new(
-            World::with([domain], [account], []),
+            crate::pipeline::overlay::test_support::with_global_root(World::with(
+                [domain],
+                [account],
+                [],
+            )),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -3097,9 +3164,15 @@ mod tests {
             iroha_primitives::json::Json::new(1_u64),
         );
         ivm::reset_argument_record_decode_count();
-        let error =
-            derive_from_ivm_dynamic(&artifact, &alice, &metadata, &state.view(), TEST_GAS_LIMIT)
-                .expect_err("selected raw contract entrypoints require a live instance identity");
+        let error = derive_from_ivm_dynamic(
+            &artifact,
+            &alice,
+            &metadata,
+            &state.view(),
+            TEST_GAS_LIMIT,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, ivm::contract_code_hash(&artifact)),
+        )
+        .expect_err("selected raw contract entrypoints require a live instance identity");
         assert!(
             error.contains("requires a live contract_address or contract_alias binding"),
             "unexpected prepass rejection: {error}"
@@ -3315,7 +3388,7 @@ seiyaku WarmAccessCounter {
         let prepared_before = prepared_cache.stats();
         let first = manifest_access_set(
             &manifest,
-            summary.code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, summary.code_hash),
             summary.prepared_contract(),
             false,
             Some("write_one"),
@@ -3323,7 +3396,7 @@ seiyaku WarmAccessCounter {
         .expect("first prepared access derivation");
         let second = manifest_access_set(
             &manifest,
-            summary.code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, summary.code_hash),
             summary.prepared_contract(),
             false,
             Some("write_one"),
@@ -3815,7 +3888,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let view = state.block(prepass_test_header());
         // Program: GET_AUTHORITY; INPUT_PUBLISH_TLV (key/value); SET_ACCOUNT_DETAIL; HALT
         let key: Name = "cursor".parse().expect("key name");
@@ -3949,6 +4026,10 @@ seiyaku DynamicAccessCounter {
             tx.metadata(),
             &view,
             TEST_GAS_LIMIT,
+            ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                ivm::contract_code_hash(bytecode.as_ref()),
+            ),
         )
         .expect("account-detail prepass must execute the current pointer-ownership fixture");
         let k = key_account_detail(&alice, &"cursor".parse().unwrap());
@@ -3973,7 +4054,11 @@ seiyaku DynamicAccessCounter {
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let state = State::new(
-            World::with([domain], [account], []),
+            crate::pipeline::overlay::test_support::with_global_root(World::with(
+                [domain],
+                [account],
+                [],
+            )),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -4027,7 +4112,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let view = state.view();
         let mut code = Vec::new();
         for rd in [10_u8, 11, 12] {
@@ -4148,7 +4237,7 @@ seiyaku DynamicAccessCounter {
         );
         assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
         let state = State::new(
-            World::default(),
+            crate::pipeline::overlay::test_support::with_global_root(World::default()),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -4529,7 +4618,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         // Insert manifest with access-set hints into WSV
         let asset_def: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -4553,9 +4646,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         // Build a tx carrying this program; add manifest copy into metadata as well (optional)
@@ -4595,7 +4689,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let asset_def: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -4636,6 +4734,69 @@ seiyaku DynamicAccessCounter {
         assert_eq!(source, Some(AccessSetSource::EntrypointHints));
     }
     #[test]
+    fn artifact_custody_is_checked_before_shared_preparation_cache() {
+        let (program, hash, _) = test_contract_artifact(
+            crate::ivm_test_support::unit_return().to_vec(),
+            None,
+            vec![default_test_entrypoint()],
+        );
+        let owned = ContractArtifactId::new(DataSpaceId::new(17), hash);
+        let foreign = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
+        let mut world = World::default();
+        world.contract_code.insert(owned, program);
+        let state = State::new(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(prepared_contract_for_access(&view, owned).is_some());
+        assert!(
+            prepared_contract_for_access(&view, foreign).is_none(),
+            "a warm equal-hash artifact never grants registry custody in another dataspace"
+        );
+        assert!(prepared_contract_for_access(&view, owned).is_some());
+    }
+
+    #[test]
+    fn access_set_cache_separates_equal_hashes_in_different_dataspaces() {
+        let hash = IrohaHash::new(b"scoped access-cache fixture");
+        let owned = AccessSetCacheKey {
+            artifact_id: ContractArtifactId::new(DataSpaceId::new(17), hash),
+            entrypoint: Some("scope_isolation_fixture".to_owned()),
+        };
+        let foreign = AccessSetCacheKey {
+            artifact_id: ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash),
+            entrypoint: owned.entrypoint.clone(),
+        };
+        let signature = IrohaHash::new(b"same signed manifest");
+        let mut owned_set = AccessSet::new();
+        owned_set.add_read("state:owned".to_owned());
+        let mut foreign_set = AccessSet::new();
+        foreign_set.add_read("state:foreign".to_owned());
+        let mut cache = access_set_cache().write();
+        cache.insert(
+            owned.clone(),
+            AccessSetCacheEntry {
+                manifest_hash: signature,
+                set: owned_set.clone(),
+            },
+        );
+        assert!(!cache.contains_key(&foreign));
+        cache.insert(
+            foreign.clone(),
+            AccessSetCacheEntry {
+                manifest_hash: signature,
+                set: foreign_set.clone(),
+            },
+        );
+        assert_eq!(cache.get(&owned).unwrap().set, owned_set);
+        assert_eq!(cache.get(&foreign).unwrap().set, foreign_set);
+        cache.remove(&owned);
+        cache.remove(&foreign);
+    }
+
+    #[test]
     fn access_set_cache_invalidates_on_manifest_update() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
@@ -4647,7 +4808,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let (prog, code_hash, _) = test_contract_artifact(
             crate::ivm_test_support::unit_return().to_vec(),
             None,
@@ -4677,7 +4842,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world.contract_manifests.insert(code_hash, manifest_a);
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest_a,
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
@@ -4714,7 +4882,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world.contract_manifests.insert(code_hash, manifest_b);
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest_b,
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let set_b = derive_for_transaction(&tx, Some(&state.view()), IvmStrategy::Conservative);
@@ -4732,7 +4903,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&[0x01, 0x00]); // dummy body
         ivm::ProgramMetadata::parse(&prog).expect("header parse");
@@ -4761,7 +4936,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world.contract_manifests.insert(code_hash, manifest);
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest,
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
@@ -4789,7 +4967,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let mut code = Vec::new();
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
@@ -4861,9 +5043,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
@@ -4897,7 +5080,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let mut code = Vec::new();
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
@@ -4946,9 +5133,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
@@ -4978,7 +5166,11 @@ seiyaku DynamicAccessCounter {
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(world),
+            kura,
+            query,
+        );
         let mut code = Vec::new();
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
@@ -5033,9 +5225,10 @@ seiyaku DynamicAccessCounter {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
@@ -5135,7 +5328,11 @@ seiyaku DynamicAccessCounter {
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(World::default()),
+            kura,
+            query,
+        );
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5218,7 +5415,11 @@ seiyaku DynamicAccessCounter {
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(World::default()),
+            kura,
+            query,
+        );
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5280,7 +5481,11 @@ seiyaku DynamicAccessCounter {
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(World::default()),
+            kura,
+            query,
+        );
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5307,12 +5512,26 @@ seiyaku DynamicAccessCounter {
             let (prog, code_hash, manifest) =
                 test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
             let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
-            stx.world.contract_manifests.insert(code_hash, manifest);
+            stx.world.contract_manifests.insert(
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+                manifest,
+            );
             let trigger_id: TriggerId = "ivm_trigger".parse().unwrap();
             let mut trigger_metadata = Metadata::default();
             trigger_metadata.insert(
                 "contract_entrypoint".parse().expect("entrypoint key"),
                 iroha_primitives::json::Json::new("main"),
+            );
+            let address = iroha_data_model::smart_contract::ContractAddress::derive(
+                &test_network_id(),
+                &alice,
+                96,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("explicit universal trigger address");
+            trigger_metadata.insert(
+                "contract_address".parse().expect("address key"),
+                iroha_primitives::json::Json::new(address.to_string()),
             );
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -5386,7 +5605,7 @@ seiyaku DynamicAccessCounter {
                 .view()
                 .world()
                 .contract_manifests()
-                .get(&code_hash)
+                .get(&ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash))
                 .is_some()
         );
     }
@@ -5397,7 +5616,11 @@ seiyaku DynamicAccessCounter {
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let state = State::new(
+            crate::pipeline::overlay::test_support::with_global_root(World::default()),
+            kura,
+            query,
+        );
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5424,7 +5647,10 @@ seiyaku DynamicAccessCounter {
             let (prog, code_hash, manifest) =
                 test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
             let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
-            stx.world.contract_manifests.insert(code_hash, manifest);
+            stx.world.contract_manifests.insert(
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+                manifest,
+            );
             let trigger_id: TriggerId = "ivm_trigger_without_selector".parse().unwrap();
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -5469,7 +5695,7 @@ seiyaku DynamicAccessCounter {
                 .view()
                 .world()
                 .contract_manifests()
-                .get(&code_hash)
+                .get(&ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash))
                 .is_some()
         );
     }

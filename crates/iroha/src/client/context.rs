@@ -70,6 +70,7 @@ impl ClientBuilder {
             torii_request_timeout,
             key_pair,
             basic_auth,
+            api_token,
             transaction_add_nonce,
             transaction_ttl,
             transaction_status_timeout,
@@ -78,6 +79,12 @@ impl ClientBuilder {
             sorafs_rollout_phase,
         } = configuration;
         let mut headers = HashMap::new();
+        if let Some(api_token) = api_token {
+            headers.insert(
+                String::from("X-API-Token"),
+                api_token.expose_secret().to_owned(),
+            );
+        }
         if let Some(basic_auth) = basic_auth {
             let credentials = format!(
                 "{}:{}",
@@ -133,7 +140,7 @@ impl ClientBuilder {
         }
     }
 
-    /// Add default headers, retaining explicitly configured Basic authentication.
+    /// Add default headers, retaining explicitly configured authentication.
     #[must_use]
     pub fn headers(mut self, mut headers: HashMap<String, String>) -> Self {
         // HTTP names are case-insensitive. A supplied Authorization spelling

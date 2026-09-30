@@ -533,7 +533,7 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
     for (path, method, response_schema, reject, statuses) in contract_rows! {
         "/v1/contracts/aliases/resolve", "post", "#/components/schemas/ContractAliasResolveResponse", "alias_auth_required", &contract_words("200 400 401 404 429 500")[..];
         "/v1/gov/contracts/{contract_address}", "get", "#/components/schemas/GovernedContractResponse", "contract_code_auth_required", &contract_words("200 400 401 404 429 500");
-        "/v1/contracts/code-bytes/{code_hash}", "get", "#/components/schemas/JsonValue", "contract_code_auth_required", &contract_words("200 400 401 404 429");
+        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes", "get", "#/components/schemas/JsonValue", "contract_code_auth_required", &contract_words("200 400 401 404 429");
     } {
         let operation = openapi_operation(&document, path, method);
         assert_eq!(operation_header_requirements(operation), canonical_account_header_requirements(false));

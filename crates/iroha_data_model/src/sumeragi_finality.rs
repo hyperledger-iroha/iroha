@@ -60,7 +60,7 @@ use iroha_sumeragi::{
     availability::AvailabilityFrame,
     crypto::Crypto,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
-    preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
+    preimage::{committee_digest_preimage, payload_hash},
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
 };
 use norito::{
@@ -76,6 +76,8 @@ use crate::{
     sumeragi::SumeragiStatus,
     transaction::TransactionEntrypoint,
 };
+#[cfg(test)]
+use iroha_sumeragi::preimage::{InstanceKind, instance_id};
 
 /// Maximum canonical certified block accepted by a portable proof reader.
 pub const MAX_FINALITY_BLOCK_BYTES: usize = 32 * 1024 * 1024;
@@ -551,13 +553,16 @@ impl SumeragiFinalityVerifier {
                     }),
             "selected roster differs from signed genesis authority",
         )?;
-        let instance = instance_id(
-            &crypto,
-            &Hash32(Hash::from(trusted_genesis.hash()).into()),
-            chain_id.as_bytes(),
-            InstanceKind::Global,
-            0,
-        );
+        let instance = signed_genesis_consensus_metadata(trusted_genesis)
+            .map_err(malformed)?
+            .sumeragi_context
+            .root_scope
+            .instance_id(
+                &crypto,
+                crate::NetworkId::from_genesis_hash(trusted_genesis.hash()),
+                chain_id,
+            )
+            .map_err(malformed)?;
         Ok(Self {
             genesis: trusted_genesis.clone(),
             chain_id: chain_id.to_owned(),

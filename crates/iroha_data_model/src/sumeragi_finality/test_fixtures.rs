@@ -153,6 +153,28 @@ impl NativeFinalityFixture {
     /// All certificates are genuine native BLS; supplied execution results remain synthetic.
     #[must_use]
     pub fn start_with_mode(chain_id: &str, mode: SumeragiConsensusMode) -> Self {
+        Self::start_with_mode_and_scope(
+            chain_id,
+            mode,
+            crate::block::consensus::SumeragiRootScope::Global,
+        )
+    }
+
+    /// Start a permissioned signed genesis with an explicit immutable root scope.
+    /// Certificates use the resulting native instance; synthetic results do not execute World.
+    #[must_use]
+    pub fn start_with_scope(
+        chain_id: &str,
+        scope: crate::block::consensus::SumeragiRootScope,
+    ) -> Self {
+        Self::start_with_mode_and_scope(chain_id, SumeragiConsensusMode::Permissioned, scope)
+    }
+
+    fn start_with_mode_and_scope(
+        chain_id: &str,
+        mode: SumeragiConsensusMode,
+        root_scope: crate::block::consensus::SumeragiRootScope,
+    ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
         let mut keys: Vec<_> = (1..=4)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
@@ -192,8 +214,10 @@ impl NativeFinalityFixture {
                         .collect(),
                 },
             },
-            sumeragi_context:
-                crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
+            sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters {
+                root_scope,
+                ..crate::block::consensus::SumeragiGenesisContextParameters::recommended()
+            },
         };
         let mut instructions: Vec<InstructionBox> = validators
             .iter()

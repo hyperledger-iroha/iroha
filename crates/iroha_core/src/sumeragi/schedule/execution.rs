@@ -138,7 +138,8 @@ pub(crate) fn authenticate_successor_context(
     let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)?;
     let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)?;
     let instance =
-        crate::sumeragi::node::global_instance(genesis.block(), &state.chain_id().to_string());
+        crate::sumeragi::node::root_instance(genesis.block(), &state.chain_id().to_string())
+            .map_err(ScheduleError::Epoch)?;
     let current = &state.world().consensus_schedule().ready(height)?.epoch;
     expected
         .validate()
@@ -207,6 +208,16 @@ impl StateBlock<'_> {
             })?;
             authenticate_successor_context(self, &self._curr_block, expected)?;
         }
+        let root_scope = if height == genesis_height {
+            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                .map_err(ScheduleError::Epoch)?
+                .sumeragi_context
+                .root_scope
+        } else {
+            crate::sumeragi::lanes::routing::committed_root_scope(&self.world).ok_or_else(|| {
+                ScheduleError::Epoch("native control requires immutable root scope".into())
+            })?
+        };
         let budget = self.pipeline_ivm_prepared_cache.execution_budget();
         let params = ChainParamsRecord::from_parameters(self.world.parameters().sumeragi());
         let (captured, pulse) = if height == genesis_height {
@@ -218,6 +229,7 @@ impl StateBlock<'_> {
             let epoch =
                 crate::sumeragi::epoch::genesis_epoch(source).map_err(ScheduleError::Epoch)?;
             let pulse = epoch_beacon::capture(
+                root_scope,
                 &self.world,
                 self.block_hashes(),
                 &epoch,
@@ -236,6 +248,7 @@ impl StateBlock<'_> {
             }
             let current = &schedule.ready(height)?.epoch;
             let pulse = epoch_beacon::capture(
+                root_scope,
                 &self.world,
                 self.block_hashes(),
                 current,

@@ -18,7 +18,6 @@ use iroha_sumeragi::{
     api::CommittedTip,
     evidence::{EvidenceContext, EvidenceError, verify_evidence},
     message::Evidence,
-    preimage::{InstanceKind, instance_id},
     topology::demotion_window,
     types::{EpochId, Hash32, ValidatorIndex},
 };
@@ -135,14 +134,15 @@ pub(crate) fn verify_from_state(
         .get(0)
         .ok_or_else(|| invalid("signed genesis identity is absent"))?;
     let crypto = BlsCrypto::new();
-    let genesis: iroha_crypto::Hash = (*genesis_hash).into();
-    let instance = instance_id(
-        &crypto,
-        &Hash32(*genesis.as_ref()),
-        state.chain_id().as_str().as_bytes(),
-        InstanceKind::Global,
-        0,
-    );
+    let scope = super::lanes::routing::committed_root_scope(state.world())
+        .ok_or_else(|| invalid("signed immutable root scope is absent or malformed"))?;
+    let instance = scope
+        .instance_id(
+            &crypto,
+            iroha_data_model::NetworkId::from_genesis_hash(*genesis_hash),
+            state.chain_id().as_str(),
+        )
+        .map_err(|error| invalid(&error.to_string()))?;
     if instance != claimed_instance {
         return Err(invalid(
             "report targets another network, chain or native instance",

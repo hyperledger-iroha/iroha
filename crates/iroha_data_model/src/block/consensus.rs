@@ -28,6 +28,8 @@ use norito::codec::{Decode, DecodeAll, Encode};
 use std::{string::String, vec::Vec};
 /// Canonical genesis/handshake fingerprint projection.
 pub mod fingerprint;
+mod root_scope;
+pub use root_scope::SumeragiRootScope;
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.
@@ -155,6 +157,8 @@ pub struct ValidatorPower {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::SumeragiGenesisContextParameters")]
 pub struct SumeragiGenesisContextParameters {
+    /// Immutable execution scope and native root-instance kind selected by signed genesis.
+    pub root_scope: SumeragiRootScope,
     /// Mandatory deterministic data-availability layout for proposal bodies.
     pub da_layout: DataAvailabilityLayout,
     /// Canonical commitment to the staged Nexus/AMX consensus context.
@@ -174,6 +178,7 @@ impl SumeragiGenesisContextParameters {
     #[must_use]
     pub const fn recommended() -> Self {
         Self {
+            root_scope: SumeragiRootScope::Global,
             da_layout: recommended_data_availability_layout(),
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
@@ -188,6 +193,7 @@ impl SumeragiGenesisContextParameters {
     /// limit or an encoding/shard mismatch, and rejects zero or non-canonical
     /// policy commitments.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        self.root_scope.validate()?;
         if self.nexus_amx_context_hash == [0; 32]
             || <[u8; Hash::LENGTH]>::from(Hash::prehashed(self.nexus_amx_context_hash))
                 != self.nexus_amx_context_hash
@@ -232,6 +238,8 @@ pub struct HeightContextId(
 /// Invalid signed consensus metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationError {
+    /// A private root names the universal dataspace instead of a distinct child scope.
+    InvalidRootScope,
     /// RS16 dimensions or resource bounds are invalid.
     InvalidDataAvailabilityLayout,
     /// The staged Nexus commitment is not a canonical nonzero hash.
@@ -242,6 +250,7 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::InvalidRootScope => "invalid Sumeragi root scope",
             Self::InvalidDataAvailabilityLayout => "invalid data-availability layout",
             Self::InvalidNexusAmxContextHash => "invalid Nexus context hash",
             Self::InvalidExecutionPolicyHash => "invalid execution-policy hash",

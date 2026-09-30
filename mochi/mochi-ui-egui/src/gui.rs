@@ -187,15 +187,22 @@ impl Desktop {
         style.visuals = egui::Visuals::dark();
         style.visuals.selection.bg_fill = egui::Color32::from_rgb(72, 87, 167);
         creation.egui_ctx.set_style(style);
+        let mut app = Self::model(path);
+        app.open();
+        app
+    }
+
+    fn model(path: PathBuf) -> Self {
         let (sender, receiver) = mpsc::channel();
         let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build();
         let error = runtime
             .as_ref()
             .err()
             .map(|e| format!("Cannot start desktop task runtime: {e}"));
-        let mut app = Self {
+        Self {
             runtime: runtime.ok(),
             sender,
             receiver,
@@ -235,9 +242,7 @@ impl Desktop {
             journal_path: String::new(),
             review: None,
             receipt: None,
-        };
-        app.open();
-        app
+        }
     }
 
     fn spawn(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
@@ -262,6 +267,7 @@ impl Desktop {
         self.preview = None;
         self.submitted_hash = None;
         self.receipt = None;
+        self.notice = None;
         self.reset_intent = false;
     }
 
@@ -270,6 +276,7 @@ impl Desktop {
         self.clear_network();
         self.workspace = None;
         self.names.clear();
+        self.new_name = "local".into();
         let path = PathBuf::from(&self.workspace_path);
         self.spawn(move || Message::Opened(open_workspace(path)));
     }
@@ -330,6 +337,7 @@ impl Desktop {
             self.clear_network();
         }
         let name = selection.network.prepared().context.name.clone();
+        self.new_name = name.clone();
         if !self.names.contains(&name) {
             self.names.push(name);
             self.names.sort();
@@ -460,10 +468,10 @@ impl Desktop {
             }
         }
         if let Some((_, receiver)) = self.blocks.as_mut() {
-            drain_stream(receiver, &mut self.activity);
+            drain_stream(receiver, &mut self.activity, block_activity);
         }
         if let Some((_, receiver)) = self.events.as_mut() {
-            drain_stream(receiver, &mut self.activity);
+            drain_stream(receiver, &mut self.activity, event_activity);
         }
         if !self.busy
             && self.selected.is_some()
@@ -603,7 +611,7 @@ impl Desktop {
                     Message::Dashboard((|| {
                         let client = network.observer(peer).map_err(|e| e.to_string())?;
                         let context = &network.prepared().context;
-                        handle
+                        let snapshot = handle
                             .block_on(fetch_dashboard_snapshot(
                                 format!("Validator {}", peer + 1),
                                 &client,
@@ -612,7 +620,9 @@ impl Desktop {
                                     account_id: context.account_id.clone(),
                                 }],
                             ))
-                            .map_err(|e| format!("{e:?}"))
+                            .map_err(|e| format!("{e:?}"))?;
+                        network.validate().map_err(|e| e.to_string())?;
+                        Ok(snapshot)
                     })())
                 });
             }
@@ -1157,13 +1167,61 @@ fn push_activity(activity: &mut VecDeque<String>, value: String) {
     }
 }
 
-fn drain_stream<T: std::fmt::Debug + Clone>(
+fn bounded_text(value: &str) -> String {
+    value.chars().take(4096).collect()
+}
+
+fn block_activity(event: &mochi_core::BlockStreamEvent) -> String {
+    use mochi_core::BlockStreamEvent;
+    match event {
+        BlockStreamEvent::Block {
+            summary, raw_len, ..
+        } => format!(
+            "Block #{} · {} transactions · {} rejected · {} bytes · {}",
+            summary.height,
+            summary.transaction_count,
+            summary.rejected_transaction_count,
+            raw_len,
+            bounded_text(&summary.hash_hex)
+        ),
+        BlockStreamEvent::Text { text } => bounded_text(text),
+        BlockStreamEvent::DecodeError { error } => {
+            format!("Block {:?}: {}", error.stage, bounded_text(&error.message))
+        }
+        BlockStreamEvent::Lagged { skipped } => format!("Block stream skipped {skipped} messages"),
+        BlockStreamEvent::Closed => "Block stream closed".into(),
+    }
+}
+
+fn event_activity(event: &mochi_core::EventStreamEvent) -> String {
+    use mochi_core::EventStreamEvent;
+    match event {
+        EventStreamEvent::Event {
+            summary, raw_len, ..
+        } => format!(
+            "{} · {} · {} bytes · {}",
+            summary.category.label(),
+            bounded_text(&summary.label),
+            raw_len,
+            bounded_text(summary.detail.as_deref().unwrap_or_default())
+        ),
+        EventStreamEvent::Text { text } => bounded_text(text),
+        EventStreamEvent::DecodeError { error } => {
+            format!("Event {:?}: {}", error.stage, bounded_text(&error.message))
+        }
+        EventStreamEvent::Lagged { skipped } => format!("Event stream skipped {skipped} messages"),
+        EventStreamEvent::Closed => "Event stream closed".into(),
+    }
+}
+
+fn drain_stream<T: Clone>(
     receiver: &mut tokio::sync::broadcast::Receiver<T>,
     activity: &mut VecDeque<String>,
+    summarize: impl Fn(&T) -> String,
 ) {
     for _ in 0..64 {
         match receiver.try_recv() {
-            Ok(event) => push_activity(activity, format!("{event:?}")),
+            Ok(event) => push_activity(activity, summarize(&event)),
             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(count)) => push_activity(
                 activity,
                 format!(
@@ -1178,6 +1236,23 @@ fn drain_stream<T: std::fmt::Debug + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_summaries_bound_untrusted_text_and_show_lifecycle() {
+        assert_eq!(
+            block_activity(&mochi_core::BlockStreamEvent::Closed),
+            "Block stream closed"
+        );
+        assert_eq!(
+            event_activity(&mochi_core::EventStreamEvent::Closed),
+            "Event stream closed"
+        );
+        let event = mochi_core::BlockStreamEvent::Text {
+            text: "界".repeat(5000),
+        };
+        assert_eq!(block_activity(&event).chars().count(), 4096);
+        assert!(event_activity(&mochi_core::EventStreamEvent::Lagged { skipped: 5 }).contains('5'));
+    }
 
     #[test]
     fn optional_package_selectors_preserve_simple_source_default() {
@@ -1198,10 +1273,72 @@ mod tests {
     }
 
     #[test]
-    fn dropped_review_cancels_without_implicit_approval() {
-        let (sender, receiver) = mpsc::channel::<bool>();
-        drop(sender);
-        assert!(!receiver.recv().unwrap_or(false));
+    fn stale_context_results_are_ignored_and_their_review_is_cancelled() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.epoch = 2;
+        desktop.logs = "current context".into();
+        desktop
+            .sender
+            .send((1, Message::Logs(Ok("stale context".into()))))
+            .unwrap();
+        let (decision, answer) = mpsc::channel();
+        desktop
+            .sender
+            .send((
+                1,
+                Message::Review {
+                    evidence: "old fees".into(),
+                    decision,
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.logs, "current context");
+        assert!(desktop.review.is_none());
+        assert!(answer.recv().is_err());
+    }
+
+    #[test]
+    fn closing_desktop_with_pending_review_cancels_without_approval() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        let (decision, answer) = mpsc::channel();
+        desktop
+            .sender
+            .send((
+                0,
+                Message::Review {
+                    evidence: "quoted fees".into(),
+                    decision,
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(desktop.busy);
+        assert_eq!(desktop.review.as_ref().unwrap().evidence, "quoted fees");
+        drop(desktop);
+        assert!(answer.recv().is_err());
+    }
+
+    #[test]
+    fn every_empty_workspace_view_renders_without_starting_network_or_signer() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        let context = egui::Context::default();
+        for view in View::ALL {
+            let output = context.run(egui::RawInput::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| match view {
+                    View::Dashboard => desktop.dashboard(ui),
+                    View::State => desktop.state(ui),
+                    View::Activity => desktop.activity(ui),
+                    View::Composer => desktop.composer(ui),
+                    View::Contracts => desktop.contracts(ui),
+                });
+            });
+            assert!(!output.shapes.is_empty());
+            assert!(!desktop.busy);
+            assert!(desktop.workspace.is_none());
+            assert!(desktop.selected.is_none());
+        }
     }
 
     #[test]
@@ -1211,7 +1348,7 @@ mod tests {
             sender.send(index).unwrap();
         }
         let mut activity = VecDeque::new();
-        drain_stream(&mut receiver, &mut activity);
+        drain_stream(&mut receiver, &mut activity, |event| event.to_string());
         assert!(activity.front().unwrap().contains("skipped"));
         assert_eq!(activity.back().unwrap(), "9");
     }

@@ -186,6 +186,22 @@ fn require_same_deployment(before: &Value, after: &Value) -> Result<(), Box<dyn 
 mod tests {
     use super::*;
 
+    /// Exercise an already-built matching runtime without invoking Cargo from the bundle.
+    #[test]
+    #[ignore = "requires IROHA_DEVEX_BUNDLE_BIN pointing to matching native runtime binaries"]
+    fn installed_runtime_without_configuration() {
+        let directory = std::env::var_os("IROHA_DEVEX_BUNDLE_BIN")
+            .map(PathBuf::from)
+            .expect("set IROHA_DEVEX_BUNDLE_BIN to the installed runtime bin directory");
+        let kagami = directory.join(if cfg!(windows) {
+            "kagami.exe"
+        } else {
+            "kagami"
+        });
+        run(&kagami)
+            .expect("installed developer workflow must retain Applied evidence across restart");
+    }
+
     #[test]
     fn readiness_requires_every_validator_and_exact_phase() {
         let ready = norito::json!({"phase": "ready", "running_peers": 4});

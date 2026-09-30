@@ -274,14 +274,14 @@ pub fn build_commit_deployment_transaction(
 }
 pub fn build_native_upload_transaction_plan(
     signing: &TransactionSigningContext<'_>,
-    code_hash: Hash,
+    artifact_id: ContractArtifactId,
     code: &[u8],
 ) -> Result<NativeUploadTransactionPlan> {
     if code.is_empty() {
         return Err(eyre!("contract artifact must not be empty"));
     }
     let canonical_code_hash = ivm_abi::metadata::contract_code_hash(code);
-    if code_hash != canonical_code_hash {
+    if artifact_id.code_hash != canonical_code_hash {
         return Err(eyre!(
             "contract code hash does not match the canonical artifact hash"
         ));
@@ -296,7 +296,7 @@ pub fn build_native_upload_transaction_plan(
         let chunk_index =
             u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
         let upload = UploadSmartContractCodeChunk {
-            code_hash,
+            artifact_id,
             total_size,
             chunk_index,
             chunk_count,
@@ -307,7 +307,7 @@ pub fn build_native_upload_transaction_plan(
             vec![
                 InstructionBox::from(upload),
                 InstructionBox::from(FinalizeSmartContractCodeUpload {
-                    code_hash,
+                    artifact_id,
                     total_size,
                     chunk_count,
                 }),

@@ -18,6 +18,7 @@ use crate::{
     state::{BlockHashRead, GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, WorldReadOnly},
 };
 use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
     consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
         GlobalThresholdBeaconPulseContextV1,
@@ -46,23 +47,54 @@ impl VerifiedEpochPulse {
     }
 }
 
-/// Whether this committed source requests mandatory native control work at the given height.
+/// Whether this signed root owns the global control plane. Private roots use one
+/// permissioned committee and cannot acquire parent Parliament or beacon custody.
+fn owns_global_control(
+    scope: SumeragiRootScope,
+    world: &impl WorldReadOnly,
+    current: &ValidatorEpochContextV1,
+) -> Result<bool, String> {
+    scope.validate().map_err(|error| error.to_string())?;
+    if matches!(scope, SumeragiRootScope::Global) {
+        return Ok(true);
+    }
+    if current.mode != ConsensusMode::Permissioned
+        || current.authorization.beacon != BeaconEpochBindingV1::Bootstrap
+        || world
+            .parliament_required_beacon_pulse_slots()
+            .iter()
+            .next()
+            .is_some()
+        || world.active_global_beacon_key_session().is_some()
+        || world.global_beacon_pulses().iter().next().is_some()
+    {
+        return Err("private root cannot own global epoch, Parliament, or beacon control".into());
+    }
+    Ok(false)
+}
+
+/// Whether this authenticated root requests mandatory native control work at the given height.
 pub(crate) fn required(
+    scope: SumeragiRootScope,
     world: &impl WorldReadOnly,
     current: &ValidatorEpochContextV1,
     height: u64,
-) -> bool {
-    (current.mode == ConsensusMode::Npos
+) -> Result<bool, String> {
+    if !owns_global_control(scope, world, current)? {
+        return Ok(false);
+    }
+    Ok((current.mode == ConsensusMode::Npos
         && height.checked_add(1) == Some(current.authorization.last_height))
         || world
             .parliament_required_beacon_pulse_slots()
             .get(&(BeaconSessionId::for_network_v1(&current.network_id), height))
-            .is_some_and(|attempts| !attempts.is_empty())
+            .is_some_and(|attempts| !attempts.is_empty()))
 }
 
 /// Verify presence/absence and actual threshold proof at the immutable committed cut.
 /// This function consumes no node-local certificate signer subset or aggregator state.
 pub(crate) fn capture(
+    scope: SumeragiRootScope,
     world: &impl WorldReadOnly,
     hashes: &(impl BlockHashRead + ?Sized),
     current: &ValidatorEpochContextV1,
@@ -103,7 +135,7 @@ pub(crate) fn capture(
     {
         return Err("native beacon witness is outside its exact committed prestate".into());
     }
-    let demanded = required(world, current, height);
+    let demanded = required(scope, world, current, height)?;
     let Some(pulse) = supplied else {
         return if demanded {
             Err("mandatory native beacon control witness is absent".into())
@@ -228,4 +260,75 @@ fn validate_pending_slot(
         return Err("native beacon history lost its latest cursor".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod root_scope_tests {
+    use super::*;
+    use crate::{
+        query::store::LiveQueryStore,
+        state::{State, StateReadOnly as _, World},
+        sumeragi::lanes::routing::test_support,
+    };
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{NetworkId, governance::types::GovernanceAttemptId};
+    use iroha_model_base::topology::DataSpaceId;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn signed_private_genesis_has_no_global_control_or_provider_requirement() {
+        let scope = SumeragiRootScope::Dataspace {
+            parent_network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"parent"),
+            )),
+            dataspace_id: DataSpaceId::new((1_u64 << 40) + 13),
+        };
+        let genesis = test_support::signed_genesis(scope);
+        let epoch = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
+        let state = State::new_for_testing(
+            World::new(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(!required(scope, view.world(), &epoch, 1).unwrap());
+        let captured = capture(
+            scope,
+            view.world(),
+            view.block_hashes(),
+            &epoch,
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(captured.pulse().is_none());
+        assert!(captured.link().is_none());
+        let mut wrong_mode = epoch.clone();
+        wrong_mode.mode = ConsensusMode::Npos;
+        assert!(required(scope, view.world(), &wrong_mode, 1).is_err());
+    }
+
+    #[test]
+    fn private_root_rejects_retained_parent_parliament_demand_instead_of_signing_it() {
+        let scope = SumeragiRootScope::Dataspace {
+            parent_network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"parent"),
+            )),
+            dataspace_id: DataSpaceId::new(13),
+        };
+        let epoch =
+            crate::sumeragi::epoch::genesis_epoch(&test_support::signed_genesis(scope)).unwrap();
+        let mut world = test_support::world(scope);
+        world.parliament_required_beacon_pulse_slots.insert(
+            (BeaconSessionId::for_network_v1(&epoch.network_id), 7),
+            BTreeSet::from([GovernanceAttemptId::new([7; 32])]),
+        );
+        assert!(
+            required(scope, &world.view(), &epoch, 7)
+                .unwrap_err()
+                .contains("global epoch, Parliament, or beacon")
+        );
+        assert!(required(SumeragiRootScope::Global, &world.view(), &epoch, 7).unwrap());
+    }
 }

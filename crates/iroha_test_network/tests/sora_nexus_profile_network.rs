@@ -973,6 +973,7 @@ fn verify_pulse(
         let cursor = NativeJournalCursor::new(
             config.common.chain.clone(),
             network,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             native_finality_limits(),
         )
         .map_err(|error| eyre!(error))?;

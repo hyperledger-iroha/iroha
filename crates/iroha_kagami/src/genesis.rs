@@ -284,10 +284,6 @@ mod sign;
 #[cfg(test)]
 pub use iroha_deploy::genesis::staging::bind_and_sign_staged_sumeragi_context;
 pub use iroha_deploy::genesis::staging::staged_signed_sumeragi_context_hashes;
-#[cfg(test)]
-pub(crate) use sign::prepared_native_test_chain;
-#[cfg(test)]
-pub(crate) use sign::tests::native_genesis_fixture_with_instructions;
 mod validate;
 #[cfg(test)]
 pub use iroha_deploy::genesis::generate_default;

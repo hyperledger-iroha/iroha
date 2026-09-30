@@ -21,9 +21,11 @@ fn complete_headers() -> String {
     .join("\r\n")
 }
 
-fn page(items: &[Permission]) -> Result<Vec<u8>> {
-    norito::json::to_vec(&norito::json!({ "total": (items.len()), "items": (items.to_vec()) }))
-        .map_err(Into::into)
+fn page(items: &[Permission], has_more: bool) -> Result<Vec<u8>> {
+    norito::json::to_vec(
+        &norito::json!({ "total": (items.len()), "items": (items.to_vec()), "has_more": has_more }),
+    )
+    .map_err(Into::into)
 }
 
 fn read_scripted_permissions(
@@ -89,7 +91,7 @@ fn read_scripted_permissions(
 }
 
 #[test]
-fn public_permission_pages_traverse_more_than_500_items_and_empty_final_page() -> Result<()> {
+fn public_permission_pages_follow_explicit_exhaustion_without_an_empty_probe() -> Result<()> {
     let first = (0..500)
         .map(|index| Permission::new(format!("UnrelatedPermission{index}"), Json::new(())))
         .collect::<Vec<_>>();
@@ -100,14 +102,13 @@ fn public_permission_pages_traverse_more_than_500_items_and_empty_final_page() -
     // The public merger reports the returned page count, even after route deduplication.
     let second = [first[0].clone(), manage.clone()];
     let (result, requests) = read_scripted_permissions(vec![
-        (complete_headers(), page(&first)?),
-        (complete_headers(), page(&second)?),
-        (complete_headers(), page(&[])?),
+        (complete_headers(), page(&first, true)?),
+        (complete_headers(), page(&second, false)?),
     ])?;
     let authorization = result?;
     assert_eq!(authorization.manage_alias_permission, manage);
-    assert_eq!(requests.len(), 3);
-    for (request, offset) in requests.iter().zip([0, 500, 1000]) {
+    assert_eq!(requests.len(), 2);
+    for (request, offset) in requests.iter().zip([0, 500]) {
         let first_line = request.lines().next().expect("request line");
         assert!(first_line.starts_with("GET /v1/accounts/"));
         assert!(first_line.ends_with(&format!(
@@ -126,27 +127,39 @@ fn public_permission_pages_traverse_more_than_500_items_and_empty_final_page() -
 fn public_permission_pages_reject_incomplete_or_misrepresented_evidence() -> Result<()> {
     let headers = complete_headers();
     for (headers, body) in [
-        (headers.replace("effective-v1", "direct-only"), page(&[])?),
+        (
+            headers.replace("effective-v1", "direct-only"),
+            page(&[], false)?,
+        ),
         (
             headers.replace("routes-succeeded: 2", "routes-succeeded: 1"),
-            page(&[])?,
+            page(&[], false)?,
         ),
         (
             headers.replace("routes-unavailable: 0", "routes-unavailable: 1"),
-            page(&[])?,
+            page(&[], false)?,
         ),
         (
             format!("{headers}\r\nx-iroha-account-permission-semantics: effective-v1"),
-            page(&[])?,
+            page(&[], false)?,
         ),
-        (headers.clone(), br#"{"total": 501, "items": []}"#.to_vec()),
+        (
+            headers.clone(),
+            br#"{"total": 501, "items": [], "has_more": false}"#.to_vec(),
+        ),
+        (headers.clone(), br#"{"total": 0, "items": []}"#.to_vec()),
+        (
+            headers.clone(),
+            br#"{"total": 0, "items": [], "has_more": "false"}"#.to_vec(),
+        ),
+        (headers.clone(), page(&[], true)?),
     ] {
         let (result, requests) = read_scripted_permissions(vec![(headers, body)])?;
         assert!(result.is_err());
         assert_eq!(requests.len(), 1);
     }
     // A genuinely empty complete response is an actionable missing grant, not authorization.
-    let (result, requests) = read_scripted_permissions(vec![(headers, page(&[])?)])?;
+    let (result, requests) = read_scripted_permissions(vec![(headers, page(&[], false)?)])?;
     assert!(
         result
             .unwrap_err()
@@ -154,5 +167,43 @@ fn public_permission_pages_reject_incomplete_or_misrepresented_evidence() -> Res
             .contains("CanManageAccountAlias")
     );
     assert_eq!(requests.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn complete_first_page_never_exceeds_the_default_fetch_budget() -> Result<()> {
+    let manage: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
+    for count in [14, 500] {
+        let mut items = (1..count)
+            .map(|index| Permission::new(format!("UnrelatedPermission{index}"), Json::new(())))
+            .collect::<Vec<_>>();
+        items.push(manage.clone());
+        let (result, requests) =
+            read_scripted_permissions(vec![(complete_headers(), page(&items, false)?)])?;
+        assert_eq!(result?.manage_alias_permission, manage);
+        assert_eq!(
+            requests.len(),
+            1,
+            "complete route evidence must not probe offset500"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn short_merged_page_cannot_override_explicit_route_continuation() -> Result<()> {
+    let manage: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
+    let (result, requests) = read_scripted_permissions(vec![
+        (complete_headers(), page(&[manage.clone()], true)?),
+        (complete_headers(), page(&[], false)?),
+    ])?;
+    assert_eq!(result?.manage_alias_permission, manage);
+    assert_eq!(requests.len(), 2);
     Ok(())
 }

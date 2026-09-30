@@ -346,6 +346,7 @@ mod tests {
             torii_api_url: "http://127.0.0.1:1".parse().expect("valid url"),
             torii_request_timeout: Duration::from_millis(50),
             basic_auth: None,
+            api_token: None,
             transaction_add_nonce: false,
             transaction_ttl: ttl,
             transaction_status_timeout: ttl,

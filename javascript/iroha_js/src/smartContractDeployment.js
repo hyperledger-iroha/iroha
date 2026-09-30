@@ -298,6 +298,7 @@ export function deriveContractAddress(input) {
  * caller-owned mutable values.
  */
 export function prepareBrowserContractArtifact({
+  dataspaceId,
   artifactBytes,
   manifest,
   compilerCodeHash,
@@ -311,7 +312,9 @@ export function prepareBrowserContractArtifact({
       `compiled artifact code hash mismatch: computed ${hashes.codeHashHex}, compiler supplied ${codeHash}`,
     );
   }
+  const artifactId = Object.freeze({ dataspaceId, codeHash });
   const unsignedManifestInstruction = buildRegisterSmartContractCodeInstruction({
+    artifactId,
     manifest,
   });
   const normalizedManifest =
@@ -352,7 +355,7 @@ export function prepareBrowserContractArtifact({
         kind: "upload_chunk",
         index,
         instruction: buildUploadSmartContractCodeChunkInstruction({
-          codeHash,
+          artifactId,
           totalSize: artifact.length,
           chunkIndex: index,
           chunkCount,
@@ -366,13 +369,14 @@ export function prepareBrowserContractArtifact({
     Object.freeze({
       kind: "finalize_upload",
       instruction: buildFinalizeSmartContractCodeUploadInstruction({
-        codeHash,
+        artifactId,
         totalSize: artifact.length,
         chunkCount,
       }),
     }),
   ];
   return Object.freeze({
+    artifactId: Object.freeze({ dataspaceId: unsignedManifestInstruction.RegisterSmartContractCode.artifact_id.dataspace_id, codeHash }),
     artifactBytes: artifact,
     artifactSha256Hex: hashes.artifactSha256Hex,
     codeHash,
@@ -435,7 +439,6 @@ export async function deploySmartContractBrowser(options) {
   );
   const authority = authorityDetails(source.authority, chainDiscriminant);
   const contractAlias = normalizeContractAlias(source.contractAlias);
-  const prepared = prepareBrowserContractArtifact(source);
   const nodeCapabilities = validateNodeCapabilities(
     await source.readNodeCapabilities(
       Object.freeze({
@@ -453,7 +456,7 @@ export async function deploySmartContractBrowser(options) {
     chainDiscriminant,
     authority,
     contractAlias,
-    prepared,
+    prepareArtifact: prepareBrowserContractArtifact,
     nodeCapabilities,
     deriveContractAddress,
   });

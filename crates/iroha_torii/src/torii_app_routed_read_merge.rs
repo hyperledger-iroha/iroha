@@ -335,10 +335,16 @@ fn validate_torii_exact_list_page(
 #[cfg(feature = "app_api")]
 fn merged_list_response(
     payloads: Vec<Value>,
+    endpoint: ToriiReadEndpointV1,
     routed_by: &'static str,
     mut budget: ToriiRoutedReadMemoryBudget,
 ) -> Result<Response, Response> {
     budget.begin_json_merge();
+    // Keep the original routes' exhaustion evidence. A deduplicated union length alone is
+    // not a protocol statement about whether every route has been completely traversed.
+    let has_more = (endpoint == ToriiReadEndpointV1::AccountPermissionsGet)
+        .then(|| permission_pages_have_more(&payloads))
+        .transpose()?;
     let item_count = payloads.iter().try_fold(0_usize, |count, payload| {
         count
             .checked_add(
@@ -369,15 +375,40 @@ fn merged_list_response(
         }
     }
     drop(seen);
-    budget.admit_merge_btree::<String, Value>(1, 2)?;
-    budget.admit_merge_allocation("total".len() + "items".len())?;
+    budget.admit_merge_btree::<String, Value>(1, 2 + usize::from(has_more.is_some()))?;
+    budget.admit_merge_allocation(
+        "total".len() + "items".len() + has_more.map_or(0, |_| "has_more".len()),
+    )?;
     let mut root = norito::json::Map::new();
     root.insert("total".into(), Value::from(merged_items.len() as u64));
     root.insert("items".into(), Value::Array(merged_items));
+    if let Some(has_more) = has_more {
+        root.insert("has_more".into(), Value::from(has_more));
+    }
     let root = Value::Object(root);
     let mut response = budget.json_response(&root)?;
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
+}
+#[cfg(feature = "app_api")]
+fn permission_pages_have_more(payloads: &[Value]) -> Result<bool, Response> {
+    let mut has_more = false;
+    for payload in payloads {
+        let items = list_items_from_payload(payload, "permission route has no items array")?;
+        let route_has_more = payload
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                torii_internal_json_error("permission route has no boolean exhaustion evidence")
+            })?;
+        if route_has_more && items.is_empty() {
+            return Err(torii_internal_json_error(
+                "permission route cannot advance an empty incomplete page",
+            ));
+        }
+        has_more |= route_has_more;
+    }
+    Ok(has_more)
 }
 #[cfg(feature = "app_api")]
 fn merged_paginated_list_response(
@@ -1717,19 +1748,21 @@ mod routed_read_merge_regression_tests {
 
     #[tokio::test]
     async fn dataspace_summary_merge_preserves_portfolios_and_rejects_retired_consensus() {
-        let shard = |id: u64, positions: u64, active: bool| norito::json!({
-            "account": "alice",
-            "account_id": "alice",
-            "uaid": "test-uaid",
-            "totals": {},
-            "dataspaces": [{
-                "dataspace_id": id,
-                "dataspace_alias": null,
-                "accounts": ["alice"],
-                "portfolio": {"accounts": 1, "positions": positions},
-                "manifest": {"present": true, "active": active}
-            }]
-        });
+        let shard = |id: u64, positions: u64, active: bool| {
+            norito::json!({
+                "account": "alice",
+                "account_id": "alice",
+                "uaid": "test-uaid",
+                "totals": {},
+                "dataspaces": [{
+                    "dataspace_id": id,
+                    "dataspace_alias": null,
+                    "accounts": ["alice"],
+                    "portfolio": {"accounts": 1, "positions": positions},
+                    "manifest": {"present": true, "active": active}
+                }]
+            })
+        };
         let response = merged_dataspace_summary_response(
             vec![shard(7, 2, true), shard(9, 3, false)],
             "proxy",
@@ -1743,20 +1776,38 @@ mod routed_read_merge_regression_tests {
         assert_eq!(merged["account"], Value::from("alice"));
         assert_eq!(merged["account_id"], Value::from("alice"));
         assert_eq!(merged["uaid"], Value::from("test-uaid"));
-        assert_eq!(merged["totals"], norito::json!({
-            "dataspaces": 2, "accounts_bound": 1, "portfolio_accounts": 2,
-            "portfolio_positions": 5, "manifests_total": 2, "manifests_active": 1
-        }));
+        assert_eq!(
+            merged["totals"],
+            norito::json!({
+                "dataspaces": 2, "accounts_bound": 1, "portfolio_accounts": 2,
+                "portfolio_positions": 5, "manifests_total": 2, "manifests_active": 1
+            })
+        );
         assert_eq!(merged["dataspaces"][0]["dataspace_id"], Value::from(7));
         assert_eq!(merged["dataspaces"][1]["dataspace_id"], Value::from(9));
-        assert!(merged["dataspaces"].as_array().unwrap().iter()
-            .all(|row| row.get("consensus").is_none()));
+        assert!(
+            merged["dataspaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row.get("consensus").is_none())
+        );
 
-        for key in ["consensus_entries", "consensus_tx_count", "consensus_chunks_total",
-            "consensus_rbc_bytes_total", "consensus_teu_total"] {
+        for key in [
+            "consensus_entries",
+            "consensus_tx_count",
+            "consensus_chunks_total",
+            "consensus_rbc_bytes_total",
+            "consensus_teu_total",
+        ] {
             let mut retired = shard(7, 2, true);
-            retired.as_object_mut().unwrap()
-                .get_mut("totals").unwrap().as_object_mut().unwrap()
+            retired
+                .as_object_mut()
+                .unwrap()
+                .get_mut("totals")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
                 .insert(key.into(), Value::from(0));
             let response = merged_dataspace_summary_response(vec![retired], "proxy", test_budget())
                 .expect_err("even zero retired totals are not the current protocol");
@@ -1764,9 +1815,16 @@ mod routed_read_merge_regression_tests {
         }
         for value in [Value::Null, norito::json!({})] {
             let mut retired = shard(7, 2, true);
-            retired.as_object_mut().unwrap()
-                .get_mut("dataspaces").unwrap().as_array_mut().unwrap()[0]
-                .as_object_mut().unwrap().insert("consensus".into(), value);
+            retired
+                .as_object_mut()
+                .unwrap()
+                .get_mut("dataspaces")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]
+                .as_object_mut()
+                .unwrap()
+                .insert("consensus".into(), value);
             let response = merged_dataspace_summary_response(vec![retired], "proxy", test_budget())
                 .expect_err("retired commitment projection is rejected");
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -2677,32 +2735,33 @@ fn merged_dataspace_summary_response(
             let rows_seen = rows_seen
                 .checked_add(rows.len())
                 .ok_or_else(torii_routed_read_accounting_response)?;
-            let (accounts_seen, account_bytes) =
-                rows.iter()
-                    .try_fold((accounts_seen, account_bytes), |(count, bytes), row| {
-                        if row.get("consensus").is_some() {
-                            return Err(torii_internal_json_error(
-                                "dataspace summary rows must not contain retired consensus commitments",
-                            ));
-                        }
-                        let Some(accounts) = row.get("accounts").and_then(Value::as_array) else {
-                            return Ok((count, bytes));
-                        };
-                        let count = count
-                            .checked_add(accounts.len())
-                            .ok_or_else(torii_routed_read_accounting_response)?;
-                        let bytes = accounts.iter().try_fold(bytes, |bytes, account| {
-                            let account = account.as_str().ok_or_else(|| {
-                                torii_internal_json_error(
-                                    "dataspace summary account bindings must be strings",
-                                )
-                            })?;
-                            bytes
-                                .checked_add(account.len())
-                                .ok_or_else(torii_routed_read_accounting_response)
+            let (accounts_seen, account_bytes) = rows.iter().try_fold(
+                (accounts_seen, account_bytes),
+                |(count, bytes), row| {
+                    if row.get("consensus").is_some() {
+                        return Err(torii_internal_json_error(
+                            "dataspace summary rows must not contain retired consensus commitments",
+                        ));
+                    }
+                    let Some(accounts) = row.get("accounts").and_then(Value::as_array) else {
+                        return Ok((count, bytes));
+                    };
+                    let count = count
+                        .checked_add(accounts.len())
+                        .ok_or_else(torii_routed_read_accounting_response)?;
+                    let bytes = accounts.iter().try_fold(bytes, |bytes, account| {
+                        let account = account.as_str().ok_or_else(|| {
+                            torii_internal_json_error(
+                                "dataspace summary account bindings must be strings",
+                            )
                         })?;
-                        Ok((count, bytes))
+                        bytes
+                            .checked_add(account.len())
+                            .ok_or_else(torii_routed_read_accounting_response)
                     })?;
+                    Ok((count, bytes))
+                },
+            )?;
             Ok((rows_seen, accounts_seen, account_bytes))
         },
     )?;

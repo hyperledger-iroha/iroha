@@ -2753,7 +2753,11 @@ fn permissioned_localnet_registers_support_accounts_without_staking() {
         );
     }
     assert!(!nexus.contains_key("fees"));
-    assert!(!nexus.contains_key("storage"));
+    assert_eq!(
+        nexus["storage"]["local_budget_bytes"].as_integer(),
+        Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES as i64),
+        "permissioned localnet storage must have the same finite developer cap"
+    );
     assert!(
         manifest
             .crypto()

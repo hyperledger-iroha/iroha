@@ -146,7 +146,10 @@ fn one_chunk_contract_registration_uses_upload_and_finalize() -> Result<()> {
             fee_payment: &test_fee_payment(),
             metadata: &Metadata::default(),
         },
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::new(u64::MAX),
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     assert_eq!(plan.chunk_count, 1);
@@ -160,11 +163,12 @@ fn one_chunk_contract_registration_uses_upload_and_finalize() -> Result<()> {
         .as_any()
         .downcast_ref::<UploadSmartContractCodeChunk>()
         .expect("first instruction uploads the only chunk");
+    assert_eq!(upload.artifact_id.dataspace_id, DataSpaceId::new(u64::MAX));
     assert_eq!(upload.chunk_index, 0);
     assert_eq!(upload.chunk_count, 1);
     assert_eq!(upload.total_size, u64::try_from(code.len())?);
     assert_eq!(
-        upload.code_hash,
+        upload.artifact_id.code_hash,
         ivm_abi::metadata::contract_code_hash(&code)
     );
     assert_eq!(upload.chunk, code);
@@ -172,7 +176,7 @@ fn one_chunk_contract_registration_uses_upload_and_finalize() -> Result<()> {
         .as_any()
         .downcast_ref::<FinalizeSmartContractCodeUpload>()
         .expect("second instruction finalizes the only chunk");
-    assert_eq!(finalize.code_hash, upload.code_hash);
+    assert_eq!(finalize.artifact_id, upload.artifact_id);
     assert_eq!(finalize.total_size, upload.total_size);
     assert_eq!(finalize.chunk_count, upload.chunk_count);
     let report = native_upload_report(&plan, false);
@@ -197,7 +201,7 @@ fn native_upload_plan_rejects_empty_artifact() {
             fee_payment: &test_fee_payment(),
             metadata: &Metadata::default(),
         },
-        Hash::new(b""),
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, Hash::new(b"")),
         &[],
     );
     let error = match result {
@@ -220,7 +224,10 @@ fn native_upload_plan_rejects_noncanonical_code_hash() {
             fee_payment: &test_fee_payment(),
             metadata: &Metadata::default(),
         },
-        Hash::new(b"not-the-canonical-artifact-hash"),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"not-the-canonical-artifact-hash"),
+        ),
         &code,
     );
     let error = match result {
@@ -243,7 +250,10 @@ fn exact_chunk_boundary_uses_one_final_transaction() -> Result<()> {
             fee_payment: &test_fee_payment(),
             metadata: &Metadata::default(),
         },
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     assert_eq!(plan.chunk_count, 1);
@@ -286,7 +296,10 @@ fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
             fee_payment: &test_fee_payment(),
             metadata: &metadata,
         },
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     let expected_count = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
@@ -322,7 +335,7 @@ fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
         assert_eq!(upload.chunk_count, plan.chunk_count);
         assert_eq!(upload.total_size, u64::try_from(code.len())?);
         assert_eq!(
-            upload.code_hash,
+            upload.artifact_id.code_hash,
             ivm_abi::metadata::contract_code_hash(&code)
         );
         let expected_chunk_len = code
@@ -341,7 +354,7 @@ fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
                 .as_any()
                 .downcast_ref::<FinalizeSmartContractCodeUpload>()
                 .expect("last upload transaction must finalize");
-            assert_eq!(finalize.code_hash, upload.code_hash);
+            assert_eq!(finalize.artifact_id.code_hash, upload.artifact_id.code_hash);
             assert_eq!(finalize.total_size, upload.total_size);
             assert_eq!(finalize.chunk_count, upload.chunk_count);
         }
@@ -363,7 +376,10 @@ fn native_upload_json_reports_exact_hash_roles_and_skip_semantics() -> Result<()
             fee_payment: &test_fee_payment(),
             metadata: &Metadata::default(),
         },
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     let report = native_upload_report(&plan, false);
@@ -435,7 +451,10 @@ fn skip_registration_omits_all_uploads_and_emit_order_is_stable() -> Result<()> 
     };
     let upload = build_native_upload_transaction_plan(
         &signing,
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     let mut uploads = upload.pre_stage;
@@ -523,7 +542,10 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
     };
     let upload = build_native_upload_transaction_plan(
         &signing,
-        ivm_abi::metadata::contract_code_hash(&code),
+        ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            ivm_abi::metadata::contract_code_hash(&code),
+        ),
         &code,
     )?;
     let mut transactions = upload
@@ -549,8 +571,12 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
     }
     .try_signed(&key_pair)
     .wrap_err("sign metadata-test manifest")?;
-    transactions
-        .push(signing.sign([InstructionBox::from(RegisterSmartContractCode { manifest })])?);
+    transactions.push(
+        signing.sign([InstructionBox::from(RegisterSmartContractCode {
+            artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest,
+        })])?,
+    );
     transactions.push(build_commit_deployment_transaction(
         &signing,
         7,

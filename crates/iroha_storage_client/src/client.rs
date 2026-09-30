@@ -661,6 +661,7 @@ mod tests {
             account_chain_discriminant: 753,
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: "http://127.0.0.1:8080/".parse().expect("Torii URL"),
             torii_request_timeout: DEFAULT_TORII_REQUEST_TIMEOUT,
             transaction_ttl: Duration::from_secs(5),
