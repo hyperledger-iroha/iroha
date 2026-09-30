@@ -39,6 +39,9 @@ test("all SDKs consume the Rust-generated canonical KAGEMUSHA three-message fixt
 
   const requestRaw = raw(fixture.payment_request);
   const request = Kagemusha.decodePaymentRequest(requestRaw);
+  // This required field precedes the governance signature in the Rust producer.
+  assert.deepEqual(request.hardwareCredential.appPolicyBindingDigest, new Uint8Array(32).fill(0xa6));
+  assert.equal(request.hardwareCredential.governanceSignature.rawBytes().length, 64);
   const paymentRaw = raw(fixture.payment);
   const payment = Kagemusha.decodePayment(paymentRaw, request);
   const acknowledgementRaw = raw(fixture.acknowledgement);

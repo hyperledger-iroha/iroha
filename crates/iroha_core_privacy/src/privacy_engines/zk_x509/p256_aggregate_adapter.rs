@@ -120,6 +120,15 @@ pub(crate) const ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1: [u8; 32] =
     0x1c, 0xfb, 0x7e, 0x49, 0xa3, 0xf4, 0x47, 0x07, 0xcf, 0x89, 0x23, 0x0a, 0xc4, 0xd5, 0x20, 0x34,
 ];
 include!("p256_aggregate_layout.rs");
+#[cfg(test)]
+#[path = "p256_bound_terminal_replay_tests.rs"]
+mod bound_terminal_replay_tests;
+#[cfg(test)]
+#[path = "p256_fixed_replay_batch_tests.rs"]
+mod fixed_replay_batch_tests;
+#[cfg(test)]
+#[path = "p256_native_boundary_sources.rs"]
+mod native_boundary_sources;
 /// Aggregate adapter construction or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256AggregateAdapterErrorV1 {
@@ -432,12 +441,60 @@ fn fill_aggregate_aux_columns_v1<const WIDTH: usize>(
     destination.committed = true;
     Ok(())
 }
+/// Replay a bounded set of challenge-independent columns through the same
+/// transactional destination and clearing row owner as auxiliary replay.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_aggregate_base_columns_v1<const WIDTH: usize>(
+    rows: usize,
+    first: usize,
+    outputs: &mut [&mut [F]],
+    mut base_row: impl FnMut(usize) -> Result<[F; WIDTH], P256AggregateAdapterErrorV1>,
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    let mut row = 0;
+    fill_aggregate_aux_columns_v1::<WIDTH>(rows, first, outputs, || {
+        if row == rows {
+            return Ok(None);
+        }
+        let values = base_row(row)?;
+        row += 1;
+        Ok(Some(values))
+    })
+}
+/// Conservative stack charge for either serial arithmetic or value base replay.
+/// Native output columns already occupy the unchanged eight-column allowance.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn p256_base_replay_scratch_v1() -> usize {
+    core::mem::size_of::<P256ArithmeticAggregateRowsV1<'static>>()
+        + core::mem::size_of::<super::p256_value_bus::P256ValueBusStarkBaseRowProviderV1<'static>>()
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_VALUE_BUS_STARK_BASE_WIDTH_V1>>()
+        + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
+        + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            * core::mem::size_of::<&mut [F]>()
+        + 2 * core::mem::size_of::<usize>()
+        + 2 * core::mem::size_of::<&P256ValueBusBaseSourceV1>()
+        + core::mem::size_of::<P256ValueBusStarkEndpointV1>()
+}
 /// Stack-owned replay state in addition to the already admitted native columns.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
     core::mem::size_of::<P256ArithmeticAggregateAuxStreamV1<'static>>()
         + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>>(
         )
+        + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
+        + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            * core::mem::size_of::<&mut [F]>()
+}
+/// Peak stack payload for a serial value-bus batch, beyond existing stream heap scratch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn p256_value_aux_replay_scratch_v1() -> usize {
+    let execution = core::mem::size_of::<P256MainBoundWriterReplayV1<'static>>()
+        + core::mem::size_of::<P256ValueExecutionAggregateStreamV1<'static>>()
+        + core::mem::size_of::<
+            P256AggregateAuxRowScratchV1<P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1>,
+        >();
+    let sorted = core::mem::size_of::<P256ValueBusStarkAuxSourceV1<'static>>()
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_VALUE_BUS_STARK_AUX_WIDTH_V1>>();
+    execution.max(sorted)
         + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
         + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
             * core::mem::size_of::<&mut [F]>()
@@ -1313,7 +1370,8 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         if self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
             return Ok(None);
         }
-        let mut aux = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1];
+        let mut aux =
+            zeroize::Zeroizing::new([F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1]);
         aux[VALUE_NATIVE_AUX..VALUE_WRITER_AUX].copy_from_slice(
             &self
                 .value_aux
@@ -1341,7 +1399,13 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             &mut aux[VALUE_ARITHMETIC_COPY_AUX..],
         )?;
         self.next_row += 1;
-        Ok(Some(aux))
+        if self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
+            && self.arithmetic_copy_running != self.arithmetic_copy_terminal
+        {
+            super::private_table::zeroize_fields_v1(&mut aux[..]);
+            return Err(P256AggregateAdapterErrorV1::Constraint);
+        }
+        Ok(Some(*aux))
     }
     /// Replay this deterministic stream into one challenge-dependent native
     /// auxiliary column, then drop all row-local state.
@@ -1778,6 +1842,45 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             .get(row)
             .copied()
             .unwrap_or([F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]))
+    }
+    /// Borrow contiguous cells from the immutable retained arithmetic rows
+    /// into at most eight caller-owned columns. No full private row is copied
+    /// to stack: the source remains under its clearing owner throughout.
+    fn fill_base_columns_v1(
+        &self,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        if outputs.is_empty()
+            || outputs.len()
+                > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(outputs.len())
+                .is_none_or(|end| end > P256_ARITHMETIC_BASE_WIDTH_V1)
+            || outputs
+                .iter()
+                .any(|output| output.len() != P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1)
+            || self.trace.base.len() > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let mut destination = P256AggregateColumnsDestinationGuardV1 {
+            outputs,
+            committed: false,
+        };
+        for row in 0..P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+            if let Some(values) = self.trace.base.get(row) {
+                for (offset, output) in destination.outputs.iter_mut().enumerate() {
+                    output[row] = values[first + offset];
+                }
+            } else {
+                for output in destination.outputs.iter_mut() {
+                    output[row] = F::ZERO;
+                }
+            }
+        }
+        destination.committed = true;
+        Ok(())
     }
     /// Copy one complete committed arithmetic column into caller-owned
     /// storage without materializing an aggregate row matrix.
@@ -4241,6 +4344,37 @@ impl P256MainVerifierFixedSourceV1 {
             .copied()
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
+    /// Fill up to eight arithmetic fixed columns from one canonical row pass.
+    /// The caller owns the already admitted final fixed-polynomial matrix; this
+    /// method retains only one stack row and never accepts a witness schedule.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn fill_arithmetic_fixed_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        if registration.adapter_v1() != P256MainAdapterV1::Arithmetic
+            || registration.local_instance_v1() != 0
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let fixed = self.arithmetic_v1(registration.role_v1());
+        let mut row = 0;
+        fill_aggregate_aux_columns_v1::<P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1>(
+            P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
+            first,
+            outputs,
+            || {
+                if row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+                    return Ok(None);
+                }
+                let values = fixed.row_v1(row)?;
+                row += 1;
+                Ok(Some(values))
+            },
+        )
+    }
     /// Replay one complete verifier-owned fixed column transactionally.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
@@ -4702,10 +4836,14 @@ impl P256MainBaseSourceV1 {
                 fixed.allocated_heap_bytes_v1(),
             ]));
         }
-        Ok(certificate
+        let value_replay = certificate
             .max(wallet)
+            .checked_add(p256_value_aux_replay_scratch_v1())
+            .ok_or(P256AggregateAdapterErrorV1::Resource)?;
+        Ok(value_replay
             .max(validation_scratch)
-            .max(p256_arithmetic_aux_replay_scratch_v1()))
+            .max(p256_arithmetic_aux_replay_scratch_v1())
+            .max(p256_base_replay_scratch_v1()))
     }
     /// Predict the complete canonical five-signature source before private allocations.
     ///
@@ -4879,6 +5017,61 @@ impl P256MainBaseSourceV1 {
     ) -> Result<Vec<P256MainRegistrationV1>, P256AggregateAdapterErrorV1> {
         self.ensure_base_phase_v1()?;
         canonical_p256_main_registrations_v1()
+    }
+    /// Replay up to eight adjacent arithmetic or execution/sorted value base
+    /// columns. The immutable phase owner and exact registration remain the
+    /// authority; all columns share one canonical row pass and clearing guard.
+    pub(crate) fn fill_base_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if !matches!(
+            (registration.adapter_v1(), registration.local_instance_v1()),
+            (P256MainAdapterV1::Arithmetic, 0) | (P256MainAdapterV1::ValueBus, 0 | 1)
+        ) || outputs.is_empty()
+            || outputs.len()
+                > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(outputs.len())
+                .is_none_or(|end| end > shape.base_width)
+            || outputs
+                .iter()
+                .any(|output| output.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let signature = self.signature_v1(registration)?;
+        match (registration.adapter_v1(), registration.local_instance_v1()) {
+            (P256MainAdapterV1::Arithmetic, 0) => {
+                let rows = signature
+                    .arithmetic
+                    .as_ref()
+                    .ok_or(P256AggregateAdapterErrorV1::Phase)?
+                    .rows_v1(signature.role)?;
+                rows.fill_base_columns_v1(first, outputs)
+            }
+            (P256MainAdapterV1::ValueBus, local @ 0..=1) => {
+                let value = signature
+                    .value
+                    .as_ref()
+                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                let endpoint = if local == 0 {
+                    P256ValueBusStarkEndpointV1::Execution
+                } else {
+                    P256ValueBusStarkEndpointV1::Sorted
+                };
+                fill_aggregate_base_columns_v1::<P256_VALUE_BUS_STARK_BASE_WIDTH_V1>(
+                    shape.trace_size,
+                    first,
+                    outputs,
+                    |row| Ok(value.base_row_v1(endpoint, row)?),
+                )
+            }
+            _ => Err(P256AggregateAdapterErrorV1::Topology),
+        }
     }
     /// Replay one complete challenge-independent committed column.
     pub(crate) fn fill_base_column_v1(
@@ -5501,6 +5694,36 @@ impl P256MainBaseSourceV1 {
         result
     }
 }
+/// Unforgeable borrow of one MAIN signature's bind-derived writer state.
+/// Fields and construction stay private to this module; the cross-trace stream
+/// may only read them. No proof claim, raw terminal or independent key/trace can
+/// be supplied by a caller. The lifetime keeps the complete checked owner alive.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) struct P256MainBoundWriterReplayV1<'a> {
+    endpoint: &'a super::p256_value_bus::P256ValueBusBaseEndpointTraceV1,
+    fixed: &'a P256CrossTraceWriterSourceFixedV1,
+    post_base: ZkX509CredentialMainPostBaseChallengesV1,
+    terminal: &'a [F; P256_CROSS_TRACE_LANES_V1],
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<'a> P256MainBoundWriterReplayV1<'a> {
+    /// The immutable execution endpoint selected by MAIN registration.
+    pub(super) fn endpoint_v1(&self) -> &'a super::p256_value_bus::P256ValueBusBaseEndpointTraceV1 {
+        self.endpoint
+    }
+    /// The retained verifier-owned schedule for that signature role.
+    pub(super) fn fixed_v1(&self) -> &'a P256CrossTraceWriterSourceFixedV1 {
+        self.fixed
+    }
+    /// Challenges from the same opaque MAIN post-base token.
+    pub(super) fn challenges_v1(&self) -> P256CrossTraceChallengesV1 {
+        self.post_base.p256_cross()
+    }
+    /// The terminal computed from this same endpoint during its checked bind.
+    pub(super) fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
+        *self.terminal
+    }
+}
 /// Post-X5B1 capability for the sole five-signature P-256 MAIN set.
 ///
 /// It is the only production source of P-256 auxiliary replay. All challenge
@@ -5668,6 +5891,62 @@ impl P256MainBoundSourceV1 {
         self.ensure_bound_v1()?;
         canonical_p256_main_registrations_v1()
     }
+    /// Replay up to eight adjacent arithmetic or execution/sorted value base
+    /// columns. The immutable phase owner and exact registration remain the
+    /// authority; all columns share one canonical row pass and clearing guard.
+    pub(crate) fn fill_base_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if !matches!(
+            (registration.adapter_v1(), registration.local_instance_v1()),
+            (P256MainAdapterV1::Arithmetic, 0) | (P256MainAdapterV1::ValueBus, 0 | 1)
+        ) || outputs.is_empty()
+            || outputs.len()
+                > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(outputs.len())
+                .is_none_or(|end| end > shape.base_width)
+            || outputs
+                .iter()
+                .any(|output| output.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let signature = self.signature_v1(registration)?;
+        match (registration.adapter_v1(), registration.local_instance_v1()) {
+            (P256MainAdapterV1::Arithmetic, 0) => {
+                let rows = signature
+                    .arithmetic
+                    .as_ref()
+                    .ok_or(P256AggregateAdapterErrorV1::Phase)?
+                    .rows_v1(signature.role)?;
+                rows.fill_base_columns_v1(first, outputs)
+            }
+            (P256MainAdapterV1::ValueBus, local @ 0..=1) => {
+                let value = signature
+                    .value
+                    .as_ref()
+                    .ok_or(P256AggregateAdapterErrorV1::Phase)?;
+                let rows = if local == 0 {
+                    value.execution_base_rows_v1()
+                } else {
+                    value.sorted_base_rows_v1()
+                }
+                .map_err(P256AggregateAdapterErrorV1::from)?;
+                fill_aggregate_base_columns_v1::<P256_VALUE_BUS_STARK_BASE_WIDTH_V1>(
+                    shape.trace_size,
+                    first,
+                    outputs,
+                    |row| Ok(rows.base_row_v1(row)?),
+                )
+            }
+            _ => Err(P256AggregateAdapterErrorV1::Topology),
+        }
+    }
     /// Replay one complete challenge-independent committed column after binding.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -5778,6 +6057,91 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
+    /// Borrow the exact verifier-owned arithmetic schedule for bounded replay.
+    pub(crate) fn fill_arithmetic_fixed_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        self.signature_v1(registration)?;
+        self.fixed
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?
+            .fill_arithmetic_fixed_columns_v1(registration, first, outputs)
+    }
+    /// Borrow execution replay from this exact checked MAIN owner. As with the
+    /// arithmetic replay factory, all terminal copies come from the private
+    /// result of binding this same immutable source, never from prover claims.
+    fn value_execution_aux_stream_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+    ) -> Result<P256ValueExecutionAggregateStreamV1<'_>, P256AggregateAdapterErrorV1> {
+        if registration.adapter_v1() != P256MainAdapterV1::ValueBus
+            || registration.local_instance_v1() != 0
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let signature = self.signature_v1(registration)?;
+        let post_base = self.post_base_v1()?;
+        let value = signature
+            .value
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?;
+        let topology = value.topology_v1()?;
+        if topology.linked_operations.len() != P256_ARITHMETIC_OPERATIONS_V1 {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let claims = self
+            .terminal_claims
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?;
+        let (buses, sources): (_, &[P256CrossTraceTerminalClaimV1]) =
+            if registration.signature_v1() < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
+                let claims = &claims.certificate_or_crl[registration.signature_v1()];
+                (&claims.buses, &claims.cross_sources)
+            } else if registration.signature_v1() == P256_X5S1_SIGNATURES_V1 - 1 {
+                (&claims.wallet.buses, &claims.wallet.cross_sources)
+            } else {
+                return Err(P256AggregateAdapterErrorV1::Topology);
+            };
+        let writer_claim = sources
+            .iter()
+            .find(|claim| claim.role == P256CrossTraceTerminalRoleV1::ValueWriter)
+            .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+        if writer_claim.start != [F::ONE; P256_CROSS_TRACE_LANES_V1] {
+            return Err(P256AggregateAdapterErrorV1::Constraint);
+        }
+        let value_aux = value.execution_aux_source_v1()?;
+        if value_aux.terminal_v1() != buses.value_execution {
+            return Err(P256AggregateAdapterErrorV1::Constraint);
+        }
+        let fixed = self
+            .fixed
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?
+            .execution_v1(signature.role);
+        let writer =
+            P256CrossTraceWriterSourceStreamV1::from_bound_main_v1(P256MainBoundWriterReplayV1 {
+                endpoint: value.execution_endpoint_v1()?,
+                fixed: &fixed.writer,
+                post_base,
+                terminal: &writer_claim.terminal,
+            })?;
+        let arithmetic_copy_challenges = post_base.p256_arithmetic_copy();
+        arithmetic_copy_challenges.validate_v1()?;
+        Ok(P256ValueExecutionAggregateStreamV1 {
+            base: value.execution_base_rows_v1()?,
+            value_aux: Some(value_aux),
+            writer: Some(writer),
+            writer_terminal: writer_claim.terminal,
+            arithmetic_operations: topology.linked_operations.len(),
+            arithmetic_copy_challenges,
+            arithmetic_copy_running: [F::ONE; P256_ARITHMETIC_COPY_LANES_V1],
+            arithmetic_copy_terminal: buses.value_arithmetic_copy,
+            next_row: 0,
+        })
+    }
     /// Borrow one arithmetic stream from this source's sole checked bind result.
     /// No caller can supply a trace, terminal, challenge, or different token.
     fn arithmetic_aux_stream_v1(
@@ -5858,6 +6222,63 @@ impl P256MainBoundSourceV1 {
             || stream.next_aux_row_v1(),
         )
     }
+    /// Replay at most eight adjacent value auxiliary columns from one exact
+    /// execution or sorted endpoint. Registration and token validation precede
+    /// construction; the existing row/destination guards clear every batch on
+    /// stream failure, extra rows or unwind. No retained source matrix is added.
+    pub(crate) fn fill_value_aux_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if !matches!(
+            (registration.adapter_v1(), registration.local_instance_v1()),
+            (P256MainAdapterV1::ValueBus, 0 | 1)
+        ) || outputs.is_empty()
+            || outputs.len()
+                > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(outputs.len())
+                .is_none_or(|end| end > shape.aux_width)
+            || outputs
+                .iter()
+                .any(|output| output.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let signature = self.signature_v1(registration)?;
+        let value = signature
+            .value
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?;
+        match registration.local_instance_v1() {
+            0 => {
+                let mut stream = self.value_execution_aux_stream_v1(registration)?;
+                fill_aggregate_aux_columns_v1::<P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1>(
+                    shape.trace_size,
+                    first,
+                    outputs,
+                    || stream.next_aux_row_v1(),
+                )
+            }
+            1 => {
+                let mut stream = value.sorted_aux_source_v1()?;
+                fill_aggregate_aux_columns_v1::<P256_VALUE_BUS_STARK_AUX_WIDTH_V1>(
+                    shape.trace_size,
+                    first,
+                    outputs,
+                    || {
+                        stream
+                            .next_aux_row_v1()
+                            .map_err(P256AggregateAdapterErrorV1::from)
+                    },
+                )
+            }
+            _ => Err(P256AggregateAdapterErrorV1::Topology),
+        }
+    }
     /// Replay one complete challenge-dependent committed column from the
     /// single retained X5B1 token.
     pub(crate) fn fill_aux_column_v1(
@@ -5873,13 +6294,9 @@ impl P256MainBoundSourceV1 {
         let signature = self.signature_v1(registration)?;
         let post_base = self.post_base_v1()?;
         match (registration.adapter_v1(), registration.local_instance_v1()) {
-            (P256MainAdapterV1::ValueBus, 0) => P256ValueExecutionAggregateStreamV1::new_v1(
-                signature
-                    .value
-                    .as_ref()
-                    .ok_or(P256AggregateAdapterErrorV1::Phase)?,
-            )?
-            .fill_aux_column_v1(column, output),
+            (P256MainAdapterV1::ValueBus, 0) => self
+                .value_execution_aux_stream_v1(registration)?
+                .fill_aux_column_v1(column, output),
             (P256MainAdapterV1::ValueBus, 1) => {
                 let mut source = signature
                     .value
@@ -9014,3 +9431,11 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "p256_value_aux_batch_tests.rs"]
+mod value_aux_batch_tests;
+
+#[cfg(test)]
+#[path = "p256_base_replay_batch_tests.rs"]
+mod base_replay_batch_tests;

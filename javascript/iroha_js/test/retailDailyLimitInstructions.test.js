@@ -161,7 +161,7 @@ builderTest("retail monetary builder closes four purposes and account direction"
       operationDigest: digest(0xC3),
     });
     const body = decode(source).RetailMonetaryMovementV1;
-    assert.deepEqual(body.purpose, { purpose, value: null });
+    assert.deepEqual(body.purpose, Object.assign(Object.create(null), { purpose, value: null }));
     assert.equal(body.retail_account, retailAccount);
     assert.equal(body.amount, "1.25");
   }

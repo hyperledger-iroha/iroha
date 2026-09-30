@@ -119,7 +119,7 @@ pub(super) fn fixture() -> Fixture {
     .expect("canonical encrypted output");
     let authentication_path: [[u8; 32]; super::PRIVATE_NOTE_TREE_DEPTH_V1] =
         core::array::from_fn(|level| [u8::try_from(level).expect("depth fits u8") + 1; 32]);
-    let leaf_position = 0x89ab_cdef;
+    let leaf_position = 0x89ab_cdef_u32;
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: context(),
         asset_definition_id: asset(),

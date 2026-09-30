@@ -1812,16 +1812,29 @@ pub trait KagemushaRecursiveVerifierV1 {
 }
 
 impl<T: KagemushaRecursiveVerifierV1 + ?Sized> KagemushaRecursiveVerifierV1 for std::sync::Arc<T> {
-    fn verify_state_proof_and_decide(&self, request: &KagemushaStateProofVerificationRequestV1<'_>) -> Result<(), String> {
+    fn verify_state_proof_and_decide(
+        &self,
+        request: &KagemushaStateProofVerificationRequestV1<'_>,
+    ) -> Result<(), String> {
         (**self).verify_state_proof_and_decide(request)
     }
-    fn verify_payment_and_decide(&self, request: &KagemushaPaymentRequestV1, payment: &KagemushaPaymentV1) -> Result<(), String> {
+    fn verify_payment_and_decide(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
+    ) -> Result<(), String> {
         (**self).verify_payment_and_decide(request, payment)
     }
-    fn verify_mint_finality_helper(&self, request: &KagemushaMintFinalityHelperVerificationRequestV1<'_>) -> Result<(), String> {
+    fn verify_mint_finality_helper(
+        &self,
+        request: &KagemushaMintFinalityHelperVerificationRequestV1<'_>,
+    ) -> Result<(), String> {
         (**self).verify_mint_finality_helper(request)
     }
-    fn verify_terminal_authorization_and_decide(&self, request: &KagemushaParityVerificationRequestV1<'_>) -> Result<(), String> {
+    fn verify_terminal_authorization_and_decide(
+        &self,
+        request: &KagemushaParityVerificationRequestV1<'_>,
+    ) -> Result<(), String> {
         (**self).verify_terminal_authorization_and_decide(request)
     }
 }

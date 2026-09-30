@@ -89,8 +89,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x9d, 0x2d, 0x34, 0x51, 0x2d, 0xe9, 0x0d, 0x13, 0xa0, 0xf6, 0x8d, 0x35, 0x2b, 0xbc, 0xc8, 0x87,
-    0xba, 0x9a, 0xc2, 0xf2, 0xa8, 0x9e, 0x5d, 0xeb, 0x84, 0x5f, 0xf5, 0xc4, 0xc6, 0x4d, 0x45, 0xff,
+    0x19, 0xaa, 0x35, 0x92, 0x7e, 0xbc, 0x6e, 0x0f, 0xf8, 0x00, 0xa0, 0xc8, 0x0b, 0x6b, 0x31, 0x5c,
+    0x26, 0x15, 0x35, 0x0f, 0x35, 0xc8, 0x2a, 0xfd, 0xb9, 0xea, 0xe6, 0x09, 0xd4, 0xc9, 0xca, 0x9c,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,9 +230,16 @@ fn verify_zk_x509_credential_subproofs_v1(
         .map_err(|_| ZkX509CredentialProofErrorV1::InvalidStatement)?;
     let main_pre_aux =
         zk_x509_main_pre_aux_from_proof_v1(consensus_public.credential_binding, main_aggregate)
-            .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
-    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof)
-        .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+            .map_err(|_error| {
+                #[cfg(test)]
+                prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
+                ZkX509CredentialProofErrorV1::MainProof
+            })?;
+    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
+        ZkX509CredentialProofErrorV1::CaProof
+    })?;
     let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
         main_pre_aux,
         ca_profile_digest_v1().map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
@@ -243,7 +250,11 @@ fn verify_zk_x509_credential_subproofs_v1(
         .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_base_root,
     )
-    .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
+    .map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &_error);
+        ZkX509CredentialProofErrorV1::CrossSubproofMismatch
+    })?;
     let main_binding = verify_zk_x509_main_aggregate_stark_v1(
         statement,
         &consensus_public.rfc_statement,
@@ -251,14 +262,22 @@ fn verify_zk_x509_credential_subproofs_v1(
         credential_binding,
         main_aggregate,
     )
-    .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    .map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
+        ZkX509CredentialProofErrorV1::MainProof
+    })?;
     let ca_binding = ca_accumulator_subproof_binding_from_proof_v1(
         consensus_public.credential_binding.ca_public_v1(),
         &sha_schedule,
         main_pre_aux,
         ca_subproof,
     )
-    .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+    .map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
+        ZkX509CredentialProofErrorV1::CaProof
+    })?;
     validate_cross_subproof_binding_v1(
         consensus_public.credential_binding,
         main_binding,
@@ -282,7 +301,10 @@ pub fn verify_zk_x509_credential_proof_v1(
 ) -> Result<(), ZkX509EngineErrorV1> {
     let consensus_public =
         compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
-    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof)?;
+    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof).inspect_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", _error);
+    })?;
     if envelope.public != consensus_public.credential_binding {
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
     }
@@ -439,9 +461,19 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         &main_aggregate,
         &ca_subproof,
     )?;
-    let envelope = decode_zk_x509_credential_envelope_v1(&encoded)
-        .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
+    #[cfg(test)]
+    prover_diagnostic::capture_public_unverified_candidate_v1(&encoded);
+    let envelope = decode_zk_x509_credential_envelope_v1(&encoded).map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &_error);
+        ZkX509EngineErrorV1::ProverSelfCheckFailed
+    })?;
     if envelope.public != consensus_public.credential_binding {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1(
+            "credential-public-binding",
+            &ZkX509CredentialProofErrorV1::PublicBindingMismatch,
+        );
         return Err(ZkX509EngineErrorV1::ProverSelfCheckFailed);
     }
     verify_zk_x509_credential_subproofs_v1(
@@ -450,7 +482,14 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         envelope.main_aggregate,
         envelope.ca_subproof,
     )
-    .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
+    .map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1(
+            "credential-subproof-self-check",
+            &_error,
+        );
+        ZkX509EngineErrorV1::ProverSelfCheckFailed
+    })?;
     #[cfg(test)]
     envelope_timer.complete_v1();
     Ok(encoded)
@@ -705,26 +744,38 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
-        let current = core::str::from_utf8(&superseded[17]).unwrap();
-        let boundary =
+        let current = core::str::from_utf8(&superseded[17]).unwrap().to_owned();
+        let word_boundary = "word-capacity-recurrence=local-compute+digest+memory-call-last:";
+        let bus_boundary =
             "cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:";
-        assert_eq!(current.matches(boundary).count(), 1);
-        superseded[17] = current.replace(boundary, "").into_bytes();
-        let old_fields = superseded.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let old_digest = independent_compiled_profile_digest_v1(&old_fields);
-        assert_eq!(
-            hex::encode(old_digest),
-            "f82e78a995ce1b9ca1e91628901e9acd9b01a6841c13e062e30ad6dfdf028795"
-        );
-        assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
-        assert_ne!(
-            construct_zk_x509_compiled_profile_v1().unwrap().digest(),
-            old_digest
-        );
-        let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
-            .expect("current verifier profile");
-        supplied.compiled_profile_digest = old_digest;
-        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
+        assert_eq!(current.matches(word_boundary).count(), 1);
+        assert_eq!(current.matches(bus_boundary).count(), 1);
+        for (descriptor, expected_digest) in [
+            (
+                current.replace(word_boundary, ""),
+                "9d2d34512de90d13a0f68d352bbcc887ba9ac2f2a89e5deb845ff5c4c64d45ff",
+            ),
+            (
+                current.replace(word_boundary, "").replace(bus_boundary, ""),
+                "f82e78a995ce1b9ca1e91628901e9acd9b01a6841c13e062e30ad6dfdf028795",
+            ),
+        ] {
+            superseded[17] = descriptor.into_bytes();
+            let old_fields = superseded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let old_digest = independent_compiled_profile_digest_v1(&old_fields);
+            assert_eq!(hex::encode(old_digest), expected_digest);
+            assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+            assert_ne!(
+                construct_zk_x509_compiled_profile_v1().unwrap().digest(),
+                old_digest
+            );
+            let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+                .expect("current verifier profile");
+            supplied.compiled_profile_digest = old_digest;
+            assert!(
+                super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err()
+            );
+        }
     }
     /// Record forbidden entropy reads while rejecting every request immediately.
     #[derive(Default)]
@@ -897,4 +948,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "engine_prover_diagnostic.rs"]
-mod prover_diagnostic;
+pub(super) mod prover_diagnostic;

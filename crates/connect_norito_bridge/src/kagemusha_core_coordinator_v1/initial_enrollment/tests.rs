@@ -954,6 +954,10 @@ fn admission_expiry_between_issuer_verification_and_possession_start_is_rejected
 
 #[test]
 fn fresh_admission_rechecks_original_deadline_at_handoff() {
+    use crate::kagemusha_core_coordinator_v1::startup_qualification::{
+        NativeStartupQualificationOwnerV1, ObservationErrorV1,
+    };
+
     let f = Fixture::new();
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
@@ -967,9 +971,14 @@ fn fresh_admission_rechecks_original_deadline_at_handoff() {
         .unwrap();
 
     assert_eq!(admission.require_live(), Ok(()));
+    assert!(NativeStartupQualificationOwnerV1::from_fresh_issuer_admission(&admission).is_ok());
     admission.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         admission.require_live(),
         Err(InitialEnrollmentErrorV1::Expired)
+    );
+    assert_eq!(
+        NativeStartupQualificationOwnerV1::from_fresh_issuer_admission(&admission).err(),
+        Some(ObservationErrorV1::Expired)
     );
 }

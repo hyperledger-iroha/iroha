@@ -145,8 +145,10 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
   const privacyWorkflow = readRepositoryFile(".github/workflows/pr_privacy_sdk_guard.yml");
   for (const path of [
     "javascript/iroha_js/src/sorafsOrderbookSubmission.js",
+    "javascript/iroha_js/src/sorafsOrderbookSubmissionBytes.js",
     "javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts",
     "javascript/iroha_js/test/sorafsOrderbookSubmission.test.js",
+    "javascript/iroha_js/test/sorafsOrderbookSubmissionBytes.test.js",
     "javascript/iroha_js/test/sorafsNativeSuites/**",
     "javascript/iroha_js/test/helpers/nativeRequirements.js",
     "javascript/iroha_js/test/helpers/native.js",

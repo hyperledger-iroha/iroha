@@ -1,8 +1,10 @@
 //! Mixed interpreter, algebraic forgery, layout and native proof checks.
 
+mod absolute;
 mod bit_counts;
 mod conditional_move;
 mod div_rem;
+mod mean;
 mod multiplication;
 mod unary_control;
 
@@ -507,7 +509,7 @@ fn scalar_segment_native_layout_fits_envelope_and_dynamic_degree_is_four() {
     let (segment, _) = mixed();
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
-    assert_eq!(segment.base_width_v1(), 1_305);
+    assert_eq!(segment.base_width_v1(), 1_351);
     let layout = AggregateProofLayoutV1::new(
         protocol.parameters,
         vec![AggregateTraceGroupLayoutV1 {
@@ -519,7 +521,7 @@ fn scalar_segment_native_layout_fits_envelope_and_dynamic_degree_is_four() {
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_038_912);
+    assert_eq!(bound, 4_141_952);
     assert!(bound <= protocol.parameters.maximum_proof_bytes);
     assert_eq!(
         measured_maximum_affine_degree_v1(
@@ -870,8 +872,8 @@ fn scalar_comparisons_mixed_with_branches_keep_degree_four_and_the_same_native_e
     assert_eq!(segment.after.registers[21], 1);
     assert_eq!(segment.after.registers[6], i64::MIN as u64);
     assert_eq!(segment.after.registers[7], i64::MAX as u64);
-    assert_eq!(segment.base_width_v1(), 1_305);
-    assert_eq!(segment.profile_constraint_count_v1(), 2_819);
+    assert_eq!(segment.base_width_v1(), 1_351);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_940);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     let layout = AggregateProofLayoutV1::new(
@@ -886,7 +888,7 @@ fn scalar_comparisons_mixed_with_branches_keep_degree_four_and_the_same_native_e
     .unwrap();
     assert_eq!(
         maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-        4_038_912
+        4_141_952
     );
     assert_eq!(
         measured_maximum_affine_degree_v1(

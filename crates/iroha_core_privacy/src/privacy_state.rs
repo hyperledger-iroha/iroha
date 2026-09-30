@@ -3478,7 +3478,7 @@ impl PrivacyProofManagedPoolSnapshotV1 {
         );
         snapshot
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn canonical_note_bootstrap_for_test(
         bootstrap: PrivacyProofManagedPoolBootstrapV1,
         protocol_id: PrivacyProtocolIdV1,
@@ -3527,7 +3527,7 @@ impl PrivacyProofManagedPoolSnapshotV1 {
             verified_batches: BTreeMap::new(),
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn canonical_private_note_bootstrap_for_test(
         bootstrap: PrivacyProofManagedPoolBootstrapV1,
@@ -3537,7 +3537,7 @@ impl PrivacyProofManagedPoolSnapshotV1 {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         )
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn canonical_pq_masp_bootstrap_for_test(
         bootstrap: PrivacyProofManagedPoolBootstrapV1,

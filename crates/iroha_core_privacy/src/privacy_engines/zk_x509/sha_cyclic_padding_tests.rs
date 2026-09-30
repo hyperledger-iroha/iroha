@@ -35,6 +35,20 @@ fn assert_actual_sha_cyclic_boundaries_v1(
                 .collect::<Vec<_>>()
         );
     }
+    // The four carried word-memory terminal products and the three private
+    // capacity counters must still reject altered successors on live edges.
+    for column in SHA_WORD_CAPACITY_MESSAGE_COUNT_V1 - ZK_X509_SHA_BUS_LANES_V1
+        ..SHA_WORD_CAPACITY_AUX_WIDTH_V1
+    {
+        let mut wrong_next = rows[1];
+        wrong_next.aux[column] = wrong_next.aux[column].add(F::ONE);
+        assert!(
+            evaluate(&rows[0], &wrong_next, terminal)
+                .iter()
+                .any(|value| *value != F::ZERO),
+            "segment {segment}, live word carry {column}"
+        );
+    }
     for column in ZK_X509_SHA_INPUT_PRODUCTS_V1..ZK_X509_SHA_BATCH_AUX_WIDTH_V1 {
         let mut wrong_first = rows[0];
         wrong_first.aux[column] = wrong_first.aux[column].add(F::ONE);
@@ -75,6 +89,8 @@ fn assert_actual_sha_cyclic_boundaries_v1(
 
 #[test]
 fn sha_fixed_recurrence_selector_is_disjoint_for_every_native_row() {
+    use super::super::sha_word_stark::SHA_WORD_CAPACITY_MEMORY_SELECTOR_V1;
+
     let provider = ZkX509ShaBatchFixedProviderV1::new_v1(ZkX509ShaCallPublicShapeV1 {
         disclosed_attributes: 4,
     })
@@ -87,6 +103,18 @@ fn sha_fixed_recurrence_selector_is_disjoint_for_every_native_row() {
             assert_eq!(terminal, F(u64::from(row + 1 == active_rows)));
             assert_eq!(padding, F(u64::from(row >= active_rows)));
             assert_eq!(terminal.mul(padding), F::ZERO);
+            let row_kind = fixed[..=SHA_WORD_CAPACITY_MEMORY_SELECTOR_V1]
+                .iter()
+                .copied()
+                .fold(F::ZERO, F::add);
+            assert_eq!(row_kind, F(u64::from(row < active_rows)));
+            let call_last = fixed[SHA_WORD_CAPACITY_CALL_LAST_V1];
+            assert_eq!(call_last.mul(padding), F::ZERO);
+            assert_eq!(
+                row_kind.sub(call_last),
+                F::ONE.sub(call_last).sub(padding),
+                "segment {segment}, word continuation row {row}",
+            );
             assert_eq!(
                 F::ONE.sub(terminal).sub(padding),
                 F(u64::from(row + 1 < active_rows)),
@@ -188,7 +216,16 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
             )
             .unwrap()
         };
-        assert!(evaluate(&padding).iter().all(|value| *value == F::ZERO));
+        let residues = evaluate(&padding);
+        assert!(
+            residues.iter().all(|value| *value == F::ZERO),
+            "segment {segment}, failing cyclic residue indices {:?}",
+            residues
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| (*value != F::ZERO).then_some(index))
+                .collect::<Vec<_>>()
+        );
         let lift = |row: &ZkX509ShaBatchRowV1| ZkX509ShaBatchRowV1 {
             base: row.base.map(E::from_base),
             aux: row.aux.map(E::from_base),

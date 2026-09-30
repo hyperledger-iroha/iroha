@@ -8,12 +8,294 @@
 use super::*;
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read as _, Write},
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use sha2::{Digest as _, Sha256};
+
+thread_local! {
+    // Enabled only around the locally constructed public maximum fixture or a
+    // retained public candidate replay. Ordinary tests and production have no sink.
+    static PUBLIC_DIAGNOSTIC_DIRECTORY_V1: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct PublicFixtureDiagnosticGuardV1 {
+    // A thread-local capability must also be dropped on its creating thread.
+    _thread: core::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl PublicFixtureDiagnosticGuardV1 {
+    fn begin_v1(directory: &Path) -> Self {
+        PUBLIC_DIAGNOSTIC_DIRECTORY_V1.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            assert!(
+                slot.is_none(),
+                "public diagnostic capture is already active"
+            );
+            *slot = Some(directory.to_path_buf());
+        });
+        Self {
+            _thread: core::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for PublicFixtureDiagnosticGuardV1 {
+    fn drop(&mut self) {
+        PUBLIC_DIAGNOSTIC_DIRECTORY_V1.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+fn record_public_diagnostic_v1(directory: &Path, record: &str) -> io::Result<()> {
+    append_receipt_v1(&directory.join("receipt.txt"), record)?;
+    println!("{record}");
+    Ok(())
+}
+
+fn retain_unverified_candidate_v1(directory: &Path, proof: &[u8]) -> io::Result<PathBuf> {
+    if proof.is_empty() || proof.len() > super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "public candidate exceeds proof cap",
+        ));
+    }
+    let digest = hex::encode(Sha256::digest(proof));
+    let path = directory.join(format!("unverified-{digest}.x5s1"));
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            file.write_all(proof)?;
+            file.sync_all()?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.is_file()
+                || metadata.len() != proof.len() as u64
+                || read_unverified_candidate_v1(&path)? != proof
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "existing candidate differs",
+                ));
+            }
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(path)
+}
+
+/// Retain only the already encoded public candidate, never prover/witness state.
+pub(crate) fn capture_public_unverified_candidate_v1(proof: &[u8]) {
+    PUBLIC_DIAGNOSTIC_DIRECTORY_V1.with(|slot| {
+        let slot = slot.borrow();
+        let Some(directory) = slot.as_ref() else { return; };
+        let path = retain_unverified_candidate_v1(directory, proof).expect("public candidate custody");
+        record_public_diagnostic_v1(directory, &format!(
+            "candidate_status=unverified\ncandidate_path={}\ncandidate_bytes={}\ncandidate_sha256={}\ncandidate_qualification=false\nprivate_witness_recorded=false",
+            path.display(), proof.len(), hex::encode(Sha256::digest(proof)),
+        )).expect("public candidate receipt");
+    });
+}
+
+/// Record the exact error returned by a verifier of public bytes, only on opt-in.
+pub(crate) fn record_public_verifier_error_v1(stage: &'static str, error: &impl core::fmt::Debug) {
+    PUBLIC_DIAGNOSTIC_DIRECTORY_V1.with(|slot| {
+        let slot = slot.borrow();
+        let Some(directory) = slot.as_ref() else {
+            return;
+        };
+        record_public_diagnostic_v1(
+            directory,
+            &format!("public_verifier_stage={stage}\npublic_verifier_error={error:?}"),
+        )
+        .expect("public verifier diagnostic receipt");
+    });
+}
+
+#[test]
+fn public_candidate_capture_requires_explicit_scope_and_restores_on_unwind() {
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let proof = b"public unverified candidate fixture";
+    capture_public_unverified_candidate_v1(proof);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _guard = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
+            capture_public_unverified_candidate_v1(proof);
+            record_public_verifier_error_v1("fixture-only", &"public failure");
+            panic!("public fixture unwind");
+        })
+        .is_err()
+    );
+    let before = fs::read(directory.join("receipt.txt")).unwrap();
+    capture_public_unverified_candidate_v1(b"unscoped public bytes");
+    record_public_verifier_error_v1("unscoped", &"public failure");
+    assert_eq!(fs::read(directory.join("receipt.txt")).unwrap(), before);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+    assert!(
+        String::from_utf8(before)
+            .unwrap()
+            .contains("candidate_status=unverified")
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn unverified_candidate_owner_preserves_hash_bounds_and_rejects_substitution() {
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let proof = b"public candidate owner fixture";
+    let path = retain_unverified_candidate_v1(&directory, proof).unwrap();
+    assert_eq!(
+        path.file_name().unwrap().to_str().unwrap(),
+        format!("unverified-{}.x5s1", hex::encode(Sha256::digest(proof)))
+    );
+    assert_eq!(fs::read(&path).unwrap(), proof);
+    assert_eq!(
+        retain_unverified_candidate_v1(&directory, proof).unwrap(),
+        path
+    );
+    assert!(retain_unverified_candidate_v1(&directory, &[]).is_err());
+    let oversized = vec![0; super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize + 1];
+    assert!(retain_unverified_candidate_v1(&directory, &oversized).is_err());
+    fs::write(&path, vec![0; proof.len()]).unwrap();
+    assert!(retain_unverified_candidate_v1(&directory, proof).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+/// Read a retained public candidate under the unchanged cap and exact digest name.
+fn read_unverified_candidate_v1(path: &Path) -> io::Result<Vec<u8>> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid retained public candidate",
+        )
+    };
+    let cap = super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as u64;
+    let metadata = fs::symlink_metadata(path)?;
+    if !path.is_absolute() || !metadata.is_file() || metadata.len() == 0 || metadata.len() > cap {
+        return Err(invalid());
+    }
+    let mut proof = Vec::new();
+    fs::File::open(path)?
+        .take(cap + 1)
+        .read_to_end(&mut proof)?;
+    if proof.is_empty() || proof.len() as u64 > cap || proof.len() as u64 != metadata.len() {
+        return Err(invalid());
+    }
+    let name = format!("unverified-{}.x5s1", hex::encode(Sha256::digest(&proof)));
+    if path.file_name().and_then(|name| name.to_str()) != Some(name.as_str()) {
+        return Err(invalid());
+    }
+    Ok(proof)
+}
+
+#[test]
+fn retained_candidate_reader_rejects_wrong_names_bounds_and_symlinks() {
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let proof = b"public retained replay fixture";
+    let path = retain_unverified_candidate_v1(&directory, proof).unwrap();
+    assert_eq!(read_unverified_candidate_v1(&path).unwrap(), proof);
+    let wrong = directory.join("wrong.x5s1");
+    fs::write(&wrong, proof).unwrap();
+    assert!(read_unverified_candidate_v1(&wrong).is_err());
+    fs::write(&path, b"changed").unwrap();
+    assert!(read_unverified_candidate_v1(&path).is_err());
+    fs::write(&path, b"").unwrap();
+    assert!(read_unverified_candidate_v1(&path).is_err());
+    fs::File::create(&path)
+        .unwrap()
+        .set_len(super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as u64 + 1)
+        .unwrap();
+    assert!(read_unverified_candidate_v1(&path).is_err());
+    fs::remove_file(&path).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&wrong, &path).unwrap();
+        assert!(read_unverified_candidate_v1(&path).is_err());
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "verifier-only replay of an explicitly selected unverified public maximum-fixture candidate"]
+fn retained_public_maximum_candidate_replays_without_prover() {
+    use super::super::relation::release_fixture::{
+        build_zk_x509_release_fixture_v1, reference_statement_context_v1,
+    };
+    let candidate = PathBuf::from(
+        std::env::var_os("IROHA_X509_PUBLIC_CANDIDATE")
+            .expect("explicit retained public candidate path"),
+    );
+    let proof =
+        read_unverified_candidate_v1(&candidate).expect("bounded digest-bound public candidate");
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
+        .expect("same deterministic maximum public fixture");
+    let genesis = *fixture.statement.context.network_id.as_bytes();
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("privacy crate is under the repository crates directory");
+    let directory = run_directory_v1(&repository.join("dist/zk-x509-prover-evidence"))
+        .expect("persistent public diagnostic output directory");
+    record_public_diagnostic_v1(&directory, &format!(
+        "output_directory={}\nreplay_source_candidate={}\ncandidate_status=unverified\ncandidate_sha256={}\ncandidate_bytes={}\nactivation=unavailable\nfull_release_qualification=false\nprivate_witness_recorded=false\nproof_regenerated=false",
+        directory.display(), candidate.display(), hex::encode(Sha256::digest(&proof)), proof.len(),
+    )).unwrap();
+    let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
+    let start = Instant::now();
+    let result = verify_zk_x509_credential_proof_v1(
+        &fixture.statement,
+        &fixture.authoritative_state,
+        genesis,
+        &proof,
+    );
+    drop(public_capture);
+    record_public_diagnostic_v1(&directory, &format!(
+        "retained_public_candidate_replay={result:?}\nreplay_seconds={:.6}\nfull_release_qualification=false", start.elapsed().as_secs_f64(),
+    )).unwrap();
+    result.expect("retained public maximum candidate must pass the unchanged verifier");
+}
+
+#[test]
+fn public_verifier_diagnostic_preserves_real_decode_failure() {
+    use super::super::relation::release_fixture::{
+        build_zk_x509_release_fixture_v1, reference_statement_context_v1,
+    };
+    let fixture =
+        build_zk_x509_release_fixture_v1(reference_statement_context_v1(), false).unwrap();
+    let genesis = *fixture.statement.context.network_id.as_bytes();
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let verify = || {
+        verify_zk_x509_credential_proof_v1(
+            &fixture.statement,
+            &fixture.authoritative_state,
+            genesis,
+            b"malformed public fixture",
+        )
+    };
+    let unscoped = verify();
+    assert!(unscoped.is_err());
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    let guard = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
+    let scoped = verify();
+    drop(guard);
+    assert_eq!(scoped, unscoped);
+    let receipt = fs::read_to_string(directory.join("receipt.txt")).unwrap();
+    assert!(receipt.contains("public_verifier_stage=credential-envelope-decode"));
+    assert!(receipt.contains("public_verifier_error="));
+    assert!(!receipt.contains("candidate_status="));
+    assert_eq!(verify(), unscoped);
+    assert_eq!(
+        fs::read_to_string(directory.join("receipt.txt")).unwrap(),
+        receipt
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
 
 fn retain_public_proof_v1(directory: &Path, proof: &[u8]) -> io::Result<PathBuf> {
     let digest = hex::encode(Sha256::digest(proof));
@@ -187,6 +469,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
     let genesis = *fixture.statement.context.network_id.as_bytes();
     let observation = super::super::prover_observation::ObservationV1::begin_v1();
     let start = Instant::now();
+    let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
     let produced = catch_private_prover_panic_v1(|| {
         prove_zk_x509_credential_proof_v1_with_rng(
             &fixture.statement,
@@ -198,6 +481,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
             &mut rand::rngs::OsRng,
         )
     });
+    drop(public_capture);
     let prove_elapsed = start.elapsed();
     let observation = observation.finish_v1();
     record(observation.public_text_v1());

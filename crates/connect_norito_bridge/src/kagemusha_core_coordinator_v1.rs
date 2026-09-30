@@ -14,8 +14,8 @@ mod archives;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
-mod qualified_enrollment_delegate;
 mod pre_enrollment_qualification;
+mod qualified_enrollment_delegate;
 pub use pre_enrollment_qualification::{
     KagemushaPreEnrollmentQualificationOwnerV1, KagemushaVerifiedPreEnrollmentQualificationV1,
 };

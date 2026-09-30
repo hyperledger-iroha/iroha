@@ -14,7 +14,7 @@ fn unit_root_call_gas() -> u64 {
     result_words * ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + result_words
 }
 
-fn attempted(
+pub(super) fn attempted(
     body: &[u32],
     steps: usize,
     inputs: &[(usize, u64)],

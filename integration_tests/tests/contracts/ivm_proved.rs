@@ -370,7 +370,7 @@ async fn run() -> Result<()> {
     let alias_permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Alias(
             iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                alias.to_string().parse()?,
+                "proved_counter@universal".parse()?,
                 DataSpaceId::UNIVERSAL,
             ),
         ),

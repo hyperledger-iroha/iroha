@@ -7772,6 +7772,7 @@ impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
         )
     }
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -8218,6 +8219,7 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
         )
     }
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -9168,6 +9170,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         }
         Ok(residues)
     }
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -10383,6 +10386,7 @@ impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
         )
     }
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -10932,6 +10936,7 @@ impl MainIoProverConstraintSourceV1 {
             self.challenges,
         )
     }
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -11266,6 +11271,7 @@ impl MainProjectionProverConstraintSourceV1 {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn composition_value_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,

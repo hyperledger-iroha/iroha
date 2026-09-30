@@ -342,8 +342,55 @@ mod tests {
             let authenticated = source.authenticated_execution(height).unwrap();
             assert_eq!(authenticated.committed().height(), height);
             let original = source.committed(height).unwrap();
-            assert!(Arc::ptr_eq(authenticated.block(), original.block()));
+            // Independent reads may decode separate owned graphs. Their exact
+            // canonical carrier, header identity and execution result must agree.
+            assert_eq!(
+                authenticated.block().encode_wire().unwrap(),
+                original.block().encode_wire().unwrap()
+            );
+            assert_eq!(
+                authenticated.committed().block_hash(),
+                original.block_hash()
+            );
+            assert_eq!(authenticated.committed().core_hash(), original.core_hash());
             assert_eq!(authenticated.committed().result(), original.result());
+        }
+        // The consuming conversion itself must retain the exact authenticated
+        // graph, for both the real H2 genesis anchor and the ordinary QC owner.
+        let mut prefix = CertifiedPrefix::new(
+            view.chain_id(),
+            *view.network_id(),
+            source.source.block(GENESIS_HEIGHT).unwrap(),
+        )
+        .unwrap();
+        let (certified, genesis) = prefix
+            .push(source.source.block(GENESIS_HEIGHT + 1).unwrap())
+            .unwrap()
+            .into_parts();
+        let genesis = genesis.expect("actual H2 authenticates genesis execution");
+        let original_genesis = Arc::clone(genesis.committed().block());
+        let authenticated_genesis = genesis.into_authenticated_execution();
+        assert!(Arc::ptr_eq(
+            authenticated_genesis.block(),
+            &original_genesis
+        ));
+        let original_successor = Arc::clone(certified.block());
+        let authenticated_successor = certified.into_authenticated_execution().unwrap();
+        assert!(Arc::ptr_eq(
+            authenticated_successor.block(),
+            &original_successor
+        ));
+        for (height, authenticated) in [(1, authenticated_genesis), (2, authenticated_successor)] {
+            assert_eq!(authenticated.committed().height(), height);
+            assert_eq!(
+                authenticated.block().encode_wire().unwrap(),
+                source
+                    .committed(height)
+                    .unwrap()
+                    .block()
+                    .encode_wire()
+                    .unwrap()
+            );
         }
     }
     #[test]

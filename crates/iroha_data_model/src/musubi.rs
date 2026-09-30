@@ -397,7 +397,7 @@ fn validate_musubi_approval_signature_v1<T>(
     signature: &SignatureOf<T>,
 ) -> Result<(), ParseError> {
     let expected_payload_len = public_key
-        .try_algorithm()
+        .borrowed_algorithm()
         .map_err(|_| ParseError::new("Musubi approval public key algorithm is invalid"))?
         .signature_payload_len();
     let actual_payload_len = signature.payload().len();
@@ -487,31 +487,39 @@ fn domain_hash_value<T: norito::SerializePayload>(domain: &[u8], value: &T) -> [
     );
     *hasher.finalize().as_bytes()
 }
-fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
-    let encoded_len = norito::codec::encode_adaptive_into(payload, &mut io::sink())
-        .expect("Musubi signing-hash preflight must serialize");
+// The callback lends the same codec result back to this scope. It never
+// renders a codec error into an allocated I/O error or publishes a partial hash.
+fn try_domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> Result<HashOf<T>, ParseError> {
+    const ENCODING: ParseError =
+        ParseError::new("Musubi signing hash has no canonical Norito encoding");
+    let encoded_len =
+        norito::codec::encode_adaptive_into(payload, &mut io::sink()).map_err(|_| ENCODING)?;
     let domain_len = u64::try_from(domain.len())
-        .expect("Musubi signature domain length fits u64")
+        .map_err(|_| ENCODING)?
         .to_le_bytes();
     let encoded_len_bytes = u64::try_from(encoded_len)
-        .expect("Musubi signed payload length fits u64")
+        .map_err(|_| ENCODING)?
         .to_le_bytes();
+    let mut encoded = Ok(0);
     let hash = Hash::new_from_writer(|writer| {
         io::Write::write_all(writer, &domain_len)?;
         io::Write::write_all(writer, domain)?;
         io::Write::write_all(writer, &encoded_len_bytes)?;
         let mut writer = writer;
-        let written = norito::codec::encode_adaptive_into(payload, &mut writer)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        if written != encoded_len {
-            return Err(io::Error::other(
-                "Musubi signing-hash length changed between passes",
-            ));
-        }
+        encoded = norito::codec::encode_adaptive_into(payload, &mut writer);
         Ok(())
     })
-    .expect("Musubi signing hash writer is infallible");
-    HashOf::from_untyped_unchecked(hash)
+    .map_err(|_| ENCODING)?;
+    let written = encoded.map_err(|_| ENCODING)?;
+    if written != encoded_len {
+        return Err(ParseError::new(
+            "Musubi signing-hash length changed between passes",
+        ));
+    }
+    Ok(HashOf::from_untyped_unchecked(hash))
+}
+fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
+    try_domain_signing_hash(domain, payload).expect("Musubi signing hash writer is infallible")
 }
 /// Canonical human-facing namespace text resolved through a namespace binding.
 #[derive(
@@ -3028,7 +3036,10 @@ impl MusubiNamespaceDelegationV1 {
                 "Musubi namespace delegation does not match current authority",
             ));
         }
-        let signing_hash = self.payload.signing_hash();
+        let signing_hash = try_domain_signing_hash(
+            MUSUBI_NAMESPACE_DELEGATION_SIGNATURE_DOMAIN_V1,
+            &self.payload,
+        )?;
         match authoritative_owner.controller() {
             AccountController::Single(public_key) => {
                 let [approval] = self.approvals.as_slice() else {
@@ -3041,10 +3052,12 @@ impl MusubiNamespaceDelegationV1 {
                         "Musubi namespace delegation approval is not an owner key",
                     ));
                 }
-                approval
-                    .signature
-                    .verify_hash(public_key, signing_hash)
-                    .map_err(|_| ParseError::new("Musubi namespace delegation signature failed"))
+                iroha_crypto::verify_signature_borrowed(
+                    &approval.signature,
+                    public_key,
+                    signing_hash.as_ref(),
+                )
+                .map_err(|_| ParseError::new("Musubi namespace delegation signature failed"))
             }
             AccountController::Multisig(policy) => {
                 let mut approved_weight = 0_u32;
@@ -3058,12 +3071,12 @@ impl MusubiNamespaceDelegationV1 {
                             "Musubi namespace delegation approval is not an owner key",
                         ));
                     };
-                    approval
-                        .signature
-                        .verify_hash(&approval.public_key, signing_hash)
-                        .map_err(|_| {
-                            ParseError::new("Musubi namespace delegation signature failed")
-                        })?;
+                    iroha_crypto::verify_signature_borrowed(
+                        &approval.signature,
+                        &approval.public_key,
+                        signing_hash.as_ref(),
+                    )
+                    .map_err(|_| ParseError::new("Musubi namespace delegation signature failed"))?;
                     approved_weight = approved_weight
                         .checked_add(u32::from(member.weight()))
                         .ok_or_else(|| {

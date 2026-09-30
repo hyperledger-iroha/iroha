@@ -274,7 +274,8 @@ const KagemushaHardwareCredentialV1 = /* @__PURE__ */ defineModel(
   [["version", K_TYPE_U16], ["credentialId", K_TYPE_FIXED32], [FIELD_NETWORK_ID, K_TYPE_NETWORK], [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32],
     ["suiteId", K_TYPE_FIXED32], ["firmwarePolicyDigest", K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64], ["laneCommitment", K_TYPE_FIXED32],
     ["hardwareEpochId", K_TYPE_FIXED32], ["hardwareEpochGeneration", K_TYPE_U64], ["devicePublicKey", K_TYPE_PUBLIC_KEY],
-    ["deviceKeyReference", K_TYPE_FIXED32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64], ["governanceSignature", K_TYPE_SIGNATURE]],
+    ["deviceKeyReference", K_TYPE_FIXED32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64],
+    ["appPolicyBindingDigest", K_TYPE_FIXED32], ["governanceSignature", K_TYPE_SIGNATURE]],
   (v) => {
     requireVersion(v.version);
     if (v.policyEpoch === 0n || v.issuedAtMs >= v.expiresAtMs) rejectType((TEXT_KAGEMUSHA_V1 + "hardware credential header" + TEXT_IS_INVALID));

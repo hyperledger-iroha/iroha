@@ -564,6 +564,22 @@ final class TxBuilderTests: XCTestCase {
         var reversed = [String: ToriiJSONValue]()
         for key in metadata.keys.sorted().reversed() { reversed[key] = metadata[key] }
         XCTAssertEqual(expected, try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: reversed, ttlMs: 60))
+        // Canonically equivalent Swift Strings are not interchangeable wire Names.
+        let composedName = "\u{e9}"
+        let decomposedName = "e\u{301}"
+        XCTAssertEqual(composedName, decomposedName)
+        XCTAssertNotEqual(Data(composedName.utf8), Data(decomposedName.utf8))
+        XCTAssertNoThrow(try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId,
+            authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries,
+            feePayment: fee, metadata: [composedName: .string("canonical")], ttlMs: 60))
+        XCTAssertThrowsError(try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId,
+            authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries,
+            feePayment: fee, metadata: [decomposedName: .string("noncanonical")], ttlMs: 60)) { error in
+            guard case CanonicalNoritoError.invalidMetadata(let reason) = error else {
+                return XCTFail("Expected canonical metadata Name error, got \(error)")
+            }
+            XCTAssertEqual(reason, "noncanonical metadata Name")
+        }
         for invalid in ([["bad key": .integer("1")], ["ok": .number(.infinity)], ["ok": .integer("01")], ["e\u{301}": .string("not canonical")]] as [[String: ToriiJSONValue]]) {
             XCTAssertThrowsError(try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: invalid, ttlMs: 60))
         }
@@ -646,37 +662,31 @@ final class TxBuilderTests: XCTestCase {
         }
     }
 
+    /// Read authentic native registry frames from the existing shared producer fixture.
+    private func sharedAliasFrame(named name: String) throws -> AliasFramedInstructionV1 {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<3 { root.deleteLastPathComponent() }
+        let url = root.appendingPathComponent("fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let vectors = try XCTUnwrap(fixture["instruction_frame_vectors"] as? [[String: Any]])
+        let vector = try XCTUnwrap(vectors.first { $0["name"] as? String == name })
+        return try AliasFramedInstructionV1(
+            wireId: XCTUnwrap(vector["wire_id"] as? String),
+            framedPayload: XCTUnwrap(Data(hexString: XCTUnwrap(vector["framed_payload_hex"] as? String))))
+    }
+
     func testBuildAliasSetupPlanVerifiesAndSignsOneAtomicFrameVector() throws {
         try requireEd25519Encoder()
         let canonicalBody = Data([1, 3, 3, 7, 9])
-        let authority = Self.fixtureExplorerAccountId
-        let alias = try ResolvedAccountAliasV1(
-            canonicalName: "merchant@banka.paynet",
-            dataspaceId: 7
-        )
-        let intent = AliasIntentV1.accountAlias(
-            try AliasAccountIntentV1(
-                alias: alias,
-                targetAccount: authority,
-                provision: .existing,
-                role: .additional
-            )
-        )
-        let ensure = EnsureAlias(
-            intent: intent,
-            acquisition: try AliasLeaseAcquisitionV1(termYears: 1),
-            quoteGuard: try AliasQuoteGuardV1(
-                expectedPolicyVersion: 1,
-                expectedPaymentAsset: Self.fixtureAssetDefinition,
-                maxAmount: "0",
-                validUntilMs: Self.fixtureCreationTimeMs + 60_000
-            )
-        )
+        let authority = AccountId.make(publicKey: try makeFixtureKeypair().publicKey)
+        let frame = try sharedAliasFrame(named: "ensure_account_alias")
+        let codec = NativeAliasNoritoRegistryCodec.shared
+        let decoded = try codec.decodeAndReencodeEnsureAlias(
+            wireId: frame.wireId, framedPayload: frame.framedPayload)
+        XCTAssertEqual(decoded.reencodedFrame, frame.framedPayload)
+        let ensure = decoded.instruction
+        let intent = ensure.intent
         let request = try AliasSetupPlanRequestV1(intents: [ensure])
-        let frame = try AliasFramedInstructionV1(
-            wireId: EnsureAlias.wireId,
-            framedPayload: Data([0x4e, 0x52, 0x54, 0x30])
-        )
         let plan = try AliasTransactionPlanV1(
             body: try AliasTransactionPlanBodyV1(
                 authority: authority,
@@ -697,7 +707,7 @@ final class TxBuilderTests: XCTestCase {
                 totalsByAsset: [],
                 warnings: [],
                 blockers: [],
-                validUntilMs: Self.fixtureCreationTimeMs + 60_000
+                validUntilMs: ensure.quoteGuard.validUntilMs
             ),
             planHash: AliasPlanVerifier.canonicalHash(
                 canonicalBodyNorito: canonicalBody
@@ -706,7 +716,7 @@ final class TxBuilderTests: XCTestCase {
         let sdk = IrohaSDK(
             toriiClient: StubPipelineClient(),
             baseURL: URL(string: "https://torii.example")!,
-            creationTimeProvider: { Self.fixtureCreationTimeMs }
+            creationTimeProvider: { 100 }
         )
         let envelope = try sdk.buildAliasSetupPlan(
             request,
@@ -715,9 +725,7 @@ final class TxBuilderTests: XCTestCase {
             bodyEncoder: { _ in canonicalBody },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
             keypair: makeFixtureKeypair(),
-            frameCodec: { _, payload in
-                DecodedEnsureAliasFrame(instruction: ensure, reencodedFrame: payload)
-            }
+            frameCodec: codec.decodeAndReencodeEnsureAlias
         )
 
         XCTAssertFalse(envelope.norito.isEmpty)
@@ -734,9 +742,7 @@ final class TxBuilderTests: XCTestCase {
                 bodyEncoder: { _ in canonicalBody },
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 keypair: makeFixtureKeypair(),
-                frameCodec: { _, payload in
-                    DecodedEnsureAliasFrame(instruction: ensure, reencodedFrame: payload)
-                }
+                frameCodec: codec.decodeAndReencodeEnsureAlias
             )
         ) { error in
             XCTAssertEqual(
@@ -766,20 +772,16 @@ final class TxBuilderTests: XCTestCase {
 
     func testBuildAliasLifecyclePlanSignsApplyAndSkipsNoOp() throws {
         try requireEd25519Encoder()
-        let authority = Self.fixtureExplorerAccountId
-        let alias = try ResolvedAccountAliasV1(canonicalName: "merchant@paynet", dataspaceId: 7)
-        let guardValue = try AliasQuoteGuardV1(
-            expectedPolicyVersion: 1,
-            expectedPaymentAsset: Self.fixtureAssetDefinition,
-            maxAmount: "2",
-            validUntilMs: Self.fixtureCreationTimeMs + 60_000
-        )
-        let renewal = try RenewAliasLease(
-            target: .accountAlias(alias),
-            expectedCurrentExpiryMs: 10,
-            targetExpiryMs: 20,
-            quoteGuard: guardValue
-        )
+        let authority = AccountId.make(publicKey: try makeFixtureKeypair().publicKey)
+        let frame = try sharedAliasFrame(named: "renew_account_alias")
+        let codec = NativeAliasNoritoRegistryCodec.shared
+        let decoded = try codec.decodeAndReencodeLifecycle(
+            wireId: frame.wireId, framedPayload: frame.framedPayload)
+        XCTAssertEqual(decoded.reencodedFrame, frame.framedPayload)
+        guard case .renewLease(let renewal) = decoded.operation else {
+            return XCTFail("Authentic renewal fixture decoded to a different operation")
+        }
+        let guardValue = renewal.quoteGuard
         let renewalRequest = AliasLifecyclePlanRequestV1.leaseRenewal(
             AliasLeaseRenewPlanRequestV1(renewal: renewal)
         )
@@ -794,18 +796,15 @@ final class TxBuilderTests: XCTestCase {
                 ),
                 operation: .renewLease(renewal),
                 disposition: .apply,
-                instruction: try AliasFramedInstructionV1(
-                    wireId: RenewAliasLease.wireId,
-                    framedPayload: Data([0x4e, 0x52, 0x54, 0x30])
-                ),
+                instruction: frame,
                 quote: try AliasLeaseQuoteV1(
                     target: renewal.target,
                     pricingClass: 1,
                     exactAmount: "1",
                     quoteGuard: guardValue,
                     expiresAtMs: renewal.targetExpiryMs,
-                    graceExpiresAtMs: 30,
-                    redemptionExpiresAtMs: 40
+                    graceExpiresAtMs: renewal.targetExpiryMs + 10,
+                    redemptionExpiresAtMs: renewal.targetExpiryMs + 20
                 ),
                 totalsByAsset: [try AliasAssetTotalV1(
                     paymentAsset: guardValue.expectedPaymentAsset,
@@ -822,7 +821,7 @@ final class TxBuilderTests: XCTestCase {
         let sdk = IrohaSDK(
             toriiClient: StubPipelineClient(),
             baseURL: URL(string: "https://torii.example")!,
-            creationTimeProvider: { Self.fixtureCreationTimeMs }
+            creationTimeProvider: { 100 }
         )
         let envelope = try XCTUnwrap(sdk.buildAliasLifecyclePlan(
             renewalRequest,
@@ -831,12 +830,7 @@ final class TxBuilderTests: XCTestCase {
             bodyEncoder: { _ in bodyBytes },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
             keypair: makeFixtureKeypair(),
-            frameCodec: { _, payload in
-                DecodedAliasLifecycleFrame(
-                    operation: .renewLease(renewal),
-                    reencodedFrame: payload
-                )
-            }
+            frameCodec: codec.decodeAndReencodeLifecycle
         ))
         try assertCompactNetworkTransactionDomain(
             in: envelope,
@@ -851,12 +845,7 @@ final class TxBuilderTests: XCTestCase {
                 bodyEncoder: { _ in bodyBytes },
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 keypair: makeFixtureKeypair(),
-                frameCodec: { _, payload in
-                    DecodedAliasLifecycleFrame(
-                        operation: .renewLease(renewal),
-                        reencodedFrame: payload
-                    )
-                }
+                frameCodec: codec.decodeAndReencodeLifecycle
             )
         ) { error in
             XCTAssertEqual(
@@ -867,7 +856,7 @@ final class TxBuilderTests: XCTestCase {
 
         let noOpBytes = Data([1, 1, 2, 3])
         let configuration = ConfigureAliasAutoRenew(
-            target: .accountAlias(alias),
+            target: renewal.target,
             expectedRevision: 0,
             config: nil
         )
@@ -886,7 +875,7 @@ final class TxBuilderTests: XCTestCase {
                 totalsByAsset: [],
                 warnings: [],
                 blockers: [],
-                validUntilMs: Self.fixtureCreationTimeMs + 60_000
+                validUntilMs: guardValue.validUntilMs
             ),
             planHash: AliasPlanVerifier.canonicalLifecycleHash(
                 canonicalBodyNorito: noOpBytes

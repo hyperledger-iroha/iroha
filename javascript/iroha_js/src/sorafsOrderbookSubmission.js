@@ -1,9 +1,10 @@
 import { Buffer } from "node:buffer";
 
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import { snapshotSorafsOrderbookSubmissionBytes } from "./sorafsOrderbookSubmissionBytes.js";
 export { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
 
-export const SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024;
+export { SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 } from "./sorafsOrderbookSubmissionBytes.js";
 export const SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024;
 
 const HASH_HEX_PATTERN = /^[0-9a-f]{63}[13579bdf]$/u;
@@ -247,27 +248,7 @@ export function prepareSorafsOrderbookSubmission({
     "inspectSorafsOrderbookSubmissionForDiscriminantV1",
   );
   const verifyReceipt = nativeFunction(native, "verifySorafsOrderbookSubmissionReceiptV1");
-  let body;
-  if (ArrayBuffer.isView(signedTransaction)) {
-    body = Buffer.from(
-      signedTransaction.buffer,
-      signedTransaction.byteOffset,
-      signedTransaction.byteLength,
-    );
-  } else if (signedTransaction instanceof ArrayBuffer) {
-    body = Buffer.from(signedTransaction);
-  } else {
-    throw new TypeError(`${context}.signedTransaction must be exact bytes`);
-  }
-  body = Buffer.from(body);
-  if (
-    body.length === 0
-    || body.length > SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1
-  ) {
-    throw new RangeError(
-      `${context}.signedTransaction must contain 1..${SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1} bytes`,
-    );
-  }
+  const body = snapshotSorafsOrderbookSubmissionBytes(signedTransaction, context);
   requireNonEmptyString(expectedReceiptSigner, `${context}.expectedReceiptSigner`);
   const identity = normalizeIdentity(
     inspect(

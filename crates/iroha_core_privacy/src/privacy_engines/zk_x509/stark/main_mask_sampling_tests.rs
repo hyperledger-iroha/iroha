@@ -293,6 +293,16 @@ fn canonical_arithmetic_auxiliary_runs_stay_within_existing_native_batch() {
 #[test]
 #[ignore = "actual maximum bound sources, native dispatch and log22 commitment/opening parity; optimized qualification"]
 fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Arithmetic);
+}
+
+#[test]
+#[ignore = "actual maximum value auxiliary dispatch, seeded commitment/DEEP/opening parity"]
+fn actual_value_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256ValueBus);
+}
+
+fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
     use crate::privacy_engines::zk_x509::{
         main_assembly::build_zk_x509_main_trace_assembly_v1,
         relation::{
@@ -350,14 +360,16 @@ fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_op
         projection: &projection,
         io: &io,
     };
-    let first_arithmetic = layout
+    let first_registration = layout
         .registered_segments
         .iter()
-        .find(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .find(|registration| {
+            registration.segment.adapter == adapter && registration.trace_group == 5
+        })
         .copied()
         .unwrap();
-    let boundary = first_arithmetic.aux_end().unwrap();
-    // Split one requested batch across two canonical signature registrations.
+    let boundary = first_registration.aux_end().unwrap();
+    // Split one requested batch across two canonical registrations (including execution to sorted).
     let crossed = sources
         .native_columns_v1(
             &layout,
@@ -387,9 +399,9 @@ fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_op
                 .is_err()
         );
     }
-    // Use two adjacent real arithmetic columns on the unchanged native19/common22
+    // Use two adjacent real auxiliary columns on the unchanged native19/common22
     // domains. These exact seeded masks feed real Merkle roots and opening replay.
-    let start = first_arithmetic.aux_start + 47;
+    let start = first_registration.aux_start + 47;
     let width = 2;
     let mut scalar = |column| {
         let (registration, local) =
@@ -434,7 +446,7 @@ fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_op
                 AUX_LEAF_DOMAIN,
                 AUX_NODE_DOMAIN,
                 5,
-                first_arithmetic.segment.trace_log2,
+                first_registration.segment.trace_log2,
                 layout.common_lde_log2,
                 width,
                 MASK_DEGREE,
@@ -465,4 +477,103 @@ fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_op
     )
     .unwrap();
     assert_eq!(opening_replay, scalar_commitment);
+}
+
+#[test]
+fn canonical_value_auxiliary_runs_stay_within_existing_native_batch() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let bound = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+    let group = &layout.trace_groups[5];
+    let resident = bound
+        * ((1 << group.native_trace_log2) * core::mem::size_of::<F>()
+            + core::mem::size_of::<ZeroizingMainTraceColumnV1>());
+    assert!(resident < plan.replay_batch);
+    let mut scalar = 0;
+    let mut batched = 0;
+    let mut endpoints = [0, 0];
+    for registration in &layout.registered_segments {
+        if registration.segment.adapter != SegmentAdapterIdV1::P256ValueBus
+            || registration.trace_group != 5
+        {
+            continue;
+        }
+        let (_, local) = p256_instance_parts_v1(registration.segment.instance).unwrap();
+        assert!(local <= 1);
+        endpoints[usize::from(local)] += 1;
+        let width = if local == 0 { 116 } else { 12 };
+        assert_eq!(registration.segment.aux_width, width);
+        let end = registration.aux_end().unwrap();
+        scalar += width;
+        for first in (0..group.aux_width).step_by(bound) {
+            if first < end && first + bound > registration.aux_start {
+                batched += 1;
+            }
+        }
+    }
+    assert_eq!(endpoints, [5, 5]);
+    assert_eq!(scalar, 640);
+    assert!(batched <= scalar.div_ceil(bound) + 10);
+    assert!(batched * 7 < scalar);
+    eprintln!(
+        "value auxiliary source traversals per complete replay: {scalar} -> {batched}; native batch payload={resident}; no retained matrix delta"
+    );
+}
+
+#[test]
+fn canonical_p256_base_runs_preserve_registration_boundaries_and_batch_allowance() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let group = &layout.trace_groups[5];
+    let mut rows_before = 0;
+    let mut rows_after = 0;
+    let mut columns = 0;
+    let mut registrations = 0;
+    for registration in &layout.registered_segments {
+        if registration.trace_group != 5
+            || !(registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic
+                || (registration.segment.adapter == SegmentAdapterIdV1::P256ValueBus
+                    && p256_instance_parts_v1(registration.segment.instance)
+                        .is_some_and(|(_, local)| local <= 1)))
+        {
+            continue;
+        }
+        registrations += 1;
+        let start = registration.base_start;
+        let end = registration.base_end().unwrap();
+        let mut seen = Vec::new();
+        columns += end - start;
+        rows_before += (end - start) * registration.segment.trace_size();
+        for batch in (0..group.base_width).step_by(8) {
+            let first = batch.max(start);
+            let last = (batch + 8).min(end).min(group.base_width);
+            if first >= last {
+                continue;
+            }
+            assert!(last - first <= 8);
+            for column in first..last {
+                let (actual, local) = registered_main_group_column_v1(
+                    &layout,
+                    5,
+                    MainTraceColumnKindV1::Base,
+                    column,
+                )
+                .unwrap();
+                assert_eq!(actual, *registration);
+                assert_eq!(local, column - start);
+                seen.push(column);
+            }
+            rows_after += registration.segment.trace_size();
+        }
+        assert_eq!(seen, (start..end).collect::<Vec<_>>());
+    }
+    assert_eq!(registrations, 15);
+    assert_eq!(columns, 1_395);
+    assert_eq!(rows_before, 1_395 * (1 << 19));
+    assert!(rows_after <= 200 * (1 << 19));
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    assert!(
+        8 * ((1 << 19) * core::mem::size_of::<F>()
+            + core::mem::size_of::<ZeroizingMainTraceColumnV1>())
+            < plan.replay_batch
+    );
 }
