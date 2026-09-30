@@ -59,20 +59,21 @@ impl SumeragiLaneStateCommitment {
                     || obligation
                         .retired_at
                         .is_some_and(|height| height > carrier_height)
-                    || match state
+                    || state
                         .lanes
                         .iter()
                         .find(|lane| lane.incarnation == obligation.incarnation)
-                    {
-                        Some(lane) => {
-                            obligation.retired_at.is_some()
-                                || lane.lane != obligation.lane
-                                || lane.created_at != obligation.created_at
-                                || u32::try_from(lane.committee.len()).ok()
-                                    != Some(obligation.signer_count)
-                        }
-                        None => obligation.retired_at.is_none(),
-                    }
+                        .map_or_else(
+                            || obligation.retired_at.is_none(),
+                            |lane| {
+                                obligation.retired_at.is_some()
+                                    || lane.lane != obligation.lane
+                                    || lane.created_at != obligation.created_at
+                                    || lane.merged != obligation.merged
+                                    || u32::try_from(lane.committee.len()).ok()
+                                        != Some(obligation.signer_count)
+                            },
+                        )
             })
             || carrier_height == 0
             || state
@@ -167,7 +168,7 @@ const _: () =
     assert!(std::mem::align_of::<StatePayload<'_>>() == std::mem::align_of::<SumeragiLaneState>());
 impl norito::core::SerializePayload for StatePayload<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        // The sole canonical SumeragiLaneState payload always emits its five compact field
+        // The sole canonical SumeragiLaneState payload always emits its six compact field
         // lengths. Propagate that known layout usage while forwarding the original bytes.
         norito::core::note_compact_len_emitted();
         std::io::Write::write_all(writer, self.bytes)?;
@@ -215,6 +216,7 @@ mod tests {
             incarnation: value.lanes[0].incarnation,
             instance: [4; 32],
             created_at: 1,
+            merged: value.lanes[0].merged,
             signer_count: 4,
             signers: SumeragiLaneCustodySigners::default(),
             evidence_horizon: 7,
@@ -222,6 +224,16 @@ mod tests {
             retired_at: None,
         });
         let original = SumeragiLaneStateCommitment::from_state(network(), 3, &value).unwrap();
+        let frontier = value.custody[0].merged;
+        for field in 0..3 {
+            match field {
+                0 => value.custody[0].merged.height += 1,
+                1 => value.custody[0].merged.block_hash[0] ^= 1,
+                _ => value.custody[0].merged.result[0] ^= 1,
+            }
+            assert!(SumeragiLaneStateCommitment::from_state(network(), 3, &value).is_err());
+            value.custody[0].merged = frontier;
+        }
         value.custody[0].evidence_horizon += 1;
         assert_ne!(
             original,

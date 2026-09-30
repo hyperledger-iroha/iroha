@@ -7094,6 +7094,7 @@ mod tests {
                     incarnation: [17; 32],
                     instance: [18; 32],
                     created_at: creation,
+                    merged: iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier::default(),
                     signer_count: 1,
                     signers: vec![SumeragiLaneSignerCustody { signer: 0, binding }]
                         .try_into()

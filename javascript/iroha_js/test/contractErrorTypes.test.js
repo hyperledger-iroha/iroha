@@ -162,7 +162,7 @@ test("exported structs retain locked identity in public and durable schemas", as
     assert.throws(() => validateManifestErrorTypeBindingsV1(manifest), TypeError, name);
   }
   const base = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
-  const manifest = { ...base.manifest, ...fixture.manifest };
+  const manifest = { ...base.manifest, error_messages: null, ...fixture.manifest };
   const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, fixture.manifest.entrypoints[0].return_schema);

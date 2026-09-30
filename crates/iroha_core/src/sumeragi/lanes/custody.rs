@@ -49,6 +49,9 @@ pub enum CustodyViolation {
     /// A live original incarnation disappeared before authenticated retirement.
     #[error("live lane custody lost its original incarnation")]
     MissingIncarnation,
+    /// A later global merge regressed or rewrote the same native frontier.
+    #[error("original lane custody frontier regressed or changed branch")]
+    Frontier,
     /// A creation attempts to replace already pinned original custody.
     #[error("duplicate lane custody creation")]
     DuplicateCreation,
@@ -176,6 +179,15 @@ pub(super) fn prepare_retirement(
                 .iter()
                 .find(|record| record.incarnation == obligation.incarnation)
                 .ok_or(CustodyViolation::MissingIncarnation)?;
+            if record.merged.height < obligation.merged.height
+                || (record.merged.height == obligation.merged.height
+                    && record.merged != obligation.merged)
+            {
+                return Err(CustodyViolation::Frontier);
+            }
+            // The lane step has already applied this carrier's merges. Retain its final exact
+            // frontier before retirement removes the live routing record in the same step.
+            obligation.merged = record.merged;
             if record
                 .retirement_height()
                 .is_some_and(|retirement| retirement <= height)
@@ -188,7 +200,7 @@ pub(super) fn prepare_retirement(
             .map_err(|_| CustodyViolation::Obligation)?;
     }
     state.custody.retain(|obligation| {
-        obligation.retains_at(height).unwrap_or(true) || has_pending_evidence(world, obligation)
+        obligation.retains_at(height).unwrap_or(true) || has_retained_evidence(world, obligation)
     });
     Ok(())
 }
@@ -243,6 +255,7 @@ pub(super) fn pin_created(
             )
             .0,
             created_at: record.created_at,
+            merged: record.merged,
             signer_count: u32::try_from(record.committee.len())
                 .map_err(|_| CustodyViolation::Committee)?,
             signers: pin_signers(
@@ -312,6 +325,15 @@ fn effective_retains_at(
         .checked_add(horizon)
         .and_then(|end| end.checked_add(delay))
         .is_none_or(|end| height < end)
+}
+
+// Terminal reports still need original custody provenance for restoration and replay fences.
+// Pruning the record in the next mandatory phase releases this nonmonetary retention as well.
+fn has_retained_evidence(world: &impl WorldReadOnly, obligation: &SumeragiLaneCustody) -> bool {
+    world
+        .consensus_evidence()
+        .iter()
+        .any(|(_, record)| record.attribution.instance == obligation.instance)
 }
 
 fn has_pending_evidence(world: &impl WorldReadOnly, obligation: &SumeragiLaneCustody) -> bool {

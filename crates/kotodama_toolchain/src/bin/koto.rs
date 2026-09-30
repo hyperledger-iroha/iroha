@@ -288,7 +288,16 @@ fn check_loaded_project(
     loaded: LoadedSourceProject,
 ) -> (Vec<PathBuf>, DiagnosticBundle) {
     let source_paths = loaded.source_paths;
-    match driver.check_project(loaded.graph) {
+    let checked_graph = if kotodama_lang::parser::parse(&loaded.graph.root.source)
+        .is_ok_and(|program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Module)
+        && loaded.graph.imports.is_empty()
+        && loaded.graph.packages.is_empty()
+    {
+        driver.check_module_sources(loaded.graph.root, loaded.graph.sources)
+    } else {
+        driver.check_project(loaded.graph)
+    };
+    match checked_graph {
         Ok(warnings) => {
             let checked = source_paths
                 .values()
@@ -351,11 +360,7 @@ fn check_project_paths_with_root(
             })
             .and_then(|root| load_source_project(input, &root, &BTreeMap::new()));
         match loaded {
-            Ok(loaded)
-                if kotodama_lang::parser::parse(&loaded.graph.root.source).is_ok_and(
-                    |program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Seiyaku,
-                ) =>
-            {
+            Ok(loaded) => {
                 return check_loaded_project(driver, loaded);
             }
             Err(error) => {
@@ -369,7 +374,6 @@ fn check_project_paths_with_root(
                 });
                 return (Vec::new(), diagnostics);
             }
-            _ => {}
         }
     }
     let preferred_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -815,7 +819,7 @@ fn document(mut args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| {
             "documentation source is absent from the explicit project graph".to_owned()
         })?;
-    let source_signatures = analysis.declaration_signatures(source_id);
+    let source_signatures = analysis.unit_declaration_signatures(source_id);
     let driver = BuildDriver::new(session, "koto-doc");
     let output = driver
         .compile_project(graph, &source_name)
@@ -2062,10 +2066,11 @@ fn lsp_project_with_open_overlays(
         &overlays,
     )?;
     for package in &mut graph.packages {
-        package.sources = kotodama_lang::driver::load_source_companions(
+        package.sources = kotodama_lang::driver::load_source_package_companions(
             &package.modules,
             &source_root,
             &overlays,
+            &package.identity,
         )
         .map_err(|error| match error.into_diagnostics() {
             Ok(mut bundle) => {
@@ -3653,12 +3658,11 @@ mod tests {
             3,
             "owned exports rename the root reference, declaration, and exact manifest token together"
         );
-        let mut invalid_project = project.clone();
+        // Unopened source changes are reloaded from disk under the same locked manifest.
         let invalid_source =
             "module Math { /* 金庫😀 */ export fn value() -> int { return missing; } }";
-        invalid_project.graph.packages[0].modules[0].source = invalid_source.to_owned();
-        let diagnostics =
-            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        std::fs::write(&module, invalid_source).expect("write unopened dependency error");
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, Some(&project));
         let diagnostic = diagnostics[&module_uri]
             .diagnostics
             .iter()
@@ -3678,9 +3682,12 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(expected_character)
         );
-        invalid_project.graph.packages[0].modules[0].source = "module Math { /* 金庫😀 */ export fn value() -> int { 7 } fn helper(int unused) -> int { 1 } }".to_owned();
-        let diagnostics =
-            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        std::fs::write(
+            &module,
+            "module Math { /* 金庫😀 */ export fn value() -> int { 7 } fn helper(int unused) -> int { 1 } }",
+        )
+        .expect("write unopened dependency lint");
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, Some(&project));
         let warning = diagnostics[&module_uri]
             .diagnostics
             .iter()

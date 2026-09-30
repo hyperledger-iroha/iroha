@@ -287,8 +287,26 @@ fn fingerprints_cover_reachable_sources_only_but_bound_the_entire_inventory() {
     let mut extra = request.clone();
     extra
         .sources
-        .push(file("unused.ko", "malformed unused content"));
+        .push(file("a-unused.ko", "malformed unused content"));
+    let baseline_sources = graph
+        .link(request.clone(), LinkerOptions::default())
+        .unwrap()
+        .program
+        .source_files;
+    let extended_sources = graph
+        .link(extra.clone(), LinkerOptions::default())
+        .unwrap()
+        .program
+        .source_files;
+    assert_eq!(
+        baseline_sources, extended_sources,
+        "unreachable inventory cannot change source identities shared with cached reports"
+    );
     assert_eq!(before, ModuleBuildGraph::fingerprint(&extra).unwrap());
+    let canonical = ModuleBuildGraph::canonical_source_bundle(extra.clone()).unwrap();
+    assert_eq!(canonical.sources.len(), 1);
+    assert_eq!(canonical.sources[0].source_name, "value.ko");
+    assert_eq!(before, ModuleBuildGraph::fingerprint(&canonical).unwrap());
     assert_eq!(
         graph
             .link(extra.clone(), LinkerOptions::default())
@@ -363,4 +381,107 @@ fn test_fingerprint_includes_test_only_companions() {
     request.sources[0].source = request.sources[0].source.replace("== 1", "== 2");
     let after = graph.link_sources_inner(request, &[test], options).unwrap();
     assert_ne!(before.fingerprint, after.fingerprint);
+}
+#[test]
+fn included_argument_table_overflow_has_native_declaration_diagnostics() {
+    let parameters = (0..=crate::regalloc::MAX_ARGUMENT_VALUES)
+        .map(|index| format!("int p{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fragment = format!("fn too_many({parameters}) {{}}");
+    let request = project(
+        r#"seiyaku App { include "large.ko"; }"#,
+        &[("large.ko", &fragment)],
+    );
+    let diagnostics = ModuleBuildGraph::default()
+        .link(request, LinkerOptions::default())
+        .unwrap_err()
+        .into_diagnostics();
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "K2007"
+                && diagnostic
+                    .primary_span
+                    .as_ref()
+                    .and_then(|span| span.source.as_deref())
+                    == Some("large.ko")),
+        "{}",
+        diagnostics.render_human()
+    );
+}
+#[test]
+fn standalone_test_source_catalog_is_retained() {
+    let target = crate::session::TestSourceUnit {
+        source_name: "app.ko".into(),
+        source: "seiyaku App { fn value() -> int { 1 } }".into(),
+    };
+    let tests = crate::session::TestSourceUnit { source_name: "tests.ko".into(), source: r#"module Tests { koto_test { target: "app.ko" } error enum Failure { #[message("A test failure")] Bad = 1; } #[test] fn ok() { require(value() == 1, Failure::Bad); } }"#.into() };
+    let session = crate::session::CompilerSession::new(crate::compiler::CompilerOptions {
+        mode: crate::compiler::CompilerMode::Test,
+        ..crate::compiler::CompilerOptions::default()
+    });
+    let output = session.build_test_sources(&target, &[tests]).unwrap();
+    assert!(
+        output
+            .suite
+            .contract_interface
+            .error_messages
+            .iter()
+            .any(|entry| entry.message == "A test failure")
+    );
+}
+
+#[test]
+fn dependency_path_errors_point_at_native_fragment_directives() {
+    let request = project(
+        r#"seiyaku App { include "sub/helpers.ko"; }"#,
+        &[("sub/helpers.ko", r#"include "../../escape.ko";"#)],
+    );
+    let diagnostics = ModuleBuildGraph::default()
+        .link(request, LinkerOptions::default())
+        .unwrap_err()
+        .into_diagnostics();
+    let diagnostic = &diagnostics.diagnostics[0];
+    assert_eq!(diagnostic.code, "E_INVALID_SOURCE_PATH");
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source.as_deref()),
+        Some("sub/helpers.ko")
+    );
+    assert!(diagnostic.primary_source.is_some());
+}
+
+#[test]
+fn canonical_package_bundle_discards_unreachable_companions() {
+    let request = SourcePackageGraphRequest {
+        package: SourcePackageUnit {
+            identity: "demo/library@1".into(),
+            modules: vec![file(
+                "src/lib.ko",
+                r#"module Library { include "parts.ko"; }"#,
+            )],
+            sources: vec![
+                file("src/unused.ko", "invalid unused source"),
+                file("src/parts.ko", "export const int VALUE = 7;"),
+            ],
+            exports: BTreeSet::from(["VALUE".into()]),
+            imports: Vec::new(),
+        },
+        dependencies: Vec::new(),
+    };
+    let before = ModuleBuildGraph::package_fingerprint(&request).unwrap();
+    let canonical = ModuleBuildGraph::canonical_source_package_bundle(request).unwrap();
+    assert_eq!(canonical.package.sources.len(), 1);
+    assert_eq!(canonical.package.sources[0].source_name, "src/parts.ko");
+    assert_eq!(
+        before,
+        ModuleBuildGraph::package_fingerprint(&canonical).unwrap()
+    );
+    ModuleBuildGraph::default()
+        .validate_package(canonical, LinkerOptions::default())
+        .unwrap();
 }

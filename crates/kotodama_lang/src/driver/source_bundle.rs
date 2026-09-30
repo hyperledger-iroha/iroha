@@ -62,11 +62,52 @@ pub fn load_source_companions(
     source_root: &Path,
     overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<Vec<SourceModuleUnit>, BuildError> {
+    load_source_companions_scoped(entries, source_root, overlays, None)
+}
+/// Load a locked package's companion files while retaining package ownership in diagnostics.
+pub fn load_source_package_companions(
+    entries: &[SourceModuleUnit],
+    source_root: &Path,
+    overlays: &BTreeMap<PathBuf, String>,
+    package_identity: &str,
+) -> Result<Vec<SourceModuleUnit>, BuildError> {
+    load_source_companions_scoped(entries, source_root, overlays, Some(package_identity))
+}
+fn load_source_companions_scoped(
+    entries: &[SourceModuleUnit],
+    source_root: &Path,
+    overlays: &BTreeMap<PathBuf, String>,
+    package_identity: Option<&str>,
+) -> Result<Vec<SourceModuleUnit>, BuildError> {
     let canonical_root = source_root.canonicalize().map_err(|error| BuildError::Io {
         operation: "canonicalize Kotodama source root",
         path: source_root.to_path_buf(),
         message: error.to_string(),
     })?;
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            Ok(SourceModuleUnit {
+                source_name: crate::linker::resolve_source_path("entry.ko", &entry.source_name)
+                    .map_err(BuildError::SourceGraph)?,
+                source: entry.source.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, BuildError>>()?;
+    let mut physical_names = BTreeMap::new();
+    for entry in &entries {
+        let entry_path = canonical_root.join(&entry.source_name);
+        let entry_inventory = BTreeMap::from([(entry_path.clone(), String::new())]);
+        let physical = canonical_overlay_path(&entry_path, &canonical_root, &entry_inventory)?;
+        if let Some(first) = physical_names.insert(physical, entry.source_name.clone())
+            && first != entry.source_name
+        {
+            return Err(BuildError::SourceGraph(SourceGraphError::DuplicateSource {
+                scope: "physical source inventory".into(),
+                source: entry.source_name.clone(),
+            }));
+        }
+    }
     let mut known = entries
         .iter()
         .map(|unit| unit.source_name.clone())
@@ -76,10 +117,28 @@ pub fn load_source_companions(
         .cloned()
         .map(|unit| (unit, false))
         .collect::<VecDeque<_>>();
-    let mut total_bytes = entries.iter().map(|unit| unit.source.len()).sum::<usize>();
+    let mut total_bytes = entries.iter().fold(0usize, |total, unit| {
+        total.saturating_add(unit.source.len())
+    });
+    if entries.len() > MAX_MODULE_GRAPH_SOURCES || total_bytes > MAX_MODULE_GRAPH_SOURCE_BYTES {
+        return Err(BuildError::SourceGraph(SourceGraphError::Budget {
+            sources: entries.len(),
+            source_bytes: total_bytes,
+            max_sources: MAX_MODULE_GRAPH_SOURCES,
+            max_source_bytes: MAX_MODULE_GRAPH_SOURCE_BYTES,
+        }));
+    }
     let mut companions = Vec::new();
     while let Some((unit, fragment)) = pending.pop_front() {
-        let file = SourceFile::new(SourceId(0), unit.source_name.as_str(), unit.source.as_str());
+        let file = match package_identity {
+            Some(identity) => SourceFile::new_in_package(
+                SourceId(0),
+                identity,
+                unit.source_name.as_str(),
+                unit.source.as_str(),
+            ),
+            None => SourceFile::new(SourceId(0), unit.source_name.as_str(), unit.source.as_str()),
+        };
         let program = if fragment {
             crate::parser::parse_fragment_source(&file, FrontendBudget::v1())
         } else {
@@ -106,44 +165,37 @@ pub fn load_source_companions(
                 continue;
             }
             let physical = canonical_root.join(&name);
-            let source = if let Some(source) = overlays.get(&physical) {
-                // Check every existing ancestor even when the unsaved leaf has no inode yet.
-                let mut ancestor = physical.as_path();
-                while !ancestor.exists() {
-                    ancestor = ancestor.parent().ok_or_else(|| BuildError::InvalidPath {
-                        path: physical.clone(),
-                        message: "source has no existing parent".into(),
-                    })?;
-                }
-                let canonical = ancestor.canonicalize().map_err(|error| BuildError::Io {
-                    operation: "canonicalize Kotodama source ancestor",
-                    path: ancestor.into(),
-                    message: error.to_string(),
+            let canonical =
+                canonical_overlay_path(&physical, &canonical_root, overlays).map_err(|error| {
+                    match error {
+                        BuildError::Io { .. } => {
+                            BuildError::Compile(DiagnosticBundle::single(Diagnostic::error(
+                                "E_SOURCE_NOT_FOUND",
+                                DiagnosticPhase::Resolve,
+                                format!("cannot resolve source `{name}`: {error}"),
+                                Some(directive_span.clone()),
+                            )))
+                        }
+                        error => error,
+                    }
                 })?;
-                if !canonical.starts_with(&canonical_root) {
-                    return Err(BuildError::InvalidPath {
-                        path: physical,
-                        message: "source resolves outside its source root".into(),
-                    });
-                }
-                source.clone()
-            } else {
-                let canonical = physical.canonicalize().map_err(|error| {
-                    BuildError::Compile(DiagnosticBundle::single(Diagnostic::error(
-                        "E_SOURCE_NOT_FOUND",
+            if let Some(first) = physical_names.insert(canonical.clone(), name.clone())
+                && first != name
+            {
+                return Err(BuildError::Compile(DiagnosticBundle::single(
+                    Diagnostic::error(
+                        "E_DUPLICATE_SOURCE",
                         DiagnosticPhase::Resolve,
-                        format!("cannot resolve source `{name}`: {error}"),
+                        format!("source `{name}` resolves to the same physical file as `{first}`"),
                         Some(directive_span.clone()),
-                    )))
-                })?;
-                if !canonical.starts_with(&canonical_root) {
-                    return Err(BuildError::InvalidPath {
-                        path: physical,
-                        message: "source resolves outside its source root".into(),
-                    });
-                }
-                read_source_file(&canonical)?
-            };
+                    ),
+                )));
+            }
+            let source = overlays
+                .get(&physical)
+                .or_else(|| overlays.get(&canonical))
+                .cloned()
+                .map_or_else(|| read_source_file(&canonical), Ok)?;
             total_bytes = total_bytes.saturating_add(source.len());
             if known.len() > MAX_MODULE_GRAPH_SOURCES || total_bytes > MAX_MODULE_GRAPH_SOURCE_BYTES
             {
@@ -319,5 +371,22 @@ mod tests {
                 .to_string()
                 .contains("outside")
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn source_loader_rejects_multiple_logical_names_for_one_physical_file() {
+        let directory = Directory::new();
+        std::fs::write(
+            directory.0.join("app.ko"),
+            "seiyaku App { include \"first.ko\"; include \"second.ko\"; }",
+        )
+        .expect("root source");
+        std::fs::write(directory.0.join("first.ko"), "fn helper() {}").expect("source fragment");
+        std::os::unix::fs::symlink("first.ko", directory.0.join("second.ko"))
+            .expect("in-root alias");
+        let error =
+            load_source_project(&directory.0.join("app.ko"), &directory.0, &BTreeMap::new())
+                .expect_err("physical alias must fail");
+        assert!(error.to_string().contains("E_DUPLICATE_SOURCE"));
     }
 }

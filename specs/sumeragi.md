@@ -2510,7 +2510,11 @@ and E59 (simulator).
 - *Participant* (`AmxParticipantStateV1` over the `AmxEscrow` interface that a dataspace's
   executor implements): prepare (item 3), settle (item 6) and `G`'s handoffs. A `Prepare` is also
   rejected once the participant has verified a `G` block above `d`: `G` has then decided `x`, and
-  without this vote only `Abort`.
+  without this vote only `Abort`. The fallible escrow interface preserves a host's typed local
+  failure separately from protocol rejection: refused preparation emits no vote, and refused
+  apply/release changes neither the prepared entry nor the verified global-height cursor.
+  The same proof can retry against the original escrow. Native participant graph funding,
+  independent State and production escrow installation remain open.
 - *Simulator* (`sim::amx`, F31): the same protocol as a toy application on every instance's
   committed blocks, checked by O-AMX (§13.2) and the `MX` mutations (§13.4). Its executor
   consumes the same signed RS16 `AvailableBody` owners as the other scenarios. A held

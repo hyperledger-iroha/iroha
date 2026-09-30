@@ -20,10 +20,7 @@ impl ModuleBuildGraph {
     pub(crate) fn editor_request(
         request: &SourceLinkRequest,
     ) -> Result<SourceLinkRequest, SourceGraphError> {
-        let names = validate_source_link_request(request)?;
-        let mut request = request.clone();
-        canonicalize_source_link_request(&mut request, names);
-        Ok(request)
+        Self::canonical_source_bundle(request.clone())
     }
 }
 

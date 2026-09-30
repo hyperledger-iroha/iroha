@@ -26,8 +26,11 @@
 //! before constructing a historical record proof, including after deadline pruning and replay.
 //!
 //! **Participants.** The participant side ([`iroha_data_model::sumeragi_amx::AmxParticipantStateV1`]
-//! over an [`iroha_data_model::sumeragi_amx::AmxEscrow`]) is complete and tested over an
-//! in-memory dataspace. The node does not host a dataspace instance with its own state yet (lane
+//! over an [`iroha_data_model::sumeragi_amx::AmxEscrow`]) is tested over an in-memory
+//! dataspace. Escrow reports host failures separately from protocol rejection: a refused
+//! prepare records no vote, and a refused apply/release keeps the original unsettled entry
+//! and global-height cursor for retry. Native participant graph funding remains open.
+//! The node does not host a dataspace instance with its own state yet (lane
 //! instances share `G`'s state, `specs/sumeragi_lanes.md` §0). TODO(S6): hosting one needs
 //! (1) a per-dataspace World with an `AmxParticipantStateV1` cell anchored at `G`'s genesis
 //! context, (2) native `PrepareAmx`/`SettleAmx`/`RelayGlobalHandoff` instructions of that

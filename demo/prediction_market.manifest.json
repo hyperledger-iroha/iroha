@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "PredictionMarket",
-  "code_hash": "hash:F7A8281423C164FECA0931079D046605F2DC2228C0352804B028BEE72BE954FD#558A",
-  "abi_hash": "hash:4DE60141043F6E9990D9A36EC5049D1FA2400792A72889604A4B2B6F7C6AA0F9#130B",
+  "code_hash": "hash:EC3B3AC6962148C4103905D39225D3CBDA089B028D27F1ACC171D694C8C3CD0D#E97F",
+  "abi_hash": "hash:ECB75640994009BC31B3CA23F40AA5FF07550841285F24613E2C497A6A1E5733#96CD",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -186,6 +186,7 @@
       ]
     }
   ],
+  "error_messages": null,
   "kotoba": null,
   "provenance": null
 }

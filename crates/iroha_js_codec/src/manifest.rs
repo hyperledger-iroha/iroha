@@ -171,6 +171,12 @@ mod tests {
         let mut manifest = base.get("manifest").expect("manifest").clone();
         if let Some(overlay) = overlay {
             let extra: Value = json::from_json(overlay).expect("shared nominal fixture");
+            // The overlay replaces nominal error identities; the base fixture's
+            // presentation catalog belongs only to the base error declarations.
+            manifest
+                .as_object_mut()
+                .expect("manifest object")
+                .insert("error_messages".into(), Value::Null);
             manifest.as_object_mut().expect("manifest object").extend(
                 extra
                     .get("manifest")

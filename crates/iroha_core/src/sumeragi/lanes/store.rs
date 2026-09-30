@@ -67,7 +67,7 @@ impl LaneFrameRead {
     }
 
     /// Authenticate the original certificate and restore complete available payload custody.
-    /// Returned clones share the already admitted owners; no uncharged bulk copy is made.
+    /// Moves the exact restored body and certificate owners without a metadata or bulk clone.
     /// A successful job is consumed and cannot be polled again.
     ///
     /// # Errors
@@ -75,7 +75,7 @@ impl LaneFrameRead {
     /// refusal. `WouldBlock` retains the exact pending read and may be retried.
     pub fn poll(&mut self) -> io::Result<(AvailableBody, Qc)> {
         let prepared = self.job.poll(&self.budget)?;
-        Ok((prepared.body().clone(), prepared.commit_qc().clone()))
+        Ok(prepared.into_parts())
     }
 }
 
@@ -239,11 +239,13 @@ impl FileLaneBlockStore {
         if height == 0 || height > state.tip {
             return Ok(None);
         }
-        let prepared = self.read_prepared(&mut state, height)?;
-        // These clones share already-admitted original byte/control owners. No bulk copy occurs.
-        let result = (prepared.body().clone(), prepared.commit_qc().clone());
-        state.read = None;
-        Ok(Some(result))
+        self.read_prepared(&mut state, height)?;
+        let prepared = state
+            .read
+            .take()
+            .and_then(|read| read.ready)
+            .expect("completed original lane read");
+        Ok(Some(prepared.into_parts()))
     }
     /// Wait until the durable validated tip reaches `height`, bounded by `timeout`.
     #[must_use]

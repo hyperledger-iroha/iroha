@@ -40,6 +40,7 @@ fn obligation() -> SumeragiLaneCustody {
         incarnation: [1; 32],
         instance: [2; 32],
         created_at: 10,
+        merged: crate::sumeragi_lanes::SumeragiLaneFrontier::default(),
         signer_count: 4,
         signers,
         evidence_horizon: 7,
@@ -227,4 +228,21 @@ fn custody_json_requires_the_complete_current_state_layout() {
     let mut json = norito::json::to_value(&super::super::SumeragiLaneState::default()).unwrap();
     json.as_object_mut().unwrap().remove("custody");
     assert!(norito::json::from_value::<super::super::SumeragiLaneState>(json).is_err());
+}
+
+#[test]
+fn native_parent_coverage_uses_only_the_globally_anchored_native_frontier() {
+    let mut value = obligation();
+    assert!(!value.covers_native_subject(0).unwrap());
+    assert!(value.covers_native_subject(1).unwrap());
+    assert!(!value.covers_native_subject(2).unwrap());
+    value.merged.height = 1_000_000;
+    assert!(value.covers_native_subject(1_000_001).unwrap());
+    assert!(!value.covers_native_subject(1_000_002).unwrap());
+    assert!(
+        value.admits_at(11).unwrap(),
+        "global admission clock remains independent"
+    );
+    value.merged.height = u64::MAX;
+    assert!(value.covers_native_subject(u64::MAX).unwrap());
 }

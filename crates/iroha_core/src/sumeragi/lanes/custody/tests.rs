@@ -44,6 +44,7 @@ fn obligation(record: &PublicLaneValidatorRecord, incarnation: u8) -> SumeragiLa
         incarnation: [incarnation; 32],
         instance: [incarnation + 1; 32],
         created_at: 10,
+        merged: iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier::default(),
         signer_count: 1,
         signers,
         evidence_horizon: 7,
@@ -347,6 +348,91 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
         .unwrap()
         .penalty_status = EvidencePenaltyStatus::Applied { height: 30 };
     prepare_retirement(&mut state, &world, 30).unwrap();
+    assert_eq!(
+        state.custody.len(),
+        1,
+        "terminal report retains reauthentication provenance"
+    );
+    assert!(
+        !retains_registration(&world, &original, 30),
+        "completed penalty permits release"
+    );
+    world.consensus_evidence.remove(key);
+    prepare_retirement(&mut state, &world, 31).unwrap();
     assert!(state.custody.is_empty());
-    assert!(!retains_registration(&world, &original, 30));
+}
+
+#[test]
+fn retirement_keeps_the_final_same_carrier_merge_after_the_live_record_is_removed() {
+    use iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier;
+    let original_world = World::default();
+    let mut world = original_world.block();
+    parameters(&mut world, 7, 3);
+    let original = record();
+    let mut live = lane(&original);
+    live.closing = Some(15); // A=4: exact retirement at global height 20.
+    let final_merge = SumeragiLaneFrontier {
+        height: 900,
+        block_hash: [0xA1; 32],
+        result: [0xB1; 32],
+    };
+    live.merged = final_merge;
+    live.merged_at = 20;
+    let mut state = SumeragiLaneState {
+        lanes: vec![live],
+        custody: vec![obligation(&original, 1)],
+        ..SumeragiLaneState::default()
+    };
+    prepare_retirement(&mut state, &world, 20).unwrap();
+    assert_eq!(state.custody[0].retired_at, Some(20));
+    assert_eq!(state.custody[0].merged, final_merge);
+    state.lanes.clear();
+    prepare_retirement(&mut state, &world, 27).unwrap();
+    assert_eq!(state.custody[0].merged, final_merge);
+    assert!(state.custody[0].admits_at(27).unwrap());
+    assert!(state.custody[0].covers_native_subject(901).unwrap());
+    assert!(!state.custody[0].covers_native_subject(902).unwrap());
+}
+
+#[test]
+fn an_existing_frontier_cannot_regress_or_switch_hash_or_result_at_the_same_native_height() {
+    use iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier;
+    let original_world = World::default();
+    let mut world = original_world.block();
+    parameters(&mut world, 7, 3);
+    let original = record();
+    let frontier = SumeragiLaneFrontier {
+        height: 9,
+        block_hash: [1; 32],
+        result: [2; 32],
+    };
+    let mut row = obligation(&original, 1);
+    row.merged = frontier;
+    for replacement in [
+        SumeragiLaneFrontier {
+            height: 8,
+            ..frontier
+        },
+        SumeragiLaneFrontier {
+            block_hash: [3; 32],
+            ..frontier
+        },
+        SumeragiLaneFrontier {
+            result: [3; 32],
+            ..frontier
+        },
+    ] {
+        let mut live = lane(&original);
+        live.merged = replacement;
+        let mut state = SumeragiLaneState {
+            lanes: vec![live],
+            custody: vec![row.clone()],
+            ..SumeragiLaneState::default()
+        };
+        assert_eq!(
+            prepare_retirement(&mut state, &world, 20),
+            Err(CustodyViolation::Frontier)
+        );
+        assert_eq!(state.custody[0].merged, frontier);
+    }
 }

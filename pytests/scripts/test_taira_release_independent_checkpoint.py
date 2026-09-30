@@ -45,7 +45,9 @@ class IndependentCheckpointTests(unittest.TestCase):
             self.artifacts[selection] = {
                 "name": gate.HARNESS_TARGETS[selection][0], "executable": str(path),
                 "profile": {"test": True},
-                "manifest_path": str(self.fixture.source / "crates" / gate.HARNESS_TARGETS[selection][3][1] / "Cargo.toml"),
+                "manifest_path": str(gate.native_package_root(
+                    self.fixture.source, gate.HARNESS_TARGETS[selection][3][1]
+                ) / "Cargo.toml"),
             }
         self.actual_checks = gate.run_checks
         shipping = patch.object(gate, "shipping_harnesses", return_value=())

@@ -950,7 +950,7 @@ const GLOBAL: [u8; 32] = [0x47; 32];
 
 /// An in-memory dataspace ledger: a leg `[from, to, amount_be64]` moves `amount` from `from` to
 /// `to`; escrow debits `from` into the transaction's escrow.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Ledger {
     balances: std::collections::BTreeMap<u8, u64>,
     escrows: std::collections::BTreeMap<[u8; 32], (u8, u8, u64)>,
@@ -977,30 +977,37 @@ impl Ledger {
 }
 
 impl AmxEscrow for Ledger {
-    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Option<[u8; 32]> {
+    type Error = core::convert::Infallible;
+
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Result<Option<[u8; 32]>, Self::Error> {
         let [from, to, amount @ ..] = leg.payload.as_slice() else {
-            return None;
+            return Ok(None);
         };
-        let amount = u64::from_be_bytes(amount.try_into().ok()?);
-        let balance = self.balances.entry(*from).or_default();
-        if *balance < amount {
-            return None;
+        let Ok(amount) = amount.try_into() else {
+            return Ok(None);
+        };
+        let amount = u64::from_be_bytes(amount);
+        let balance = self.balances.get(from).copied().unwrap_or_default();
+        if balance < amount {
+            return Ok(None);
         }
-        *balance -= amount;
+        self.balances.insert(*from, balance - amount);
         self.escrows.insert(*tx, (*from, *to, amount));
-        Some(Hash::new(&leg.payload).into())
+        Ok(Some(Hash::new(&leg.payload).into()))
     }
 
-    fn apply(&mut self, tx: &[u8; 32]) {
+    fn apply(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
         let (_, to, amount) = self.escrows.remove(tx).expect("an escrow to apply");
         *self.balances.entry(to).or_default() += amount;
         self.applied.push(*tx);
+        Ok(())
     }
 
-    fn release(&mut self, tx: &[u8; 32]) {
+    fn release(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
         let (from, _, amount) = self.escrows.remove(tx).expect("an escrow to release");
         *self.balances.entry(from).or_default() += amount;
         self.released.push(*tx);
+        Ok(())
     }
 }
 
@@ -1043,6 +1050,181 @@ fn participant() -> AmxParticipantStateV1 {
         DS1,
         AmxForeignInstanceV1::new(GLOBAL, long_fixture()).unwrap(),
     )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EscrowCall {
+    Prepare,
+    Apply,
+    Release,
+}
+
+struct RefusingEscrow {
+    ledger: Ledger,
+    refused: Option<EscrowCall>,
+    calls: Vec<EscrowCall>,
+}
+
+impl RefusingEscrow {
+    fn called(&mut self, call: EscrowCall) -> Result<(), EscrowCall> {
+        self.calls.push(call);
+        if self.refused == Some(call) {
+            Err(call)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl AmxEscrow for RefusingEscrow {
+    type Error = EscrowCall;
+
+    fn escrow(&mut self, tx: &[u8; 32], leg: &AmxLegV1) -> Result<Option<[u8; 32]>, Self::Error> {
+        self.called(EscrowCall::Prepare)?;
+        Ok(self.ledger.escrow(tx, leg).unwrap())
+    }
+
+    fn apply(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
+        self.called(EscrowCall::Apply)?;
+        self.ledger.apply(tx).unwrap();
+        Ok(())
+    }
+
+    fn release(&mut self, tx: &[u8; 32]) -> Result<(), Self::Error> {
+        self.called(EscrowCall::Release)?;
+        self.ledger.release(tx).unwrap();
+        Ok(())
+    }
+}
+
+fn corrupted_signature(proof: &AmxRecordProofV1) -> AmxRecordProofV1 {
+    let mut changed = proof.clone();
+    let mut certificate: Qc = norito::decode_canonical(&changed.block.commit_qc).unwrap();
+    certificate.agg_sig.0[17] ^= 1;
+    changed.block.commit_qc = norito::encode_canonical(&certificate).unwrap();
+    changed
+}
+
+#[test]
+fn sumeragi_amx_participant_resource_refusal_never_votes_no_or_closes_escrow() {
+    for (outcome, operation, settled) in [
+        (
+            AmxOutcomeV1::Commit,
+            EscrowCall::Apply,
+            AmxSettleOutcome::Applied,
+        ),
+        (
+            AmxOutcomeV1::Abort,
+            EscrowCall::Release,
+            AmxSettleOutcome::Released,
+        ),
+    ] {
+        let tx = transfer(10, 31, [7, 8]);
+        let begin = global_proof(2, &AmxRecordV1::Begin(tx.begin().unwrap()));
+        let decision_height = if outcome == AmxOutcomeV1::Abort {
+            11
+        } else {
+            9
+        };
+        let decision = global_proof(decision_height, &decision(&tx, outcome));
+        let mut state = participant();
+        let original = state.clone();
+        let mut escrow = RefusingEscrow {
+            ledger: Ledger::with(&[(1, 20)]),
+            refused: Some(EscrowCall::Prepare),
+            calls: Vec::new(),
+        };
+        let original_ledger = escrow.ledger.clone();
+        assert_eq!(
+            state.prepare(&mut escrow, &tx, &begin),
+            Err(AmxParticipantError::Escrow(EscrowCall::Prepare))
+        );
+        assert_eq!(
+            state, original,
+            "refusal cannot install No or advance global height"
+        );
+        assert_eq!(escrow.ledger, original_ledger);
+
+        escrow.refused = None;
+        let AmxRecordV1::Prepared(prepared) = state.prepare(&mut escrow, &tx, &begin).unwrap()
+        else {
+            panic!("original request must prepare on retry");
+        };
+        assert!(matches!(prepared.vote, AmxVoteV1::Yes(_)));
+        let prepared_state = state.clone();
+        let locked_ledger = escrow.ledger.clone();
+        escrow.refused = Some(operation);
+        let calls = escrow.calls.clone();
+        assert!(matches!(
+            state.settle(&mut escrow, &corrupted_signature(&decision)),
+            Err(AmxParticipantError::Protocol(AmxError::Proof(_)))
+        ));
+        assert_eq!(escrow.calls, calls, "invalid signature cannot invoke escrow");
+        assert_eq!(state, prepared_state);
+        for _ in 0..2 {
+            assert_eq!(
+                state.settle(&mut escrow, &decision),
+                Err(AmxParticipantError::Escrow(operation))
+            );
+            assert_eq!(
+                state, prepared_state,
+                "failed settlement cannot close or prune the Yes"
+            );
+            assert_eq!(escrow.ledger, locked_ledger);
+        }
+        escrow.refused = None;
+        assert_eq!(state.settle(&mut escrow, &decision).unwrap(), settled);
+        assert_eq!(escrow.ledger.total(), original_ledger.total());
+        assert!(escrow.ledger.escrows.is_empty());
+        assert_eq!(
+            escrow.ledger.applied.len() + escrow.ledger.released.len(),
+            1
+        );
+        let calls = escrow.calls.clone();
+        // A late duplicate can be held after deadline pruning, but never invokes escrow twice.
+        let _ = state.settle(&mut escrow, &decision);
+        assert_eq!(escrow.calls, calls);
+        state.validate().unwrap();
+    }
+}
+
+#[test]
+fn sumeragi_amx_participant_held_or_invalid_proof_never_calls_refusing_escrow() {
+    let tx = transfer(10, 32, [7, 8]);
+    let begin = global_proof(2, &AmxRecordV1::Begin(tx.begin().unwrap()));
+    let abort = global_proof(3, &decision(&tx, AmxOutcomeV1::Abort));
+    let mut state = participant();
+    let mut escrow = RefusingEscrow {
+        ledger: Ledger::with(&[(1, 20)]),
+        refused: Some(EscrowCall::Prepare),
+        calls: Vec::new(),
+    };
+    let original_ledger = escrow.ledger.clone();
+    let original_state = state.clone();
+    assert!(matches!(
+        state.prepare(&mut escrow, &tx, &corrupted_signature(&begin)),
+        Err(AmxParticipantError::Protocol(AmxError::Proof(_)))
+    ));
+    assert!(matches!(
+        state.prepare(&mut escrow, &tx, &abort),
+        Err(AmxParticipantError::Protocol(_))
+    ));
+    assert!(matches!(
+        state.settle(&mut escrow, &begin),
+        Err(AmxParticipantError::Protocol(_))
+    ));
+    assert_eq!(state, original_state);
+    assert_eq!(
+        state.settle(&mut escrow, &abort).unwrap(),
+        AmxSettleOutcome::Held
+    );
+    let AmxRecordV1::Prepared(prepared) = state.prepare(&mut escrow, &tx, &begin).unwrap() else {
+        panic!("held decision must produce Prepared No");
+    };
+    assert_eq!(prepared.vote, AmxVoteV1::No);
+    assert!(escrow.calls.is_empty());
+    assert_eq!(escrow.ledger, original_ledger);
+    state.validate().unwrap();
 }
 
 #[test]

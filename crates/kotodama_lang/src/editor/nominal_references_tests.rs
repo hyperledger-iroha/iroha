@@ -66,7 +66,7 @@ fn imported_enum_references_rename_only_the_exact_locked_owner_and_enum_segment(
             identity: identity.into(),
             modules: vec![SourceModuleUnit {
                 source_name: "errors.ko".into(),
-                source: "module Errors { error enum Failure { Missing = 1 } fn fail() -> Failure { Failure::Missing } }".into(),
+                source: "module Errors { export error enum Failure { Missing = 1 } fn fail() -> Failure { Failure::Missing } }".into(),
             }],
             exports: BTreeSet::from(["Failure".into()]),
             imports: vec![],

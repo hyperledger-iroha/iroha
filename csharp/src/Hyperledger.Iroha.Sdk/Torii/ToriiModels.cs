@@ -7281,9 +7281,11 @@ public sealed record class ToriiContractSourcePackage
 
 public sealed record class ToriiContractSourceFile
 {
+    [JsonRequired]
     [JsonPropertyName("source_name")]
     public string SourceName { get; init; } = string.Empty;
 
+    [JsonRequired]
     [JsonPropertyName("source_text")]
     public string SourceText { get; init; } = string.Empty;
 }

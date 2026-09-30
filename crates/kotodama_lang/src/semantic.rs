@@ -1067,6 +1067,7 @@ impl SemanticContext {
             .collect();
         drop(arenas);
         self.resolved_arenas.borrow_mut().clear();
+        self.resolved_declaration_sources.borrow_mut().clear();
         self.resolved_binding_types.borrow_mut().clear();
         self.typed_hir_nodes.borrow_mut().clear();
         self.required_list_capacity.borrow_mut().take();
@@ -1784,6 +1785,7 @@ impl SemanticContext {
         self.external_types.borrow_mut().clear();
         self.external_states.borrow_mut().clear();
         self.resolved_arenas.borrow_mut().clear();
+        self.resolved_declaration_sources.borrow_mut().clear();
         self.resolved_binding_types.borrow_mut().clear();
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();

@@ -132,6 +132,9 @@ pub struct SumeragiLaneCustody {
     pub instance: [u8; 32],
     /// Authenticated global creation height.
     pub created_at: u64,
+    /// Last native frontier authenticated by a global merge, retained after retirement.
+    /// Its height belongs to the native lane clock, never the global offence clock.
+    pub merged: super::SumeragiLaneFrontier,
     /// Pinned exact native committee size.
     pub signer_count: u32,
     /// Sparse original stake identities, strictly ordered by native signer index.
@@ -199,6 +202,18 @@ impl SumeragiLaneCustody {
                     .ok_or("lane custody release overflow")
             })
             .transpose()
+    }
+
+    /// Whether the global chain anchors the native parent needed to attribute this subject.
+    /// This is only a same-clock coverage predicate; the caller must authenticate the row and
+    /// every parent/demotion header backwards from the exact retained frontier.
+    /// # Errors
+    /// The original obligation is structurally invalid or its global lifetime overflows.
+    pub fn covers_native_subject(&self, height: u64) -> Result<bool, &'static str> {
+        self.validate()?;
+        Ok(height
+            .checked_sub(1)
+            .is_some_and(|parent| parent <= self.merged.height))
     }
 
     /// Whether this original obligation permits admission at a global carrier height.
