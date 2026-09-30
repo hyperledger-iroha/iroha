@@ -132,6 +132,7 @@ impl SumeragiLaneStateCommitment {
 
 // A view of the existing payload, with the original wire type's exact alignment. This is
 // only a streaming equality projection: it implements no decoder or alternate wire format.
+#[repr(C)]
 struct StatePayload<'a> {
     bytes: &'a [u8],
     _alignment: [SumeragiLaneState; 0],
@@ -196,8 +197,8 @@ mod tests {
                     da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                     lane: LaneId::new(lane),
                     dataspace: DataSpaceId::new(1),
-                    incarnation: [lane as u8; 32],
-                    params: Default::default(),
+                    incarnation: [u8::try_from(lane).unwrap(); 32],
+                    params: crate::parameter::system::SumeragiParameters::default(),
                     committee: committee.clone(),
                     created_at: 1,
                     active_from: 3,
@@ -404,7 +405,7 @@ mod tests {
         future.samples[0].height = 2;
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &future).is_err());
         let mut duplicate = state(0);
-        duplicate.samples.push(duplicate.samples[0].clone());
+        duplicate.samples.push(duplicate.samples[0]);
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &duplicate).is_err());
     }
 }

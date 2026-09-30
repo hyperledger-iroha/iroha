@@ -6,7 +6,7 @@ use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 #[test]
 fn retired_citizen_service_table_is_rejected_as_unknown() {
     let table: toml::Table = toml::from_str(
-        r#"
+        r"
 [citizen_service]
 seat_cooldown_blocks = 4
 max_seats_per_epoch = 2
@@ -15,7 +15,7 @@ decline_slash_bps = 100
 no_show_slash_bps = 200
 misconduct_slash_bps = 300
 role_bond_multipliers = { parliament = 2 }
-"#,
+",
     )
     .expect("retired citizen-service TOML is syntactically valid");
     let error = ConfigReader::new()

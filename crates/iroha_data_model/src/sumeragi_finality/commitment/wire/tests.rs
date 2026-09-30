@@ -27,7 +27,7 @@ fn compact_result_roundtrips_complete_boundary_without_repeated_epoch_wire() {
         height: value.height,
         execution: value.execution,
         schedule: value.schedule.clone(),
-        beacon: value.beacon.clone(),
+        beacon: value.beacon,
         native_lanes: value.native_lanes.clone(),
     })
     .unwrap();

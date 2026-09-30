@@ -1538,7 +1538,12 @@ mod tests {
     /// instances, other messages, non-BLS senders, relayed and oversize frames are dropped.
     #[test]
     fn ingress_routes_by_instance() {
-        let caps = FrameCaps::for_params(1024, 1024);
+        // Exercise a local refusal below the protocol's maximum row size. The
+        // default bulk cap also accommodates manifests and is larger than a row.
+        let caps = FrameCaps {
+            bulk: 1024,
+            ..FrameCaps::for_params(1024, 1024)
+        };
         let ingress = SumeragiIngress::new(caps);
         let (i, j) = (Hash32([1; 32]), Hash32([2; 32]));
         let sink = Arc::new(Sink::default());

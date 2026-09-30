@@ -62,7 +62,7 @@ const N: usize = 4;
 /// The deterministic execution result of the test: `R = H(parent_R ‖ payload)`.
 fn result_of(block: &AvailableBody) -> Hash32 {
     let mut input = block.header().parent_result.0.to_vec();
-    input.extend_from_slice(&block.payload().as_slice());
+    input.extend_from_slice(block.payload().as_slice());
     Hash32(sha256(&input))
 }
 
@@ -179,7 +179,7 @@ impl Rig {
         self.v.key(index)
     }
 
-    fn deliver(&mut self, from: ValidatorIndex, msg: WireMessage) {
+    fn deliver(&mut self, from: ValidatorIndex, msg: &WireMessage) {
         let mut msg = WireMessage::decode(&msg.encode().unwrap(), 32 << 20).unwrap();
         msg.admit_owned_bytes(&self.budget).unwrap();
         let from = self.key(from);
@@ -250,7 +250,7 @@ impl Rig {
             .proposal(leader, &I, 1, view, block.header().clone(), None, None);
         self.deliver(
             leader,
-            WireMessage::Proposal(Box::new(crate::message::ProposalMessage {
+            &WireMessage::Proposal(Box::new(crate::message::ProposalMessage {
                 proposal,
                 availability: block.availability().clone(),
             })),
@@ -458,7 +458,7 @@ fn set_a_prepare_retransmitted_after_stage_2() {
     );
     // The phase's QC stops the retransmissions of the Prepare.
     let qc = r.qc_q(VoteKind::Prepare, 0, &b);
-    r.deliver(r.proxy_tail(0), WireMessage::Qc(qc));
+    r.deliver(r.proxy_tail(0), &WireMessage::Qc(qc));
     let from = r.now + 1;
     r.run_until(from + 3 * r.local.rebroadcast_interval);
     assert!(
@@ -543,7 +543,7 @@ fn set_b_prepare_retransmitted_at_stage_1() {
 fn set_b_commit_retransmitted_at_stage_1() {
     let (mut r, b, t_vote) = set_b_voter();
     let pqc = r.qc_q(VoteKind::Prepare, 0, &b);
-    r.deliver(r.proxy_tail(0), WireMessage::Qc(pqc));
+    r.deliver(r.proxy_tail(0), &WireMessage::Qc(pqc));
     let t_pqc = r.now;
     // The PrepareQC is a vote-to-QC latency sample (§9.1): `t_retx` from here on.
     let t_retx = r.core.status().t_retx;
@@ -576,7 +576,7 @@ fn set_b_commit_retransmitted_at_stage_1() {
     );
     // The CommitQC ends the Commit's retransmissions.
     let cqc = r.qc_q(VoteKind::Commit, 0, &b);
-    r.deliver(r.proxy_tail(0), WireMessage::Qc(cqc));
+    r.deliver(r.proxy_tail(0), &WireMessage::Qc(cqc));
     assert_eq!(r.core.status().committed_height, 1);
     let from = r.now + 1;
     r.run_until(from + 3 * r.local.rebroadcast_interval);
@@ -593,7 +593,7 @@ fn proxy_tail_answers_retransmitted_prepare() {
     let b = r.block(0, b"B");
     let pqc = r.qc_q(VoteKind::Prepare, 0, &b);
     let voter = r.others()[0];
-    r.deliver(voter, WireMessage::Qc(pqc.clone()));
+    r.deliver(voter, &WireMessage::Qc(pqc.clone()));
     let bh = b.hash(&r.v.crypto);
     let vote =
         r.v.vote(VoteKind::Prepare, voter, &I, 1, 0, &bh, &result_of(&b));
@@ -606,10 +606,10 @@ fn proxy_tail_answers_retransmitted_prepare() {
             .count()
     };
     let mark = r.sent.len();
-    r.deliver(voter, WireMessage::Vote(vote.clone()));
+    r.deliver(voter, &WireMessage::Vote(vote.clone()));
     assert_eq!(answers(&r, mark), 1, "the PrepareQC answers the voter");
     let mark = r.sent.len();
-    r.deliver(voter, WireMessage::Vote(vote));
+    r.deliver(voter, &WireMessage::Vote(vote));
     assert_eq!(answers(&r, mark), 0, "once per voter");
 }
 

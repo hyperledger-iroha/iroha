@@ -31,6 +31,9 @@ pub struct NativeFinalityLimits {
 }
 impl NativeFinalityLimits {
     /// Reject zero, contradictory or above-protocol source bounds before processing input.
+    ///
+    /// # Errors
+    /// Rejects zero, contradictory or above-protocol source limits and a zero allocation limit.
     pub fn validate(self) -> Result<(), String> {
         if self.block_bytes == 0
             || self.block_bytes > NATIVE_FINALITY_MAX_BLOCK_BYTES
@@ -46,6 +49,9 @@ impl NativeFinalityLimits {
     }
 
     /// Norito allocation accounting for an entire journal operation, not a fresh per-block pool.
+    ///
+    /// # Errors
+    /// Rejects limits that fail [`Self::validate`].
     pub fn decode_limits(self) -> Result<norito::DecodeLimits, String> {
         self.validate()?;
         Ok(norito::DecodeLimits::new(
@@ -61,7 +67,7 @@ impl NativeFinalityLimits {
 /// One original canonical `SignedBlockWire`, including its native certificate and result.
 ///
 /// This is untrusted transport data, never an authority capability. H1 is signed genesis;
-/// ordinary heights carry native CommitQCs. No other finality layout is accepted.
+/// ordinary heights carry native `CommitQCs`. No other finality layout is accepted.
 #[derive(
     Clone,
     Debug,
@@ -87,6 +93,9 @@ pub struct NativeFinalityArtifact {
 impl NativeFinalityArtifact {
     /// Encode a block only after counting its exact canonical size against the supplied cap.
     /// This is an offchain transport allocation, not production execution-pool admission.
+    ///
+    /// # Errors
+    /// Rejects invalid limits, canonical encoding or size failures, and source allocation refusal.
     pub fn from_block(block: &SignedBlock, limits: NativeFinalityLimits) -> Result<Self, String> {
         limits.validate()?;
         let len = {
@@ -125,6 +134,10 @@ impl NativeFinalityArtifact {
     /// An outer journal scope remains charged cumulatively: Norito nested limits compose;
     /// this per-frame scope cannot reset or raise its outer budget. Exact source length is
     /// checked before the canonical decoder allocates.
+    ///
+    /// # Errors
+    /// Rejects invalid limits, empty or oversized sources, noncanonical encoding, or exhausted
+    /// aggregate decoding and allocation limits.
     pub fn decode_block(&self, limits: NativeFinalityLimits) -> Result<SignedBlock, String> {
         limits.validate()?;
         if self.block_wire.is_empty() || self.block_wire.len() > limits.block_bytes {
@@ -158,6 +171,10 @@ pub struct NativeFinalityJournal {
 }
 impl NativeFinalityJournal {
     /// Check aggregate source lengths and count before any block decode.
+    ///
+    /// # Errors
+    /// Rejects invalid limits, empty or excessive block counts, invalid frame sizes, or an
+    /// overflowing or excessive aggregate source length.
     pub fn validate_source(&self, limits: NativeFinalityLimits) -> Result<(), String> {
         limits.validate()?;
         if self.blocks.is_empty() || self.blocks.len() > limits.block_count {
@@ -179,6 +196,10 @@ impl NativeFinalityJournal {
     }
 
     /// Decode a canonical journal archive within the supplied aggregate byte/allocation caps.
+    ///
+    /// # Errors
+    /// Rejects invalid limits, empty or excessive archive bytes, noncanonical decoding,
+    /// allocation refusal, or a journal whose source sizes fail validation.
     pub fn decode(bytes: &[u8], limits: NativeFinalityLimits) -> Result<Self, String> {
         limits.validate()?;
         if bytes.is_empty() || bytes.len() > limits.journal_bytes {
@@ -200,7 +221,7 @@ mod tests {
     fn limits() -> NativeFinalityLimits {
         NativeFinalityLimits {
             block_bytes: 65536,
-            journal_bytes: 131072,
+            journal_bytes: 131_072,
             block_count: 4,
             allocated_bytes: 1024 * 1024,
         }
@@ -214,7 +235,7 @@ mod tests {
             2,
             0,
         ))
-        .build(Default::default())
+        .build(std::collections::BTreeSet::default())
     }
     #[test]
     fn exact_native_source_roundtrips_binary_and_json() {

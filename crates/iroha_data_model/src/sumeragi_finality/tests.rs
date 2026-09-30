@@ -12,7 +12,7 @@ use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub(super) genesis: SignedBlock,
     pub(crate) first: SumeragiFinalityProof,
     pub(crate) second: SumeragiFinalityProof,
@@ -269,7 +269,7 @@ impl Fixture {
             0,
         );
         let mut first_block = genesis.clone();
-        output_test_support::install_network(&mut first_block, vec![Ok(Default::default())])
+        output_test_support::install_network(&mut first_block, vec![Ok(Vec::default())])
             .unwrap();
         let first_result = result(&first_block, &epoch);
         // Genesis is result-only: no consensus header, CommitQC or availability frame.
@@ -297,7 +297,7 @@ impl Fixture {
         ));
         builder.push_transaction(tx);
         let mut block = builder.build(BTreeSet::new());
-        output_test_support::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        output_test_support::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         let result = result(&block, &epoch);
         let parent = first.decode_checked().unwrap();
         let second = certify_successor(&keys, &validators, instance, &parent, block, &result);
@@ -357,20 +357,20 @@ fn current_proofs_roundtrip_and_verify_successful_exact_execution() {
     let mut verifier = fixture.verifier();
     assert!(verifier.verify(&fixture.second).is_err(), "no gaps");
     verifier.verify(&fixture.first).unwrap();
-    let verified = verifier.verify(&fixture.second).unwrap();
-    let committed = output_test_support::committed(verified.block(), 0);
-    verified
+    let authenticated = verifier.verify(&fixture.second).unwrap();
+    let committed = output_test_support::committed(authenticated.block(), 0);
+    authenticated
         .verify_committed_transaction(&fixture.network, &committed)
         .unwrap();
     let foreign =
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
     assert!(
-        verified
+        authenticated
             .verify_committed_transaction(&foreign, &committed)
             .is_err()
     );
     assert!(
-        decode_versioned_signed_block(&verified.canonical_executed_wire().unwrap())
+        decode_versioned_signed_block(&authenticated.canonical_executed_wire().unwrap())
             .unwrap()
             .commit_certificate()
             .is_none()
@@ -487,7 +487,7 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
             unanchored: false,
             abstaining: false,
             halted: None,
-            footprint: Default::default(),
+            footprint: crate::sumeragi::SumeragiFootprint::default(),
         },
         finality_proof: fixture.second,
     };

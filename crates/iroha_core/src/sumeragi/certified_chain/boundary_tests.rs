@@ -558,6 +558,14 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
                 3 => next.committee[0].proof_of_possession[0] ^= 1,
                 _ => next.authority.validators[0].ep_proof_public_key = [0xff; 32],
             }
+            // The compact wire derives both successor epochs from the boundary. Keep
+            // that projection consistent so the reader tests the forged authority itself.
+            let changed = next.clone();
+            for slot in [&mut result.schedule.next, &mut result.schedule.after_next] {
+                if let ScheduledSlot::Ready(config) = slot {
+                    config.epoch = changed.clone();
+                }
+            }
             *bytes = norito::encode_canonical(&result).unwrap();
         });
         let state = state_with_history(&corrupt);
@@ -683,9 +691,10 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
     history[0] = Arc::new(original.clone().with_commit_certificate(Some(certificate)));
     let state = state_with_history(&history);
     let view = state.view();
+    assert!(read_frame(Arc::clone(&history[0]), 1).is_ok());
     assert!(
-        committed_block(&view, 1).is_ok(),
-        "local deterministic State trust is separate"
+        committed_block(&view, 1).is_err(),
+        "stored frames and a hash index cannot replace original execution provenance"
     );
     assert!(matches!(
         CertifiedChain::new(&view)

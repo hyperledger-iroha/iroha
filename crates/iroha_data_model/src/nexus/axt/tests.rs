@@ -383,10 +383,10 @@ fn source_success_receipt_and_ordered_transfer_occurrence_commit_every_field() {
         .validate()
         .expect("all occurrence digests present");
     AxtSourceTransferOccurrenceV1 {
-        source_tx_index: (MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1) as u32,
-        transcript_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
-        delta_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
-        pair_ordinal: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        source_tx_index: u32::try_from((MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1)).unwrap(),
+        transcript_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
+        delta_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
+        pair_ordinal: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
         ..occurrence
     }
     .validate()
@@ -466,28 +466,28 @@ fn source_success_receipt_and_ordered_transfer_occurrence_commit_every_field() {
     for (out_of_range, field) in [
         (
             AxtSourceTransferOccurrenceV1 {
-                source_tx_index: MAX_AXT_FINALIZED_TRANSACTIONS_V1 as u32,
+                source_tx_index: u32::try_from(MAX_AXT_FINALIZED_TRANSACTIONS_V1).unwrap(),
                 ..occurrence
             },
             AxtSourceTransferCoordinateFieldV1::SourceTransaction,
         ),
         (
             AxtSourceTransferOccurrenceV1 {
-                transcript_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                transcript_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1).unwrap(),
                 ..occurrence
             },
             AxtSourceTransferCoordinateFieldV1::Transcript,
         ),
         (
             AxtSourceTransferOccurrenceV1 {
-                delta_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                delta_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1).unwrap(),
                 ..occurrence
             },
             AxtSourceTransferCoordinateFieldV1::Delta,
         ),
         (
             AxtSourceTransferOccurrenceV1 {
-                pair_ordinal: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                pair_ordinal: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1).unwrap(),
                 ..occurrence
             },
             AxtSourceTransferCoordinateFieldV1::PairOrdinal,
@@ -1005,23 +1005,23 @@ fn source_transfer_replay_key_uses_physical_coordinate_independent_of_issuer_non
     }
     assert_eq!(
         AxtSourceTransferReplayKeyV1 {
-            source_tx_index: MAX_AXT_FINALIZED_TRANSACTIONS_V1 as u32,
+            source_tx_index: u32::try_from(MAX_AXT_FINALIZED_TRANSACTIONS_V1).unwrap(),
             ..key
         }
         .validate(),
         Err(AxtSourceTransferReplayKeyValidationErrorV1::TransactionIndex)
     );
     AxtSourceTransferReplayKeyV1 {
-        source_tx_index: (MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1) as u32,
-        transcript_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
-        delta_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        source_tx_index: u32::try_from((MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1)).unwrap(),
+        transcript_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
+        delta_index: u32::try_from((MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1)).unwrap(),
         ..key
     }
     .validate()
     .expect("the last V1 replay coordinates remain valid");
     assert_eq!(
         AxtSourceTransferReplayKeyV1 {
-            transcript_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+            transcript_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1).unwrap(),
             ..key
         }
         .validate(),
@@ -1029,7 +1029,7 @@ fn source_transfer_replay_key_uses_physical_coordinate_independent_of_issuer_non
     );
     assert_eq!(
         AxtSourceTransferReplayKeyV1 {
-            delta_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+            delta_index: u32::try_from(MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1).unwrap(),
             ..key
         }
         .validate(),

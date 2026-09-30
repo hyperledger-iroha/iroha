@@ -503,6 +503,85 @@ fn sumeragi_amx_write_proof_matches_the_certified_write_root() {
 }
 
 #[test]
+fn sumeragi_amx_record_proof_construction_requires_the_complete_certified_write_set() {
+    let context = fixture(4);
+    let tx = transaction(&[DS1, DS2], 50, 1).id().unwrap();
+    let record = prepared(tx, DS1, AmxVoteV1::Yes([5; 32]));
+    let writes = vec![
+        (b"unrelated".to_vec(), b"write".to_vec()),
+        write_of(&record),
+    ];
+    let block = certify(instance(DS1), &context, 3, &writes, None, 3);
+    let all = block_writes(&context, 3, &writes);
+    let build = |block, writes: &[(Vec<u8>, Vec<u8>)]| {
+        AmxRecordProofV1::from_writes(
+            block,
+            writes
+                .iter()
+                .map(|(key, value)| (key.as_slice(), value.as_slice())),
+            record.clone(),
+        )
+    };
+
+    let proof = build(block.clone(), &all).unwrap();
+    let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();
+    tracker.verify_record(&proof).unwrap();
+    let encoded = norito::encode_canonical(&proof).unwrap();
+    let restored: AmxRecordProofV1 = norito::decode_canonical(&encoded).unwrap();
+    assert_eq!(restored, proof);
+    tracker.verify_record(&restored).unwrap();
+
+    // Keeping the AMX record while losing either mandatory or ordinary writes must fail
+    // before a relayer retains an unusable proof.
+    assert!(build(block.clone(), &writes).is_err());
+    assert!(build(block.clone(), &[all[0].clone(), all[2].clone()]).is_err());
+    let mut changed = all.clone();
+    changed[1].1 = b"changed".to_vec();
+    assert!(build(block.clone(), &changed).is_err());
+    let mut extra = all.clone();
+    extra.push((b"unexpected".to_vec(), b"write".to_vec()));
+    assert!(build(block.clone(), &extra).is_err());
+    let foreign = certify(instance(DS1), &context, 4, &writes, None, 3);
+    assert!(build(foreign, &all).is_err());
+
+    // Repeated writes are valid when their final values are exactly those certified.
+    let mut repeated = vec![(b"unrelated".to_vec(), b"superseded".to_vec())];
+    repeated.extend(all);
+    assert_eq!(build(block.clone(), &repeated).unwrap(), proof);
+    repeated.push((b"unrelated".to_vec(), b"uncertified".to_vec()));
+    assert!(build(block, &repeated).is_err());
+}
+
+#[test]
+fn sumeragi_amx_record_proof_construction_rejects_invalid_result_preimages() {
+    let context = fixture(4);
+    let tx = transaction(&[DS1, DS2], 50, 1).id().unwrap();
+    let record = prepared(tx, DS1, AmxVoteV1::Yes([5; 32]));
+    let writes = vec![write_of(&record)];
+    let block = certify(instance(DS1), &context, 3, &writes, None, 3);
+    let all = block_writes(&context, 3, &writes);
+    let preimages = [
+        Vec::new(),
+        vec![0; crate::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES + 1],
+        block.result_preimage[..block.result_preimage.len() - 1].to_vec(),
+        certify(instance(DS1), &context, 3, &[], None, 3).result_preimage,
+    ];
+    for result_preimage in preimages {
+        let mut invalid = block.clone();
+        invalid.result_preimage = result_preimage;
+        assert!(
+            AmxRecordProofV1::from_writes(
+                invalid,
+                all.iter()
+                    .map(|(key, value)| (key.as_slice(), value.as_slice())),
+                record.clone(),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn sumeragi_amx_tracker_verifies_records_under_the_tracked_committee_only() {
     let context = fixture(4);
     let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();

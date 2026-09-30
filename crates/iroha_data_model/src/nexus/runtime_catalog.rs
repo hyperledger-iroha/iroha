@@ -735,7 +735,7 @@ mod tests {
     fn additive_catalog_bounds_manifest_sources_and_counts() {
         for value in [
             Json::new(()),
-            Json::new(json::Value::Object(Default::default())),
+            Json::new(json::Value::Object(std::collections::BTreeMap::default())),
         ] {
             let entry = RuntimeLaneManifestV1 {
                 lane_id: LaneId::new(7),

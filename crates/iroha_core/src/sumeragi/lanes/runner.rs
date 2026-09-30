@@ -323,10 +323,12 @@ impl Inner {
             if let Some(lane) = running.remove(&key) {
                 self.stop_lane(lane);
                 InstanceMetrics::retire(&self.inputs.state.telemetry, MetricsInstance::Lane(key.0));
-                self.inputs.stores.release(key.0, &key.1);
                 iroha_logger::info!(lane = %key.0, "sumeragi: lane instance retired");
             }
         }
+        // Failed store openings never enter `running` or executor recovery. Reconcile the
+        // registry itself so their original funded buffers and disk locks retire as well.
+        self.inputs.stores.release_retired(&lanes);
         for record in &lanes.lanes {
             let key = (record.lane, record.incarnation);
             if record.active_from > applied || running.contains_key(&key) {
@@ -372,7 +374,7 @@ impl Inner {
         let instance = lane_instance(&*shared, &inputs.network, &inputs.chain_id, record);
         let store = inputs
             .stores
-            .store(record.lane, &record.incarnation)
+            .runtime_store(record.lane, &record.incarnation)
             .map_err(|error| error.to_string())?;
         let key = core_key(inputs.key_pair.public_key()).map_err(|error| error.to_string())?;
         let custody = inputs

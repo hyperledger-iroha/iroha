@@ -87,7 +87,7 @@ fn executed_identity_excludes_original_complete_certificate_only() {
     let identity = assert_exact_identity(&certified);
     let uncertified = certified.clone().with_commit_certificate(None);
     assert_eq!(assert_exact_identity(&uncertified), identity);
-    assert!(certified.encode_wire().unwrap().len() > identity.0 as usize);
+    assert!(certified.encode_wire().unwrap().len() > usize::try_from(identity.0).unwrap());
     let commitment =
         crate::sumeragi_finality::ExecutionResultCommitment::decode(certificate.result_preimage())
             .unwrap();

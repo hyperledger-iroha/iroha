@@ -3761,8 +3761,7 @@ pub(crate) mod tests {
             atomic_private_settlement_program_id_v1,
         },
         ivm_private_note::{
-            PrivateNotePlaintextV1, PrivateNoteRelationProfileV1, derive_note_authority_v1,
-            derive_profiled_input_commitment_v1, derive_profiled_output_commitment_v1,
+            PrivateNotePlaintextV1, derive_note_authority_v1,
             encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1,
             ivm_private_recipient_public_key_v1,
         },

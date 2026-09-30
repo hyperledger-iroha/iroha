@@ -499,7 +499,7 @@ impl Cluster {
                 instance: I,
                 height: body.header().height,
                 block_hash: body.hash(&self.v.crypto),
-                index: index as u32,
+                index: u32::try_from(index).unwrap(),
                 bytes,
             });
             for peer in peers {
@@ -1070,9 +1070,9 @@ fn det_l24_lost_proposal_copy() {
         "at most one immediate and one independent interval re-push: {}",
         seen.repushes
     );
-    let requested = seen.request_received.expect("A received C's request");
+    let request_time = seen.request_received.expect("A received C's request");
     let received = seen.proposal_received.expect("C received the proposal");
-    assert_eq!(received, requested + c.latency, "A replies immediately");
+    assert_eq!(received, request_time + c.latency, "A replies immediately");
     assert!(seen.c_prepared, "C Prepared at ({target}, 0)");
     assert_eq!(c.commit_views.get(&target), Some(&0), "view 0 commits");
 }

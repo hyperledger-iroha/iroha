@@ -3078,7 +3078,7 @@ mod governance_tests {
     #[test]
     fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
         let table: toml::Table = toml::from_str(
-            r#"
+            r"
 policy_jury_size = 16
 confirmation_jury_size = 16
 
@@ -3090,7 +3090,7 @@ release_delay_blocks = 14
 opening_phase_blocks = 15
 max_ballot_retries = 15
 max_corpus_entries = 16
-"#,
+",
         )
         .expect("parse timed-OVN policy TOML");
         let parsed = ConfigReader::new()
@@ -6014,9 +6014,9 @@ impl Gas {
                 .into_iter()
                 .filter_map(|r| {
                     let asset = r.asset;
-                    let twap = match r.twap_local_per_xor.as_deref() {
-                        None => Some(Numeric::one()),
-                        Some(value) => match Numeric::from_str(value) {
+                    let twap = r.twap_local_per_xor.as_deref().map_or_else(
+                        || Some(Numeric::one()),
+                        |value| match Numeric::from_str(value) {
                             Ok(parsed) if parsed > Numeric::zero() => Some(parsed),
                             Ok(_) => {
                                 emitter.emit(
@@ -6035,35 +6035,31 @@ impl Gas {
                                 None
                             }
                         },
-                    };
-                    let liquidity = match r.liquidity_profile.as_deref() {
-                        None => Some(actual::GasLiquidity::default()),
-                        Some(value) => match actual::GasLiquidity::from_str(value) {
-                            Ok(parsed) => Some(parsed),
-                            Err(()) => {
+                    );
+                    let liquidity = r.liquidity_profile.as_deref().map_or_else(
+                        || Some(actual::GasLiquidity::default()),
+                        |value| actual::GasLiquidity::from_str(value).map_or_else(
+                            |()| {
                                 emitter.emit(
                                     Report::new(ParseError::InvalidPipelineConfig).attach(format!(
                                         "invalid pipeline.gas.units_per_gas liquidity `{value}` for asset `{asset}`; expected exactly `tier1`, `tier2`, or `tier3`"
                                     )),
                                 );
                                 None
-                            }
-                        },
-                    };
-                    let volatility = match r.volatility_class.as_deref() {
-                        None => Some(actual::GasVolatility::default()),
-                        Some(value) => match actual::GasVolatility::from_str(value) {
-                            Ok(parsed) => Some(parsed),
-                            Err(()) => {
+                            }, Some),
+                    );
+                    let volatility = r.volatility_class.as_deref().map_or_else(
+                        || Some(actual::GasVolatility::default()),
+                        |value| actual::GasVolatility::from_str(value).map_or_else(
+                            |()| {
                                 emitter.emit(
                                     Report::new(ParseError::InvalidPipelineConfig).attach(format!(
                                         "invalid pipeline.gas.units_per_gas volatility `{value}` for asset `{asset}`; expected exactly `stable`, `elevated`, or `dislocated`"
                                     )),
                                 );
                                 None
-                            }
-                        },
-                    };
+                            }, Some),
+                    );
                     let (Some(twap), Some(liquidity), Some(volatility)) =
                         (twap, liquidity, volatility)
                     else {
@@ -6592,23 +6588,23 @@ mod sumeragi_core_parse_tests {
     use super::*;
     use std::time::Duration;
 
-    fn ms(value: u64) -> Option<DurationMs> {
-        Some(DurationMs(Duration::from_millis(value)))
+    fn ms(value: u64) -> DurationMs {
+        DurationMs(Duration::from_millis(value))
     }
 
     #[test]
     fn local_overrides_map_every_field() {
         let local = Sumeragi::parse_local_overrides(
-            ms(1),
-            ms(2),
+            Some(ms(1)),
+            Some(ms(2)),
             Some(3),
             Some(4),
-            ms(5),
-            ms(6),
-            ms(7),
-            ms(8),
+            Some(ms(5)),
+            Some(ms(6)),
+            Some(ms(7)),
+            Some(ms(8)),
             Some(9),
-            ms(10),
+            Some(ms(10)),
             Some(11),
             Some(12),
         )
@@ -6635,13 +6631,13 @@ mod sumeragi_core_parse_tests {
     #[test]
     fn local_overrides_name_every_zero_interval() {
         let error = Sumeragi::parse_local_overrides(
-            ms(0),
+            Some(ms(0)),
             None,
             Some(0),
             Some(0),
             None,
             None,
-            ms(0),
+            Some(ms(0)),
             None,
             Some(0),
             None,
@@ -6914,7 +6910,7 @@ mod accel_tests {
     fn acceleration_resource_counts_reject_negative_and_oversized_geometry() {
         for table in [
             toml::toml! { [resource_limits] host_bytes = -1 },
-            toml::toml! { [resource_limits] discovery_ordinals = 4294967296i64 },
+            toml::toml! { [resource_limits] discovery_ordinals = 4_294_967_296_i64 },
             toml::toml! { max_gpus = -1 },
         ] {
             assert!(
@@ -10435,8 +10431,7 @@ impl NexusFees {
                 }
                 Ok(account_id) => {
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "nexus.fees.successful_claim_fee_exempt_authorities[{index}] must be the exact canonical I105 literal `{}`",
-                        account_id
+                        "nexus.fees.successful_claim_fee_exempt_authorities[{index}] must be the exact canonical I105 literal `{account_id}`"
                     )));
                     valid_authorities = false;
                 }
@@ -12187,8 +12182,7 @@ impl Nexus {
                             lane_errors = true;
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
-                                    "lane[{idx}] settlement_buffer.account_id must be the exact canonical I105 literal `{}`",
-                                    account_id
+                                    "lane[{idx}] settlement_buffer.account_id must be the exact canonical I105 literal `{account_id}`"
                                 ),
                             ));
                             continue;
@@ -14506,39 +14500,36 @@ impl SoracloudRuntimeSubmission {
                 actual::SoracloudRuntimeFeePayer::Authority
             }
             "sponsor" => {
-                let program_id = match fee_program_id {
-                    Some(program_id_literal) => {
-                        match program_id_literal.parse::<FeeSponsorProgramId>() {
-                            Ok(program_id) if program_id_literal == program_id.to_string() => {
-                                Some(program_id)
-                            }
-                            Ok(_) => {
-                                emit(
+                let program_id = if let Some(program_id_literal) = fee_program_id {
+                    match program_id_literal.parse::<FeeSponsorProgramId>() {
+                        Ok(program_id) if program_id_literal == program_id.to_string() => {
+                            Some(program_id)
+                        }
+                        Ok(_) => {
+                            emit(
                                     emitter,
                                     "soracloud_runtime.submission.fee_program_id must use its canonical literal"
                                         .to_owned(),
                                 );
-                                None
-                            }
-                            Err(error) => {
-                                emit(
-                                    emitter,
-                                    format!(
-                                        "invalid soracloud_runtime.submission.fee_program_id: {error}"
-                                    ),
-                                );
-                                None
-                            }
+                            None
+                        }
+                        Err(error) => {
+                            emit(
+                                emitter,
+                                format!(
+                                    "invalid soracloud_runtime.submission.fee_program_id: {error}"
+                                ),
+                            );
+                            None
                         }
                     }
-                    None => {
-                        emit(
-                            emitter,
-                            "soracloud_runtime.submission sponsor payer requires fee_program_id"
-                                .to_owned(),
-                        );
-                        None
-                    }
+                } else {
+                    emit(
+                        emitter,
+                        "soracloud_runtime.submission sponsor payer requires fee_program_id"
+                            .to_owned(),
+                    );
+                    None
                 };
                 let program_revision = match fee_program_revision {
                     Some(program_revision) if program_revision > 0 => Some(program_revision),
@@ -16523,7 +16514,9 @@ impl ToriiRecipientLookup {
         let mut routes = Vec::with_capacity(self.routes.len());
         for (index, route) in self.routes.into_iter().enumerate() {
             if let Some(route) = route.parse(index, emitter) {
-                if !route_ids.insert(route.fi_id.clone()) {
+                if route_ids.insert(route.fi_id.clone()) {
+                    routes.push(route);
+                } else {
                     emit_torii_config_error(
                         emitter,
                         format!(
@@ -16532,8 +16525,6 @@ impl ToriiRecipientLookup {
                         ),
                     );
                     valid = false;
-                } else {
-                    routes.push(route);
                 }
             } else {
                 valid = false;
@@ -16587,8 +16578,7 @@ impl ToriiRecipientLookupRoute {
                 emit_torii_config_error(
                     emitter,
                     format!(
-                        "invalid torii.recipient_lookup.routes[{index}].fi_id `{}`; expected exactly `hbl.sbp` or `ubl.sbp`",
-                        fi_id
+                        "invalid torii.recipient_lookup.routes[{index}].fi_id `{fi_id}`; expected exactly `hbl.sbp` or `ubl.sbp`"
                     ),
                 );
                 None
@@ -20868,17 +20858,17 @@ impl core::fmt::Debug for DaTaikaiAnchor {
 impl DaTaikaiAnchor {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::DaTaikaiAnchor> {
         let mut valid = true;
-        let endpoint = match url::Url::parse(&self.endpoint) {
-            Ok(endpoint) => Some(endpoint),
-            Err(_) => {
+        let endpoint = url::Url::parse(&self.endpoint).map_or_else(
+            |_| {
                 emit_torii_config_error(
                     emitter,
                     "torii.da_ingest.taikai_anchor.endpoint must be an absolute URL",
                 );
                 valid = false;
                 None
-            }
-        };
+            },
+            Some,
+        );
         if let Some(endpoint) = endpoint.as_ref() {
             let loopback = match endpoint.host() {
                 Some(url::Host::Ipv4(address)) => address.is_loopback(),
@@ -20908,15 +20898,15 @@ impl DaTaikaiAnchor {
                 valid = false;
             }
         }
-        match self.receipt_public_key.try_algorithm() {
-            Ok(Algorithm::Ed25519) => {}
-            Ok(_) | Err(_) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.da_ingest.taikai_anchor.receipt_public_key must use Ed25519",
-                );
-                valid = false;
-            }
+        if !matches!(
+            self.receipt_public_key.try_algorithm(),
+            Ok(Algorithm::Ed25519)
+        ) {
+            emit_torii_config_error(
+                emitter,
+                "torii.da_ingest.taikai_anchor.receipt_public_key must use Ed25519",
+            );
+            valid = false;
         }
         if self.api_token.as_ref().is_some_and(|token| {
             token.is_empty() || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
@@ -20944,9 +20934,7 @@ impl DaTaikaiAnchor {
         if !valid {
             return None;
         }
-        let Some(endpoint) = endpoint else {
-            return None;
-        };
+        let endpoint = endpoint?;
         Some(actual::DaTaikaiAnchor {
             endpoint,
             api_token: self.api_token,
@@ -32639,28 +32627,22 @@ impl SorafsGateway {
             untrusted_hosting,
             direct_mode,
         } = self;
-        let rollout_phase = match iroha_service_model::soranet::RolloutPhase::parse(&rollout_phase)
-        {
-            Some(phase) => phase,
-            None => {
+        let rollout_phase = iroha_service_model::soranet::RolloutPhase::parse(&rollout_phase)
+            .unwrap_or_else(|| {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                     "invalid `sorafs.gateway.rollout_phase` value `{rollout_phase}`; expected exactly canary|ramp|default"
                 )));
                 iroha_service_model::soranet::RolloutPhase::default()
-            }
-        };
-        let anonymity_policy = match anonymity_policy {
-            Some(label) => match iroha_service_model::soranet::AnonymityPolicy::parse(&label) {
-                Some(stage) => stage,
-                None => {
+            });
+        let anonymity_policy = anonymity_policy.map_or_else(
+            || rollout_phase.default_anonymity_policy(),
+            |label| iroha_service_model::soranet::AnonymityPolicy::parse(&label).unwrap_or_else(|| {
                     emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                         "invalid `sorafs.gateway.anonymity_policy` value `{label}`; expected exactly anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     )));
                     rollout_phase.default_anonymity_policy()
-                }
-            },
-            None => rollout_phase.default_anonymity_policy(),
-        };
+                }),
+        );
         actual::SorafsGateway {
             require_manifest_envelope,
             enforce_admission,
@@ -33862,14 +33844,17 @@ mod sorafs_publish_discovery_config_tests {
         });
         result.expect("canonical publish origins must be accepted");
         assert_eq!(
-            parsed.gateway_base_url.as_ref().map(|url| url.as_str()),
+            parsed
+                .gateway_base_url
+                .as_ref()
+                .map(actual::SorafsPublishBaseUrl::as_str),
             Some("https://gateway.example")
         );
         assert_eq!(
             parsed
                 .pin_torii_urls
                 .iter()
-                .map(|url| url.as_str())
+                .map(actual::SorafsPublishBaseUrl::as_str)
                 .collect::<Vec<_>>(),
             [
                 "https://pin.example:8443",
@@ -33933,7 +33918,7 @@ mod sorafs_publish_discovery_config_tests {
             parsed
                 .pin_torii_urls
                 .iter()
-                .map(|url| url.as_str())
+                .map(actual::SorafsPublishBaseUrl::as_str)
                 .collect::<Vec<_>>(),
             ["https://pin.example"]
         );

@@ -197,6 +197,9 @@ impl<T, Charge> Reserved<T, Charge> {
     /// constructing any payload. The caller can retry with the returned owner;
     /// no allocation size estimate or replacement capacity grant is used.
     /// Success retains the charge until the original allocation is freed.
+    ///
+    /// # Errors
+    /// Returns the unchanged charge and requested layout if the global allocator refuses it.
     pub fn try_new(charge: Charge) -> Result<Self, (Charge, ReservationError)> {
         let layout = Self::layout();
         // SAFETY: the concrete sized layout is valid and nonzero. alloc uses the

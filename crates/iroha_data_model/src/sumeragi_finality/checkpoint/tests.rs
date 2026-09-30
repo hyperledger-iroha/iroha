@@ -37,7 +37,7 @@ fn extend(
     builder.push_transaction(tx);
     let mut block = builder.build(BTreeSet::new());
     let output = if succeeds {
-        Ok(Default::default())
+        Ok(Vec::default())
     } else {
         Err(TransactionRejectionReason::Validation(
             crate::ValidationFail::NotPermitted("publication assertion rejected".into()),

@@ -274,6 +274,11 @@ mod tests {
     }
     #[test]
     fn optional_name_http_absence_requires_exact_typed_json() {
+        use crate::http_default::DefaultHttpTransport;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let selector = name_selector(SnsNamespacePath::Dataspace, "dpn").expect("selector");
         let envelope = ErrorEnvelope::new(
             SNS_REGISTRATION_NOT_FOUND_CODE,
@@ -363,11 +368,6 @@ mod tests {
         }
 
         // Exercise the actual public SDK path, including its request and error context.
-        use crate::http_default::DefaultHttpTransport;
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
         let client = sns_http_test_client();
         for (namespace, literal) in [
             (SnsNamespacePath::Dataspace, "dpn"),

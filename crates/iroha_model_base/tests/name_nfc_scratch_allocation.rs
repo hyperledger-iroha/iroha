@@ -130,6 +130,8 @@ fn measured<T>(operation: impl FnOnce() -> T) -> (T, Observation) {
 // test that could initialize the process-global profile before the first measurement.
 #[test]
 fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
+    #[derive(Clone, Copy)]
+    struct SortValue(u32);
     let (cold, profile) = measured(|| Name::validate_canonical("first-cold-profile"));
     cold.unwrap();
     assert_eq!(
@@ -140,13 +142,11 @@ fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
 
     // CharacterAndClass is one u32. Exercise the pinned standard library's
     // maximum possible stable sort geometry separately, with backing made first.
-    #[derive(Clone, Copy)]
-    struct SortValue(u32);
-    let mut sort_values: Vec<_> = (0..(MAX_NAME_BYTES * 4) as u32)
+    let mut sort_values: Vec<_> = (0..u32::try_from(MAX_NAME_BYTES * 4).unwrap())
         .rev()
         .map(SortValue)
         .collect();
-    let (_, sort) = measured(|| sort_values.sort_by_key(|value| value.0));
+    let ((), sort) = measured(|| sort_values.sort_by_key(|value| value.0));
     assert_eq!(
         sort.count, 0,
         "the complete <=1020-element sort stays on its 4 KiB stack buffer"
@@ -157,7 +157,7 @@ fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
     // Mix short ascending/descending runs and repeated keys. Pack original
     // positions into the same four-byte value so the general stable path must
     // preserve equal-key order without changing CharacterAndClass geometry.
-    let mut interleaved: Vec<_> = (0..(MAX_NAME_BYTES * 4) as u32)
+    let mut interleaved: Vec<_> = (0..u32::try_from(MAX_NAME_BYTES * 4).unwrap())
         .map(|position| SortValue((((position * 73) % 127) << 10) | position))
         .collect();
     assert!(
@@ -170,7 +170,7 @@ fn cold_profile_and_all_nfc_backings_stay_within_the_reserved_request_bound() {
             .windows(2)
             .any(|pair| pair[0].0 >> 10 > pair[1].0 >> 10)
     );
-    let (_, general_sort) = measured(|| interleaved.sort_by_key(|value| value.0 >> 10));
+    let ((), general_sort) = measured(|| interleaved.sort_by_key(|value| value.0 >> 10));
     assert_eq!(
         general_sort.count, 0,
         "general stable sorting must use the pinned stack scratch"

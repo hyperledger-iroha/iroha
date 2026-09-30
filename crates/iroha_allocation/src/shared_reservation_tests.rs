@@ -254,7 +254,7 @@ fn one_shot_refusal_does_not_affect_other_layouts_threads_or_later_allocations()
         std::thread::scope(|scope| {
             scope.spawn(|| drop(Reserved::<Aligned, ()>::try_new(()).unwrap()));
         });
-        let (_, error) = Reserved::<Aligned, ()>::try_new(()).unwrap_err();
+        let ((), error) = Reserved::<Aligned, ()>::try_new(()).unwrap_err();
         assert_eq!(error.layout(), layout);
         drop(Reserved::<Aligned, ()>::try_new(()).unwrap());
         drop(other);
@@ -293,7 +293,7 @@ fn initialized_shell_can_move_to_another_thread_without_refunding_early() {
 #[test]
 fn refusal_error_describes_only_the_exact_allocator_layout() {
     let layout = Reserved::<Aligned, ()>::layout();
-    let (_, error) =
+    let ((), error) =
         refusing_allocation(layout, || Reserved::<Aligned, ()>::try_new(())).unwrap_err();
     let copied = error;
     assert_eq!(error, copied);

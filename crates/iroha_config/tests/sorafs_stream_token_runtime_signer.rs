@@ -217,11 +217,11 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
             attester.authority.active_from_unix_ms,
             attester.authority.active_until_unix_ms
         ),
-        (800000, 2000000)
+        (800_000, 2_000_000)
     );
     assert_eq!(
         (attester.max_validity_ms, attester.max_anchor_age_ms),
-        (1000000, 10000)
+        (1_000_000, 10000)
     );
     let observer = &signer_backend.observer;
     assert_eq!(
@@ -250,9 +250,9 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
             observer.authority.active_from_unix_ms,
             observer.authority.active_until_unix_ms
         ),
-        (900000, 1900000)
+        (900_000, 1_900_000)
     );
-    assert_eq!(observer.max_state_age_ms, 300000);
+    assert_eq!(observer.max_state_age_ms, 300_000);
     assert_eq!(
         tokens.admission_provider_handle.as_deref(),
         Some("sealed-cas:prod/stream-token/gateway-admission/v1")

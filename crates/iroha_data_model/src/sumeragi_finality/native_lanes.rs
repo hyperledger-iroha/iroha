@@ -13,7 +13,7 @@ use thiserror::Error;
 use super::lane_state_commitment::SumeragiLaneStateCommitment;
 use crate::sumeragi_lanes::SumeragiLaneState;
 
-/// The one ordinary StatePath which commits the complete native lane lane state.
+/// The one ordinary `StatePath` which commits the complete native lane lane state.
 pub const SUMERAGI_LANE_STATE_WITNESS_KEY: &[u8] = b"iroha:sumeragi:lane-state:v1";
 
 const DEPTH: usize = 256;
@@ -100,7 +100,7 @@ impl NativeLaneStateProof {
             .filter(|write| write.key == SUMERAGI_LANE_STATE_WITNESS_KEY);
         let target = targets
             .next()
-            .ok_or(malformed("missing complete lane-state write"))?;
+            .ok_or_else(|| malformed("missing complete lane-state write"))?;
         if targets.next().is_some() {
             return Err(malformed("duplicate complete lane-state write"));
         }
@@ -124,7 +124,7 @@ impl NativeLaneStateProof {
             .writes
             .len()
             .checked_mul(2)
-            .ok_or(malformed("scratch size overflow"))?;
+            .ok_or_else(|| malformed("scratch size overflow"))?;
         let mut storage = ChargedBuffer::new(capacity, budget)?;
         let empty = Hash::new([]);
         for _ in 0..capacity {
@@ -229,7 +229,7 @@ impl NativeLaneStateProof {
         (proof, root)
     }
 
-    /// Verify the sole fixed StatePath against the exact native execution commitment.
+    /// Verify the sole fixed `StatePath` against the exact native execution commitment.
     #[must_use]
     pub fn verify(&self, network: NetworkId, height: u64, root: Hash) -> bool {
         self.commitment.matches_carrier(network, height) && self.verify_root(root)
@@ -269,7 +269,7 @@ impl NativeLaneStateProof {
     ///
     /// The payload is the lane field from the sole canonical original execution archive, using
     /// the canonical layout flags. Its exact canonical frame is hashed without rebuilding lane
-    /// records, public keys or PoPs. This does not decode state or validate an untrusted claim:
+    /// records, public keys or `PoPs`. This does not decode state or validate an untrusted claim:
     /// callers must first authenticate this proof with [`Self::verify`] against the independently
     /// certified native result at the exact network and height. Only then does byte equality
     /// establish that the payload is the original complete canonical state.

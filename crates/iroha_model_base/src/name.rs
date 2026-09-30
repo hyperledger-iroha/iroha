@@ -216,7 +216,7 @@ impl Name {
     ///
     /// This performs only the same initial syntax predicate, never NFC or semantic
     /// rejection. Syntax-invalid and ASCII inputs cannot allocate normalization
-    /// scratch. Other inputs use the fingerprinted profile's cumulative SmallVec
+    /// scratch. Other inputs use the fingerprinted profile's cumulative `SmallVec`
     /// growth bound, which also covers simultaneous old/new allocation during growth.
     /// Callers must reserve these bytes before validation and retain custody until
     /// it returns. Sequential calls may share their maximum; concurrent calls may not.
@@ -575,7 +575,7 @@ mod tests {
             "A\u{30a}",
             "가",
             "\u{1100}\u{1161}",
-            "Å",
+            "\u{212b}",
             "Ａ",
             "a\u{200d}b",
             "a\u{202e}b",
@@ -619,7 +619,10 @@ mod tests {
             );
             let parsed = candidate.parse::<Name>();
             assert_eq!(
-                parsed.as_ref().map(|_| ()).map_err(|error| error.reason()),
+                parsed
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(crate::error::ParseError::reason),
                 Name::validate_canonical(&candidate).map_err(|error| error.reason())
             );
             if let Ok(name) = parsed {

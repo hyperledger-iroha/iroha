@@ -252,16 +252,16 @@ fn minamoto_inherits_complete_da_retention_policy() {
     };
     assert_eq!(
         retention(&policy.default_retention),
-        (21600, 2592000, 3, "warm".into(), "da.default".into())
+        (21600, 2_592_000, 3, "warm".into(), "da.default".into())
     );
     assert_eq!(policy.overrides.len(), 3);
     for (entry, (class, hot, cold, replicas, storage, tag)) in policy.overrides.iter().zip([
-        ("taikai_segment", 86400, 1209600, 5, "hot", "da.taikai.live"),
-        ("nexus_lane_sidecar", 21600, 604800, 4, "warm", "da.sidecar"),
+        ("taikai_segment", 86400, 1_209_600, 5, "hot", "da.taikai.live"),
+        ("nexus_lane_sidecar", 21600, 604_800, 4, "warm", "da.sidecar"),
         (
             "governance_artifact",
             43200,
-            15552000,
+            15_552_000,
             3,
             "cold",
             "da.governance",
@@ -276,9 +276,9 @@ fn minamoto_inherits_complete_da_retention_policy() {
     assert_eq!(policy.taikai_availability.len(), 3);
     for (entry, (class, hot, cold, replicas, storage, tag)) in
         policy.taikai_availability.iter().zip([
-            ("hot", 86400, 1209600, 5, "hot", "da.taikai.live"),
-            ("warm", 21600, 2592000, 4, "warm", "da.taikai.warm"),
-            ("cold", 3600, 15552000, 3, "cold", "da.taikai.archive"),
+            ("hot", 86400, 1_209_600, 5, "hot", "da.taikai.live"),
+            ("warm", 21600, 2_592_000, 4, "warm", "da.taikai.warm"),
+            ("cold", 3600, 15_552_000, 3, "cold", "da.taikai.archive"),
         ])
     {
         assert_eq!(entry.availability_class, class);

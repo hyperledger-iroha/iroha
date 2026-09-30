@@ -34,9 +34,9 @@ const VESTA: [[u8; 32]; 10] = [
     hex_literal::hex!("5dd951afd934da1f383baff361d8acc11bea9c7e6027a4e0c3fe2eb45d00dc1e"),
 ];
 
-pub(crate) fn fixture(count: usize) -> ValidatorEpochContextV1 {
+pub fn fixture(count: usize) -> ValidatorEpochContextV1 {
     let mut pairs = (1..=count)
-        .map(|seed| KeyPair::try_from_seed(vec![seed as u8; 32], Algorithm::BlsNormal).unwrap())
+        .map(|seed| KeyPair::try_from_seed(vec![u8::try_from(seed).unwrap(); 32], Algorithm::BlsNormal).unwrap())
         .collect::<Vec<_>>();
     pairs.sort_by_key(|pair| PeerId::new(pair.public_key().clone()));
     let committee = pairs
@@ -78,7 +78,7 @@ pub(crate) fn fixture(count: usize) -> ValidatorEpochContextV1 {
     context
 }
 
-pub(crate) fn retained(previous: &ValidatorEpochContextV1) -> ValidatorEpochContextV1 {
+pub fn retained(previous: &ValidatorEpochContextV1) -> ValidatorEpochContextV1 {
     let mut next = previous.clone();
     let authorization = &mut next.authorization;
     authorization.epoch += 1;

@@ -7,7 +7,7 @@ use crate::{
     sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
 };
 
-/// The sole SignedBlock payload layout, with only execution-derived fields projected.
+/// The sole `SignedBlock` payload layout, with only execution-derived fields projected.
 #[derive(Encode)]
 pub(super) struct Proposal<'a> {
     signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
@@ -42,7 +42,7 @@ impl<'a> Proposal<'a> {
                 da_proof_policies: self.payload.da_proof_policies.0.clone(),
                 da_pin_intents: self.payload.da_pin_intents.0.clone(),
                 npos_consensus_effects: self.payload.npos_consensus_effects.0.clone(),
-                global_beacon_pulse: self.payload.global_beacon_pulse.0.clone(),
+                global_beacon_pulse: *self.payload.global_beacon_pulse.0,
                 execution_context: self.payload.execution_context.map(|context| {
                     BlockExecutionContextBundle {
                         version: context.version,

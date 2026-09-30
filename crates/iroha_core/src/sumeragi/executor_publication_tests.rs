@@ -548,9 +548,11 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
             &original
         ));
         blocks.append(&block, &qc).unwrap();
-        assert!(
-            blocks.append(&block, &alternate).is_err(),
-            "durable retry cannot replace the prepared certificate"
+        blocks.append(&block, &alternate).unwrap();
+        assert_eq!(
+            blocks.committed_body(2).unwrap().unwrap().1,
+            qc,
+            "an idempotent retry with another valid quorum retains the original certificate"
         );
         worker.commit(&block, &qc).unwrap();
     });
@@ -1955,7 +1957,17 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                 .is_local_refusal()
         );
         let overlay = std::ptr::from_ref(original.overlay.as_ref());
-        let result = std::ptr::from_ref(original.phase.ready().unwrap().get());
+        // The move-only result shell can move from Finishing to Live; its funded
+        // committee backing and exact result must survive without reconstruction.
+        let result = original
+            .phase
+            .ready()
+            .unwrap()
+            .get()
+            .schedule
+            .current
+            .committee
+            .as_ptr();
         let witness = iroha_crypto::HashOf::new(&original.witness);
         let budget = worker.state.ivm_execution_budget();
         let held = budget.reserved_bytes();
@@ -1967,7 +1979,15 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             let retained = worker.finishing.as_ref().unwrap();
             assert_eq!(std::ptr::from_ref(retained.overlay.as_ref()), overlay);
             assert_eq!(
-                std::ptr::from_ref(retained.phase.ready().unwrap().get()),
+                retained
+                    .phase
+                    .ready()
+                    .unwrap()
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .as_ptr(),
                 result
             );
             assert_eq!(iroha_crypto::HashOf::new(&retained.witness), witness);
@@ -1993,7 +2013,11 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             std::ptr::from_ref(live.overlay.as_deref().unwrap()),
             overlay
         );
-        assert_eq!(std::ptr::from_ref(live.commitment.get()), result);
+        assert_eq!(
+            live.commitment.get().schedule.current.committee.as_ptr(),
+            result
+        );
+        assert!(live.commitment.belongs_to(&budget));
         assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
         let source = live.native_contexts.as_ref().unwrap();
         let bytes = source.canonical_bytes().to_vec();
@@ -2118,6 +2142,16 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
     with_worker(|chain, worker, _blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let archive_files = || {
+            std::fs::read_dir(chain.kura().store_root().join("native-contexts"))
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = archive_files();
         let foreign_budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let foreign = NativeContextArchive::open(
             chain.kura(),
@@ -2131,7 +2165,17 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             worker.prepare_original_result().unwrap();
             let original = worker.finishing.as_ref().unwrap();
             original_overlay = Some(std::ptr::from_ref(original.overlay.as_ref()));
-            original_result = Some(std::ptr::from_ref(original.phase.ready().unwrap().get()));
+            original_result = Some(
+                original
+                    .phase
+                    .ready()
+                    .unwrap()
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .as_ptr(),
+            );
             assert!(matches!(
                 foreign.prepare(
                     &original.overlay,
@@ -2143,11 +2187,10 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             ));
             assert_eq!(foreign_budget.reserved_bytes(), 0);
             assert!(original.native_contexts.is_none());
-            assert!(
-                std::fs::read_dir(chain.kura().store_root().join("native-contexts"))
-                    .unwrap()
-                    .next()
-                    .is_none()
+            assert_eq!(
+                archive_files(),
+                before,
+                "retain the original genesis archive unchanged"
             );
             worker.finish_execution_with_encoder(encode_result_preimage)
         });
@@ -2158,8 +2201,21 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             original_overlay
         );
         assert_eq!(
-            Some(std::ptr::from_ref(retained.commitment.get())),
+            Some(
+                retained
+                    .commitment
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .as_ptr()
+            ),
             original_result
+        );
+        assert!(
+            retained
+                .commitment
+                .belongs_to(&worker.state.ivm_execution_budget())
         );
         assert!(retained.native_contexts.is_some());
         assert_eq!(foreign_budget.reserved_bytes(), 0);

@@ -739,8 +739,7 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let genesis = frame(&chain, 1);
     let certificate = genesis.commit_certificate().unwrap();
     let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
-    result.execution.ordinary_writes_root =
-        Hash::new(b"unsigned pinned genesis execution replacement");
+    result.execution.world_state_root = Hash::new(b"unsigned pinned genesis execution replacement");
     let changed = Arc::new(genesis.as_ref().clone().with_commit_certificate(Some(
         CommitCertificate::from_untrusted_parts(
             certificate.consensus_header().to_vec(),
@@ -760,8 +759,8 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let receipt = reader.certified(1).unwrap();
     assert_eq!(receipt.verification(), QcVerification::Genesis);
     assert_eq!(
-        receipt.commitment().execution.ordinary_writes_root,
-        result.execution.ordinary_writes_root
+        receipt.commitment().execution.world_state_root,
+        result.execution.world_state_root
     );
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura).unwrap();
     assert_eq!(

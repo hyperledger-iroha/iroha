@@ -30,7 +30,7 @@ use crate::{
 /// A committed block of the reference chain.
 #[derive(Clone, Debug)]
 pub struct RefBlock {
-    /// AvailableBody hash.
+    /// `AvailableBody` hash.
     pub bh: Hash32,
     /// Certified result.
     pub result: Hash32,
@@ -1025,7 +1025,7 @@ impl World {
         let honest_proposer = proposer_key
             .and_then(|k| self.key_owner.get(&k).copied())
             .is_some_and(|m| !self.machines[m].byz);
-        for (id, _) in decode_txs(&block.payload().as_slice()) {
+        for (id, _) in decode_txs(block.payload().as_slice()) {
             if let Some(entry) = self.txs[inst].get_mut(&id)
                 && entry.2.is_none()
             {

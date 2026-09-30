@@ -104,7 +104,7 @@ fn owner_document(cases: &[Case], owner: &str) -> Vec<u8> {
 ///
 /// A single stdout lock prevents parallel test output from interleaving inside
 /// the record. Collection must still require every expected compiled owner.
-pub(crate) fn print_owner(cases: &[Case], owner: &str) {
+pub fn print_owner(cases: &[Case], owner: &str) {
     let document = owner_document(cases, owner);
     let digest = hex::encode(Sha256::digest(&document));
     let mut output = std::io::stdout().lock();

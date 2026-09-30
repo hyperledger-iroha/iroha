@@ -884,7 +884,11 @@ fn det_s35_relay_tamper_no_evidence() {
     let mut bad_attach = genuine.clone();
     bad_attach.proposal.justify = Some(h.tc_q(0));
     for p in [tampered.clone(), bad_attach.clone()] {
-        h.deliver(leader, WireMessage::Proposal(Box::new(p)));
+        let out = h.deliver(leader, WireMessage::Proposal(Box::new(p)));
+        assert!(
+            evidence(&out).is_empty() && timeouts(&out).is_empty(),
+            "unsigned carrier corruption cannot accuse or time out the original author"
+        );
     }
     assert!(h.pending_exec.is_empty());
     h.deliver(leader, WireMessage::Proposal(Box::new(genuine)));
@@ -1259,7 +1263,7 @@ fn det_s31b_record_and_store_lost() {
     let entries: Vec<SyncEntry> = full[6..9]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            manifest: manifest(&block),
+            manifest: manifest(block),
             commit_qc: qc.clone(),
         })
         .collect();
@@ -1419,7 +1423,7 @@ fn det_s31e_echo_signature() {
         [usize::try_from(t).unwrap()..usize::try_from(t + 2).unwrap()]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            manifest: manifest(&block),
+            manifest: manifest(block),
             commit_qc: qc.clone(),
         })
         .collect();
@@ -1523,7 +1527,7 @@ fn det_s32b_store_behind_record() {
     let entries = full[2..6]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            manifest: manifest(&block),
+            manifest: manifest(block),
             commit_qc: qc.clone(),
         })
         .collect();

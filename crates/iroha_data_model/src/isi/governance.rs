@@ -818,7 +818,7 @@ mod tests {
         let (instruction_box_pair, pair_flags) = norito::codec::encode_with_header_flags(&boxed);
         assert_eq!(pair_flags, header_flags);
         let pair_decoded = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+            let guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
             let (decoded, used) = InstructionBox::decode_from_slice(&instruction_box_pair)
                 .expect("decode bare InstructionBox pair");
             assert_eq!(used, instruction_box_pair.len());
@@ -871,12 +871,12 @@ mod tests {
         );
         let mut trailing_pair = instruction_box_pair.clone();
         trailing_pair.push(0);
-        let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+        let guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
         assert!(
             InstructionBox::decode_from_slice(&trailing_pair).is_err(),
             "trailing InstructionBox pair byte must be rejected"
         );
-        drop(_guard);
+        drop(guard);
         assert_legacy_instruction_payload_rejected(
             std::any::type_name::<UpdatePlainConviction>(),
             &CastPlainBallot {

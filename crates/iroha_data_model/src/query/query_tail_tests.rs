@@ -7,8 +7,8 @@ mod canonical_output_inclusion_tests {
     fn execution_fixture() -> (SignedBlock, CommittedTransaction) {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            fixture::network(0, Ok(Default::default())),
-            fixture::network(1, Ok(Default::default())),
+            fixture::network(0, Ok(Vec::default())),
+            fixture::network(1, Ok(Vec::default())),
             fixture::simple_time(&block, 0),
         ];
         fixture::install(&mut block, rows, 3).unwrap();
@@ -408,7 +408,7 @@ mod fault_injection_tests {
             )
             .sign(key.private_key()),
         );
-        let output = crate::block::output_test_support::network(0, Ok(Default::default()));
+        let output = crate::block::output_test_support::network(0, Ok(Vec::default()));
         CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fault carrier")),
             entrypoint_hash: entrypoint.hash(),

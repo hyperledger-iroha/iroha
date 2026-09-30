@@ -61,7 +61,7 @@ fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::Sumeragi
             unanchored: false,
             abstaining: false,
             halted: None,
-            footprint: Default::default(),
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
         },
         finality_proof: proof,
     };

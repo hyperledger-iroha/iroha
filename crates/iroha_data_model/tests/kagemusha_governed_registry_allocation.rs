@@ -64,14 +64,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
 }
 
 fn allocations_during(f: impl FnOnce()) -> usize {
-    ALLOCATION_COUNT.with(|count| count.set(0));
-    TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
     struct StopTracking;
     impl Drop for StopTracking {
         fn drop(&mut self) {
             TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
         }
     }
+    ALLOCATION_COUNT.with(|count| count.set(0));
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
     let stop = StopTracking;
     f();
     drop(stop);

@@ -204,6 +204,7 @@ fn delegate_rejects_independently_provisioned_context_substitution() {
                 )
                 .unwrap(),
             &request,
+            Some(&verified),
         );
         assert!(matches!(
             result,

@@ -5636,6 +5636,7 @@ mod tests {
 
     #[test]
     fn availability_decoder_accepts_exact_json_and_sanitizes_malformed_success() {
+        const CANARY: &str = "private-invalid-json-content-type-canary";
         let (authority, keys, _) = phase_fixture_v1();
         let share = availability_shares_v1(&authority, &keys).remove(0);
         let dto = availability_response_fixture_v1(share);
@@ -5647,7 +5648,6 @@ mod tests {
         let decoded = decode_private_settlement_availability_response_v1(&response)
             .expect("exact share JSON");
         assert_eq!(decoded.share.signer, dto.share.signer);
-        const CANARY: &str = "private-invalid-json-content-type-canary";
         for (content_type, expected) in [
             (APPLICATION_JSON, "invalid_response_json"),
             (CANARY, "invalid_response_content_type"),

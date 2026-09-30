@@ -320,6 +320,7 @@ mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
 mod canonical_history;
+mod committed_execution_read;
 pub(crate) mod native_execution_tip;
 pub use native_execution_tip::NativeExecutionTip;
 mod carrier_da_effects;

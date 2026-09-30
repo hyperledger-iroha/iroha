@@ -250,7 +250,7 @@ fn every_member_drives_exact_applied_parent_and_partial_ingress_is_bounded() {
 fn locked_reproposal_and_restart_preserve_exact_control_header() {
     let mut h = H::new(4, pick::leader(2));
     h.auto_control = false;
-    let original = h.flagged(h.block(0, b"locked transactions"));
+    let original = h.flagged(&h.block(0, b"locked transactions"));
     let mut header = original.header().clone();
     header.control_witness = ControlWitness::try_from_slice(b"original finalized pulse").unwrap();
     let original = h.author(header, original.payload().as_slice());

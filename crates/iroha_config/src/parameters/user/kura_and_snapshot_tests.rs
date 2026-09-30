@@ -25,7 +25,7 @@ fn kura_transaction_history_has_one_finite_file_configured_limit() {
                     .kura
                     .transaction_history_bytes
                     .get(),
-                bytes as u64
+                u64::try_from(bytes).unwrap()
             );
         }
     }
@@ -58,7 +58,7 @@ fn kura_hash_history_has_one_finite_file_configured_limit() {
                     .kura
                     .block_hash_history_bytes
                     .get(),
-                bytes as u64
+                u64::try_from(bytes).unwrap()
             );
         }
     }
@@ -226,9 +226,9 @@ fn kura_fastpq_artifact_policy_parses_nested_file_config_and_rejects_zero_or_inc
         );
         if valid {
             let parsed = parsed.unwrap().kura.fastpq_artifacts;
-            assert_eq!(parsed.max_artifact_bytes.get(), artifact as usize);
-            assert_eq!(parsed.max_artifacts.get(), records as usize);
-            assert_eq!(parsed.max_total_bytes.get(), total as u64);
+            assert_eq!(parsed.max_artifact_bytes.get(), usize::try_from(artifact).unwrap());
+            assert_eq!(parsed.max_artifacts.get(), usize::try_from(records).unwrap());
+            assert_eq!(parsed.max_total_bytes.get(), u64::try_from(total).unwrap());
         }
     }
 }

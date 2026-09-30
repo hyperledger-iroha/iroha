@@ -74,7 +74,6 @@ fn signed(
     keys: &[KeyPair],
 ) -> KagemushaMobileBootstrapPackageV1 {
     KagemushaMobileBootstrapPackageV1 {
-        checkpoint: checkpoint.clone(),
         approvals: keys
             .iter()
             .map(|key| KagemushaMobileBootstrapApprovalV1 {
@@ -83,6 +82,7 @@ fn signed(
                     .expect("checkpoint signature"),
             })
             .collect(),
+        checkpoint,
     }
 }
 
@@ -110,9 +110,9 @@ fn archive(package: &KagemushaMobileBootstrapPackageV1) -> Vec<u8> {
 
 fn verify_kagemusha_mobile_bootstrap_v1(
     archive: &[u8],
-    pins: KagemushaMobileBootstrapPinsV1<'_>,
+    pins: &KagemushaMobileBootstrapPinsV1<'_>,
 ) -> Result<[u8; 32], String> {
-    KagemushaMobileBootstrapPackageV1::decode_canonical_exact(archive)?.authenticate(&pins)
+    KagemushaMobileBootstrapPackageV1::decode_canonical_exact(archive)?.authenticate(pins)
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn rejects_noncanonical_truncated_trailing_and_oversized_archives() {
         vec![0; KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1 + 1],
         norito::encode_canonical(&package.checkpoint).expect("wrong archive type"),
     ] {
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, pins(&policy)).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, &pins(&policy)).is_err());
     }
 }
 

@@ -174,26 +174,26 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
         .into_iter()
         .enumerate()
         .map(|(index, validator)| {
-            let mut eq_proof_public_key = [0_u8; 32];
+            let mut pallas_public_key = [0_u8; 32];
             hex::decode_to_slice(
                 EQ_PROOF_PUBLIC_KEYS
                     .get(index)
                     .expect("test authority has exactly four validators"),
-                &mut eq_proof_public_key,
+                &mut pallas_public_key,
             )
             .expect("valid fixed Pallas public key");
-            let mut ep_proof_public_key = [0_u8; 32];
+            let mut vesta_public_key = [0_u8; 32];
             hex::decode_to_slice(
                 EP_PROOF_PUBLIC_KEYS
                     .get(index)
                     .expect("test authority has exactly four validators"),
-                &mut ep_proof_public_key,
+                &mut vesta_public_key,
             )
             .expect("valid fixed Vesta public key");
             KagemushaMintFinalityValidatorKeysV1 {
                 validator,
-                eq_proof_public_key,
-                ep_proof_public_key,
+                eq_proof_public_key: pallas_public_key,
+                ep_proof_public_key: vesta_public_key,
             }
         })
         .collect::<Vec<_>>();
@@ -1376,7 +1376,7 @@ impl GenesisSourceTemplate {
     /// completed JSON is not a valid [`RawGenesisTransaction`].
     pub fn materialize(
         mut self,
-        parameters: KagemushaMintFinalityGenesisParametersV1,
+        parameters: &KagemushaMintFinalityGenesisParametersV1,
         xor_asset_definition_id: Option<AssetDefinitionId>,
     ) -> Result<RawGenesisTransaction> {
         let is_npos = self
@@ -1442,7 +1442,7 @@ impl GenesisSourceTemplate {
             .expect("source template object was checked at construction")
             .insert(
                 "kagemusha_mint_finality".to_owned(),
-                norito::json::value::to_value(&parameters).map_err(|error| {
+                norito::json::value::to_value(parameters).map_err(|error| {
                     eyre!("serialize KAGEMUSHA mint-finality parameters: {error}")
                 })?,
             );
@@ -3220,7 +3220,7 @@ mod tests {
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         GenesisSourceTemplate::from_path(path)?.materialize(
-            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             Some(SumeragiNposParameters::default().xor_asset_definition_id),
         )
     }
@@ -3232,7 +3232,7 @@ mod tests {
         assert!(RawGenesisTransaction::from_path(&path).is_err());
         let parameters = deterministic_test_kagemusha_mint_finality_genesis_parameters();
         let materialized = GenesisSourceTemplate::from_path(&path)?.materialize(
-            parameters.clone(),
+            &parameters,
             Some(SumeragiNposParameters::default().xor_asset_definition_id),
         )?;
         assert_eq!(

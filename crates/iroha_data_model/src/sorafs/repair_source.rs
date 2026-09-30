@@ -92,7 +92,7 @@ mod tests {
         for mutation in 0..5 {
             let mut changed = request.clone();
             match mutation {
-                0 => changed.chunk_length = (REPAIR_SOURCE_CHUNK_MAX_BYTES_V1 + 1) as u32,
+                0 => changed.chunk_length = u32::try_from(REPAIR_SOURCE_CHUNK_MAX_BYTES_V1 + 1).unwrap(),
                 1 => changed.task_revision = 0,
                 2 => changed.lease_generation = 0,
                 3 => changed.source_provider = changed.target_provider,

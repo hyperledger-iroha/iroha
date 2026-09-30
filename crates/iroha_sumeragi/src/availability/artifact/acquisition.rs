@@ -84,6 +84,10 @@ impl PayloadAcquisition {
     }
     /// Verify all original signatures once, then allocate exact bounded row-owner slots.
     /// Every refusal preserves this job and every already admitted backing allocation.
+    ///
+    /// # Errors
+    /// Rejects invalid manifest authority, geometry, content or signatures, foreign funding,
+    /// or refusal to admit the manifest or allocate row-owner slots.
     pub fn prepare(
         &mut self,
         budget: &AllocationBudget,
@@ -142,6 +146,10 @@ impl PayloadAcquisition {
     }
     /// Admit and retain one actual distinct row. On error return the exact original chunk.
     /// `false` means a duplicate, which never advances reconstruction readiness.
+    ///
+    /// # Errors
+    /// Returns the original chunk on manifest preparation failure, mismatched row source
+    /// or commitment, or refusal to admit its bytes to the original pool.
     #[allow(
         clippy::result_large_err,
         reason = "return the actual received byte owner"
@@ -185,6 +193,10 @@ impl PayloadAcquisition {
     }
     /// Reconstruct only after every stripe has k distinct authenticated actual rows.
     /// A local refusal returns this exact job, including completed material awaiting sharing.
+    ///
+    /// # Errors
+    /// Returns the retained job if preparation fails, any stripe has too few distinct rows,
+    /// reconstruction or commitment checks fail, or an allocation or sharing request is refused.
     #[allow(
         clippy::result_large_err,
         reason = "retain source, received owners and completed output"
@@ -229,7 +241,7 @@ impl PayloadAcquisition {
         }
         let mut refs = ChargedBuffer::new(rows.len(), budget).map_err(AcquisitionError::Slots)?;
         for row in rows {
-            refs.push_reserved(row.as_ref().map(|row| row.as_slice()));
+            refs.push_reserved(row.as_ref().map(crate::bytes::ByteSequence::as_slice));
         }
         let verified = self.verified();
         let material = verified.reconstruct(refs.as_slice(), budget, crypto)?;

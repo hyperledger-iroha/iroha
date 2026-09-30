@@ -19,15 +19,26 @@ fn retained_hardware_policy_preimage_matches_native_digest_and_rejects_invalid_s
     let profiles = vec![enabled_profile(1, [0x73; 32])];
     let bytes = kagemusha_hardware_policy_digest_preimage_v1(&profiles).unwrap();
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
-    assert_eq!(digest, kagemusha_hardware_policy_digest_v1(&profiles).unwrap());
+    assert_eq!(
+        digest,
+        kagemusha_hardware_policy_digest_v1(&profiles).unwrap()
+    );
     let frame_start = HARDWARE_POLICY_DIGEST_DOMAIN.len() + 1 + 8;
-    assert_eq!(&bytes[..HARDWARE_POLICY_DIGEST_DOMAIN.len()], HARDWARE_POLICY_DIGEST_DOMAIN);
+    assert_eq!(
+        &bytes[..HARDWARE_POLICY_DIGEST_DOMAIN.len()],
+        HARDWARE_POLICY_DIGEST_DOMAIN
+    );
     assert_eq!(bytes[HARDWARE_POLICY_DIGEST_DOMAIN.len()], 0);
-    assert_eq!(u64::from_le_bytes(bytes[frame_start - 8..frame_start].try_into().unwrap()),
-        (bytes.len() - frame_start) as u64);
+    assert_eq!(
+        u64::from_le_bytes(bytes[frame_start - 8..frame_start].try_into().unwrap()),
+        (bytes.len() - frame_start) as u64
+    );
     let mut substituted = profiles.clone();
     substituted[0].qualification_digest[0] ^= 1;
-    assert_ne!(kagemusha_hardware_policy_digest_preimage_v1(&substituted).unwrap(), bytes);
+    assert_ne!(
+        kagemusha_hardware_policy_digest_preimage_v1(&substituted).unwrap(),
+        bytes
+    );
     for invalid in [vec![], vec![profiles[0], profiles[0]]] {
         assert!(kagemusha_hardware_policy_digest_preimage_v1(&invalid).is_err());
     }
@@ -129,7 +140,7 @@ fn reseal_profile_qualification(receipt: &mut KagemushaInternalValidationReceipt
 fn streaming_authority_policy_digest_preserves_canonical_frame_identity() {
     let keys = authority_keys();
     for signer_count in 1..=keys.len() {
-        let policy = authority_policy(&keys[..signer_count], signer_count as u16);
+        let policy = authority_policy(&keys[..signer_count], u16::try_from(signer_count).unwrap());
         let frame = norito::encode_canonical(&policy).expect("canonical policy frame");
         assert_eq!(norito::canonical_frame_len(&policy).unwrap(), frame.len());
         assert_eq!(

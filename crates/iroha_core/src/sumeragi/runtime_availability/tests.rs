@@ -1,4 +1,4 @@
-//! Global availability must use the authenticated signed genesis identity, not NetworkId.
+//! Global availability binds signed genesis and configured chain to the global instance.
 use super::*;
 use crate::{
     state::World,
@@ -6,23 +6,21 @@ use crate::{
 };
 use iroha_sumeragi::preimage::{InstanceKind, instance_id};
 #[test]
-fn constructor_uses_authenticated_genesis_when_network_id_is_distinct() {
+fn constructor_binds_authenticated_genesis_and_chain_to_the_global_instance() {
     let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     let state = chain.state().clone();
     let crypto = Arc::new(BlsCrypto::new());
-    let wrong = instance_id(
-        &*crypto,
-        &Hash32(*state.network_id_ref().as_bytes()),
-        state.chain_id_ref().to_string().as_bytes(),
-        InstanceKind::Global,
-        0,
-    );
-    assert_ne!(
-        wrong,
-        chain.instance(),
-        "NetworkId and signed genesis hash are distinct protocol inputs"
-    );
-    assert!(NativeGlobalAvailability::new(state.clone(), wrong, crypto.clone()).is_err());
+    let genesis = crate::sumeragi::startup::core_hash_of(chain.genesis());
+    let chain_id = state.chain_id_ref().to_string();
+    assert_eq!(genesis.0, *state.network_id_ref().as_bytes());
+    for (genesis, chain_id) in [
+        (Hash32([0xab; 32]), chain_id.as_bytes()),
+        (genesis, b"another-chain".as_slice()),
+    ] {
+        let wrong = instance_id(&*crypto, &genesis, chain_id, InstanceKind::Global, 0);
+        assert_ne!(wrong, chain.instance());
+        assert!(NativeGlobalAvailability::new(state.clone(), wrong, crypto.clone()).is_err());
+    }
     let provider = NativeGlobalAvailability::new(state, chain.instance(), crypto).unwrap();
     assert_eq!(provider.instance(), chain.instance());
     assert!(provider.height_config(1).unwrap().is_none());

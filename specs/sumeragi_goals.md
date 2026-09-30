@@ -27,7 +27,7 @@ the cutover.
 
 | Id | Goal | Status | Acceptance |
 | --- | --- | --- | --- |
-| S1 | Sans-IO core and simulator | Implemented; qualification in progress. Every §13.4 mutation is killed by its named test and every fault scenario passes at 500 seeds. CI: the PR job runs the simulator and the driver/node/lane tests; `.github/workflows/nightly_sumeragi.yml` runs every scenario at 10 000 seeds and the mutation gate (`scripts/sumeragi_mutation_gate.py --strict`). | Spec conformance; every safety and liveness mutation of spec §13.4 killed by its named deterministic test (`scripts/sumeragi_mutation_gate.py`); all fault scenarios pass nightly at 10 000 seeds. |
+| S1 | Sans-IO core and simulator | Implemented; current-source qualification remains open. CI: the PR job runs the simulator and the driver/node/lane tests; `.github/workflows/nightly_sumeragi.yml` runs every scenario at 10 000 seeds and the mutation gate (`scripts/sumeragi_mutation_gate.py --strict`). | Spec conformance; every safety and liveness mutation of spec §13.4 killed by its named deterministic test (`scripts/sumeragi_mutation_gate.py`); all fault scenarios pass nightly at 10 000 seeds. |
 | S2 | Node driver | Implemented: `iroha_core::sumeragi::driver` (kernel, persistence, executor scheduling, serving, ingress) with the simulator conformance run; E49, E55. | Driver in `iroha_core` generic over `Net`, `RecordStore`, `BodyStore`, `BlockStore`, `Clock` and `Executor`; the same driver code runs in the simulator (spec §13.5); O2/O3/O5/O8/O9 conformance oracles pass at every I/O completion. |
 | S3 | Execution and storage binding | Implemented with the E51 result commitment (complete World roots, ordered events and witnessed writes): State executor on one live overlay, Kura frames with commit certificates, file record/body stores, genesis result-only certificate, replay checked against each certified result; 4 in-process validators commit, restart and reject a forged result. | Define `R` (post-state root, transaction-outcome root, event root, scheduled committee); speculative execution chained on certified parents; apply reuses cached post-states; Kura stores blocks with CommitQCs; per-key safety-record files with the installation log and store id (spec §7.4). |
 | S4 | Cutover and deletion | Done (2026-09-29). irohad starts only Sumeragi (`node::prepare` then `start_on_network`); four `iroha3d` peers over P2P commit transactions, restart one and all, and replace a crashed leader (`integration_tests/tests/sumeragi.rs`). Application readers of committed blocks read Kura's certified frames through the certified-chain reader (spec §12.7, Appendix E, E57). `kagami localnet` passes `--sumeragi-assert-fresh-key` on a peer's first boot; the SoraFS provider-ingest and reputation finalized archives are captured by the native executor (`sumeragi::executor::FinalizedArchives`); bridge finality proofs, bundles and challenge-bound attestations are built from commit certificates (`iroha_core::sumeragi::finality`). The v2 runtime and everything that existed only for it are deleted (inventory below). Accelerated snapshot restoration moved to S9. | Swap at `SumeragiStartArgs::start` (`crates/iroha_core/src/sumeragi/mod.rs`, started from `crates/irohad/src/main.rs`); P2P control/bulk traffic classes; config surface reduced to spec §12.4; status endpoint from `Core::status`. Then delete the v2 runtime and everything that exists only for it (inventory below). |
@@ -38,6 +38,24 @@ the cutover.
 | S9 | Full state root in `R` | Implemented; current-candidate qualification and authenticated accelerated snapshot restoration remain open. E51 binds parent/post-execution World roots from an incremental LtHash16 accumulator and ordered event roots; publication incorporates deterministic tail writes and startup checks certified replay against a cold World capture. | Qualify exhaustive canonical World coverage, incremental/cold equivalence, rollback, event ordering and restart against certified results. Accelerated restoration additionally authenticates the complete restored State and retained native tip/history; a matching World root alone is insufficient. |
 
 S2 and S3 come before S4. S5 and S6 build on S4. S7 gates the release.
+
+### Active handoff completion gates
+
+The complete handoff goal is active as of 2026-09-30. Work starts with H1; independent
+implementation and simulator work may proceed in parallel. Each gate requires current-source
+evidence, and implementation coverage alone does not close its network or release acceptance.
+
+| Id | Outcome | Completion gate |
+| --- | --- | --- |
+| H1 | Production integration | Rebuild the daemon and Nexus harness; qualify proposal publication, repeated accepted paid settlements and disjoint lane gossip. Preserve the original funded execution through finality and restart; reclaim retired lane storage only when retained global history no longer needs it. |
+| H2 | Native dataspaces and AMX (S5/S6) | Independent dataspace State; production escrow and prepare/settle instructions; authenticated persisted record proofs and validator relayers; real multi-dataspace commit, abort, deadline and restart coverage. |
+| H3 | Staking and committee transitions (S8) | Complete authenticated lane offence attribution and original-pool resource accounting; prove E+2 selection, the full beacon preparation interval and paid 4→7→4 transitions with restart, rewards, exits and slashing. |
+| H4 | Authenticated snapshot restoration (S9) | Authenticate complete State, the exact certified native tip and retained history before restoration; reject substituted, incomplete and corrupt provenance and establish replay equivalence. |
+| H5 | Current-source qualification (S1/S2/S3) | All simulator scenarios at 10,000 seeds; every required mutation killed by its named test; whole-node signed RS16 loss/withholding, lane isolation/restart, workspace build/tests, strict applicable lint and rebuilt native SDK artifacts on the same candidate. |
+| H6 | Taira cutover (S7) | Authenticate Linux source/artifacts and native control authority; complete the fresh four-validator cutover through the canonical reset workflow and retain readiness, paid-write and restart evidence. |
+
+All six gates remain open. H6 uses the reset runbook's deployment authority and runtime-only
+signing inputs; local build or component results cannot stand in for live qualification.
 
 **Snapshot contract.** The node publishes signed local snapshot exports only after
 original genesis execution and certified journal replay finish and the native driver
@@ -142,7 +160,7 @@ the owner decides otherwise.
    timestamps are application payload and the core never checks clocks; no rule is defined
    yet, and it must not compare against local clocks.
 7. **Execution divergence.** Is a halt acceptable for launch? Default: `ApplyDiverged` halts
-   the instance; recovery needs a state-snapshot path that no goal covers yet.
+   the instance; authenticated State restoration is covered by S9 and remains open.
 8. **Payload availability.** Signed RS16 `PayloadManifest`/`PayloadChunk` availability
    is mandatory for the first release. The core integrates signed manifests, authenticated RS16 row acquisition and
    source-bound payload custody. Whole-node loss/withholding, committee geometry

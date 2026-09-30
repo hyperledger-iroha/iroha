@@ -696,6 +696,12 @@ impl CertifiedTestChain {
     /// this fixture does not claim transaction-driven ceremony or live-network qualification.
     /// The returned chain is ready to execute its mandatory attested boundary work at 10.
     pub fn npos_boundary_fixture() -> Self {
+        Self::npos_boundary_fixture_with_currency(true)
+    }
+
+    /// Build the same authentic prefix with or without the currency in signed genesis.
+    /// The absent case reaches the real boundary check without corrupting World indexes.
+    fn npos_boundary_fixture_with_currency(include_currency: bool) -> Self {
         use crate::beacon::{
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
@@ -722,16 +728,18 @@ impl CertifiedTestChain {
         policy.validate().expect("bounded ten-block fixture policy");
         // A boundary reconciles the signed network currency even when it retains
         // the incumbent committee without an eligible future candidate pool.
-        config.genesis_instructions.push(
-            Register::asset_definition(AssetDefinition::new(
-                policy.xor_asset_definition_id.clone(),
-                "Network XOR",
-                NumericSpec::fractional(9),
-                AssetBalancePolicy::Global,
-                None,
-            ))
-            .into(),
-        );
+        if include_currency {
+            config.genesis_instructions.push(
+                Register::asset_definition(AssetDefinition::new(
+                    policy.xor_asset_definition_id.clone(),
+                    "Network XOR",
+                    NumericSpec::fractional(9),
+                    AssetBalancePolicy::Global,
+                    None,
+                ))
+                .into(),
+            );
+        }
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 policy.epoch_length_blocks,
@@ -1883,7 +1891,6 @@ mod tests {
             asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
         };
 
-        let _logger = iroha_logger::test_logger();
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         let current = {
             let view = chain.state().view();
@@ -1930,7 +1937,7 @@ mod tests {
             pipeline::{BlockStatus, PipelineEventBox},
         };
 
-        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        let mut chain = CertifiedTestChain::npos_boundary_fixture_with_currency(false);
         let currency = chain
             .state()
             .view()
@@ -1938,9 +1945,16 @@ mod tests {
             .sumeragi_npos_parameters()
             .unwrap()
             .xor_asset_definition_id;
-        chain.setup_world_at(2_000, |transaction| {
-            transaction.world.asset_definitions.remove(currency);
-        });
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .asset_definitions()
+                .get(&currency)
+                .is_none(),
+            "negative fixture omits currency from its original signed genesis"
+        );
         let original = chain.committed(9);
         let proposal = chain.proposal(None, Vec::new());
         let error = match chain.begin_proposal(proposal, Default::default()) {

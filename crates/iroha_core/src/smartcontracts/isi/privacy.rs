@@ -7296,7 +7296,7 @@ mod tests {
         assert_atomic_rejection(&effect(successor.root()), &transaction);
         let (pq_statement, pq_witness) = pq_masp_fixture();
         let pq_input_commitment =
-            derive_pq_masp_note_commitment_v1(&pq_statement, &pq_witness.inputs[0].note)
+            derive_pq_masp_note_commitment_v1(&pq_statement, pq_witness.inputs()[0].note())
                 .expect("canonical PQ-MASP input commitment");
         let pq_snapshot = PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1 {

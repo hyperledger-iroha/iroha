@@ -74,7 +74,7 @@ fn stream_token_admission_binding_and_bounds_fail_closed() {
         ("admission_max_pending", 1_000_000u64),
         ("admission_max_tracked_tokens", 1_000_000),
         ("admission_reconcile_max_items", 1024),
-        ("admission_lease_ttl_ms", 300000),
+        ("admission_lease_ttl_ms", 300_000),
     ] {
         for value in [1, maximum] {
             parse_overlay(&base.replace(
@@ -338,9 +338,9 @@ fn signer_key_revision_is_the_only_token_generation_and_never_truncates() {
 #[test]
 fn custody_and_observer_time_bounds_are_finite_without_a_config_clock() {
     for (field, maximum) in [
-        ("attester.max_validity_ms", 86400000u64),
-        ("attester.max_anchor_age_ms", 86400000),
-        ("observer.max_state_age_ms", 300000),
+        ("attester.max_validity_ms", 86_400_000_u64),
+        ("attester.max_anchor_age_ms", 86_400_000),
+        ("observer.max_state_age_ms", 300_000),
     ] {
         for value in [1, maximum] {
             parse_overlay(&replaced_field(field, value.to_string()))
@@ -361,7 +361,7 @@ fn custody_and_observer_time_bounds_are_finite_without_a_config_clock() {
                 &format!("{SIGNER_PREFIX}.{field} must be within 1..="),
             );
         }
-        let start = if prefix == "attester" { 800000 } else { 900000 };
+        let start = if prefix == "attester" { 800_000 } else { 900_000 };
         for end in [start - 1, start] {
             rejects(
                 &replaced_field(&format!("{prefix}.active_until_unix_ms"), end.to_string()),

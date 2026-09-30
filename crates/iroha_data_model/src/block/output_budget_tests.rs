@@ -547,9 +547,9 @@ fn rejection_projection_refuses_success_foreign_origin_and_internal_rows() {
     }
 }
 
-fn assert_rejected_side_channel_poisoned(actual: ExecutionOutputV1) {
+fn assert_rejected_side_channel_poisoned(actual: &ExecutionOutputV1) {
     let terminal_bytes = output_bytes(&terminal(0)).unwrap();
-    let actual_bytes = output_bytes(&actual).unwrap();
+    let actual_bytes = output_bytes(actual).unwrap();
     // Test both a roomy reservation and a bounded fallback corridor: overflow
     // must not launder invalid applied receipts or callback completions.
     for row_bytes in [terminal_bytes.max(actual_bytes), terminal_bytes] {
@@ -617,7 +617,7 @@ fn network_rejection_refuses_batch_receipts_before_fitting_or_fallback() {
             let mut receipt = receipt.clone();
             receipt.status = status.clone();
             row.result.set_batch_transfer_outcomes(vec![receipt]);
-            assert_rejected_side_channel_poisoned(actual);
+            assert_rejected_side_channel_poisoned(&actual);
         }
     }
 }
@@ -642,7 +642,7 @@ fn network_rejection_refuses_success_and_failure_completions_before_fitting_or_f
                 trigger_id: "rolled-back-callback".parse().unwrap(),
                 outcome: outcome.clone(),
             });
-            assert_rejected_side_channel_poisoned(actual);
+            assert_rejected_side_channel_poisoned(&actual);
         }
     }
 }

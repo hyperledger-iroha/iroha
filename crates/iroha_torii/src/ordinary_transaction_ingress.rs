@@ -8,6 +8,81 @@ use iroha_data_model::isi::consensus_keys::{
     ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleCertificateV1,
 };
 
+/// A replay index is only a locator. Acknowledgment requires the exact carrier,
+/// including its authorization proof, from the original authenticated execution.
+/// No State read guard is retained across bounded native history authentication.
+///
+/// # Errors
+/// Indexed history is unavailable, exceeds the query budget, or changes during authentication.
+pub(super) fn contains_exact_committed_input(
+    state: &CoreState,
+    transaction: &TransactionEntrypoint,
+) -> Result<bool, Error> {
+    let unavailable = || Error::AppServiceUnavailable {
+        code: "transaction_replay_history_unavailable",
+        message: "committed transaction history could not be authenticated".to_owned(),
+    };
+    let transaction_hash = transaction.hash();
+    let capture = || -> Result<_, Error> {
+        let view = state.view();
+        let Some(height) = view.transactions.get(&transaction_hash) else {
+            return Ok(None);
+        };
+        let hash = view
+            .block_hashes()
+            .get(height.get() - 1)
+            .copied()
+            .ok_or_else(unavailable)?;
+        Ok(Some((height, hash)))
+    };
+    let Some((height, hash)) = capture()? else {
+        return Ok(false);
+    };
+    let work = routing::app_query_limits().max_fetch_size;
+    let mut exact = false;
+    let mut occurrences = 0;
+    let receipt = state
+        .read_committed_execution(
+            height,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        )
+        .map_err(|_| unavailable())?;
+    if receipt.block().hash() != hash {
+        return Err(unavailable());
+    }
+    for original in receipt.block().network_entrypoints() {
+        if original.hash() == transaction_hash {
+            occurrences += 1;
+            exact |= original == transaction;
+        }
+    }
+    if occurrences != 1 || capture()? != Some((height, hash)) {
+        return Err(unavailable());
+    }
+    Ok(exact)
+}
+
+/// Recheck routing after authenticating a retry's original pending or committed custody.
+pub(super) fn validate_retry_route(
+    app: &SharedAppState,
+    transaction: &iroha_core::tx::AcceptedTransaction<'_>,
+    expected: &RoutingPlan,
+) -> Result<RoutingDecision, Error> {
+    let current = app
+        .queue
+        .route_plan_with_state(transaction, app.state.as_ref())
+        .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
+    require_current_transaction_route(&current)?;
+    if &current != expected {
+        return Err(Error::AppServiceUnavailable {
+            code: "transaction_retry_route_changed",
+            message: "transaction route changed during retry authentication".to_owned(),
+        });
+    }
+    Ok(current.coordinator_route())
+}
+
 fn certificate(transaction: &SignedTransaction) -> Option<&ThresholdKeyLifecycleCertificateV1> {
     if transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
@@ -118,6 +193,11 @@ pub(super) async fn submit(
             authenticate(&worker_app, accepted.entrypoint(), &routing_plan).map_err(|message| {
                 Error::Query(iroha_data_model::ValidationFail::NotPermitted(message))
             })?;
+            if !worker_app.queue.is_expired(&accepted)
+                && contains_exact_committed_input(&worker_app.state, accepted.entrypoint())?
+            {
+                return validate_retry_route(&worker_app, &accepted, &routing_plan);
+            }
             routing::push_accepted_transaction_for_ingress_with_routing_plan(
                 worker_app.queue.clone(),
                 worker_app.state.clone(),

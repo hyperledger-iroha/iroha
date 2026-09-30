@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_empty_boundary_pasta_is_source_complete_and_subset_independent() {
+    fn actual_boundary_pasta_is_source_complete_and_subset_independent() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let view = chain.state().view();
@@ -712,7 +712,7 @@ mod tests {
         let certified = reader.certified(10).unwrap();
         let header = certified.header().unwrap();
         assert!(header.attest);
-        assert_eq!(header.payload_len, 0);
+        assert!(header.payload_len > 0, "the boundary carries actual work");
         let qc = certified.commit_qc().unwrap();
         let current = &certified.commitment().schedule.current;
         let config = super::super::schedule::ScheduledConfig {

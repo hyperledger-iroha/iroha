@@ -5,7 +5,7 @@
 //! needed to reproduce the terminal mint credit, while atomically debiting the
 //! online account and crediting the pooled reserve. Finality later attaches a
 //! proof of that already-committed receipt and the exact mint credit; attaching
-//! it is idempotent and never changes reserve totals. Redemption is one phase
+//! it is idempotent and never mutations reserve totals. Redemption is one phase
 //! because its hardware-bound terminal voucher exists before chain execution.
 
 use super::*;
@@ -2322,8 +2322,9 @@ impl KagemushaOperationFinalityV1 {
         trust_anchor: &KagemushaFinalityTrustAnchorV1,
     ) -> Result<(), KagemushaIsiValidationErrorV1> {
         require_chain_version(self.version)?;
-        if self.finality_proof.height() <= 1
-            || self.finality_proof.height() != trust_anchor.checkpoint.height()
+        let proof_height = self.finality_proof.height();
+        if proof_height <= 1
+            || proof_height != trust_anchor.checkpoint.height()
             || self.network_id != trust_anchor.network_id
             || self.reserve_receipt_witness.receipt.network_id != trust_anchor.network_id
         {
@@ -2332,10 +2333,10 @@ impl KagemushaOperationFinalityV1 {
             ));
         }
         let verifier = trust_anchor.verifier()?;
-        let verified = verifier
+        let decision = verifier
             .verify_same_decision(trust_anchor.checkpoint.tip(), &self.finality_proof)
             .map_err(|error| KagemushaIsiValidationErrorV1::InvalidFinality(error.to_string()))?;
-        let commitment = verified.execution();
+        let commitment = decision.execution();
         let expected_root = commitment.ordinary_writes_root;
         if !self.reserve_receipt_witness.verify(expected_root) {
             return Err(KagemushaIsiValidationErrorV1::InvalidFinality(
@@ -2905,8 +2906,7 @@ fn require_chain_version(version: u16) -> Result<(), KagemushaIsiValidationError
 }
 
 fn is_valid_mint_finality_committee_size(count: usize) -> bool {
-    count >= 4
-        && count <= KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1
+    (4..=KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1).contains(&count)
         && (count - 1).is_multiple_of(3)
 }
 
@@ -3525,13 +3525,13 @@ mod tests {
                 norito::json::from_str::<KagemushaMintFinalitySealMessageV1>(&changed).is_err()
             );
         }
-        let changes: [fn(&mut KagemushaMintFinalitySealMessageV1); 4] = [
+        let mutations: [fn(&mut KagemushaMintFinalitySealMessageV1); 4] = [
             |value| value.native_instance[0] ^= 1,
             |value| value.native_epoch_context[31] ^= 1,
             |value| value.native_block_hash[0] ^= 1,
             |value| value.native_result[0] ^= 1,
         ];
-        for change in changes {
+        for change in mutations {
             let mut changed = message;
             change(&mut changed);
             assert_ne!(

@@ -173,10 +173,9 @@ where
         .iter()
         .enumerate()
         .map(|(index, old)| {
-            if let Some(current) = &replacement {
-                if replacement_index.is_none_or(|selected| selected == index) {
-                    return current.clone();
-                }
+            if let Some(current) = &replacement
+                && replacement_index.is_none_or(|selected| selected == index) {
+                return current.clone();
             }
             exact_current_case::<T>(old)
         })

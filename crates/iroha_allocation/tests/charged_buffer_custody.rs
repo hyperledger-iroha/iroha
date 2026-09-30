@@ -95,7 +95,7 @@ fn prepaid_refusal_never_allocates_and_allocator_failure_retains_original_charge
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let enabled = OBSERVE_ALLOCATIONS
-            .try_with(|enabled| enabled.get())
+            .try_with(std::cell::Cell::get)
             .unwrap_or(false);
         if enabled {
             OBSERVED_COUNT.fetch_add(1, SeqCst);
@@ -492,6 +492,7 @@ fn appending_copy_elements_never_invokes_payload_clone() {
 
     #[expect(
         clippy::non_canonical_clone_impl,
+        clippy::expl_impl_clone_on_copy,
         reason = "prove the Copy append never invokes user Clone code"
     )]
     impl Clone for Entry {

@@ -8,7 +8,7 @@ use std::{
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex, PoisonError, Weak,
         atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll, Waker},
@@ -46,7 +46,7 @@ impl Default for ReleaseNotification {
         // Some platforms allocate native mutex storage on first acquisition.
         // Pay that construction cost here, before allocation-free observations
         // or a release that may itself be returning exhausted capacity.
-        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        drop(state.lock().unwrap_or_else(PoisonError::into_inner));
         Self { state }
     }
 }
@@ -63,19 +63,22 @@ impl ReleaseNotification {
     /// This does not admit native mutex internals or future waiter allocations.
     pub fn new_charged<Charge: Send + Sync + 'static>(charge: Charge) -> Self {
         let state = ErasedShared::new(Mutex::new(State::default()), charge);
-        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        drop(state.lock().unwrap_or_else(PoisonError::into_inner));
         Self { state }
     }
 
     /// Fallibly construct the same prepaid notification control allocation.
     /// Refusal returns its unchanged charge; no observation or signal was created.
     /// Native mutex internals and future waiter storage remain separate owners.
+    ///
+    /// # Errors
+    /// Returns the unchanged charge when the notification control allocation is refused.
     pub fn try_new_charged<Charge: Send + Sync + 'static>(
         charge: Charge,
     ) -> Result<Self, (Charge, crate::shared::ReservationError)> {
         let state = ErasedShared::try_new(Mutex::new(State::default()), charge)
             .map_err(|(_, charge, error)| (charge, error))?;
-        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        drop(state.lock().unwrap_or_else(PoisonError::into_inner));
         Ok(Self { state })
     }
 
@@ -84,7 +87,7 @@ impl ReleaseNotification {
         let sequence = self
             .state
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .sequence;
         ReleaseWait {
             state: self.state.clone(),
@@ -181,7 +184,7 @@ impl ReleaseNotification {
         impl WakeCohort {
             fn drain(&mut self) {
                 for waiter in self.waiters.by_ref().filter_map(|waiter| waiter.upgrade()) {
-                    let waker = waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+                    let waker = waiter.lock().unwrap_or_else(PoisonError::into_inner).take();
                     // The registration guard is gone before either the wake
                     // callback or its consumed waker's destructor can run.
                     if let Some(waker) = waker {
@@ -200,7 +203,7 @@ impl ReleaseNotification {
             }
         }
         let waiters = {
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             // Exhaustion makes observations immediately ready, never silently
             // aliases an old waiter. This counter is only a wake hint.
             state.sequence = state.sequence.saturating_add(1);
@@ -243,7 +246,7 @@ impl ReleaseWait {
     pub fn is_poisoned(&self) -> bool {
         self.state
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .poisoned
     }
 
@@ -277,14 +280,14 @@ impl Future for ReleaseFuture {
             .observation
             .state
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(PoisonError::into_inner);
         if state.sequence != this.observation.sequence || state.sequence == u64::MAX {
             drop(state);
             this.registration = None;
             return Poll::Ready(());
         }
         let retired = if let Some(registration) = &this.registration {
-            let mut waker = registration.lock().unwrap_or_else(|p| p.into_inner());
+            let mut waker = registration.lock().unwrap_or_else(PoisonError::into_inner);
             if waker.as_ref().is_none_or(|old| !old.will_wake(cx.waker())) {
                 waker.replace(replacement)
             } else {
@@ -295,7 +298,7 @@ impl Future for ReleaseFuture {
             // Initialize native mutex storage before publishing this waiter.
             // The first release must not allocate in order to take its waker;
             // dropping this fresh guard invokes no waker callback.
-            drop(registration.lock().unwrap_or_else(|p| p.into_inner()));
+            drop(registration.lock().unwrap_or_else(PoisonError::into_inner));
             state.waiters.retain(|waiter| waiter.strong_count() != 0);
             state.waiters.push(Arc::downgrade(&registration));
             this.registration = Some(registration);
@@ -317,7 +320,7 @@ impl Drop for ReleaseFuture {
             .observation
             .state
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(PoisonError::into_inner);
         state
             .waiters
             .retain(|waiter| !waiter.ptr_eq(&weak) && waiter.strong_count() != 0);
@@ -374,6 +377,9 @@ impl DeferredRelease {
     /// Retain this actual release in a batch belonging to the same original source.
     /// A foreign batch returns the unchanged notice. Success coalesces release and
     /// poison without waking, allocating, or retiring any protected payload.
+    ///
+    /// # Errors
+    /// Returns this unchanged notice when the batch belongs to another notification source.
     pub fn try_merge_into(mut self, batch: &mut DeferredReleaseBatch) -> Result<(), Self> {
         if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
             return Err(self);
@@ -419,14 +425,14 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// The callback must unlock the physical owner on success and unwind;
     /// returned values may retain cleanup but never the physical guard.
     /// Acquisition poison is recorded before any later cleanup can unwind.
+    ///
+    /// # Errors
+    /// Returns the unchanged guard if the batch belongs to another notification source.
     pub fn try_release_into<R>(
         mut self,
         batch: &mut DeferredReleaseBatch,
         release: impl FnOnce(T) -> R,
     ) -> Result<R, Self> {
-        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
-            return Err(self);
-        }
         struct Record<'a> {
             batch: &'a mut DeferredReleaseBatch,
             poison: PoisonPolicy<'a>,
@@ -436,6 +442,9 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                 self.batch.released = true;
                 self.batch.poisoned |= self.poison.observe();
             }
+        }
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
         }
         // On callback unwind the original physical owner drops before this
         // record. The batch remains in its caller's aggregate throughout.
@@ -475,15 +484,15 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// A foreign batch returns the unchanged guard without invoking either callback.
     /// `release` must unlock on success and unwind; `observe_poison` must inspect
     /// only the corresponding native mutex and cannot invoke user code.
+    ///
+    /// # Errors
+    /// Returns the unchanged guard if the batch belongs to another notification source.
     pub fn try_release_into_observed<R>(
         mut self,
         batch: &mut DeferredReleaseBatch,
         release: impl FnOnce(T) -> R,
         observe_poison: impl Fn() -> bool,
     ) -> Result<R, Self> {
-        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
-            return Err(self);
-        }
         struct Record<'a, F: Fn() -> bool> {
             batch: &'a mut DeferredReleaseBatch,
             observe_poison: F,
@@ -493,6 +502,9 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                 self.batch.released = true;
                 self.batch.poisoned |= (self.observe_poison)();
             }
+        }
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
         }
         let record = Record {
             batch,
@@ -513,15 +525,16 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// destroyed its physical guard. Completed payloads and unused charges must
     /// already belong to the caller's acquisition slot before another conversion.
     /// `observe_poison` inspects only this original native mutex and cannot panic.
+    ///
+    /// # Errors
+    /// The outer error returns the unchanged guard for a foreign batch. The inner error
+    /// returns the original guard and the callback's refusal without recording a release.
     pub fn try_map_preserving_release_into<R, E>(
         mut self,
         batch: &mut DeferredReleaseBatch,
         consume: impl FnOnce(T) -> Result<R, (T, E)>,
         observe_poison: impl Fn() -> bool,
     ) -> Result<Result<ReleaseGuard<'owner, R>, (Self, E)>, Self> {
-        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
-            return Err(self);
-        }
         struct Record<'a, F: Fn() -> bool> {
             batch: &'a mut DeferredReleaseBatch,
             observe_poison: F,
@@ -534,6 +547,9 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                     self.batch.poisoned |= (self.observe_poison)();
                 }
             }
+        }
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
         }
         let mut record = Record {
             batch,
@@ -565,6 +581,9 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// Attempt a phase change while retaining the original guard on refusal.
     /// Neither success nor refusal emits a release; the returned owner remains
     /// responsible for the same physical lock. Unwind releases before signaling.
+    ///
+    /// # Errors
+    /// Returns the original guard and the callback's error when the phase change is refused.
     pub fn try_map_preserving_release<R, E>(
         mut self,
         consume: impl FnOnce(T) -> Result<R, (T, E)>,
@@ -682,6 +701,9 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// On error or unwind, `consume` must release both physical guards before
     /// returning or unwinding; neither notification runs until that completes.
     /// Freeze both physical poison verdicts before any wake callback can panic.
+    ///
+    /// # Errors
+    /// Returns the callback's error after both physical guards are released and notified.
     pub fn try_map_pair_preserving_release<'other, S, A, B, E>(
         mut self,
         mut other: ReleaseGuard<'other, S>,
@@ -733,21 +755,21 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         let first = self.inner.take().expect("owned first release guard");
         let second = other.inner.take().expect("owned second release guard");
         // Only empty wrappers remain; the pair owns both original signals.
-        let _first = std::mem::ManuallyDrop::new(self);
-        let _second = std::mem::ManuallyDrop::new(other);
+        let first_owner = std::mem::ManuallyDrop::new(self);
+        let second_owner = std::mem::ManuallyDrop::new(other);
         match consume(first, second) {
             Ok((first, second)) => {
                 signals.armed = false;
                 Ok((
                     ReleaseGuard {
                         inner: Some(first),
-                        notification: _first.notification,
-                        poison: _first.poison,
+                        notification: first_owner.notification,
+                        poison: first_owner.poison,
                     },
                     ReleaseGuard {
                         inner: Some(second),
-                        notification: _second.notification,
-                        poison: _second.poison,
+                        notification: second_owner.notification,
+                        poison: second_owner.poison,
                     },
                 ))
             }

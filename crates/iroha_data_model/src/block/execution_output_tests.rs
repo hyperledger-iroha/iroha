@@ -241,26 +241,26 @@ fn invocation_identity_commits_every_prebody_field_and_distinct_domains() {
             &norito::encode_canonical(&original).unwrap()
         ])
     );
-    let mut changes = Vec::new();
+    let mut mutations = Vec::new();
     let mut changed = original.clone();
     changed.candidate_index += 1;
-    changes.push(changed);
+    mutations.push(changed);
     let mut changed = original.clone();
     changed.event = PipelineEventPositionV1::Network(0);
-    changes.push(changed);
+    mutations.push(changed);
     let mut changed = original.clone();
     changed.trigger.trigger_id = "other-root".parse().unwrap();
-    changes.push(changed);
+    mutations.push(changed);
     let mut changed = original.clone();
     changed.trigger.registered_at_height += 1;
-    changes.push(changed);
+    mutations.push(changed);
     let mut changed = original.clone();
     changed.trigger.action_hash = Hash::new(b"other action");
-    changes.push(changed);
+    mutations.push(changed);
     // Authority is committed inside the actual State-owned action_hash. The Core
     // helper's rekey regression checks that preimage and both invocation calls;
     // there is no independent model authority claim to mutate here.
-    for changed in changes {
+    for changed in mutations {
         assert_ne!(changed.execution_call_hash(proposal()).unwrap(), hash);
     }
     assert_ne!(
@@ -372,11 +372,11 @@ fn execution_output_preserves_sealed_outer_source_and_inner_call_identity() {
     assert_ne!(first.hash(), second.hash());
     assert_eq!(
         network()
-            .execution_call_hash(proposal(), &[first.clone()])
+            .execution_call_hash(proposal(), std::slice::from_ref(&first))
             .unwrap(),
         Hash::from(inner)
     );
-    validate_execution_outputs_v1(&[network()], proposal(), 8, &[first.clone()]).unwrap();
+    validate_execution_outputs_v1(&[network()], proposal(), 8, std::slice::from_ref(&first)).unwrap();
     let mut second_row = network();
     if let ExecutionOutputV1::Network(NetworkExecutionOutputV1 { input_index, .. }) =
         &mut second_row
@@ -497,21 +497,21 @@ fn rejected_network_output_cannot_retain_rolled_back_callback_completions() {
     };
     output.completions.push(completion(&trigger()));
     row.validate_structure(8, &inputs).unwrap();
-    validate_execution_outputs_v1(&[row.clone()], proposal(), 8, &inputs).unwrap();
+    validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).unwrap();
 
     let ExecutionOutputV1::Network(output) = &mut row else {
         unreachable!("Network fixture");
     };
     output.result = rejected();
     assert!(row.validate_structure(8, &inputs).is_err());
-    assert!(validate_execution_outputs_v1(&[row.clone()], proposal(), 8, &inputs).is_err());
+    assert!(validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err());
 
     let ExecutionOutputV1::Network(output) = &mut row else {
         unreachable!("Network fixture");
     };
     output.completions[0].outcome = TriggerCompletedOutcome::Failure("rolled back".into());
     assert!(row.validate_structure(8, &inputs).is_err());
-    assert!(validate_execution_outputs_v1(&[row.clone()], proposal(), 8, &inputs).is_err());
+    assert!(validate_execution_outputs_v1(std::slice::from_ref(&row), proposal(), 8, &inputs).is_err());
 
     let ExecutionOutputV1::Network(output) = &mut row else {
         unreachable!("Network fixture");
@@ -547,7 +547,7 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
             completions[0].outcome =
                 TriggerCompletedOutcome::Failure("whole invocation failed".into());
             failed.validate_structure(8, &[]).unwrap();
-            validate_execution_outputs_v1(&[failed.clone()], proposal(), 8, &[]).unwrap();
+            validate_execution_outputs_v1(std::slice::from_ref(&failed), proposal(), 8, &[]).unwrap();
 
             for mutation in 0..6 {
                 let mut invalid = failed.clone();
@@ -778,7 +778,7 @@ fn pipeline_network_event_requires_actual_signed_transaction_source_kind() {
         payload,
         key.private_key(),
     ));
-    validate_execution_outputs_v1(&[network(), pipeline()], proposal(), 8, &[sealed.clone()])
+    validate_execution_outputs_v1(&[network(), pipeline()], proposal(), 8, std::slice::from_ref(&sealed))
         .unwrap();
     let mut event = pipeline();
     if let ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) = &mut event {
@@ -822,7 +822,7 @@ fn execution_inputs_borrow_slices_arrays_vectors_and_block_sources() {
         unreachable!()
     };
     builder.push_transaction(signed);
-    let block = builder.build(Default::default());
+    let block = builder.build(std::collections::BTreeSet::default());
     check(&block, block.network_entrypoint_at(0).unwrap());
 }
 

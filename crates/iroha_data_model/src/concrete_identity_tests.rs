@@ -250,10 +250,10 @@ fn concrete_header_inputs_match_capture() {
             .expect("decode captured context");
     let header = header();
     assert_eq!(header, context.curr_block);
-    assert_fixed_confidential_features(header);
+    assert_fixed_confidential_features(&header);
 }
 
-fn assert_fixed_confidential_features(header: BlockHeader) {
+fn assert_fixed_confidential_features(header: &BlockHeader) {
     let digest = header
         .confidential_features()
         .expect("fixed capture digest");

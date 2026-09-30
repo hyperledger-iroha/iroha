@@ -5,11 +5,11 @@ use std::alloc::{GlobalAlloc, System};
 use std::cell::Cell;
 
 #[derive(Clone, Copy)]
-pub(crate) struct Record {
-    pub(crate) pointer: usize,
-    pub(crate) layout: Layout,
-    pub(crate) freed: bool,
-    pub(crate) refunded: bool,
+pub struct Record {
+    pub pointer: usize,
+    pub layout: Layout,
+    pub freed: bool,
+    pub refunded: bool,
 }
 
 thread_local! {
@@ -121,7 +121,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
 // Intentionally neither Clone nor Default. Its size also changes real padding.
-pub(crate) struct Charge {
+pub struct Charge {
     id: usize,
     layout: Layout,
     _storage: [u8; 129],
@@ -143,11 +143,11 @@ impl Drop for Charge {
     }
 }
 
-pub(crate) struct Prepaid {
-    pub(crate) next: usize,
+pub struct Prepaid {
+    pub next: usize,
     // A finite admitted count suffices for this allocator-observation fixture;
     // production must prepay the complete exact layout sum before mutation.
-    pub(crate) remaining: usize,
+    pub remaining: usize,
 }
 
 // This fixture observes node storage only. Nested funded payloads use the
@@ -155,7 +155,7 @@ pub(crate) struct Prepaid {
 
 impl Prepaid {
     /// Observe one original admitted node or tracking-buffer allocation.
-    pub(crate) fn take_allocation_charge(&mut self, layout: Layout) -> Charge {
+    pub fn take_allocation_charge(&mut self, layout: Layout) -> Charge {
         EXPECTED_BATCH.with(|pending| assert!(pending.get().iter().all(Option::is_none)));
         self.take_charge(layout, false)
     }
@@ -199,7 +199,7 @@ impl Prepaid {
     }
 }
 
-pub(crate) fn prepaid() -> Prepaid {
+pub fn prepaid() -> Prepaid {
     RECORDS.with(|records| records.set([None; 128]));
     EXPECTED.with(|expected| expected.set(None));
     EXPECTED_BATCH.with(|pending| pending.set([None; 8]));
@@ -209,11 +209,11 @@ pub(crate) fn prepaid() -> Prepaid {
     }
 }
 
-pub(crate) fn record(id: usize) -> Record {
+pub fn record(id: usize) -> Record {
     RECORDS.with(|records| records.get()[id].expect("original allocation record"))
 }
 
-pub(crate) fn all_refunded(funding: &Prepaid) {
+pub fn all_refunded(funding: &Prepaid) {
     assert!(EXPECTED.with(Cell::get).is_none());
     EXPECTED_BATCH.with(|pending| assert!(pending.get().iter().all(Option::is_none)));
     for id in 0..funding.next {
@@ -222,7 +222,7 @@ pub(crate) fn all_refunded(funding: &Prepaid) {
 }
 
 /// Check a real operation without leaving allocator observation armed on panic.
-pub(crate) fn without_allocations<T>(action: impl FnOnce() -> T) -> T {
+pub fn without_allocations<T>(action: impl FnOnce() -> T) -> T {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -243,7 +243,7 @@ pub(crate) fn without_allocations<T>(action: impl FnOnce() -> T) -> T {
 
 /// Refuse exactly one matching allocation using the existing test allocator.
 /// Unrelated allocations and other test threads retain their original behavior.
-pub(crate) fn refusing_allocation<T>(layout: Layout, action: impl FnOnce() -> T) -> T {
+pub fn refusing_allocation<T>(layout: Layout, action: impl FnOnce() -> T) -> T {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {

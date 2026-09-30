@@ -1296,7 +1296,7 @@ impl World {
                 instance: body.header().instance,
                 height: body.header().height,
                 block_hash: body.hash(&self.hasher),
-                index: index as u32,
+                index: u32::try_from(index).expect("protocol-bounded row index"),
                 bytes,
             }));
             for peer in peers {
@@ -1485,7 +1485,10 @@ impl World {
         let Ok(bytes) = msg.encode() else {
             return;
         };
-        let Ok(mut decoded) = WireMessage::decode(&bytes, self.net.frame_limit as usize) else {
+        let Ok(mut decoded) = WireMessage::decode(
+            &bytes,
+            usize::try_from(self.net.frame_limit).unwrap_or(usize::MAX),
+        ) else {
             return;
         };
         if decoded.admit_owned_bytes(&self.replicas[r].budget).is_err() {
@@ -1630,7 +1633,7 @@ impl World {
             .filter(|res| *res == qc.result);
         let local = cached.or_else(|| {
             let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
-                divergent_exec(&tip_result, &block.payload().as_slice(), &bh)
+                divergent_exec(&tip_result, block.payload().as_slice(), &bh)
             } else {
                 block_exec(
                     &tip_result,
@@ -1664,7 +1667,7 @@ impl World {
         rep.bodies.retain(|_, b| b.header().height > height);
         rep.exec.cache.retain(|_, (h, _)| *h >= height);
         rep.exec.executed.prune_through(height);
-        for (id, _) in decode_txs(&block.payload().as_slice()) {
+        for (id, _) in decode_txs(block.payload().as_slice()) {
             rep.txs.remove(&id);
         }
         let config = self.instances[inst].applied_config(height);
@@ -1734,7 +1737,7 @@ impl World {
         } else if profile.reject_nonempty && !block.payload().as_slice().is_empty() {
             ExecOutcome::Invalid
         } else if profile.divergent && !block.payload().as_slice().is_empty() {
-            divergent_exec(parent, &block.payload().as_slice(), bh)
+            divergent_exec(parent, block.payload().as_slice(), bh)
         } else {
             block_exec(
                 parent,
@@ -1877,7 +1880,7 @@ impl World {
             return;
         };
         let rep = &mut self.replicas[r];
-        for (id, poison) in decode_txs(&block.payload().as_slice()) {
+        for (id, poison) in decode_txs(block.payload().as_slice()) {
             if poison {
                 rep.quarantine.insert(id);
                 rep.txs.remove(&id);
@@ -2117,7 +2120,7 @@ impl World {
                 } else {
                     let profile = self.machines[m].profile;
                     let outcome = if profile.divergent && !block.payload().as_slice().is_empty() {
-                        divergent_exec(&tip_result, &block.payload().as_slice(), &qc.block_hash)
+                        divergent_exec(&tip_result, block.payload().as_slice(), &qc.block_hash)
                     } else {
                         block_exec(
                             &tip_result,
@@ -2147,7 +2150,7 @@ impl World {
                 rep.bodies.retain(|_, b| b.header().height > height);
                 rep.exec.cache.retain(|_, (h, _)| *h >= height);
                 rep.exec.executed.prune_through(height);
-                for (id, _) in decode_txs(&block.payload().as_slice()) {
+                for (id, _) in decode_txs(block.payload().as_slice()) {
                     rep.txs.remove(&id);
                 }
                 let config = self.instances[inst].applied_config(height);
