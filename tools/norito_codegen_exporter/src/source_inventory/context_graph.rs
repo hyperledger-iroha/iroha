@@ -211,13 +211,10 @@ impl Builder {
         }
         let path = self.resolve(Path::new(""), &name)?;
         let metadata = fs::symlink_metadata(self.root.join(&path))?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            bail!("source must be a bounded regular file: {name}");
+        if !metadata.is_file() {
+            bail!("source must be a regular file: {name}");
         }
         let source = fs::read_to_string(self.root.join(path))?;
-        if source.len() as u64 > MAX_SOURCE_BYTES {
-            bail!("source grew beyond the byte limit: {name}");
-        }
         let syntax = syn::parse_file(&source).ok();
         let record = inspect_source(&name, &source)?;
         let loaded = Rc::new(Loaded {

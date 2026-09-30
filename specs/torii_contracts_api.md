@@ -7,11 +7,11 @@ the standard transaction pipeline.
 
 ## Endpoints
 
-- GET `/v1/contracts/code/{code_hash}`
-  - Fetches the canonical on-chain `ContractManifest` by its content-addressed
-    `code_hash`.
-- GET `/v1/contracts/code-bytes/{code_hash}`
-  - Fetches the registered bytecode as `{ "code_b64": "…" }`.
+- GET `/v1/contracts/artifacts/{dataspace_id}/{code_hash}`
+  - Fetches the canonical on-chain `ContractManifest` for the exact dataspace
+    and content hash, with mandatory `network_id` and `artifact_id` bindings.
+- GET `/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes`
+  - Fetches the registered bytecode as `{ "network_id": …, "artifact_id": …, "code_b64": "…" }`.
 - POST `/v1/contracts/aliases/resolve`
   - Resolves an active contract alias using canonical account-signed request
     headers and returns the exact consensus binding and contract subject.
@@ -110,6 +110,8 @@ remain required keys with explicit nulls. Missing or unknown keys are invalid.
 
 ```jsonc
 {
+  "network_id": "hash:<exact-genesis-hash>#<checksum>",
+  "artifact_id": { "dataspace_id": 18446744073709551615, "code_hash": "hash:0123…CDEF#ABCD" },
   "code_hash": "0123…cdef",
   "abi_hash": "89ab…7654",
   "manifest": {
@@ -141,17 +143,13 @@ All DTOs derive both `JsonSerialize` and `NoritoSerialize`. Clients may submit e
 
 ## Examples
 
-Fetch a manifest by hash:
-
-```bash
-curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
-```
-
-Fetch the registered code bytes:
-
-```bash
-curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
-```
+Artifact reads use account-signed SDK methods with a typed `ContractArtifactId`.
+The dataspace path component is canonical decimal `u64`; the hash is 64 lowercase
+hex digits. The caller must retain the expected network and verify both response
+identity fields before consuming bytes or manifests. Unsigned reads are rejected,
+and current dataspace read grants are checked on every request. Private roots also
+require the generated owner listener token and reject a foreign dataspace even if
+the caller has another grant. No hash-only route is registered.
 
 Resolve the currently active alias using the canonical account-signature
 headers produced by an SDK client:

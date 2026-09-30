@@ -37,6 +37,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
 use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
+use iroha_data_model::smart_contract::ContractArtifactId;
 use iroha_data_model::{
     IntoKeyValue,
     account::{
@@ -1111,6 +1112,7 @@ macro_rules! with_world_overlay_fields {
             consensus_keys_by_pk,
             sumeragi_lanes,
             sumeragi_amx,
+            private_dataspaces,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -3203,66 +3205,53 @@ pub struct SmartContractCodeUploadKey {
     /// Account that owns and may finalize or cancel the upload.
     pub authority: AccountId,
     /// Declared hash of the complete contract artifact.
-    pub code_hash: Hash,
+    pub artifact_id: ContractArtifactId,
 }
 impl SmartContractCodeUploadKey {
     /// Construct an upload key from its owner and artifact hash.
     #[must_use]
-    pub fn new(authority: AccountId, code_hash: Hash) -> Self {
+    pub fn new(authority: AccountId, artifact_id: ContractArtifactId) -> Self {
         Self {
             authority,
-            code_hash,
+            artifact_id,
         }
     }
     pub(crate) fn authority_range(authority: &AccountId) -> std::ops::RangeInclusive<Self> {
-        Self::new(authority.clone(), Hash::prehashed([0; Hash::LENGTH]))
-            ..=Self::new(authority.clone(), Hash::prehashed([u8::MAX; Hash::LENGTH]))
+        Self::new(
+            authority.clone(),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                Hash::prehashed([0; Hash::LENGTH]),
+            ),
+        )
+            ..=Self::new(
+                authority.clone(),
+                ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                    Hash::prehashed([u8::MAX; Hash::LENGTH]),
+                ),
+            )
     }
 }
 impl norito::json::JsonKeyCodec for SmartContractCodeUploadKey {
     fn encode_json_key(&self, out: &mut String) {
         let key = format!(
-            "{}|{}",
+            "{}|{}|{}",
             self.authority,
-            hex::encode(self.code_hash.as_ref())
+            self.artifact_id.dataspace_id.as_u64(),
+            hex::encode(self.artifact_id.code_hash.as_ref())
         );
         json::write_json_string(&key, out);
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        let mut parts = encoded.split('|');
-        let authority = parts
-            .next()
-            .ok_or_else(|| json::Error::Message("expected contract upload key authority".into()))?;
-        let code_hash = parts
-            .next()
-            .ok_or_else(|| json::Error::Message("expected contract upload key code hash".into()))?;
-        if parts.next().is_some() {
-            return Err(json::Error::Message(
-                "contract upload key has trailing components".into(),
-            ));
-        }
-        let authority = AccountId::parse_encoded(authority).map_err(|error| {
-            json::Error::Message(format!("invalid contract upload key authority: {error}"))
+        let (authority, artifact) = encoded.split_once('|').ok_or_else(|| {
+            json::Error::Message("expected authority|dataspace|artifact-hash upload key".into())
         })?;
-        let code_hash = decode_contract_upload_key_hash(code_hash)?;
-        Ok(Self {
-            authority,
-            code_hash,
-        })
+        let authority = AccountId::parse_encoded(authority)
+            .map_err(|error| json::Error::Message(format!("invalid upload owner: {error}")))?;
+        let artifact_id = ContractArtifactId::decode_json_key(artifact)?;
+        Ok(Self::new(authority, artifact_id))
     }
-}
-fn decode_contract_upload_key_hash(encoded: &str) -> Result<Hash, json::Error> {
-    let bytes = hex::decode(encoded).map_err(|error| {
-        json::Error::Message(format!("invalid contract upload key hash: {error}"))
-    })?;
-    let bytes: [u8; Hash::LENGTH] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        json::Error::Message(format!(
-            "invalid contract upload key hash length: expected {}, got {}",
-            Hash::LENGTH,
-            bytes.len()
-        ))
-    })?;
-    Ok(Hash::prehashed(bytes))
 }
 /// Consensus key identifying one chunk within an authority-owned pending upload.
 #[derive(norito::NoritoSchema)]
@@ -3292,45 +3281,28 @@ impl SmartContractCodeUploadChunkKey {
 impl norito::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     fn encode_json_key(&self, out: &mut String) {
         let key = format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{}",
             self.upload.authority,
-            hex::encode(self.upload.code_hash.as_ref()),
+            self.upload.artifact_id.dataspace_id.as_u64(),
+            hex::encode(self.upload.artifact_id.code_hash.as_ref()),
             self.chunk_index
         );
         json::write_json_string(&key, out);
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        let mut parts = encoded.split('|');
-        let authority = parts.next().ok_or_else(|| {
-            json::Error::Message("expected contract upload chunk key authority".into())
+        let (upload, raw_index) = encoded.rsplit_once('|').ok_or_else(|| {
+            json::Error::Message("expected scoped upload key and chunk index".into())
         })?;
-        let code_hash = parts.next().ok_or_else(|| {
-            json::Error::Message("expected contract upload chunk key code hash".into())
+        let upload = SmartContractCodeUploadKey::decode_json_key(upload)?;
+        let chunk_index = raw_index.parse::<u32>().map_err(|error| {
+            json::Error::Message(format!("invalid upload chunk index: {error}"))
         })?;
-        let chunk_index = parts.next().ok_or_else(|| {
-            json::Error::Message("expected contract upload chunk key index".into())
-        })?;
-        if parts.next().is_some() {
+        if chunk_index.to_string() != raw_index {
             return Err(json::Error::Message(
-                "contract upload chunk key has trailing components".into(),
+                "upload chunk index must be canonical decimal".into(),
             ));
         }
-        let authority = AccountId::parse_encoded(authority).map_err(|error| {
-            json::Error::Message(format!(
-                "invalid contract upload chunk key authority: {error}"
-            ))
-        })?;
-        let code_hash = decode_contract_upload_key_hash(code_hash)?;
-        let chunk_index = chunk_index.parse::<u32>().map_err(|error| {
-            json::Error::Message(format!("invalid contract upload chunk key index: {error}"))
-        })?;
-        Ok(Self {
-            upload: SmartContractCodeUploadKey {
-                authority,
-                code_hash,
-            },
-            chunk_index,
-        })
+        Ok(Self::new(upload, chunk_index))
     }
 }
 /// Immutable shape descriptor for a pending contract-code upload.
@@ -4014,6 +3986,8 @@ pub struct WorldData {
     pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Parent-authorized independent private roots and their contiguous certified cursors.
+    pub(crate) private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4125,11 +4099,11 @@ pub struct WorldData {
     pub(crate) merge_global_state_root: Cell<Option<Hash>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: Storage<Hash, EvidenceRecord>,
-    /// Registry of contract manifests by code hash (on-chain).
+    /// Registry of contract manifests by exact dataspace artifact identity (on-chain).
     pub(crate) contract_manifests:
-        Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
-    /// On-chain storage of compiled contract code bytes keyed by code hash.
-    pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
+        Storage<ContractArtifactId, iroha_data_model::smart_contract::manifest::ContractManifest>,
+    /// On-chain storage of compiled contract code bytes keyed by dataspace artifact identity.
+    pub(crate) contract_code: Storage<ContractArtifactId, Vec<u8>>,
     /// Pending contract upload descriptors keyed by owner and complete artifact hash.
     pub(crate) contract_code_uploads:
         Storage<SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
@@ -4687,6 +4661,8 @@ pub struct WorldBlockFields<'world> {
         CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Parent-authorized independent private roots and their contiguous certified cursors.
+    pub(crate) private_dataspaces: CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -5096,11 +5072,11 @@ pub struct WorldBlockFields<'world> {
     /// Contract manifests
     pub(crate) contract_manifests: StorageField<
         'world,
-        iroha_crypto::Hash,
+        ContractArtifactId,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
-    /// Contract code bytes keyed by hash
-    pub(crate) contract_code: StorageField<'world, iroha_crypto::Hash, Vec<u8>>,
+    /// Contract code bytes keyed by dataspace artifact identity
+    pub(crate) contract_code: StorageField<'world, ContractArtifactId, Vec<u8>>,
     /// Pending contract upload descriptors.
     pub(crate) contract_code_uploads:
         StorageField<'world, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
@@ -6005,6 +5981,7 @@ impl WorldBlock<'_> {
             merge_global_state_root,
             sumeragi_lanes,
             sumeragi_amx,
+            private_dataspaces,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
@@ -6357,6 +6334,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Parent-authorized independent private roots and their contiguous certified cursors.
+    pub(crate) private_dataspaces: CellTransaction<'block, 'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6754,10 +6733,10 @@ pub struct WorldTransaction<'block, 'world> {
     /// Contract manifests
     pub(crate) contract_manifests: StorageTransaction<
         'block,
-        iroha_crypto::Hash,
+        ContractArtifactId,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
-    pub(crate) contract_code: StorageTransaction<'block, iroha_crypto::Hash, Vec<u8>>,
+    pub(crate) contract_code: StorageTransaction<'block, ContractArtifactId, Vec<u8>>,
     pub(crate) contract_code_uploads:
         StorageTransaction<'block, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
     pub(crate) contract_code_upload_chunks:
@@ -7470,7 +7449,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        iroha_crypto::Hash,
+        ContractArtifactId,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     > {
         &mut self.contract_manifests
@@ -8876,6 +8855,8 @@ pub struct WorldView<'world> {
         CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Parent-authorized independent private roots and their contiguous certified cursors.
+    pub(crate) private_dataspaces: CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -9084,10 +9065,10 @@ pub struct WorldView<'world> {
     /// Contract manifests
     pub(crate) contract_manifests: StorageView<
         'world,
-        iroha_crypto::Hash,
+        ContractArtifactId,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
-    pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
+    pub(crate) contract_code: StorageView<'world, ContractArtifactId, Vec<u8>>,
     pub(crate) contract_code_uploads:
         StorageView<'world, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
     pub(crate) contract_code_upload_chunks:
@@ -12046,6 +12027,14 @@ pub struct State {
     pub(crate) canonical_runtime: Cell<SnapshotNexusRuntime>,
     /// Original native execution identity, atomically published outside World.
     pub(crate) native_execution_tip: native_execution_tip::TipCell,
+    /// Current original certified pre-tail cut; absent after decoded snapshot restoration.
+    native_world_cut: parking_lot::Mutex<
+        Option<
+            iroha_allocation::ChargedShared<
+                world_projection::world_state_accumulator::world_state_cut::CutCapsule,
+            >,
+        >,
+    >,
     /// Whether the effective Nexus runtime catalog came from the loaded WSV snapshot.
     nexus_runtime_restored_from_snapshot: bool,
     /// Last block height where Nexus storage budget enforcement ran.
@@ -12427,6 +12416,8 @@ struct PendingPublicLaneSlashObservability {
 /// The original fields stay in one retirement owner throughout execution.
 pub struct StateBlock<'state> {
     fields: Option<StateBlockFields<'state>>,
+    world_cut_capture:
+        Option<world_projection::world_state_accumulator::world_state_cut::JournalCapture>,
     publication: Option<publication::StatePublication<'state>>,
 }
 
@@ -12682,6 +12673,7 @@ impl<'state> StateBlock<'state> {
     fn from_fields(fields: StateBlockFields<'state>) -> Self {
         Self {
             fields: Some(fields),
+            world_cut_capture: None,
             publication: None,
         }
     }
@@ -12725,6 +12717,7 @@ impl Drop for StateBlock<'_> {
                 hashes.with_deferred_refund_notifications(|_| {
                     mv::BlockRetirement::release_writers(self);
                     // Every original sibling unlocks before payload refunds or notices.
+                    drop(self.world_cut_capture.take());
                     drop(self.fields.take());
                     drop(self.publication.take());
                 })
@@ -13945,6 +13938,8 @@ pub struct StateTransaction<'block, 'state> {
     pub tx_call_hash: Option<iroha_crypto::Hash>,
     /// Actual outer Network entry identity; sealed reveals retain a distinct inner call hash.
     pub(crate) current_network_entrypoint_hash: Option<HashOf<TransactionEntrypoint>>,
+    /// Original authenticated genesis input authority; absent for ordinary and ad-hoc execution.
+    pub(crate) genesis_execution_scope: Option<network_policy_routes::GenesisExecutionScope>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -20893,6 +20888,8 @@ macro_rules! world_ro_accessors {
             ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
             /// The global chain's AMX two-phase-commit state (read-only).
             ref sumeragi_amx: iroha_data_model::sumeragi_amx::SumeragiAmxState;
+            /// Parent-authorized private roots and their latest contiguous certified cursors.
+            ref private_dataspaces: iroha_data_model::private_dataspace::PrivateDataspaceRegistry;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
@@ -20927,9 +20924,9 @@ macro_rules! world_ro_accessors {
             storage proofs_by_tag: [u8; 4] => Vec<iroha_data_model::proof::ProofId>;
             /// Contract manifests (read-only).
             storage contract_manifests:
-                iroha_crypto::Hash => iroha_data_model::smart_contract::manifest::ContractManifest;
-            /// Get stored contract code bytes by hash (read-only)
-            storage contract_code: iroha_crypto::Hash => Vec<u8>;
+                ContractArtifactId => iroha_data_model::smart_contract::manifest::ContractManifest;
+            /// Get stored contract code bytes by dataspace artifact identity (read-only)
+            storage contract_code: ContractArtifactId => Vec<u8>;
             /// Pending contract-code upload descriptors (read-only).
             storage contract_code_uploads:
                 SmartContractCodeUploadKey => SmartContractCodeUploadDescriptor;
@@ -21436,9 +21433,9 @@ pub trait WorldReadOnly {
     fn contract_code_upload_progress(
         &self,
         authority: &AccountId,
-        code_hash: &Hash,
+        artifact_id: &ContractArtifactId,
     ) -> Option<SmartContractCodeUploadProgress> {
-        let upload = SmartContractCodeUploadKey::new(authority.clone(), *code_hash);
+        let upload = SmartContractCodeUploadKey::new(authority.clone(), *artifact_id);
         let descriptor = *self.contract_code_uploads().get(&upload)?;
         let received_chunks = self
             .contract_code_upload_chunks()
@@ -24671,6 +24668,7 @@ impl<'block> WorldTransaction<'block, '_> {
             consensus_keys_by_pk: _,
             sumeragi_lanes: _,
             sumeragi_amx: _,
+            private_dataspaces: _,
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
@@ -24899,6 +24897,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.consensus_keys_by_pk.apply();
         self.sumeragi_lanes.apply();
         self.sumeragi_amx.apply();
+        self.private_dataspaces.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
@@ -27535,6 +27534,7 @@ impl State {
         let native_execution_tip = native_execution_tip::empty_cell(&execution_budget)?;
         let mut s = Self {
             native_execution_tip,
+            native_world_cut: parking_lot::Mutex::new(None),
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
                 .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
@@ -37271,6 +37271,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: fields.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_network_entrypoint_hash: None,
+            genesis_execution_scope: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             deferred_governance_ballot_penalties: Vec::new(),
@@ -38924,8 +38925,19 @@ mod tiered_snapshot_diff_tests {
         use norito::json::JsonKeyCodec;
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let code_hash = iroha_crypto::Hash::new(b"stable contract upload json key");
-        let upload_key = SmartContractCodeUploadKey::new(authority.clone(), code_hash);
-        let expected_upload = format!("{}|{}", authority, hex::encode(code_hash.as_ref()));
+        let upload_key = SmartContractCodeUploadKey::new(
+            authority.clone(),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                code_hash,
+            ),
+        );
+        let expected_upload = format!(
+            "{}|{}|{}",
+            authority,
+            u64::MAX,
+            hex::encode(code_hash.as_ref())
+        );
         let mut encoded_upload = String::new();
         upload_key.encode_json_key(&mut encoded_upload);
         let mut parser = norito::json::Parser::new(&encoded_upload);
@@ -38963,15 +38975,24 @@ mod tiered_snapshot_diff_tests {
         assert_ne!(first_authority, second_authority);
         let first_upload = SmartContractCodeUploadKey::new(
             first_authority.clone(),
-            Hash::prehashed([0; Hash::LENGTH]),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                Hash::prehashed([0; Hash::LENGTH]),
+            ),
         );
         let last_upload = SmartContractCodeUploadKey::new(
             first_authority.clone(),
-            Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            ),
         );
         let other_upload = SmartContractCodeUploadKey::new(
             second_authority.clone(),
-            Hash::new(b"other authority upload"),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                Hash::new(b"other authority upload"),
+            ),
         );
         let descriptor = SmartContractCodeUploadDescriptor {
             total_size: 2,
@@ -39015,7 +39036,7 @@ mod tiered_snapshot_diff_tests {
             2
         );
         assert_eq!(
-            view.contract_code_upload_progress(&first_authority, &first_upload.code_hash),
+            view.contract_code_upload_progress(&first_authority, &first_upload.artifact_id),
             Some(SmartContractCodeUploadProgress {
                 descriptor,
                 received_chunks: 2,
@@ -39050,10 +39071,19 @@ mod tiered_snapshot_diff_tests {
             .contract_alias_bindings
             .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([7_u8; 32]);
-        block.contract_code.insert(hash, vec![1, 2, 3]);
+        block.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                hash,
+            ),
+            vec![1, 2, 3],
+        );
         let upload_key = SmartContractCodeUploadKey::new(
             AccountId::new(checked_keypair().public_key().clone()),
-            iroha_crypto::Hash::new(b"tiered upload diff"),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                iroha_crypto::Hash::new(b"tiered upload diff"),
+            ),
         );
         let upload_chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 0);
         block.contract_code_uploads.insert(
@@ -39069,7 +39099,7 @@ mod tiered_snapshot_diff_tests {
         let diff = block.tiered_snapshot_diff();
         assert!(
             diff.entries().iter().any(|entry| {
-                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
+                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, hash))
             })
         );
         assert!(diff.entries().iter().any(|entry| {
@@ -39122,10 +39152,19 @@ mod tiered_snapshot_diff_tests {
             .contract_alias_bindings
             .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([9_u8; 32]);
-        block.contract_code.insert(hash, vec![4, 5, 6]);
+        block.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                hash,
+            ),
+            vec![4, 5, 6],
+        );
         let upload_key = SmartContractCodeUploadKey::new(
             AccountId::new(checked_keypair().public_key().clone()),
-            iroha_crypto::Hash::new(b"tiered upload payload"),
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                iroha_crypto::Hash::new(b"tiered upload payload"),
+            ),
         );
         let upload_chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 0);
         block.contract_code_uploads.insert(
@@ -39142,7 +39181,7 @@ mod tiered_snapshot_diff_tests {
         let diff = TieredSnapshotDiff::from(&payload);
         assert!(
             diff.entries().iter().any(|entry| {
-                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
+                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, hash))
             })
         );
         assert!(diff.entries().iter().any(|entry| {
@@ -39194,7 +39233,13 @@ mod tiered_snapshot_diff_tests {
     fn pending_contract_upload_roundtrips_in_state_snapshot_without_legacy_defaults() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let code_hash = iroha_crypto::Hash::new(b"partial contract upload snapshot");
-        let upload_key = SmartContractCodeUploadKey::new(authority, code_hash);
+        let upload_key = SmartContractCodeUploadKey::new(
+            authority,
+            ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                code_hash,
+            ),
+        );
         let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 1);
         let descriptor = SmartContractCodeUploadDescriptor {
             total_size: 65_539,
@@ -42028,7 +42073,7 @@ impl StateTransaction<'_, '_> {
         crate::smartcontracts::ivm::validate_generic_execution_context(
             &self.world,
             metadata,
-            summary.code_hash,
+            crate::executor::root_scope::captured_artifact_id(self, summary.code_hash)?,
         )?;
         let eff_cycles =
             crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
@@ -42429,7 +42474,7 @@ impl StateTransaction<'_, '_> {
                     } else {
                         crate::smartcontracts::code::with_code_bytes(
                             self,
-                            &identity.code_hash,
+                            &ContractArtifactId::for_address(&identity.contract_address, identity.code_hash).map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },
@@ -42446,7 +42491,13 @@ impl StateTransaction<'_, '_> {
                 let live_code = self
                     .world
                     .contract_code
-                    .get(&identity.code_hash)
+                    .get(
+                        &ContractArtifactId::for_address(
+                            &identity.contract_address,
+                            identity.code_hash,
+                        )
+                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                    )
                     .ok_or_else(|| {
                         ValidationFail::NotPermitted(format!(
                             "contract bytecode `{}` not found in WSV",
@@ -42467,7 +42518,13 @@ impl StateTransaction<'_, '_> {
                 let manifest = self
                     .world
                     .contract_manifests
-                    .get(&identity.code_hash)
+                    .get(
+                        &ContractArtifactId::for_address(
+                            &identity.contract_address,
+                            identity.code_hash,
+                        )
+                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                    )
                     .ok_or_else(|| {
                         ValidationFail::NotPermitted(format!(
                             "contract instance `{}` has no manifest",
@@ -42709,7 +42766,15 @@ impl StateTransaction<'_, '_> {
                             let live_code = self
                                 .world
                                 .contract_code
-                                .get(&runtime_identity.code_hash)
+                                .get(
+                                    &ContractArtifactId::for_address(
+                                        &runtime_identity.contract_address,
+                                        runtime_identity.code_hash,
+                                    )
+                                    .map_err(|error| {
+                                        ValidationFail::NotPermitted(error.to_string())
+                                    })?,
+                                )
                                 .ok_or_else(|| {
                                     ValidationFail::NotPermitted(format!(
                                         "contract bytecode `{}` not found in WSV",
@@ -42726,7 +42791,15 @@ impl StateTransaction<'_, '_> {
                             let manifest = self
                                 .world
                                 .contract_manifests
-                                .get(&runtime_identity.code_hash)
+                                .get(
+                                    &ContractArtifactId::for_address(
+                                        &runtime_identity.contract_address,
+                                        runtime_identity.code_hash,
+                                    )
+                                    .map_err(|error| {
+                                        ValidationFail::NotPermitted(error.to_string())
+                                    })?,
+                                )
                                 .ok_or_else(|| {
                                     ValidationFail::NotPermitted(format!(
                                         "contract instance `{}` has no manifest",

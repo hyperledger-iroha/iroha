@@ -84,11 +84,22 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     @Test
     fun `substituted native verified issuer nonce revokes the original owner`() {
         val endpoint = Endpoint().apply { wrongPreparationNonce = true }
-        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint).initialEnrollment()
+        val native = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint)
+        val phases = native.initialEnrollment()
         val selected = phases.begin(account)
-        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        val failure = assertFailsWith<IllegalArgumentException> {
+            phases.verifySignedPreparation(selected, preparation(selected))
+        }
+        assertEquals("native preparation verifier substituted issuer nonce", failure.message)
         assertEquals(1, endpoint.closeCalls)
+        val dispatched = endpoint.calls
+        repeat(2) { assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) } }
+        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        assertEquals(dispatched, endpoint.calls)
+        assertEquals(1, endpoint.closeCalls)
+        native.close()
         assertNull(phases.recoverExactSelection(account))
+        assertEquals(1, endpoint.closeCalls)
     }
 
     @Test
@@ -330,7 +341,8 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var changedSelectionField: Int? = null
         var rejectSelectionRead = false
         private var challengeId = ByteArray(32) { 7 }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long): Int { closeCalls++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {

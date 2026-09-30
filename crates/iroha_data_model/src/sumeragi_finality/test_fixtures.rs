@@ -153,6 +153,28 @@ impl NativeFinalityFixture {
     /// All certificates are genuine native BLS; supplied execution results remain synthetic.
     #[must_use]
     pub fn start_with_mode(chain_id: &str, mode: SumeragiConsensusMode) -> Self {
+        Self::start_with_mode_and_scope(
+            chain_id,
+            mode,
+            crate::block::consensus::SumeragiRootScope::Global,
+        )
+    }
+
+    /// Start a permissioned signed genesis with an explicit immutable root scope.
+    /// Certificates use the resulting native instance; synthetic results do not execute World.
+    #[must_use]
+    pub fn start_with_scope(
+        chain_id: &str,
+        scope: crate::block::consensus::SumeragiRootScope,
+    ) -> Self {
+        Self::start_with_mode_and_scope(chain_id, SumeragiConsensusMode::Permissioned, scope)
+    }
+
+    fn start_with_mode_and_scope(
+        chain_id: &str,
+        mode: SumeragiConsensusMode,
+        root_scope: crate::block::consensus::SumeragiRootScope,
+    ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
         let mut keys: Vec<_> = (1..=4)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
@@ -192,8 +214,10 @@ impl NativeFinalityFixture {
                         .collect(),
                 },
             },
-            sumeragi_context:
-                crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
+            sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters {
+                root_scope,
+                ..crate::block::consensus::SumeragiGenesisContextParameters::recommended()
+            },
         };
         let mut instructions: Vec<InstructionBox> = validators
             .iter()
@@ -381,6 +405,24 @@ impl NativeFinalityFixture {
     /// Panics if the block does not extend the fixture's exact tip or violates native proof rules.
     pub fn certify(&mut self, block: SignedBlock) -> SumeragiFinalityProof {
         let result = Self::result(&block, &self.epoch);
+        self.certify_result(block, &result)
+    }
+
+    /// Certify an explicitly synthetic complete-World root for portable reader tests.
+    /// This helper executes no World transition and grants no monetary authority.
+    ///
+    /// # Panics
+    /// Panics if the block is not the exact fixture successor or violates proof rules.
+    pub fn certify_with_world_root(
+        &mut self,
+        block: SignedBlock,
+        world_root: Hash,
+    ) -> SumeragiFinalityProof {
+        let parent = self.verifier.verify_retained_decision(&self.tip).unwrap();
+        let mut result = Self::result(&block, &self.epoch);
+        result.execution.parent_world_state_root = parent.execution().world_state_root;
+        result.execution.world_state_root = world_root;
+        result.validate().unwrap();
         self.certify_result(block, &result)
     }
 

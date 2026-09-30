@@ -281,6 +281,7 @@ fn main() -> Result<()> {
         account_chain_discriminant: args.chain_discriminant,
         key_pair,
         basic_auth: None,
+        api_token: None,
         torii_api_url: args.torii_url,
         torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: Duration::from_secs(900),

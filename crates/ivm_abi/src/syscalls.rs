@@ -461,7 +461,7 @@ pub const SYSCALL_CORE_QUERY_GET: u32 = 0x01_0001;
 pub const SYSCALL_CORE_QUERY_PAGE: u32 = 0x01_0002;
 /// Read one runtime/system/custom parameter from `r10=&Name`.
 pub const SYSCALL_QUERY_GET_PARAMETER: u32 = 0x01_0006;
-/// Read one contract manifest from `r10=&NoritoBytes(Hash)`.
+/// Read one contract manifest from `r10=&NoritoBytes(ContractArtifactId)`.
 pub const SYSCALL_QUERY_GET_CONTRACT_MANIFEST: u32 = 0x01_0007;
 /// Read one contract instance from `r10=&NoritoBytes(ContractAddress)` or `r10=&Name(alias)`.
 pub const SYSCALL_QUERY_GET_CONTRACT_INSTANCE: u32 = 0x01_0008;

@@ -6,6 +6,7 @@ declare const acknowledgement: Kagemusha.Acknowledgement;
 declare const bytes: Uint8Array;
 
 const recipientKey: Uint8Array = request.recipientEncryptionKey;
+const appPolicyBinding: Uint8Array = request.hardwareCredential.appPolicyBindingDigest;
 const proof: Kagemusha.PaymentProof = Kagemusha.decodePaymentProof(Kagemusha.encodePaymentProof(payment.proof));
 const bodyDigest: Uint8Array = Kagemusha.paymentBodyDigest(payment.output, payment.encryptedCredit);
 Kagemusha.paymentRequestTranscript(request);
@@ -53,4 +54,4 @@ Kagemusha.preparedTransferDigest(request, bytes, bytes, bytes);
 // @ts-expect-error old payment signatures are not part of the wire schema
 payment.terminalSignature;
 
-void recipientKey; void bodyDigest; void kind; void payload;
+void recipientKey; void appPolicyBinding; void bodyDigest; void kind; void payload;

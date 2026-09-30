@@ -928,11 +928,38 @@ pub(crate) struct P256CrossTraceWriterAuxRowV1<A = F> {
     /// Source terminal repeated as a degree-zero column.
     pub(crate) terminal: [A; P256_CROSS_TRACE_LANES_V1],
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for P256CrossTraceWriterAuxRowV1 {
+    fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.event_values);
+        zeroize::Zeroize::zeroize(&mut self.powers);
+        zeroize::Zeroize::zeroize(&mut self.selected_power);
+        zeroize::Zeroize::zeroize(&mut self.product_before);
+        zeroize::Zeroize::zeroize(&mut self.terminal);
+    }
+}
+/// Either an independently compiled oracle schedule or the exact retained
+/// verifier schedule borrowed through the immutable MAIN bound capability.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[derive(Clone)]
+enum P256CrossTraceWriterFixedReplayV1<'a> {
+    Compiled(Arc<P256CrossTraceWriterSourceFixedV1>),
+    Bound(&'a P256CrossTraceWriterSourceFixedV1),
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256CrossTraceWriterFixedReplayV1<'_> {
+    fn source_v1(&self) -> &P256CrossTraceWriterSourceFixedV1 {
+        match self {
+            Self::Compiled(source) => source,
+            Self::Bound(source) => source,
+        }
+    }
+}
 /// Constant-memory deterministic provider for the `2^19` writer-source auxiliary rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     value_bus: &'a P256ValueBusBaseEndpointTraceV1,
-    fixed: Arc<P256CrossTraceWriterSourceFixedV1>,
+    fixed: P256CrossTraceWriterFixedReplayV1<'a>,
     challenges: P256CrossTraceChallengesV1,
     terminal: [F; P256_CROSS_TRACE_LANES_V1],
     running: [F; P256_CROSS_TRACE_LANES_V1],
@@ -1098,7 +1125,7 @@ pub(crate) fn build_zk_x509_p256_cross_trace_writer_source_v1(
     let terminal = compute_writer_terminal_v1(value_bus, &fixed, challenges)?;
     Ok(P256CrossTraceWriterSourceStreamV1 {
         value_bus,
-        fixed,
+        fixed: P256CrossTraceWriterFixedReplayV1::Compiled(fixed),
         challenges,
         terminal,
         running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
@@ -1125,12 +1152,37 @@ fn compute_writer_terminal_v1(
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
+    /// Borrow the exact schedule and terminal already checked during MAIN bind.
+    /// The capability has no public/raw constructor and fixes the endpoint,
+    /// signature role, opaque token and derived terminal to the same owner.
+    pub(super) fn from_bound_main_v1(
+        bound: super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
+    ) -> Result<Self, P256CrossTraceBusErrorV1> {
+        let value_bus = bound.endpoint_v1();
+        let challenges = bound.challenges_v1();
+        challenges.validate()?;
+        let segment_count = value_bus.segment_count_v1().map_err(|error| match error {
+            P256ValueBusErrorV1::Resource => P256CrossTraceBusErrorV1::Resource,
+            _ => P256CrossTraceBusErrorV1::Topology,
+        })?;
+        if segment_count != P256_CROSS_TRACE_VALUE_BUS_SEGMENTS_V1 {
+            return Err(P256CrossTraceBusErrorV1::Topology);
+        }
+        Ok(Self {
+            value_bus,
+            fixed: P256CrossTraceWriterFixedReplayV1::Bound(bound.fixed_v1()),
+            challenges,
+            terminal: bound.terminal_v1(),
+            running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
+            next_row: 0,
+        })
+    }
     /// Restart deterministic row replay without recompiling multiplicities or
     /// recomputing the terminal.
     pub(crate) fn replay_v1(&self) -> P256CrossTraceWriterSourceStreamV1<'a> {
         P256CrossTraceWriterSourceStreamV1 {
             value_bus: self.value_bus,
-            fixed: Arc::clone(&self.fixed),
+            fixed: self.fixed.clone(),
             challenges: self.challenges,
             terminal: self.terminal,
             running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
@@ -1144,9 +1196,14 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 {
             return Ok(None);
         }
-        let fixed = self.fixed.row_v1(self.next_row)?;
+        let fixed = self.fixed.source_v1().row_v1(self.next_row)?;
         let sources = projected_writer_source_values_v1(self.value_bus, self.next_row, fixed)?;
-        let mut row = build_writer_row_v1(fixed, sources, self.running, self.challenges);
+        let mut row = zeroize::Zeroizing::new(build_writer_row_v1(
+            fixed,
+            sources,
+            self.running,
+            self.challenges,
+        ));
         let final_slot = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - 1;
         self.running = core::array::from_fn(|lane| {
             row.product_before[final_slot][lane].mul(row.selected_power[final_slot][lane])
@@ -1158,7 +1215,7 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         {
             return Err(P256CrossTraceBusErrorV1::Constraint);
         }
-        Ok(Some(row))
+        Ok(Some(*row))
     }
     /// Constant writer-source product terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
@@ -1258,6 +1315,18 @@ fn build_writer_row_v1(
     let mut running = product_before;
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         product_states[slot] = running;
+        // The complete inactive tuple is verifier-owned public schedule data.
+        // Its compression and all powers are one, so the product carries exactly.
+        // Keep unusual fixed tuples on the direct path rather than assuming that
+        // an inactive flag alone proves the remaining selectors are canonical.
+        if fixed.events[slot] == P256CrossTraceEventFixedV1::inactive()
+            && fixed.multiplicity_one[slot] == F::ZERO
+            && fixed.multiplicity_64[slot] == F::ZERO
+            && fixed.multiplicity_65[slot] == F::ZERO
+            && fixed.multiplicity_129[slot] == F::ZERO
+        {
+            continue;
+        }
         for lane in 0..P256_CROSS_TRACE_LANES_V1 {
             powers[slot][lane][0] = compress_event_v1(
                 fixed.events[slot],
@@ -1413,9 +1482,11 @@ mod tests {
         };
         let writer = P256CrossTraceWriterSourceStreamV1 {
             value_bus: &endpoint,
-            fixed: Arc::new(P256CrossTraceWriterSourceFixedV1 {
-                multiplicities: Vec::new(),
-            }),
+            fixed: P256CrossTraceWriterFixedReplayV1::Compiled(Arc::new(
+                P256CrossTraceWriterSourceFixedV1 {
+                    multiplicities: Vec::new(),
+                },
+            )),
             challenges: challenges_v1(),
             terminal: [F(17); P256_CROSS_TRACE_LANES_V1],
             running: [F(19); P256_CROSS_TRACE_LANES_V1],
@@ -2472,3 +2543,7 @@ mod tests {
         assert!(ratio.powi(4) < 2_f64.powi(-176));
     }
 }
+
+#[cfg(test)]
+#[path = "p256_writer_inactive_tests.rs"]
+mod writer_inactive_tests;

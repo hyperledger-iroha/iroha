@@ -41,9 +41,14 @@ object ClaimIdentifierWirePayloadEncoder {
         return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload)
     }
 
-    /** Decodes a Norito-framed `ClaimIdentifier` payload. */
+    /**
+     * Structurally decodes a canonical Norito-framed claim with no phone-retail evidence.
+     *
+     * This validates framing and required fields. Receipt signatures and policy authority
+     * still require separate verification before use.
+     */
     @JvmStatic
-    internal fun decodePayload(
+    fun decodePayload(
         wirePayload: ByteArray,
         chainDiscriminant: Int,
     ): DecodedClaimIdentifierPayload {
@@ -58,23 +63,29 @@ object ClaimIdentifierWirePayloadEncoder {
         )
     }
 
-    internal data class DecodedClaimIdentifierPayload(
+    /** Structurally decoded claim fields, with owned defensive copies of receipt bytes. */
+    class DecodedClaimIdentifierPayload internal constructor(
         val accountId: String,
-        val receiptPayloadBytes: ByteArray,
-        val attestationPayloadBytes: ByteArray,
+        receiptPayloadBytes: ByteArray,
+        attestationPayloadBytes: ByteArray,
     ) {
+        private val receiptBytes = receiptPayloadBytes.clone()
+        private val attestationBytes = attestationPayloadBytes.clone()
+
+        val receiptPayloadBytes: ByteArray get() = receiptBytes.clone()
+        val attestationPayloadBytes: ByteArray get() = attestationBytes.clone()
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is DecodedClaimIdentifierPayload) return false
             return accountId == other.accountId &&
-                receiptPayloadBytes.contentEquals(other.receiptPayloadBytes) &&
-                attestationPayloadBytes.contentEquals(other.attestationPayloadBytes)
+                receiptBytes.contentEquals(other.receiptBytes) &&
+                attestationBytes.contentEquals(other.attestationBytes)
         }
 
         override fun hashCode(): Int {
             var result = accountId.hashCode()
-            result = 31 * result + receiptPayloadBytes.contentHashCode()
-            result = 31 * result + attestationPayloadBytes.contentHashCode()
+            result = 31 * result + receiptBytes.contentHashCode()
+            result = 31 * result + attestationBytes.contentHashCode()
             return result
         }
     }

@@ -7730,13 +7730,6 @@ export interface ToriiContractManifestInput {
   provenance?: ContractManifestProvenanceInput | null;
 }
 
-export interface RegisterContractCodeRequest {
-  authority: string;
-  privateKey: string;
-  manifest: ToriiContractManifestInput;
-  codeBytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
-}
-
 export interface ContractOperationReceipt {
   operation_kind: string;
   status: string;
@@ -7832,6 +7825,8 @@ export interface ContractCallSimulateResponse {
 }
 
 export interface ContractManifestRecord {
+  network_id: string;
+  artifact_id: { dataspace_id: string; code_hash: string };
   manifest: {
     seiyaku_name: string | null;
     /** Lowercase 32-byte hex normalized from Rust's canonical Hash literal. */
@@ -7915,6 +7910,8 @@ export interface ContractKotobaEntryRecord {
 }
 
 export interface ContractCodeBytesRecord {
+  network_id: string;
+  artifact_id: { dataspace_id: string; code_hash: string };
   code_b64: string;
 }
 
@@ -9220,19 +9217,26 @@ export interface UaidManifestQueryOptions {
   signal?: AbortSignal;
 }
 
+/** Exact dataspace ownership for one immutable compiled artifact. */
+export interface ContractArtifactIdInput {
+  dataspaceId: SmartContractUnsigned64;
+  codeHash: HashLike;
+}
+
 export interface RegisterSmartContractCodeInstructionInput {
+  artifactId: ContractArtifactIdInput;
   manifest: ContractManifestInput;
 }
 
 export interface RegisterSmartContractBytesInstructionInput {
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
 }
 
 export type SmartContractUnsigned64 = number | bigint | string;
 
 export interface UploadSmartContractCodeChunkInstructionInput {
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   totalSize: SmartContractUnsigned64;
   chunkIndex: number;
   chunkCount: number;
@@ -9240,13 +9244,13 @@ export interface UploadSmartContractCodeChunkInstructionInput {
 }
 
 export interface FinalizeSmartContractCodeUploadInstructionInput {
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   totalSize: SmartContractUnsigned64;
   chunkCount: number;
 }
 
 export interface CancelSmartContractCodeUploadInstructionInput {
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
 }
 
 export interface CommitContractDeploymentInstructionInput {
@@ -9259,7 +9263,7 @@ export interface CommitContractDeploymentInstructionInput {
 }
 
 export interface RemoveSmartContractBytesInstructionInput {
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   reason?: string | null;
 }
 
@@ -9528,6 +9532,7 @@ export interface FinalizeElectionTransactionInput {
 }
 
 export interface RegisterSmartContractCodeTransactionInput {
+  artifactId: ContractArtifactIdInput;
   networkId: NetworkId;
   authority: string;
   manifest: ContractManifestInput;
@@ -9542,7 +9547,7 @@ export interface RegisterSmartContractCodeTransactionInput {
 export interface RegisterSmartContractBytesTransactionInput {
   networkId: NetworkId;
   authority: string;
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -9555,7 +9560,7 @@ export interface RegisterSmartContractBytesTransactionInput {
 export interface RemoveSmartContractBytesTransactionInput {
   networkId: NetworkId;
   authority: string;
-  codeHash: HashLike;
+  artifactId: ContractArtifactIdInput;
   reason?: string | null;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -11167,9 +11172,6 @@ export declare class ToriiClient {
     baseUrl: string,
     options: ConnectWebSocketParams,
   ): string;
-  registerContractCode(
-    request: RegisterContractCodeRequest,
-  ): Promise<unknown | null>;
   setContractAlias(
     request: SetContractAliasRequest,
   ): Promise<SetContractAliasResponse>;
@@ -11206,10 +11208,11 @@ export declare class ToriiClient {
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigProposalResolveResponse>;
   getContractManifest(
-    codeHashHex: string,
+    artifactId: ContractArtifactIdInput,
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
-    codeHashHex: string,
+    artifactId: ContractArtifactIdInput,
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
@@ -13594,6 +13597,8 @@ export interface CanonicalMultisigContractCallInput {
   payload: Record<string, unknown>;
   arguments_hex: string | null;
   code_hash_hex: string;
+  /** Positive creation_time_ms of the exact frozen native Propose attempt. */
+  creation_time_ms: number;
 }
 /** Construction only; never evidence of deployment, permission or finality. */
 export function buildCanonicalMultisigContractCall(

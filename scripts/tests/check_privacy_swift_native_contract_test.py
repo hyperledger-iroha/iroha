@@ -66,21 +66,23 @@ def workflow_job(source: str, name: str) -> str:
 class PrivacySwiftNativeContractTests(unittest.TestCase):
     """Guard the release Swift tests against native capability skips."""
 
-    def test_metal_bridge_links_frameworks_for_every_apple_consumer(self) -> None:
+    def test_native_archive_frameworks_reach_every_apple_consumer(self) -> None:
         builder = read("scripts/build_norito_xcframework.sh")
         swift_package = read("IrohaSwift/Package.swift")
         binary_podspec = read("crates/connect_norito_bridge/NoritoBridge.podspec.template")
-        self.assertIn("-framework CoreGraphics", builder)
-        self.assertIn("-framework Metal", builder)
-        self.assertIn(
-            '.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS]))',
-            swift_package,
-        )
-        self.assertIn(
-            '.linkedFramework("Metal", .when(platforms: [.iOS, .macOS]))',
-            swift_package,
-        )
-        self.assertIn("s.frameworks       = ['CoreGraphics', 'Metal']", binary_podspec)
+        frameworks = ("Foundation", "Security", "Metal", "CoreGraphics", "Accelerate")
+        declared = re.search(r"s\.frameworks\s*=\s*\[([^]]+)\]", binary_podspec)
+        self.assertIsNotNone(declared)
+        self.assertEqual(re.findall(r"'([^']+)'", declared.group(1)), list(frameworks))
+        for framework in frameworks:
+            with self.subTest(framework=framework):
+                self.assertIn(f"-framework {framework}", builder)
+                self.assertIn(
+                    f'.linkedFramework("{framework}", .when(platforms: [.iOS, .macOS]))',
+                    swift_package,
+                )
+        source_pod = read("IrohaSwift/IrohaSwift.podspec")
+        self.assertIn("s.dependency       'NoritoBridge', version", source_pod)
 
     def test_swift_release_test_inventory_has_no_runtime_skip(self) -> None:
         test_roots = (

@@ -352,25 +352,10 @@ impl Function {
         Ok(changed)
     }
     fn coalesce_trivial_values(&mut self) -> Result<bool, String> {
-        let mut aliases = BTreeMap::new();
+        let mut aliases = projection_and_copy_aliases(self)?;
         let mut equivalence = ValueEquivalence::default();
-        for block in &self.blocks {
-            for instruction in &block.instructions {
-                let ir::Instr::Copy { dest, src } = instruction.as_ir() else {
-                    continue;
-                };
-                let destination = Value::decode(*dest);
-                let source = Value::decode(*src);
-                if destination == source {
-                    continue;
-                }
-                if aliases.insert(destination, source).is_some() {
-                    return Err(format!(
-                        "SSA copy destination {destination:?} is defined more than once"
-                    ));
-                }
-                equivalence.union(destination, source);
-            }
+        for (destination, source) in &aliases {
+            equivalence.union(*destination, *source);
         }
 
         let phi_locations = self
@@ -488,8 +473,9 @@ impl Function {
                 !remove
             });
             block.instructions.retain_mut(|instruction| {
-                if let ir::Instr::Copy { dest, src } = instruction.as_ir()
-                    && dest != src
+                if matches!(instruction.as_ir(),
+                    ir::Instr::Copy { dest, .. } | ir::Instr::TupleGet { dest, .. }
+                        if aliases.contains_key(&Value::decode(*dest)))
                 {
                     return false;
                 }
@@ -1481,6 +1467,121 @@ impl ValueEquivalence {
         }
         Some(EquivalenceMerge { left, right, root })
     }
+}
+/// Products are immutable virtual collections of SSA values. Selecting a
+/// known field therefore aliases the original value; materializing intermediate
+/// projections only increases live ranges, spills, and stack-address code.
+/// Resolve copy/projection chains in one memoized, iterative walk so deeply
+/// nested records and repeated field updates do not require quadratic passes.
+fn projection_and_copy_aliases(function: &Function) -> Result<BTreeMap<Value, Value>, String> {
+    let mut definitions = BTreeMap::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if let ir::Instr::Copy { dest, .. }
+        | ir::Instr::TupleGet { dest, .. }
+        | ir::Instr::TuplePack { dest, .. } = instruction.as_ir()
+        {
+            let destination = Value::decode(*dest);
+            if definitions
+                .insert(destination, instruction.as_ir())
+                .is_some()
+            {
+                return Err(format!(
+                    "SSA product/copy destination {destination:?} is defined more than once"
+                ));
+            }
+        }
+    }
+    enum Pending {
+        Visit(Value),
+        Alias {
+            destination: Value,
+            source: Value,
+        },
+        Project {
+            destination: Value,
+            tuple: Value,
+            index: usize,
+        },
+    }
+    let mut resolved = BTreeMap::new();
+    let mut active = BTreeSet::new();
+    for &value in definitions.keys() {
+        let mut pending = vec![Pending::Visit(value)];
+        while let Some(operation) = pending.pop() {
+            match operation {
+                Pending::Visit(value) => {
+                    if resolved.contains_key(&value) {
+                        continue;
+                    }
+                    if !active.insert(value) {
+                        return Err(format!("cyclic SSA product/copy alias at {value:?}"));
+                    }
+                    match definitions.get(&value).copied() {
+                        Some(ir::Instr::Copy { src, .. }) => {
+                            let source = Value::decode(*src);
+                            pending.push(Pending::Alias {
+                                destination: value,
+                                source,
+                            });
+                            pending.push(Pending::Visit(source));
+                        }
+                        Some(ir::Instr::TupleGet { tuple, index, .. }) => {
+                            let tuple = Value::decode(*tuple);
+                            pending.push(Pending::Project {
+                                destination: value,
+                                tuple,
+                                index: *index,
+                            });
+                            pending.push(Pending::Visit(tuple));
+                        }
+                        _ => {
+                            resolved.insert(value, value);
+                            active.remove(&value);
+                        }
+                    }
+                }
+                Pending::Alias {
+                    destination,
+                    source,
+                } => {
+                    let source = resolved[&source];
+                    resolved.insert(destination, source);
+                    active.remove(&destination);
+                }
+                Pending::Project {
+                    destination,
+                    tuple,
+                    index,
+                } => {
+                    let tuple = resolved[&tuple];
+                    if let Some(ir::Instr::TuplePack { items, .. }) =
+                        definitions.get(&tuple).copied()
+                    {
+                        let source = items.get(index).copied().ok_or_else(|| {
+                            format!(
+                                "SSA product projection {index} exceeds tuple width {}",
+                                items.len()
+                            )
+                        })?;
+                        let source = Value::decode(source);
+                        pending.push(Pending::Alias {
+                            destination,
+                            source,
+                        });
+                        pending.push(Pending::Visit(source));
+                    } else {
+                        // A nontrivial Phi or runtime value is not a known pack.
+                        resolved.insert(destination, destination);
+                        active.remove(&destination);
+                    }
+                }
+            }
+        }
+    }
+    Ok(resolved
+        .into_iter()
+        .filter(|(value, source)| value != source)
+        .collect())
 }
 fn compress_aliases(aliases: &mut BTreeMap<Value, Value>) -> Result<(), String> {
     let destinations = aliases.keys().copied().collect::<Vec<_>>();
@@ -4595,6 +4696,89 @@ mod tests {
             unreachable!("matched the remaining input load")
         };
         assert_eq!(result, dest);
+    }
+    #[test]
+    fn nested_product_projections_coalesce_in_one_batch() {
+        const UPDATES: usize = 8_192;
+        let mut instructions = vec![
+            Instr::LoadVar {
+                dest: Temp(0),
+                name: "input".into(),
+            },
+            Instr::TuplePack {
+                dest: Temp(1),
+                items: vec![Temp(0)],
+            },
+        ];
+        let mut product = Temp(1);
+        for index in 0..UPDATES {
+            let field = Temp(2 + index * 2);
+            let next = Temp(3 + index * 2);
+            instructions.push(Instr::TupleGet {
+                dest: field,
+                tuple: product,
+                index: 0,
+            });
+            instructions.push(Instr::TuplePack {
+                dest: next,
+                items: vec![field],
+            });
+            product = next;
+        }
+        let result = Temp(2 + UPDATES * 2);
+        instructions.push(Instr::TupleGet {
+            dest: result,
+            tuple: product,
+            index: 0,
+        });
+        let mut program = Program::from_ir(IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: instructions,
+                terminator: Terminator::Return(Some(result)),
+            }])],
+        })
+        .expect("construct projection chain");
+        assert!(
+            program.functions[0]
+                .coalesce_trivial_values()
+                .expect("fold projections")
+        );
+        program
+            .verify()
+            .expect("projection aliases must preserve dominance");
+        program.functions[0]
+            .eliminate_dead_values()
+            .expect("remove unused products");
+        assert!(
+            matches!(program.functions[0].blocks[0].instructions.as_slice(),
+            [ValueInstruction(Instr::LoadVar { name, .. })] if name == "input")
+        );
+    }
+    #[test]
+    fn known_product_projection_bounds_fail_closed() {
+        let mut program = Program::from_ir(IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::TuplePack {
+                        dest: Temp(0),
+                        items: vec![],
+                    },
+                    Instr::TupleGet {
+                        dest: Temp(1),
+                        tuple: Temp(0),
+                        index: 0,
+                    },
+                ],
+                terminator: Terminator::Return(Some(Temp(1))),
+            }])],
+        })
+        .expect("construct malformed projection fixture");
+        let error = program.functions[0]
+            .coalesce_trivial_values()
+            .expect_err("reject invalid field");
+        assert!(error.contains("exceeds tuple width"), "{error}");
     }
     #[test]
     fn dead_value_elimination_removes_a_long_unused_chain_in_one_mark_sweep() {

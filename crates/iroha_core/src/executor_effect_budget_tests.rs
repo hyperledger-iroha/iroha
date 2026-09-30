@@ -186,10 +186,20 @@ seiyaku ActualEffectGroups {
         )
         .unwrap();
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(hash, program.clone());
-        world
-            .contract_manifests
-            .insert(hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                hash,
+            ),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &address, &ALICE_ID, hash);
         (state_for_testing(world), program, address, hash)
     }

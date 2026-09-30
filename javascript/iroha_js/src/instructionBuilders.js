@@ -4899,13 +4899,15 @@ export function buildRegisterSmartContractCodeInstruction(options) {
       ("buildRegisterSmartContractCodeInstruction options" + TEXT_MUST_BE + "an object"),
     );
   }
-  const manifest =
-    options.manifest ??
-    options.RegisterSmartContractCode?.manifest ??
-    options.registerSmartContractCode?.manifest;
+  const manifest = options.manifest;
   const normalized = (0, contractManifestNormalizers[0])(manifest);
+  const artifactId = normalizeContractArtifactId(options.artifactId);
+  if (normalized.code_hash !== artifactId.code_hash) {
+    throw new TypeError("artifactId.codeHash must equal manifest.code_hash");
+  }
   return {
     RegisterSmartContractCode: {
+      artifact_id: artifactId,
       manifest: normalized,
     },
   };
@@ -4933,10 +4935,7 @@ export function buildRegisterSmartContractBytesInstruction(options) {
   }
   return {
     RegisterSmartContractBytes: {
-      code_hash: normalizeHash(
-        options.codeHash ?? options.code_hash,
-        (TEXT_REGISTER_SMART_CONTRACT_BYTES + "codeHash"),
-      ),
+      artifact_id: normalizeContractArtifactId(options.artifactId),
       code,
     },
   };
@@ -4975,6 +4974,16 @@ function normalizeCanonicalU64(value, name) {
     );
   }
   return normalized.toString();
+}
+
+/** Normalize one explicitly scoped artifact input to its canonical Norito record. */
+function normalizeContractArtifactId(value) {
+  const source = assertPlainObject(value, "artifactId");
+  assertExactFields(source, ["dataspaceId", "codeHash"], "artifactId");
+  return {
+    dataspace_id: normalizeCanonicalU64(source.dataspaceId, "artifactId.dataspaceId"),
+    code_hash: normalizeHash(source.codeHash, "artifactId.codeHash"),
+  };
 }
 
 function normalizeSmartContractExactString(value, name) {
@@ -5061,10 +5070,7 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
   }
   return {
     UploadSmartContractCodeChunk: {
-      code_hash: normalizeHash(
-        source.codeHash ?? source.code_hash,
-        (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "codeHash"),
-      ),
+      artifact_id: normalizeContractArtifactId(source.artifactId),
       total_size: totalSize,
       chunk_index: chunkIndex,
       chunk_count: chunkCount,
@@ -5096,10 +5102,7 @@ export function buildFinalizeSmartContractCodeUploadInstruction(options) {
   }
   return {
     FinalizeSmartContractCodeUpload: {
-      code_hash: normalizeHash(
-        source.codeHash ?? source.code_hash,
-        (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + "codeHash"),
-      ),
+      artifact_id: normalizeContractArtifactId(source.artifactId),
       total_size: totalSize,
       chunk_count: chunkCount,
     },
@@ -5111,10 +5114,7 @@ export function buildCancelSmartContractCodeUploadInstruction(options) {
   const source = assertPlainObject(options, "cancelSmartContractCodeUpload");
   return {
     CancelSmartContractCodeUpload: {
-      code_hash: normalizeHash(
-        source.codeHash ?? source.code_hash,
-        "cancelSmartContractCodeUpload.codeHash",
-      ),
+      artifact_id: normalizeContractArtifactId(source.artifactId),
     },
   };
 }
@@ -5170,10 +5170,7 @@ export function buildCommitContractDeploymentInstruction(options) {
 export function buildRemoveSmartContractBytesInstruction(options) {
   const source = assertPlainObject(options, "removeSmartContractBytes");
   const payload = {
-    code_hash: normalizeHash(
-      source.codeHash ?? source.code_hash,
-      "removeSmartContractBytes.codeHash",
-    ),
+    artifact_id: normalizeContractArtifactId(source.artifactId),
   };
   const reason = source.reason ?? source.reasonText ?? source.reason_text;
   if (reason !== undefined && reason !== null) {

@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.offline
 /** JNI field-array endpoint; production implementations invoke the authenticated native bridge. */
 internal interface KagemushaCoreCoordinatorEndpointV1 {
     fun contract(): IntArray?
+    fun install(storagePath: String): Int
     fun open(storagePath: String): Long
     fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>?
     fun close(handle: Long): Int
@@ -15,7 +16,9 @@ internal interface KagemushaCoreCoordinatorEndpointV1 {
  * Serialized transport to the process-owned native coordinator, with no software backend.
  *
  * Contract matching proves ABI compatibility only. A generic bridge refuses [open] until its
- * qualified Rust backend is installed. Returned Norito archives stay opaque at this layer.
+ * qualified Rust provider is installed. Only that provider supplies the retained release,
+ * policy, durable journal and hardware authority; the JVM intake supplies a storage path.
+ * Returned Norito archives stay opaque at this layer.
  * Explicit close and every post-dispatch failure revoke the handle. The native ABI never
  * reopens in the same process.
  */
@@ -66,7 +69,7 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
     }
 
     companion object {
-        private val expectedContract = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        private val expectedContract = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
 
         /** Open the exact native ABI. Missing JNI/backend or a mismatched contract fails closed. */
         @JvmStatic
@@ -88,6 +91,13 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
             check(endpoint.contract()?.contentEquals(expectedContract) == true) {
                 "KAGEMUSHA native coordinator contract mismatch"
             }
+            // Native installation is idempotent only for the same successfully provisioned
+            // original owner/path. It refuses unknown preinstalled or uncertain owners.
+            val status = endpoint.install(storagePath)
+            if (status == -312) {
+                throw KagemushaNativeProvisioningUnavailableExceptionV1()
+            }
+            check(status == 0) { "KAGEMUSHA native provisioning rejected the original owner: $status" }
             val handle = endpoint.open(storagePath)
             check(handle != 0L) { "KAGEMUSHA qualified native coordinator is unavailable" }
             return KagemushaCoreCoordinatorBridgeV1(endpoint, handle)
@@ -110,15 +120,22 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
     }
 }
 
+/** No independently qualified native platform provider is installed for this process. */
+class KagemushaNativeProvisioningUnavailableExceptionV1 : IllegalStateException(
+    "KAGEMUSHA qualified native platform provisioning is unavailable",
+)
+
 /** Exact JNI owner; these methods have no Java/Kotlin monetary implementation. */
 internal object KagemushaCoreCoordinatorJniV1 : KagemushaCoreCoordinatorEndpointV1 {
     override fun contract(): IntArray? = nativeContractV1()
+    override fun install(storagePath: String): Int = nativeInstallV1(storagePath)
     override fun open(storagePath: String): Long = nativeOpenV1(storagePath)
     override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? =
         nativeInvokeV1(handle, method, fields)
     override fun close(handle: Long): Int = nativeCloseV1(handle)
 
     @JvmStatic private external fun nativeContractV1(): IntArray?
+    @JvmStatic private external fun nativeInstallV1(storagePath: String): Int
     @JvmStatic private external fun nativeOpenV1(storagePath: String): Long
     @JvmStatic private external fun nativeInvokeV1(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>?
     @JvmStatic private external fun nativeCloseV1(handle: Long): Int

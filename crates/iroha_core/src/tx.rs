@@ -3157,6 +3157,7 @@ impl StateBlock<'_> {
         policy_route: CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
+        state_transaction.genesis_execution_scope = None;
         if let Some(reason) = state_transaction.execution_deferral() {
             return Err(ExecutionAttemptError::Deferred(reason));
         }
@@ -3185,6 +3186,8 @@ impl StateBlock<'_> {
             policy_route,
             genesis,
         )?;
+        state_transaction.genesis_execution_scope =
+            policy_route.genesis_execution_scope(tx.as_ref(), state_transaction, genesis)?;
         let authority = admission.authority.clone();
         let allow_unregistered_authority = admission.allow_unregistered_authority;
         match tx.as_ref().instructions() {
@@ -3431,6 +3434,9 @@ impl StateBlock<'_> {
         let offset = summary.code_offset();
         // Use the domain-separated full-artifact hash and canonical ABI hash.
         let code_hash = summary.code_hash();
+        let artifact_id =
+            crate::executor::root_scope::captured_artifact_id(state_transaction, code_hash)
+                .map_err(TransactionRejectionReason::Validation)?;
         let abi_hash = summary.abi_hash();
         crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
@@ -3566,14 +3572,14 @@ impl StateBlock<'_> {
             if let Some(manifest) = manifest_metadata.as_ref() {
                 validate_manifest(manifest)?;
             }
-            if let Some(manifest) = state_transaction.world.contract_manifests.get(&code_hash) {
+            if let Some(manifest) = state_transaction.world.contract_manifests.get(&artifact_id) {
                 validate_manifest(manifest)?;
             }
         } else if manifest_metadata.is_some()
             || state_transaction
                 .world
                 .contract_manifests
-                .get(&code_hash)
+                .get(&artifact_id)
                 .is_some()
             || deploy_target.is_some()
         {
@@ -11928,9 +11934,10 @@ pub mod tests {
             total_size,
             chunk_count: 1,
         };
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
         let missing_upload_metadata = validate_instruction!(
             UploadSmartContractCodeChunk {
-                code_hash,
+                artifact_id,
                 total_size,
                 chunk_index: 0,
                 chunk_count: 1,
@@ -11947,13 +11954,13 @@ pub mod tests {
         assert_eq!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &code_hash),
+                .contract_code_upload_progress(&authority, &artifact_id),
             None,
             "rejected upload must not create resumable staging"
         );
         let accepted_upload = validate_instruction!(
             UploadSmartContractCodeChunk {
-                code_hash,
+                artifact_id,
                 total_size,
                 chunk_index: 0,
                 chunk_count: 1,
@@ -11968,7 +11975,7 @@ pub mod tests {
         assert_eq!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &code_hash),
+                .contract_code_upload_progress(&authority, &artifact_id),
             Some(crate::state::SmartContractCodeUploadProgress {
                 descriptor,
                 received_chunks: 1,
@@ -11976,7 +11983,7 @@ pub mod tests {
         );
         let missing_finalize_metadata = validate_instruction!(
             FinalizeSmartContractCodeUpload {
-                code_hash,
+                artifact_id,
                 total_size,
                 chunk_count: 1,
             },
@@ -11991,17 +11998,17 @@ pub mod tests {
         assert_eq!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &code_hash),
+                .contract_code_upload_progress(&authority, &artifact_id),
             Some(crate::state::SmartContractCodeUploadProgress {
                 descriptor,
                 received_chunks: 1,
             }),
             "rejected finalization must preserve resumable staging"
         );
-        assert!(block.world.contract_code().get(&code_hash).is_none());
+        assert!(block.world.contract_code().get(&artifact_id).is_none());
         let accepted_finalize = validate_instruction!(
             FinalizeSmartContractCodeUpload {
-                code_hash,
+                artifact_id,
                 total_size,
                 chunk_count: 1,
             },
@@ -12015,21 +12022,22 @@ pub mod tests {
             block
                 .world
                 .contract_code()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .map(Vec::as_slice),
             Some(code.as_slice())
         );
         assert_eq!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &code_hash),
+                .contract_code_upload_progress(&authority, &artifact_id),
             None,
             "successful finalization must clear staging"
         );
-        let cancelled_hash = Hash::new(b"owner-scoped cleanup");
+        let cancelled_artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL, Hash::new(b"owner-scoped cleanup"));
         let accepted_cancel_stage = validate_instruction!(
             UploadSmartContractCodeChunk {
-                code_hash: cancelled_hash,
+                artifact_id: cancelled_artifact_id,
                 total_size: 1,
                 chunk_index: 0,
                 chunk_count: 1,
@@ -12043,7 +12051,7 @@ pub mod tests {
         );
         let accepted_cancel = validate_instruction!(
             iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
-                code_hash: cancelled_hash,
+                artifact_id: cancelled_artifact_id,
             },
             Metadata::default()
         );
@@ -12054,7 +12062,7 @@ pub mod tests {
         assert_eq!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &cancelled_hash),
+                .contract_code_upload_progress(&authority, &cancelled_artifact_id),
             None
         );
     }

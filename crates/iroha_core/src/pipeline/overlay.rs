@@ -50,8 +50,8 @@ use iroha_data_model::{
     },
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
-    smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
+    smart_contract::{ContractAddress, ContractArtifactId},
     transaction::{Executable, SignedTransaction, signed::TransactionPayload},
 };
 use iroha_model_base::metadata::Metadata;
@@ -821,7 +821,16 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
             })
             .transpose()?;
     }
-    let artifacts = code::fetch_artifacts(state_ro, &code_hash, contract_address.as_ref());
+    let artifact_id = routed_artifact_id(state_ro, tx, code_hash)?;
+    if contract_address
+        .as_ref()
+        .is_some_and(|address| address.dataspace_id().ok() != Some(artifact_id.dataspace_id))
+    {
+        return Err(OverlayBuildError::ContractCall(
+            "contract address differs from the exact native execution scope".into(),
+        ));
+    }
+    let artifacts = code::fetch_artifacts(state_ro, &artifact_id, contract_address.as_ref());
     let manifest_opt = artifacts.manifest.as_ref();
     // A stored V1 manifest is a complete consensus binding, not a collection
     // of optional constraints.
@@ -871,6 +880,30 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     }
     Ok(())
 }
+
+/// Resolve registry ownership from the exact immutable native route, with no universal fallback.
+pub(crate) fn routed_artifact_id<R: StateReadOnly>(
+    state_ro: &R,
+    tx: &TransactionPayload,
+    code_hash: Hash,
+) -> Result<ContractArtifactId, OverlayBuildError> {
+    let height = u64::try_from(state_ro.height())
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| {
+            OverlayBuildError::ContractCall("artifact execution height overflows".into())
+        })?;
+    let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state_ro);
+    let route = snapshot
+        .inputs(state_ro.world())
+        .execution_route(tx, height)
+        .ok_or_else(|| {
+            OverlayBuildError::ContractCall(
+                "artifact has no exact immutable native execution scope".into(),
+            )
+        })?;
+    Ok(ContractArtifactId::new(route.dataspace_id, code_hash))
+}
 fn metadata_contract_manifest(
     metadata: &Metadata,
 ) -> Result<Option<ContractManifest>, OverlayBuildError> {
@@ -885,7 +918,7 @@ fn metadata_contract_manifest(
 }
 fn queued_contract_bytes_match(
     queued: &[InstructionBox],
-    code_hash: &Hash,
+    artifact_id: &ContractArtifactId,
     bytecode: &[u8],
 ) -> bool {
     queued.iter().any(|instr| {
@@ -893,16 +926,22 @@ fn queued_contract_bytes_match(
             .as_any()
             .downcast_ref::<RegisterSmartContractBytes>()
             .is_some_and(|bytes| {
-                bytes.code_hash() == code_hash && bytes.code().as_slice() == bytecode
+                bytes.artifact_id() == artifact_id && bytes.code().as_slice() == bytecode
             })
     })
 }
-fn queued_manifest_matches(queued: &[InstructionBox], manifest: &ContractManifest) -> bool {
+fn queued_manifest_matches(
+    queued: &[InstructionBox],
+    artifact_id: &ContractArtifactId,
+    manifest: &ContractManifest,
+) -> bool {
     queued.iter().any(|instr| {
         instr
             .as_any()
             .downcast_ref::<RegisterSmartContractCode>()
-            .is_some_and(|registered| registered.manifest() == manifest)
+            .is_some_and(|registered| {
+                registered.artifact_id() == artifact_id && registered.manifest() == manifest
+            })
     })
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -935,12 +974,13 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
         ));
     }
     let code_hash = verified.code_hash;
-    let code_is_registered = state_ro.world().contract_code().get(&code_hash).is_some()
-        || queued_contract_bytes_match(queued, &code_hash, bytecode);
+    let artifact_id = routed_artifact_id(state_ro, tx.payload(), code_hash)?;
+    let code_is_registered = state_ro.world().contract_code().get(&artifact_id).is_some()
+        || queued_contract_bytes_match(queued, &artifact_id, bytecode);
     if !code_is_registered {
         queued.push(
             RegisterSmartContractBytes {
-                code_hash,
+                artifact_id,
                 code: bytecode.to_vec(),
             }
             .into(),
@@ -949,11 +989,17 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     let manifest_is_registered = state_ro
         .world()
         .contract_manifests()
-        .get(&code_hash)
+        .get(&artifact_id)
         .is_some()
-        || queued_manifest_matches(queued, &manifest);
+        || queued_manifest_matches(queued, &artifact_id, &manifest);
     if !manifest_is_registered {
-        queued.push(RegisterSmartContractCode { manifest }.into());
+        queued.push(
+            RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            }
+            .into(),
+        );
     }
     Ok(())
 }
@@ -1016,17 +1062,32 @@ fn append_verified_contract_metadata_registration_without_state(
         ));
     }
     let code_hash = verified.code_hash;
-    if !queued_contract_bytes_match(queued, &code_hash, bytecode) {
+    let address = crate::executor::requested_contract_address(tx.metadata())
+        .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
+        .ok_or_else(|| {
+            OverlayBuildError::ContractCall(
+                "state-free artifact registration requires an explicit contract address".into(),
+            )
+        })?;
+    let artifact_id = ContractArtifactId::for_address(&address, code_hash)
+        .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+    if !queued_contract_bytes_match(queued, &artifact_id, bytecode) {
         queued.push(
             RegisterSmartContractBytes {
-                code_hash,
+                artifact_id,
                 code: bytecode.to_vec(),
             }
             .into(),
         );
     }
-    if !queued_manifest_matches(queued, &manifest) {
-        queued.push(RegisterSmartContractCode { manifest }.into());
+    if !queued_manifest_matches(queued, &artifact_id, &manifest) {
+        queued.push(
+            RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            }
+            .into(),
+        );
     }
     Ok(())
 }
@@ -1053,16 +1114,21 @@ fn prune_redundant_contract_ops_with_metadata<R, M>(
             "overlay execution metadata must align with queued instructions",
         );
     }
-    let mut manifest_cache: BTreeMap<Hash, Option<ContractManifest>> = BTreeMap::new();
-    let mut code_cache: BTreeMap<Hash, Option<Vec<u8>>> = BTreeMap::new();
+    let mut manifest_cache: BTreeMap<ContractArtifactId, Option<ContractManifest>> =
+        BTreeMap::new();
+    let mut code_cache: BTreeMap<ContractArtifactId, Option<Vec<u8>>> = BTreeMap::new();
     let mut binding_cache: BTreeMap<ContractAddress, Option<Hash>> = BTreeMap::new();
     let retain: Vec<bool> = queued
         .iter()
         .map(|instr| {
             if let Some(reg) = instr.as_any().downcast_ref::<RegisterSmartContractCode>() {
-                if let Some(hash) = reg.manifest().code_hash {
-                    let existing = manifest_cache.entry(hash).or_insert_with(|| {
-                        state_ro.world().contract_manifests().get(&hash).cloned()
+                if reg.manifest().code_hash == Some(reg.artifact_id().code_hash) {
+                    let existing = manifest_cache.entry(*reg.artifact_id()).or_insert_with(|| {
+                        state_ro
+                            .world()
+                            .contract_manifests()
+                            .get(reg.artifact_id())
+                            .cloned()
                     });
                     if let Some(existing) = existing {
                         if existing == reg.manifest() {
@@ -1072,11 +1138,11 @@ fn prune_redundant_contract_ops_with_metadata<R, M>(
                 }
             } else if let Some(bytes) = instr.as_any().downcast_ref::<RegisterSmartContractBytes>()
             {
-                let cached = code_cache.entry(*bytes.code_hash()).or_insert_with(|| {
+                let cached = code_cache.entry(*bytes.artifact_id()).or_insert_with(|| {
                     state_ro
                         .world()
                         .contract_code()
-                        .get(bytes.code_hash())
+                        .get(bytes.artifact_id())
                         .cloned()
                 });
                 if cached
@@ -2064,7 +2130,7 @@ fn validate_generic_program_context<R: StateReadOnly>(
     crate::smartcontracts::ivm::validate_generic_execution_context(
         state_ro.world(),
         tx.metadata(),
-        summary.code_hash,
+        routed_artifact_id(state_ro, tx.payload(), summary.code_hash)?,
     )
     .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))
 }
@@ -2220,10 +2286,12 @@ where
             crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
+            let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let manifest = state_ro
                 .world()
                 .contract_manifests()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no manifest",
@@ -2233,7 +2301,7 @@ where
             let code_bytes = state_ro
                 .world()
                 .contract_code()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no bytecode",
@@ -2736,10 +2804,12 @@ where
             crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
+            let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let manifest = state_ro
                 .world()
                 .contract_manifests()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no manifest",
@@ -2749,7 +2819,7 @@ where
             let code_bytes = state_ro
                 .world()
                 .contract_code()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no bytecode",
@@ -3210,10 +3280,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
+            let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let manifest = state_ro
                 .world()
                 .contract_manifests()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no manifest",
@@ -3223,7 +3295,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             let code_bytes = state_ro
                 .world()
                 .contract_code()
-                .get(&code_hash)
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` has no bytecode",
@@ -3531,10 +3603,20 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     }
 }
 #[cfg(test)]
-mod test_support {
+pub(super) mod test_support {
     use super::*;
     use crate::state::State;
     use nonzero_ext::nonzero;
+
+    /// Component fixture with explicit committed global-root metadata.
+    pub(crate) fn with_global_root(world: crate::state::World) -> crate::state::World {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+        world
+    }
 
     /// Prepare execution against an explicit block time, retaining the large
     /// staged world on the heap while the overlay runs.
@@ -3718,7 +3800,7 @@ mod tests_overlay_manifest {
                 );
             }
             State::new_for_testing(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
             )
@@ -3780,7 +3862,7 @@ mod tests_overlay_manifest {
                 .smart_contract_state_mut_for_testing()
                 .insert("unrelated".parse().unwrap(), b"one".to_vec());
             State::new_for_testing(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
             )
@@ -3798,7 +3880,7 @@ mod tests_overlay_manifest {
                 .smart_contract_state_mut_for_testing()
                 .insert("unrelated".parse().unwrap(), b"two".to_vec());
             State::new_for_testing(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
             )
@@ -3825,7 +3907,7 @@ mod tests_overlay_manifest {
                 .smart_contract_state_mut_for_testing()
                 .insert("unrelated".parse().unwrap(), unrelated.to_vec());
             State::new_for_testing(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
             )
@@ -3864,7 +3946,7 @@ mod tests_overlay_manifest {
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let state = State::new_for_testing(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -4020,8 +4102,14 @@ mod tests_overlay_manifest {
         let code_hash = verified.code_hash;
         let manifest = verified.manifest;
         let mut world = crate::state::World::with([domain], [account], []);
-        world.contract_code.insert(code_hash, artifact);
-        world.contract_manifests.insert(code_hash, manifest);
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            artifact,
+        );
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest,
+        );
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         let mut permissions = Permissions::new();
         assert!(permissions.insert(Permission::from(
@@ -4034,7 +4122,7 @@ mod tests_overlay_manifest {
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
         let state = State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             ChainId::from("hajimari-overlay"),
@@ -4324,7 +4412,7 @@ mod tests_overlay_manifest {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let state = State::new_with_chain(
-            crate::state::World::with([domain], [account], []),
+            test_support::with_global_root(crate::state::World::with([domain], [account], [])),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             ChainId::from("generic-overlay"),
@@ -4350,7 +4438,7 @@ mod tests_overlay_manifest {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let state = State::new_with_chain(
-            crate::state::World::with([domain], [account], []),
+            test_support::with_global_root(crate::state::World::with([domain], [account], [])),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             ChainId::from("generic-overlay-metadata"),
@@ -4615,12 +4703,14 @@ seiyaku QuarantineArguments {
         )
         .expect("derive quarantine contract address");
         let mut world = crate::state::World::with([domain], [account], []);
-        world
-            .contract_code
-            .insert(verified.code_hash, program.clone());
-        world
-            .contract_manifests
-            .insert(verified.code_hash, verified.manifest);
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
+            verified.manifest,
+        );
         seed_active_contract(
             &mut world,
             &contract_address,
@@ -4639,7 +4729,7 @@ seiyaku QuarantineArguments {
             .insert(authority.clone(), permissions);
         let chain_id = ChainId::from("parameterized-quarantine-overlay");
         let state = State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
@@ -4984,14 +5074,18 @@ seiyaku ProtectedParameterizedOverlay {
         .expect("derive parameterized contract address");
         let code_hash = verified.code_hash;
         let mut world = crate::state::World::with([domain], [account], []);
-        world.contract_code.insert(code_hash, program);
-        world
-            .contract_manifests
-            .insert(code_hash, verified.manifest);
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            program,
+        );
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            verified.manifest,
+        );
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         let chain_id = ChainId::from("parameterized-authorization-overlay");
         let state = State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
@@ -5084,8 +5178,14 @@ seiyaku GuardedOverlay {
             .build(&authority);
             let account = build_wonderland_account(&authority);
             let mut world = crate::state::World::with([domain], [account], []);
-            world.contract_code.insert(code_hash, artifact.clone());
-            world.contract_manifests.insert(code_hash, manifest.clone());
+            world.contract_code.insert(
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+                artifact.clone(),
+            );
+            world.contract_manifests.insert(
+                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+                manifest.clone(),
+            );
             seed_active_contract(&mut world, &contract_address, code_hash, &authority);
             world
                 .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
@@ -5098,7 +5198,7 @@ seiyaku GuardedOverlay {
                     .insert(authority.clone(), permissions);
             }
             State::new_with_chain(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
                 ChainId::from("authorization-overlay"),
@@ -5144,14 +5244,14 @@ seiyaku GuardedOverlayRebound {
         let rebound_code_hash = rebound_manifest.code_hash.expect("rebound code hash");
         assert_ne!(rebound_code_hash, code_hash);
         let mut rebound_state = make_state(true);
-        rebound_state
-            .world
-            .contract_code
-            .insert(rebound_code_hash, rebound_artifact);
-        rebound_state
-            .world
-            .contract_manifests
-            .insert(rebound_code_hash, rebound_manifest);
+        rebound_state.world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, rebound_code_hash),
+            rebound_artifact,
+        );
+        rebound_state.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, rebound_code_hash),
+            rebound_manifest,
+        );
         seed_active_contract(
             &mut rebound_state.world,
             &contract_address,
@@ -5673,7 +5773,7 @@ seiyaku GuardedOverlayRebound {
             // independent worlds, and their inline storage exhausted the default
             // test thread stack before authorization was reached.
             Box::new(State::new_for_testing(
-                world,
+                test_support::with_global_root(world),
                 crate::kura::Kura::blank_kura_for_testing(),
                 crate::query::store::LiveQueryStore::start_test(),
             ))
@@ -5987,6 +6087,140 @@ seiyaku GuardedOverlayRebound {
         );
     }
     #[test]
+    fn redundant_artifact_pruning_never_crosses_dataspaces() {
+        let (program, manifest) = minimal_contract_artifact(1);
+        let hash = manifest.code_hash.expect("verified artifact hash");
+        let owned = ContractArtifactId::new(DataSpaceId::new(17), hash);
+        let foreign = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
+        let mut world = crate::state::World::default();
+        world.contract_code.insert(owned, program.clone());
+        world.contract_manifests.insert(owned, manifest.clone());
+        let state = State::new(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let bytes = |artifact_id| {
+            InstructionBox::from(RegisterSmartContractBytes {
+                artifact_id,
+                code: program.clone(),
+            })
+        };
+        let registration = |artifact_id| {
+            InstructionBox::from(RegisterSmartContractCode {
+                artifact_id,
+                manifest: manifest.clone(),
+            })
+        };
+        let mut queued = vec![
+            bytes(owned),
+            bytes(foreign),
+            registration(owned),
+            registration(foreign),
+        ];
+        assert!(queued_contract_bytes_match(
+            &[bytes(owned)],
+            &owned,
+            &program
+        ));
+        assert!(!queued_contract_bytes_match(
+            &[bytes(owned)],
+            &foreign,
+            &program
+        ));
+        assert!(queued_manifest_matches(
+            &[registration(owned)],
+            &owned,
+            &manifest
+        ));
+        assert!(!queued_manifest_matches(
+            &[registration(owned)],
+            &foreign,
+            &manifest
+        ));
+        prune_redundant_contract_ops(&state.view(), &mut queued);
+        assert_eq!(queued, vec![bytes(foreign), registration(foreign)]);
+    }
+
+    #[test]
+    fn state_free_artifact_registration_requires_and_preserves_explicit_scope() {
+        let (program, manifest) = minimal_contract_artifact(1);
+        let hash = manifest.code_hash.expect("verified artifact hash");
+        let (authority, pair) = gen_account_in("wonderland");
+        let network = overlay_test_network_id(b"state-free artifact scope");
+        let address = ContractAddress::derive(&network, &authority, 1, DataSpaceId::new(u64::MAX))
+            .expect("full-width scoped address");
+        let transaction = |address: Option<&ContractAddress>| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                MANIFEST_METADATA_KEY.parse().unwrap(),
+                Json::new(manifest.clone()),
+            );
+            if let Some(address) = address {
+                metadata.insert(
+                    "contract_address".parse().unwrap(),
+                    Json::new(address.to_string()),
+                );
+            }
+            TransactionBuilder::new(network, authority.clone(), test_fee_payment())
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+                .sign(pair.private_key())
+        };
+        let mut queued = Vec::new();
+        assert!(
+            append_verified_contract_metadata_registration_without_state(
+                &transaction(None),
+                &program,
+                &mut queued
+            )
+            .is_err()
+        );
+        assert!(queued.is_empty());
+        append_verified_contract_metadata_registration_without_state(
+            &transaction(Some(&address)),
+            &program,
+            &mut queued,
+        )
+        .unwrap();
+        let expected = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
+        assert_eq!(queued.len(), 2);
+        assert!(queued_contract_bytes_match(&queued, &expected, &program));
+        assert!(queued_manifest_matches(&queued, &expected, &manifest));
+    }
+
+    #[test]
+    fn raw_artifact_routing_requires_explicit_immutable_root_scope() {
+        let (authority, pair) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(
+            overlay_test_network_id(b"scope-routing"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "scope routing".to_owned(),
+        )])
+        .sign(pair.private_key());
+        let hash = Hash::new(b"scope routing artifact");
+        let state = State::new(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        assert!(routed_artifact_id(&state.view(), tx.payload(), hash).is_err());
+        let state = State::new(
+            test_support::with_global_root(crate::state::World::default()),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            routed_artifact_id(&state.view(), tx.payload(), hash).unwrap(),
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, hash)
+        );
+    }
+
+    #[test]
     fn overlay_appends_manifest_only_when_missing() {
         // Build state with a domain/account and optionally pre-seeded manifest
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -5998,7 +6232,12 @@ seiyaku GuardedOverlayRebound {
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
+        let state = State::new_with_chain(
+            test_support::with_global_root(world),
+            kura,
+            query_handle,
+            ChainId::from("chain"),
+        );
         // Create a minimal contract artifact and attach its verified manifest to tx metadata.
         let (prog, verified_manifest) = minimal_contract_artifact(1);
         let code_hash = verified_manifest
@@ -6049,7 +6288,10 @@ seiyaku GuardedOverlayRebound {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        stx.world.contract_code.insert(code_hash, prog.clone());
+        stx.world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            prog.clone(),
+        );
         stx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -6076,9 +6318,10 @@ seiyaku GuardedOverlayRebound {
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        stx.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         stx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -6195,7 +6438,7 @@ mod tests {
             .expect("record AXT proof");
         completed.validate_commit().expect("completed AXT fixture");
         let state = crate::state::State::new_for_testing(
-            crate::state::World::default(),
+            test_support::with_global_root(crate::state::World::default()),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -6260,8 +6503,12 @@ mod tests {
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state =
-            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
+        let state = crate::state::State::new_with_chain(
+            test_support::with_global_root(world),
+            kura,
+            query_handle,
+            ChainId::from("chain"),
+        );
         let tx = TransactionBuilder::new(
             state.network_id,
             authority,
@@ -6293,7 +6540,7 @@ mod tests {
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 101);
         let state = crate::state::State::new_for_testing(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -6495,11 +6742,17 @@ seiyaku ProtectedProved {
         .expect("derive protected proved-call contract address");
         let code_hash = manifest.code_hash.expect("verified code hash");
         let mut world = crate::state::World::with([domain], [account], []);
-        world.contract_code.insert(code_hash, program.clone());
-        world.contract_manifests.insert(code_hash, manifest);
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest,
+        );
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         let mut state = State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             ChainId::from("protected-proved-overlay"),
@@ -6622,12 +6875,14 @@ seiyaku ProtectedProved {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive sample raw contract address");
-        world
-            .contract_code
-            .insert(code_hash, bytecode.as_ref().to_vec());
-        world
-            .contract_manifests
-            .insert(code_hash, verified.manifest);
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            bytecode.as_ref().to_vec(),
+        );
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            verified.manifest,
+        );
         seed_active_contract(world, &address, code_hash, authority);
         let mut permissions = iroha_data_model::permission::Permissions::new();
         assert!(
@@ -6741,7 +6996,7 @@ seiyaku ProtectedProved {
         wrong_bytes[0] ^= 0xFF;
         let wrong_abi_hash = Hash::prehashed(wrong_bytes);
         world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -6760,7 +7015,11 @@ seiyaku ProtectedProved {
         );
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         // Build a contract-call style transaction that references the instance.
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -6835,11 +7094,15 @@ seiyaku AliasBoundArguments {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
-        world
-            .contract_code
-            .insert(code_hash, bytecode.as_ref().to_vec());
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            bytecode.as_ref().to_vec(),
+        );
         assert_eq!(manifest.abi_hash, Some(abi_hash));
-        world.contract_manifests.insert(code_hash, manifest);
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest,
+        );
         world
             .bind_contract_alias(&contract_address, active_alias.clone(), None, None, 0)
             .expect("bind canonical alias");
@@ -6855,7 +7118,11 @@ seiyaku AliasBoundArguments {
             .insert(authority.clone(), permissions);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let mut state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         state.zk.halo2.enabled = true;
         let summary = IvmCache::new()
             .summarize_program(bytecode.as_ref())
@@ -6991,11 +7258,12 @@ seiyaku AliasBoundArguments {
         .expect("contract address");
         let mut world = crate::state::World::default();
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
-        world
-            .contract_code
-            .insert(code_hash, stored_bytecode.as_ref().to_vec());
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            stored_bytecode.as_ref().to_vec(),
+        );
         world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -7014,7 +7282,11 @@ seiyaku AliasBoundArguments {
         );
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         let executable_variants = [
             Executable::Ivm(substituted_bytecode.clone()),
             Executable::IvmProved(IvmProved {
@@ -7130,7 +7402,11 @@ seiyaku AliasBoundArguments {
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
         let world = crate::state::World::default();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         assert!(
             state.view().axt_policy_snapshot().entries.is_empty(),
             "expected empty AXT policy snapshot"
@@ -7178,7 +7454,7 @@ seiyaku AliasBoundArguments {
         let mut world = crate::state::World::default();
         seed_active_contract(&mut world, &contract_address, wrong_binding, &authority);
         world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -7197,7 +7473,11 @@ seiyaku AliasBoundArguments {
         );
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7240,7 +7520,11 @@ seiyaku AliasBoundArguments {
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7277,7 +7561,7 @@ seiyaku AliasBoundArguments {
         let mut world = crate::state::World::default();
         seed_active_contract(&mut world, &contract_address, code_hash, &authority);
         world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -7296,7 +7580,11 @@ seiyaku AliasBoundArguments {
         );
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = crate::state::State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("contract_address").expect("static name"),
@@ -7319,7 +7607,7 @@ seiyaku AliasBoundArguments {
         let mut world = crate::state::World::default();
         seed_active_contract(&mut world, &contract_address, code_hash, tx.authority());
         world.contract_manifests.insert(
-            code_hash,
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -7337,7 +7625,7 @@ seiyaku AliasBoundArguments {
             .signed(&kp),
         );
         let state = crate::state::State::new_for_testing(
-            world,
+            test_support::with_global_root(world),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -7364,7 +7652,7 @@ seiyaku AliasBoundArguments {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = crate::state::State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             Arc::clone(&kura),
             query_handle,
             ChainId::from("chain"),
@@ -7403,7 +7691,7 @@ seiyaku AliasBoundArguments {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = crate::state::State::new_with_chain(
-            world,
+            test_support::with_global_root(world),
             Arc::clone(&kura),
             query_handle,
             ChainId::from("chain"),
@@ -7450,8 +7738,14 @@ seiyaku AliasBoundArguments {
             error_types: None,
             provenance: None,
         };
-        world.contract_manifests.insert(code_hash, manifest.clone());
-        world.contract_code.insert(code_hash, program.clone());
+        world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
+        world.contract_code.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            program.clone(),
+        );
         let contract_address: ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
@@ -7464,14 +7758,19 @@ seiyaku AliasBoundArguments {
         );
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let state = State::new_for_testing(
+            test_support::with_global_root(world),
+            Arc::clone(&kura),
+            query,
+        );
         let mut queued: Vec<InstructionBox> = vec![
             RegisterSmartContractBytes {
-                code_hash,
+                artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 code: program.clone(),
             }
             .into(),
             RegisterSmartContractCode {
+                artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 manifest: manifest.clone(),
             }
             .into(),
@@ -7482,7 +7781,7 @@ seiyaku AliasBoundArguments {
             }
             .into(),
             RemoveSmartContractBytes {
-                code_hash,
+                artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 reason: None,
             }
             .into(),
@@ -7781,10 +8080,11 @@ pub(crate) fn enforce_manifest_is_pre_registered<R: StateReadOnly>(
     if metadata_contract_manifest(&tx.metadata)?.is_none() {
         return Ok(());
     }
+    let artifact_id = routed_artifact_id(state_ro, tx, code_hash)?;
     if state_ro
         .world()
         .contract_manifests()
-        .get(&code_hash)
+        .get(&artifact_id)
         .is_some()
     {
         return Ok(());

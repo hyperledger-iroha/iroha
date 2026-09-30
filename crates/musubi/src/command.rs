@@ -1546,6 +1546,19 @@ fn load_selected_workspace(
         .collect();
     Ok((workspace, selected_packages))
 }
+
+/// Build a package using only the caller's retained runtime identity and optional storage policy.
+pub(crate) fn build_runtime_package(
+    config: &iroha::config::Config,
+    manifest: &Path,
+    package: Option<&str>,
+    contract: Option<&str>,
+    locked: bool,
+    archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
+) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
+    build::build_runtime_package(config, manifest, package, contract, locked, archive_transport)
+        .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
+}
 #[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {
     mode: GraphModeArgs,

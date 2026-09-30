@@ -11898,6 +11898,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     ]
     private static let retiredNumericTypeNames: Set<String> = [
         "i8",
@@ -13733,11 +13734,15 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
 }
 
 public struct ToriiContractManifestRecord: Decodable, Sendable {
+    public let networkId: NetworkId
+    public let artifactId: ContractArtifactId
     public let manifest: ToriiContractManifest
     public let codeHash: String?
     public let abiHash: String?
 
     private enum CodingKeys: String, CodingKey {
+        case networkId = "network_id"
+        case artifactId = "artifact_id"
         case manifest
         case codeHash = "code_hash"
         case abiHash = "abi_hash"
@@ -13747,7 +13752,7 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         try rejectUnknownContractManifestFields(
             from: decoder,
-            allowed: ["manifest", "code_hash", "abi_hash", "code_bytes"],
+            allowed: ["network_id", "artifact_id", "manifest", "code_hash", "abi_hash", "code_bytes"],
             context: "contract manifest response"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -13758,7 +13763,13 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
                 debugDescription: "contract manifest responses must not inline code_bytes"
             )
         }
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
+        artifactId = try container.decode(ContractArtifactId.self, forKey: .artifactId)
         manifest = try container.decode(ToriiContractManifest.self, forKey: .manifest)
+        guard container.contains(.codeHash), container.contains(.abiHash) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath,
+                debugDescription: "Contract manifest responses require code_hash and abi_hash conveniences."))
+        }
         let rawCodeHash = try container.decodeIfPresent(String.self, forKey: .codeHash)
         let rawAbiHash = try container.decodeIfPresent(String.self, forKey: .abiHash)
         let normalizedCodeHash = try rawCodeHash.map { value in
@@ -13782,6 +13793,7 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
             return normalized
         }
         guard normalizedCodeHash == manifest.codeHash,
+              normalizedCodeHash == artifactId.codeHashHex,
               normalizedAbiHash == manifest.abiHash else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: container.codingPath,
@@ -13793,19 +13805,34 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
     }
 }
 
+/// Authenticated, bounded complete artifact bytes with exact network and dataspace identity.
 public struct ToriiContractCodeBytes: Decodable, Sendable {
+    public let networkId: NetworkId
+    public let artifactId: ContractArtifactId
     public let codeB64: String
 
     private enum CodingKeys: String, CodingKey {
+        case networkId = "network_id"
+        case artifactId = "artifact_id"
         case codeB64 = "code_b64"
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(from: decoder,
+            allowed: ["network_id", "artifact_id", "code_b64"], context: "contract bytes response")
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let codeB64 = try container.decode(String.self, forKey: .codeB64)
-        self.codeB64 = try ToriiValidation.normalizedBase64(codeB64,
-                                                            field: "code_b64",
-                                                            codingPath: container.codingPath + [CodingKeys.codeB64])
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
+        artifactId = try container.decode(ContractArtifactId.self, forKey: .artifactId)
+        let encoded = try container.decode(String.self, forKey: .codeB64)
+        let maximum = 16 * 1_024 * 1_024
+        guard encoded.utf8.count <= ((maximum + 2) / 3) * 4,
+              let bytes = Data(base64Encoded: encoded), !bytes.isEmpty,
+              bytes.count <= maximum, bytes.base64EncodedString() == encoded,
+              IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased() == artifactId.codeHashHex else {
+            throw DecodingError.dataCorruptedError(forKey: .codeB64, in: container,
+                debugDescription: "Contract bytes must be bounded canonical base64 matching the complete artifact hash.")
+        }
+        codeB64 = encoded
     }
 }
 
@@ -20656,8 +20683,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth, completion: @escaping (Result<ToriiContractCodeBytes, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.fetchContractCodeBytes(codeHashHex: codeHashHex, canonicalAuth: canonicalAuth) }
+    public func fetchContractCodeBytes(artifactId: ContractArtifactId, canonicalAuth: ToriiCanonicalRequestAuth, completion: @escaping (Result<ToriiContractCodeBytes, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.fetchContractCodeBytes(artifactId: artifactId, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
@@ -23697,12 +23724,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return path
     }
 
-    public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
-        let normalized = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "codeHashHex")
-        let encoded = encodePathComponent(normalized)
-        let request = try makeRequest(path: "/v1/contracts/code/\(encoded)")
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiContractManifestRecord.self, from: data)
+    public func fetchContractManifest(artifactId: ContractArtifactId, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractManifestRecord {
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload("Artifact reads require a locally selected network identity.")
+        }
+        let request = try makeCanonicalAccountRequest(path: "/v1/contracts/artifacts/\(artifactId.dataspaceId)/\(artifactId.codeHashHex)", canonicalAuth: canonicalAuth)
+        let (data, response) = try await sendBoundedResponse(request, context: "contract manifest", maximumBytes: 24 * 1_024 * 1_024)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "contract manifest response")
+        let record = try decodeJSON(ToriiContractManifestRecord.self, from: data)
+        guard record.networkId == localSigningContext.networkId, record.artifactId == artifactId else {
+            throw ToriiClientError.invalidPayload("Contract manifest response differs from the selected network or exact artifact.")
+        }
+        return record
     }
 
     public func callContract(
@@ -24686,12 +24721,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return program
     }
 
-    public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractCodeBytes {
-        let normalized = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "codeHashHex")
-        let encoded = encodePathComponent(normalized)
-        let request = try makeVpnRequest(path: "/v1/contracts/code-bytes/\(encoded)", canonicalAuth: canonicalAuth)
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiContractCodeBytes.self, from: data)
+    public func fetchContractCodeBytes(artifactId: ContractArtifactId, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractCodeBytes {
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload("Artifact reads require a locally selected network identity.")
+        }
+        let request = try makeCanonicalAccountRequest(path: "/v1/contracts/artifacts/\(artifactId.dataspaceId)/\(artifactId.codeHashHex)/bytes", canonicalAuth: canonicalAuth)
+        let (data, response) = try await sendBoundedResponse(request, context: "contract bytes", maximumBytes: 24 * 1_024 * 1_024)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "contract bytes response")
+        let record = try decodeJSON(ToriiContractCodeBytes.self, from: data)
+        guard record.networkId == localSigningContext.networkId, record.artifactId == artifactId else {
+            throw ToriiClientError.invalidPayload("Contract bytes response differs from the selected network or exact artifact.")
+        }
+        return record
     }
 
     public func getHealth() async throws -> String {

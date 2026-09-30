@@ -120,6 +120,7 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "expect",
 ];
 /// Exact compiler-owned prefixes forbidden for state declarations.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodama_link_"];

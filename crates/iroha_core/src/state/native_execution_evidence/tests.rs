@@ -166,12 +166,25 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
         ));
     let original = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert!(
-        chain
-            .state()
-            .verified_sumeragi_lane_state()
-            .unwrap_err()
-            .contains("required historical native lane state source 2")
+    let archive = crate::query::native_context_archive::NativeContextArchive::open_existing(
+        chain.kura(),
+        chain.state().ivm_execution_budget(),
+        chain.kura().native_context_archive_max_bytes(),
+    )
+    .unwrap();
+    let missing_source = archive
+        .read_exact(2, opening.hash())
+        .err()
+        .expect("the exact height-2 original archive record is missing");
+    assert!(matches!(
+        &missing_source,
+        crate::query::native_context_archive::NativeContextArchiveError::Io(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert_eq!(
+        chain.state().verified_sumeragi_lane_state().unwrap_err(),
+        missing_source.to_string(),
+        "the live reader must propagate the original missing-record refusal"
     );
     std::fs::write(&path, &original).unwrap();
     assert!(

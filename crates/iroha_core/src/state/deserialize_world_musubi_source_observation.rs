@@ -114,3 +114,7 @@ impl<'cut, W: MusubiObservationCut> ValidatedMusubiSource<'cut, W> {
 #[cfg(test)]
 #[path = "deserialize_world_musubi_source_observation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deserialize_world_musubi_capture_candidate.rs"]
+mod capture_candidate;

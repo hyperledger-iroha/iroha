@@ -148,6 +148,7 @@ EXPECTED_DECLARATION_RESERVED_EXTRAS = (
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "expect",
 )
 HEX_128 = re.compile(r"^[0-9a-f]{32}$")
 POINTER_ID = re.compile(r"^0x[0-9a-f]{4}$")

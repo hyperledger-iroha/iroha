@@ -1,3 +1,6 @@
+import { canonicalHashLiteral } from "../src/instructionBuilderPrimitives.js";
+import { universalArtifactInstruction } from "./contractArtifactTestHelpers.js";
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -29,8 +32,8 @@ function observe(object, key, events, label = key, value = object[key]) {
 
 test("public manifest builder preserves the Rust fixture and canonical instruction bytes", () => {
   const manifest = manifestFixture();
-  const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
-  assert.deepEqual(instruction, { RegisterSmartContractCode: { manifest: fixture.manifest } });
+  const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
+  assert.deepEqual(instruction, universalArtifactInstruction({ RegisterSmartContractCode: { manifest: { ...fixture.manifest, code_hash: canonicalHashLiteral(Buffer.alloc(32, 0x11)) } } }));
   assert.deepEqual(manifest, fixture.manifest);
   assert.notEqual(instruction.RegisterSmartContractCode.manifest, manifest);
   assert.notEqual(instruction.RegisterSmartContractCode.manifest.entrypoints, manifest.entrypoints);
@@ -53,7 +56,7 @@ test("entrypoint getters retain their validation order", () => {
     "access_hints_skipped", "triggers",
   ];
   for (const field of fields) observe(entrypoint, field, events);
-  const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
+  const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
   assert.deepEqual(events, fields);
   assert.deepEqual(instruction.RegisterSmartContractCode.manifest, fixture.manifest);
 });
@@ -72,7 +75,7 @@ test("an entrypoint getter failure stops before later entrypoint fields", () => 
   });
   observe(entrypoint, "kind", events);
   observe(entrypoint, "params", events);
-  assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest }), error => error === failure);
+  assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest })), error => error === failure);
   assert.deepEqual(events, ["name", "permission"]);
 });
 
@@ -84,7 +87,7 @@ test("invalid trigger metadata fails after callback admission and before trigger
   observe(trigger, "metadata", events, "metadata", []);
   observe(trigger, "id", events);
   observe(trigger, "repeats", events);
-  assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest }), {
+  assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest })), {
     code: "ERR_INVALID_OBJECT",
     path: "manifest.entrypoints[0].triggers[0].metadata",
     message: "manifest.entrypoints[0].triggers[0].metadata must be an object",
@@ -108,7 +111,7 @@ test("trigger metadata enumeration precedes value validation and callback field 
   observe(trigger.callback, "namespace", events, "callback.namespace");
   observe(trigger.callback, "entrypoint", events, "callback.entrypoint");
   events.length = 0;
-  assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest }), {
+  assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest })), {
     code: "ERR_INVALID_JSON_VALUE",
     path: "manifest.entrypoints[0].triggers[0].metadata.first",
     message: "manifest.entrypoints[0].triggers[0].metadata.first must not contain non-finite numbers",

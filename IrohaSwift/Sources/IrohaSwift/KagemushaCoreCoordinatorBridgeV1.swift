@@ -6,6 +6,7 @@ import Darwin
 /// C ABI endpoint. Test endpoints do not qualify a monetary provider.
 protocol KagemushaCoreCoordinatorEndpointV1: AnyObject {
   func contract() throws -> [UInt32]
+  func install(storagePath: Data) throws
   func open(storagePath: Data) throws -> UInt64
   func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data
   func close(handle: UInt64) throws
@@ -44,7 +45,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+  private static let expectedContract: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint
@@ -53,7 +54,9 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
 
   deinit { try? close() }
 
-  /// Open the exact native ABI. Missing symbols, a mismatched contract or absent backend fails closed.
+  /// Install the independently provisioned Rust owner, then open the exact native ABI.
+  /// Only the storage path crosses this boundary; no caller policies or authority claims
+  /// can install a backend. Missing native provisioning or any rejected install fails closed.
   public static func open(storagePath: String) throws -> KagemushaCoreCoordinatorBridgeV1 {
     _ = try validatePath(storagePath)
     guard let endpoint = NativeEndpoint.create() else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
@@ -67,6 +70,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     guard try endpoint.contract() == expectedContract else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("native coordinator contract mismatch")
     }
+    try endpoint.install(storagePath: encodedPath)
     let handle = try endpoint.open(storagePath: encodedPath)
     guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     return KagemushaCoreCoordinatorBridgeV1(endpoint: endpoint, handle: handle)
@@ -126,6 +130,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private final class NativeEndpoint: KagemushaCoreCoordinatorEndpointV1 {
     #if canImport(Darwin)
     private typealias ContractFn = @convention(c) (UnsafeMutablePointer<UInt32>?, Int) -> Int32
+    private typealias InstallFn = @convention(c) (UnsafePointer<UInt8>?, Int) -> Int32
     private typealias OpenFn = @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<UInt64>?) -> Int32
     private typealias InvokeFn = @convention(c) (
       UInt64, UInt8, UnsafePointer<UInt8>?, Int,
@@ -135,13 +140,15 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     private typealias FreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
     private let contractFunction: ContractFn
+    private let installFunction: InstallFn
     private let openFunction: OpenFn
     private let invokeFunction: InvokeFn
     private let closeFunction: CloseFn
     private let freeFunction: FreeFn
 
-    private init(contract: @escaping ContractFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, close: @escaping CloseFn, free: @escaping FreeFn) {
+    private init(contract: @escaping ContractFn, install: @escaping InstallFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, close: @escaping CloseFn, free: @escaping FreeFn) {
       contractFunction = contract
+      installFunction = install
       openFunction = open
       invokeFunction = invoke
       closeFunction = close
@@ -152,13 +159,15 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       let (image, _) = NoritoBridgeLoader.openHandle()
       guard let image,
         let contract = dlsym(image, "connect_norito_kagemusha_core_coordinator_contract_v1"),
+        let install = dlsym(image, "connect_norito_kagemusha_core_coordinator_install_v1"),
         let open = dlsym(image, "connect_norito_kagemusha_core_coordinator_open_v1"),
         let invoke = dlsym(image, "connect_norito_kagemusha_core_coordinator_invoke_v1"),
         let close = dlsym(image, "connect_norito_kagemusha_core_coordinator_close_v1"),
         let free = dlsym(image, "connect_norito_free")
       else { return nil }
       return NativeEndpoint(
-        contract: unsafeBitCast(contract, to: ContractFn.self), open: unsafeBitCast(open, to: OpenFn.self),
+        contract: unsafeBitCast(contract, to: ContractFn.self), install: unsafeBitCast(install, to: InstallFn.self),
+        open: unsafeBitCast(open, to: OpenFn.self),
         invoke: unsafeBitCast(invoke, to: InvokeFn.self), close: unsafeBitCast(close, to: CloseFn.self),
         free: unsafeBitCast(free, to: FreeFn.self))
     }
@@ -178,6 +187,13 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       try requireSuccess(status)
       guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
       return handle
+    }
+
+    func install(storagePath: Data) throws {
+      let status = storagePath.withUnsafeBytes {
+        installFunction($0.bindMemory(to: UInt8.self).baseAddress, $0.count)
+      }
+      try requireSuccess(status)
     }
 
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
@@ -205,6 +221,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     #else
     static func create() -> NativeEndpoint? { nil }
     func contract() throws -> [UInt32] { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func install(storagePath: Data) throws { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func open(storagePath: Data) throws -> UInt64 { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws { throw KagemushaCoreCoordinatorErrorV1.unavailable }

@@ -1,3 +1,4 @@
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -89,9 +90,9 @@ function batchEntryValues(executable) {
 test("browser executable batch preserves mixed order, tag, and copied bytes", () => {
   const hash = Buffer.alloc(32, 0x41);
   const argumentsBytes = Uint8Array.from([0x4b, 0x4f, 0x54, 0x4f]);
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: hash.toString("hex"),
-  });
+  }));
   const input = {
     networkId: NETWORK_ID,
     authority: AUTHORITY,
@@ -160,9 +161,9 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
 });
 
 test("canonical browser instruction transactions use native-instruction tag zero", () => {
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: "41".repeat(32),
-  });
+  }));
   const payload = buildBrowserInstructionTransactionPayload({
     networkId: NETWORK_ID,
     authority: AUTHORITY,
@@ -177,9 +178,9 @@ test("canonical browser instruction transactions use native-instruction tag zero
 test("browser executable batch bytes match the native Rust builder", () => {
   const expectedCodeHash = Buffer.alloc(32, 0x41);
   const argumentsBytes = Buffer.from([0x4b, 0x4f, 0x54, 0x4f]);
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: expectedCodeHash.toString("hex"),
-  });
+  }));
   const entries = [
     { kind: "instruction", instruction },
     {
@@ -229,9 +230,9 @@ test("browser executable batch bytes match the native Rust builder", () => {
 });
 
 test("browser executable batch rejects invalid calls before encoding", () => {
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: "41".repeat(32),
-  });
+  }));
   const base = {
     networkId: NETWORK_ID,
     authority: AUTHORITY,
@@ -304,9 +305,9 @@ test("browser executable batch rejects invalid calls before encoding", () => {
 });
 
 test("external executable batch validation rejects a noncanonical address", () => {
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: "41".repeat(32),
-  });
+  }));
   const payload = buildBrowserExecutableBatchPayload({
     networkId: NETWORK_ID,
     authority: AUTHORITY,

@@ -127,7 +127,8 @@
     "is_ok",
     "is_err",
     "unwrap_or",
-    "unwrap_err_or"
+    "unwrap_err_or",
+    "expect"
   ],
   "numeric_suffix_fixits": {
     "amt": "strip",

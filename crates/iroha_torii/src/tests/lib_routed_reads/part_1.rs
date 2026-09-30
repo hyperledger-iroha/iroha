@@ -858,8 +858,13 @@ fn merged_list_response_rejects_array_payloads_from_legacy_list_handlers() {
         norito::json!([{"id": "alpha"}]),
         norito::json!([{"id": "alpha"}, {"id": "beta"}]),
     ];
-    let response = merged_list_response(payloads, "fanout", routed_read_test_budget())
-        .expect_err("legacy raw-array list payloads must fail closed");
+    let response = merged_list_response(
+        payloads,
+        ToriiReadEndpointV1::AccountAssetsGet,
+        "fanout",
+        routed_read_test_budget(),
+    )
+    .expect_err("legacy raw-array list payloads must fail closed");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(
         response
@@ -2187,6 +2192,7 @@ async fn merged_list_response_deduplicates_items_and_sets_total() {
                 "total": 2
             }),
         ],
+        ToriiReadEndpointV1::AccountAssetsGet,
         "proxy",
         routed_read_test_budget(),
     )
@@ -2222,6 +2228,7 @@ async fn merged_list_response_preserves_first_seen_order() {
                 "total": 2
             }),
         ],
+        ToriiReadEndpointV1::AccountAssetsGet,
         "proxy",
         routed_read_test_budget(),
     )
@@ -2900,6 +2907,87 @@ async fn merged_space_directory_bindings_response_unions_accounts_and_omits_sing
 }
 
 #[tokio::test]
+async fn pipeline_status_global_resolution_prefers_routed_terminal_over_local_queue() {
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    for kind in ["Applied", "Rejected"] {
+        let response = pipeline_status_global_response_with_local_hint(
+            pipeline_status_hint_response(kind, "state"),
+            Some((
+                PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+                "queue",
+            )),
+            &hash,
+            ResponseFormat::Json,
+            ROUTED_READ_TEST_BODY_BYTES,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response_json(response).await;
+        assert_eq!(payload["status"]["kind"].as_str(), Some(kind));
+        assert_eq!(payload["resolved_from"].as_str(), Some("state"));
+    }
+}
+#[tokio::test]
+async fn pipeline_status_global_resolution_preserves_pending_and_refuses_unavailable_absence() {
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    let remote_pending = pipeline_status_global_response_with_local_hint(
+        pipeline_status_hint_response("Queued", "queue"),
+        None,
+        &hash,
+        ResponseFormat::Json,
+        ROUTED_READ_TEST_BODY_BYTES,
+    )
+    .await;
+    assert_eq!(remote_pending.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(remote_pending).await["status"]["kind"].as_str(),
+        Some("Queued")
+    );
+    let ingress_pending = pipeline_status_global_response_with_local_hint(
+        pipeline_status_not_found_response(
+            &hash,
+            PipelineStatusReadScope::Global,
+            ResponseFormat::Json,
+        ),
+        Some((
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            "queue",
+        )),
+        &hash,
+        ResponseFormat::Json,
+        ROUTED_READ_TEST_BODY_BYTES,
+    )
+    .await;
+    assert_eq!(ingress_pending.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(ingress_pending).await["status"]["kind"].as_str(),
+        Some("Queued")
+    );
+    for local_hint in [
+        None,
+        Some((
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            "queue",
+        )),
+    ] {
+        let unavailable = pipeline_status_global_response_with_local_hint(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "peer offline",
+            ),
+            local_hint,
+            &hash,
+            ResponseFormat::Json,
+            ROUTED_READ_TEST_BODY_BYTES,
+        )
+        .await;
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+#[tokio::test]
 async fn pipeline_status_fanout_requires_exact_scoped_absence() {
     let routes = [
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
@@ -3113,4 +3201,42 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
     .await
     .expect_err("no routes unavailable");
     assert_eq!(empty.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn permission_fanout_preserves_route_exhaustion_after_deduplication() {
+    for second_has_more in [false, true] {
+        let response = merged_list_response(
+            vec![
+                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 1, "has_more": false}),
+                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 2, "has_more": second_has_more}),
+            ],
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            "fanout",
+            routed_read_test_budget(),
+        ).unwrap();
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(1));
+        assert_eq!(json["has_more"].as_bool(), Some(second_has_more));
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn permission_fanout_rejects_missing_or_nonprogressing_exhaustion_evidence() {
+    for payload in [
+        norito::json!({"items": [], "total": 0}),
+        norito::json!({"items": [], "total": 0, "has_more": "false"}),
+        norito::json!({"items": [], "total": 1, "has_more": true}),
+    ] {
+        let response = merged_list_response(
+            vec![payload],
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            "fanout",
+            routed_read_test_budget(),
+        )
+        .unwrap_err();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

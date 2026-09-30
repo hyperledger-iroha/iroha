@@ -240,7 +240,7 @@ WAVE_TWO_TARGETS = (
         package="mochi/mochi-integration",
         target="readiness_smoke",
         root="readiness_smoke.rs",
-        modules=(("supervisor", "supervisor.rs"),),
+        modules=(),
     ),
     WaveTwoTarget(
         package="crates/sorafs_node",
@@ -285,7 +285,6 @@ WAVE_TWO_SOURCE_PATHS = (
     'mochi/mochi-core/tests/composer_drafts.rs',
     'mochi/mochi-core/tests/torii_streams.rs',
     'mochi/mochi-integration/tests/readiness_smoke.rs',
-    'mochi/mochi-integration/tests/supervisor.rs',
     'tools/soranet-handshake-harness/tests/fixtures_verify.rs',
     'tools/soranet-handshake-harness/tests/interop_parity.rs',
     'tools/soranet-handshake-harness/tests/perf_gate.rs',
@@ -488,7 +487,7 @@ def validate_wave_two(sources: dict[str, str] | None = None) -> None:
             first_statement = f"fn {name}() {{\n{SERIAL_CALL}"
             if source.count(first_statement) != 1:
                 raise AssertionError(f"{path}: {name} is not directly serialized")
-    if serial_test_count != 13:
+    if serial_test_count != 14:
         raise AssertionError("serialized test count drifted")
 
     for path in sorted(WAVE_TWO_SOURCE_PATHS):
@@ -554,6 +553,12 @@ class IntegrationTargetConsolidationTest(unittest.TestCase):
                 "crates/iroha_derive/tests/ui.rs",
                 "        .unwrap_or_else(std::sync::PoisonError::into_inner)",
                 "        .unwrap()",
+            ),
+            _replace_once(
+                sources,
+                "crates/iroha_monitor/tests/smoke.rs",
+                f"fn status_stub_retains_listener_until_its_owner_drops() {{\n{SERIAL_CALL}",
+                "fn status_stub_retains_listener_until_its_owner_drops() {\n",
             ),
         )
         body_mutation = dict(sources)
@@ -671,6 +676,8 @@ def _wave_three_table(target: str, root: str) -> str:
         table += '\nrequired-features = ["trybuild-tests"]'
     if root == "sorafs_cli.rs":
         table += '\nrequired-features = ["cli-orchestrator", "moderation-grpc"]'
+    if root == "one_gib.rs":
+        table += '\nrequired-features = ["dev-tools"]'
     return table
 
 
@@ -838,6 +845,12 @@ class WaveThreeIntegrationTargetConsolidationTest(unittest.TestCase):
                 "crates/norito_derive/Cargo.toml",
                 'required-features = ["trybuild-tests"]',
                 'required-features = ["other"]',
+            ),
+            _replace_once(
+                sources,
+                "crates/sorafs_chunker/Cargo.toml",
+                'name = "one_gib"\npath = "tests/one_gib.rs"\nrequired-features = ["dev-tools"]',
+                'name = "one_gib"\npath = "tests/one_gib.rs"\nrequired-features = []',
             ),
             _replace_once(
                 sources,

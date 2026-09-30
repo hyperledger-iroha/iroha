@@ -218,7 +218,7 @@ impl Diagnostic {
         }
         Value::Object(diagnostic)
     }
-    fn render_human(&self) -> String {
+    pub(crate) fn render_human(&self) -> String {
         let mut rendered = format!("error[{}]: {}\n", self.code.as_str(), self.message);
         if let Some((human, _)) = self.details.as_deref() {
             rendered.push_str(&terminated(human));

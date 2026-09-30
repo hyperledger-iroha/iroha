@@ -503,12 +503,11 @@ fn contract_probe_genesis_registration(artifact: &[u8]) -> Result<Vec<Instructio
     let permission: Permission = CanManageSmartContractCode.into();
     Ok(vec![
         Grant::account_permission(permission, registrar).into(),
-        RegisterSmartContractBytes {
-            code_hash: verified.code_hash,
+        RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
             code: artifact.to_vec(),
         }
         .into(),
-        RegisterSmartContractCode { manifest }.into(),
+        { let scoped_manifest = manifest; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }.into(),
     ])
 }
 
@@ -661,17 +660,14 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
     let permission: Permission = CanManageSmartContractCode.into();
     let expected: Vec<InstructionBox> = vec![
         Grant::account_permission(permission, registrar).into(),
-        RegisterSmartContractBytes {
-            code_hash: verified.code_hash,
+        RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
             code: artifact.clone(),
         }
         .into(),
-        RegisterSmartContractCode {
-            manifest: verified
+        { let scoped_manifest = verified
                 .manifest
                 .try_signed(registrar_key)
-                .expect("sign manifest"),
-        }
+                .expect("sign manifest"); RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .into(),
     ];
     let actual = contract_probe_genesis_registration(&artifact).expect("genesis registration");
@@ -1411,16 +1407,14 @@ fn deploy_contract_locally_signed_with_registration(
         }
         for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
             let chunk_index = u32::try_from(index)?;
-            let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-                code_hash: verified.code_hash,
+            let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
                 total_size,
                 chunk_index,
                 chunk_count,
                 chunk: chunk.to_vec(),
             })];
             if chunk_index + 1 == chunk_count {
-                instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-                    code_hash: verified.code_hash,
+                instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
                     total_size,
                     chunk_count,
                 }));
@@ -1432,7 +1426,7 @@ fn deploy_contract_locally_signed_with_registration(
             )?;
         }
         client.submit_with_metadata(
-            RegisterSmartContractCode { manifest },
+            { let scoped_manifest = manifest; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata.clone(),
         )?;
@@ -3025,8 +3019,8 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
             let code_hash = verified.code_hash;
             let actual = read_on_dedicated_thread(move || {
                 reader.client().query_single(
-                    iroha_data_model::query::smart_contract::FindContractManifestByCodeHash::new(
-                        code_hash,
+                    iroha_data_model::query::smart_contract::FindContractManifestByArtifactId::new(
+                        iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                     ),
                 ).map_err(Into::into)
             })

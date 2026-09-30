@@ -76,6 +76,7 @@ const KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS: &[&str] = &[
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "expect",
     "i8",
     "i16",
     "i32",

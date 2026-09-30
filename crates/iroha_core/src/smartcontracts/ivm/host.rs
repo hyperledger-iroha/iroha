@@ -1263,7 +1263,7 @@ pub trait QueryStateRefOps {
     fn prepare_contract_cache_miss(
         &self,
         cache: &PreparedContractCache,
-        code_hash: Hash,
+        artifact: iroha_data_model::smart_contract::ContractArtifactId,
     ) -> Result<ivm::PreparedContract, ivm::VMError>;
     /// Resolve subscription context for a trigger identifier.
     ///
@@ -2045,27 +2045,27 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
     fn prepare_contract_cache_miss(
         &self,
         cache: &PreparedContractCache,
-        code_hash: Hash,
+        artifact: iroha_data_model::smart_contract::ContractArtifactId,
     ) -> Result<ivm::PreparedContract, ivm::VMError> {
         let prepared = match *self {
             QueryStateRef::View(view) => {
-                crate::smartcontracts::code::with_code_bytes(view, &code_hash, |bytes| {
-                    cache.get_or_prepare(code_hash, bytes)
+                crate::smartcontracts::code::with_code_bytes(view, &artifact, |bytes| {
+                    cache.get_or_prepare(artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::QueryView(view) => {
-                crate::smartcontracts::code::with_code_bytes(view, &code_hash, |bytes| {
-                    cache.get_or_prepare(code_hash, bytes)
+                crate::smartcontracts::code::with_code_bytes(view, &artifact, |bytes| {
+                    cache.get_or_prepare(artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::Block(block) => {
-                crate::smartcontracts::code::with_code_bytes(block, &code_hash, |bytes| {
-                    cache.get_or_prepare(code_hash, bytes)
+                crate::smartcontracts::code::with_code_bytes(block, &artifact, |bytes| {
+                    cache.get_or_prepare(artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::Transaction(tx) => {
-                crate::smartcontracts::code::with_code_bytes(tx, &code_hash, |bytes| {
-                    cache.get_or_prepare(code_hash, bytes)
+                crate::smartcontracts::code::with_code_bytes(tx, &artifact, |bytes| {
+                    cache.get_or_prepare(artifact.code_hash, bytes)
                 })
             }
         };
@@ -6876,8 +6876,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(prepared);
         }
         if let Some(state_ref) = self.query_state.get() {
-            return state_ref
-                .prepare_contract_cache_miss(&self.prepared_contract_cache, identity.code_hash);
+            return state_ref.prepare_contract_cache_miss(
+                &self.prepared_contract_cache,
+                iroha_data_model::smart_contract::ContractArtifactId::new(
+                    identity
+                        .contract_address
+                        .dataspace_id()
+                        .map_err(|_| ivm::VMError::PermissionDenied)?,
+                    identity.code_hash,
+                ),
+            );
         }
         let record = self
             .bound_contract_records_by_subject
@@ -7999,19 +8007,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         state: &S,
         contract_address: &ContractAddress,
     ) -> Result<ContractInstance, ivm::VMError> {
+        crate::executor::root_scope::ensure_committed_contract_scope(
+            state.world(),
+            contract_address,
+        )
+        .map_err(|_| ivm::VMError::PermissionDenied)?;
         let code_hash = state
             .world()
             .contract_instances()
             .get(contract_address)
             .copied()
             .ok_or(ivm::VMError::DecodeError)?;
+        let artifact = iroha_data_model::smart_contract::ContractArtifactId::new(
+            contract_address
+                .dataspace_id()
+                .map_err(|_| ivm::VMError::PermissionDenied)?,
+            code_hash,
+        );
         let manifest = state
             .world()
             .contract_manifests()
-            .get(&code_hash)
+            .get(&artifact)
             .ok_or(ivm::VMError::DecodeError)?;
         if manifest.code_hash != Some(code_hash)
-            || state.world().contract_code().get(&code_hash).is_none()
+            || state.world().contract_code().get(&artifact).is_none()
         {
             return Err(ivm::VMError::DecodeError);
         }
@@ -9452,6 +9471,11 @@ impl<QS> CoreHostImpl<QS> {
         AccountId,
         usize,
     )> {
+        crate::executor::root_scope::ensure_committed_contract_scope(
+            state.world(),
+            contract_address,
+        )
+        .ok()?;
         let identity =
             crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)?;
         let subject =
@@ -9459,7 +9483,10 @@ impl<QS> CoreHostImpl<QS> {
         let artifact_len = state
             .world()
             .contract_code()
-            .get(&identity.code_hash)?
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                identity.contract_address.dataspace_id().ok()?,
+                identity.code_hash,
+            ))?
             .len();
         Some((identity, subject, artifact_len))
     }
@@ -11361,12 +11388,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     self.execute_core_query_page(vm, number, tag, offset, limit)
                 }
                 ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST => {
-                    let code_hash: Hash =
+                    let artifact_id: iroha_data_model::smart_contract::ContractArtifactId =
                         Self::decode_query_key(vm, vm.register(10), PointerType::NoritoBytes)?;
                     let request =
-                    QueryRequest::Singular(SingularQueryBox::FindContractManifestByCodeHash(
-                        iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
-                            code_hash,
+                    QueryRequest::Singular(SingularQueryBox::FindContractManifestByArtifactId(
+                        iroha_data_model::query::smart_contract::prelude::FindContractManifestByArtifactId {
+                            artifact_id,
                         },
                     ));
                     self.execute_singular_query_payload(
@@ -13266,6 +13293,10 @@ seiyaku PrivilegedBinding {
         let code_hash = IrohaHash::new(b"contract-code");
         let abi_hash = IrohaHash::new(b"contract-abi");
         let request = scode::RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             manifest: ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -13307,7 +13338,10 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
         let code_hash = IrohaHash::new(b"bytecode");
         let request = scode::RegisterSmartContractBytes {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             code: vec![0xAA, 0xBB, 0xCC],
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -13332,7 +13366,10 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
         let code_hash = IrohaHash::new(b"heap-bytecode");
         let request = scode::RegisterSmartContractBytes {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             code: vec![0xAA, 0xBB, 0xCC],
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -13368,7 +13405,10 @@ seiyaku PrivilegedBinding {
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let request = scode::RegisterSmartContractBytes {
-            code_hash: IrohaHash::new(b"unowned-bytecode"),
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                IrohaHash::new(b"unowned-bytecode"),
+            ),
             code: vec![0xAA, 0xBB, 0xCC],
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -13663,7 +13703,10 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
         let code_hash = IrohaHash::new(b"bytecode-image");
         let request = scode::RemoveSmartContractBytes {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             reason: None,
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -13693,6 +13736,87 @@ seiyaku PrivilegedBinding {
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
     }
+    #[test]
+    fn live_nested_dispatch_rejects_foreign_private_root_addresses_before_lookup() {
+        let own = DataSpaceId::new((1_u64 << 40) + 31);
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(IrohaHash::new(b"parent")),
+        );
+        let world = crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+                parent_network_id: network,
+                dataspace_id: own,
+            },
+        );
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let authority = fixture_account("alice");
+        let view = state.view();
+        for foreign in [DataSpaceId::UNIVERSAL, DataSpaceId::new(31)] {
+            let address = ContractAddress::derive(&network, &authority, 0, foreign).unwrap();
+            assert!(matches!(
+                CoreHost::contract_instance_by_address(&view, &address),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+            assert!(CoreHost::bound_contract_dispatch_identity(&view, &address).is_none());
+        }
+        let local = ContractAddress::derive(&network, &authority, 0, own).unwrap();
+        assert!(
+            matches!(
+                CoreHost::contract_instance_by_address(&view, &local),
+                Err(ivm::VMError::DecodeError)
+            ),
+            "exact local scope proceeds to the missing-binding lookup"
+        );
+    }
+    #[test]
+    fn vm_produced_instruction_cannot_acquire_unreviewed_private_root_authority() {
+        let authority: AccountId = fixture_account("alice");
+        let account: AccountId = fixture_account("bob");
+        let own = DataSpaceId::new((1_u64 << 40) + 31);
+        let scope = iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+            parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(IrohaHash::new(b"private-parent")),
+            ),
+            dataspace_id: own,
+        };
+        let world = crate::sumeragi::lanes::routing::test_support::world(scope);
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            2.try_into().unwrap(),
+            None,
+            None,
+            1_000,
+            0,
+        ));
+        let mut tx = block.transaction();
+        tx.current_dataspace_id = Some(own);
+        tx.world.current_dataspace_id = Some(own);
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = ivm::IVM::new(1_000);
+        let pointer = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        vm.set_register(10, pointer);
+        host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm)
+            .expect("VM produces one canonical native instruction");
+        assert_eq!(host.queued.len(), 1);
+        let error = host
+            .apply_queued(&mut tx, &authority)
+            .expect_err("generated effects require a reviewed private scope owner");
+        assert!(
+            error
+                .to_string()
+                .contains("reviewed private-root scope owner")
+        );
+        assert!(tx.world.accounts.get(&account).is_none());
+    }
+
     #[test]
     fn unregister_account_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
@@ -14948,12 +15072,18 @@ seiyaku StaleRuntimeBinding {
         let code = view
             .world()
             .contract_code()
-            .get(&identity.code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                identity.contract_address.dataspace_id().unwrap(),
+                identity.code_hash,
+            ))
             .expect("installed contract bytecode");
         let stale_code = view
             .world()
             .contract_code()
-            .get(&stale_identity.code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                stale_identity.contract_address.dataspace_id().unwrap(),
+                stale_identity.code_hash,
+            ))
             .expect("stale contract bytecode");
         let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let summary = cache
@@ -18574,7 +18704,10 @@ seiyaku Callee {
                 .expect("installed callee contract binding");
             view.world()
                 .contract_code()
-                .get(&code_hash)
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    callee_contract.dataspace_id().unwrap(),
+                    code_hash,
+                ))
                 .expect("installed callee contract artifact")
                 .len()
         };

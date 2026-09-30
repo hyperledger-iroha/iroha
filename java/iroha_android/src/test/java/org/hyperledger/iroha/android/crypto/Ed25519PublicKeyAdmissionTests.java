@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.junit.Test;
 
 public final class Ed25519PublicKeyAdmissionTests {
@@ -31,6 +32,19 @@ public final class Ed25519PublicKeyAdmissionTests {
     }
     assertFalse(Ed25519PublicKeyAdmission.isValid(null));
     assertFalse(Ed25519PublicKeyAdmission.isValid(new byte[31]));
+  }
+
+  @Test
+  public void canonicalKotlinAdmissionRetainsStrictChecksAfterCallerMutation() {
+    final byte[] admitted = hex("3B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29");
+    final byte[] original = admitted.clone();
+    assertTrue(Ed25519PublicKeyAdmission.isValid(admitted));
+    java.util.Arrays.fill(admitted, (byte) 0);
+    assertFalse(Ed25519PublicKeyAdmission.isValid(admitted));
+    assertTrue(Ed25519PublicKeyAdmission.isValid(original));
+    final byte[] mixed = hex("6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB");
+    assertFalse(Ed25519PublicKeyAdmission.isValid(mixed));
+    assertFalse(org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission.isValid(mixed));
   }
 
   private static byte[] hex(final String encoded) {

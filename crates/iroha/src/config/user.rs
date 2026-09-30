@@ -38,6 +38,8 @@ pub struct Root {
     pub torii_url: WithOrigin<Url>,
     /// Optional HTTP Basic Auth credentials.
     pub basic_auth: Option<BasicAuth>,
+    /// Owner-held Torii listener credential. Kept in private client configuration.
+    pub api_token: Option<crate::secrecy::SecretString>,
     /// Timeout for Torii HTTP requests.
     #[config(default = "super::DEFAULT_TORII_REQUEST_TIMEOUT.into()")]
     pub torii_request_timeout_ms: WithOrigin<DurationMs>,
@@ -321,6 +323,7 @@ impl Root {
             network_id_file,
             torii_url,
             basic_auth,
+            api_token,
             torii_request_timeout_ms,
             account:
                 Account {
@@ -495,6 +498,7 @@ impl Root {
                 key_pair: key_pair.unwrap(),
                 torii_api_url,
                 basic_auth,
+                api_token,
                 torii_request_timeout: torii_request_timeout_ms.into_value().get(),
                 transaction_ttl: tx_ttl.into_value().get(),
                 transaction_status_timeout: tx_timeout.into_value().get(),
@@ -794,6 +798,7 @@ mod tests {
                 Url::parse("http://127.0.0.1:8080/torii").expect("valid torii url"),
             ),
             basic_auth: None,
+            api_token: None,
             torii_request_timeout_ms: WithOrigin::inline(DurationMs::from(
                 crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             )),

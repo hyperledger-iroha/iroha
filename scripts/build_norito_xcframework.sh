@@ -1331,7 +1331,7 @@ rebuild_apple_archive_index() {
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
-  local source_library="$CARGO_TARGET_DIR/$target_triple/release/lib${LIB_CRATE_NAME}.a"
+  local source_library="$CARGO_TARGET_DIR/$target_triple/apple-release/lib${LIB_CRATE_NAME}.a"
   local staged_library="$STAGE_DIR/cargo-libraries/$target_triple/lib${LIB_CRATE_NAME}.a"
   if [[ ! -f "$source_library" ]]; then
     echo "[-] Missing $label static library after Cargo build: $source_library" >&2
@@ -1341,7 +1341,7 @@ stage_cargo_library() {
   cp "$source_library" "$staged_library"
   run_isolated_python "$PQCRYPTO_ARCHIVE_NORMALIZER" \
     --library "$staged_library" \
-    --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/release/build" \
+    --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/apple-release/build" \
     --cargo-messages "$STAGE_DIR/cargo-messages/$target_triple.jsonl" \
     --target "$target_triple" --cargo-lock "$CARGO_LOCKFILE" \
     --report "$staged_library.pqcrypto-normalization.json" || return $?
@@ -1404,7 +1404,7 @@ run_hermetic_apple_cargo() {
   # Cargo also reads the user's config.toml. Replace ambient wrappers with the
   # source-sealed helper, which disables rustc's broken debug-info stripping
   # for host proc-macro dylibs on macOS 27 (rust-lang/rust#157750). Ordinary
-  # target libraries retain their exact release compiler and linker settings.
+  # target libraries retain the source-sealed apple-release compiler settings.
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
       --set "CARGO=$CARGO_BINARY" \
@@ -1448,10 +1448,10 @@ run_hermetic_apple_cargo() {
 if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   echo "[+] Authenticating five isolated CI Apple slice handoffs" >&2
 elif [[ -n "$CI_APPLE_SLICE" ]]; then
-  echo "[+] Building one Rust static library in the caller's fixed Cargo target (release)" >&2
+  echo "[+] Building one Rust static library in the caller's fixed Cargo target (apple-release, staticlib-only ThinLTO)" >&2
   echo "    Target: $CI_APPLE_SLICE" >&2
 else
-  echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
+  echo "[+] Building Rust static libraries in the caller's fixed Cargo target (apple-release, staticlib-only ThinLTO)" >&2
   echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
   echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
 fi
@@ -1469,7 +1469,8 @@ should_build_apple_slice() {
 if should_build_apple_slice "$MACOS_ARM_TRIPLE"; then
   run_hermetic_apple_cargo \
     apple-macos "$MACOSX_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \
+    --crate-type staticlib --profile apple-release \
     --target "$MACOS_ARM_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the arm64 macOS build"
@@ -1481,7 +1482,8 @@ fi
 if should_build_apple_slice "$DEVICE_TRIPLE"; then
   run_hermetic_apple_cargo \
     apple-ios-device "$IPHONEOS_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \
+    --crate-type staticlib --profile apple-release \
     --target "$DEVICE_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the iOS device build"
@@ -1490,7 +1492,8 @@ fi
 if should_build_apple_slice "$SIM_ARM_TRIPLE"; then
   run_hermetic_apple_cargo \
     apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \
+    --crate-type staticlib --profile apple-release \
     --target "$SIM_ARM_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the arm64 simulator build"
@@ -1499,7 +1502,8 @@ fi
 if should_build_apple_slice "$SIM_X64_TRIPLE"; then
   run_hermetic_apple_cargo \
     apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \
+    --crate-type staticlib --profile apple-release \
     --target "$SIM_X64_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 simulator build"
@@ -1508,7 +1512,8 @@ fi
 if should_build_apple_slice "$MACOS_X64_TRIPLE"; then
   run_hermetic_apple_cargo \
     apple-macos "$MACOSX_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    rustc --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib \
+    --crate-type staticlib --profile apple-release \
     --target "$MACOS_X64_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 macOS build"

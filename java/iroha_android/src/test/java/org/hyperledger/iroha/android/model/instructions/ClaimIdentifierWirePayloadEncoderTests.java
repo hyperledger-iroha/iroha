@@ -3,14 +3,15 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.util.Locale;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
-import org.hyperledger.iroha.android.client.IdentifierReceiptAttestation;
-import org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoder;
-import org.hyperledger.iroha.android.client.IdentifierResolutionExecutionPayload;
-import org.hyperledger.iroha.android.client.IdentifierResolutionPayload;
-import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
-import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
-import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
-import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.sdk.client.IdentifierReceiptAttestation;
+import org.hyperledger.iroha.sdk.client.IdentifierReceiptCanonicalEncoder;
+import org.hyperledger.iroha.sdk.client.IdentifierResolutionExecutionPayload;
+import org.hyperledger.iroha.sdk.client.IdentifierResolutionPayload;
+import org.hyperledger.iroha.sdk.client.IdentifierResolutionReceipt;
+import org.hyperledger.iroha.sdk.client.RamLfeOutputOpening;
+import org.hyperledger.iroha.sdk.client.RamLfeOutputOpeningPayload;
+import org.hyperledger.iroha.sdk.core.model.InstructionBox;
+import org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoder;
 import org.hyperledger.iroha.android.test.FixtureGeneratorRunner;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -30,6 +31,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     claimIdentifierRejectsAccountMismatchBeforeEncoding();
     claimIdentifierDecoderRejectsTrailingPayloadBytes();
     claimIdentifierDecoderRejectsEmptyAccountPayload();
+    claimIdentifierRejectsPhoneRetailWithoutCanonicalityEvidence();
     printClaimIdentifierWirePayloadHex();
   }
 
@@ -37,7 +39,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     final String signatureHex = "A1B2C3D4";
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
-            "phone#retail",
+            "email#retail",
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
@@ -62,14 +64,14 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             new IdentifierReceiptAttestation("signed", signatureHex, null, null));
 
     final InstructionBox instruction = ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, receipt);
-    assert ClaimIdentifierWirePayloadEncoder.WIRE_NAME.equals(instruction.name())
+    assert ClaimIdentifierWirePayloadEncoder.WIRE_NAME.equals(instruction.getName())
         : "ClaimIdentifier wire name mismatch";
-    assert instruction.payload() instanceof InstructionBox.WirePayload
+    assert instruction.getPayload() instanceof org.hyperledger.iroha.sdk.core.model.WirePayload
         : "ClaimIdentifier must use a wire payload";
 
-    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final org.hyperledger.iroha.sdk.core.model.WirePayload wirePayload = (org.hyperledger.iroha.sdk.core.model.WirePayload) instruction.getPayload();
     final NoritoHeader.DecodeResult decoded =
-        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+        NoritoHeader.decode(wirePayload.getPayloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
 
     final NoritoDecoder claimDecoder = new NoritoDecoder(decoded.payload(), decoded.header().flags());
@@ -83,23 +85,32 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     final NoritoDecoder receiptDecoder = new NoritoDecoder(encodedReceipt, decoded.header().flags());
     final byte[] embeddedPayload = readSizedField(receiptDecoder);
     final byte[] embeddedAttestation = readSizedField(receiptDecoder);
+    final byte[] absentPhoneCanonicality = readSizedField(receiptDecoder);
+    assert java.util.Arrays.equals(new byte[] {0}, absentPhoneCanonicality)
+        : "Receipt must encode the mandatory absent phone-retail canonicality option";
     assert receiptDecoder.remaining() == 0 : "Receipt payload must not contain trailing bytes";
     assert java.util.Arrays.equals(
-            embeddedPayload, IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload()))
+            embeddedPayload, IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload))
         : "Receipt payload bytes mismatch";
     assert java.util.Arrays.equals(
             embeddedAttestation,
-            IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation()))
+            IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation))
         : "Receipt attestation bytes mismatch";
 
     final ClaimIdentifierWirePayloadEncoder.DecodedClaimIdentifierPayload roundTrip =
         ClaimIdentifierWirePayloadEncoder.decodePayload(
-            wirePayload.payloadBytes(), AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    assert ACCOUNT_ID.equals(roundTrip.accountId()) : "decoded ClaimIdentifier account mismatch";
-    assert java.util.Arrays.equals(embeddedPayload, roundTrip.receiptPayloadBytes())
+            wirePayload.getPayloadBytes(), AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    assert ACCOUNT_ID.equals(roundTrip.getAccountId()) : "decoded ClaimIdentifier account mismatch";
+    assert java.util.Arrays.equals(embeddedPayload, roundTrip.getReceiptPayloadBytes())
         : "decoded ClaimIdentifier receipt payload mismatch";
-    assert java.util.Arrays.equals(embeddedAttestation, roundTrip.attestationPayloadBytes())
+    assert java.util.Arrays.equals(embeddedAttestation, roundTrip.getAttestationPayloadBytes())
         : "decoded ClaimIdentifier attestation mismatch";
+    roundTrip.getReceiptPayloadBytes()[0] ^= 1;
+    roundTrip.getAttestationPayloadBytes()[0] ^= 1;
+    assert java.util.Arrays.equals(embeddedPayload, roundTrip.getReceiptPayloadBytes())
+        : "decoded ClaimIdentifier receipt payload must preserve owned bytes";
+    assert java.util.Arrays.equals(embeddedAttestation, roundTrip.getAttestationPayloadBytes())
+        : "decoded ClaimIdentifier attestation must preserve owned bytes";
   }
 
   private static void printClaimIdentifierWirePayloadHex() {
@@ -131,14 +142,14 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             new IdentifierReceiptAttestation("signed", signatureHex, null, null));
 
     final InstructionBox instruction = ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, receipt);
-    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final org.hyperledger.iroha.sdk.core.model.WirePayload wirePayload = (org.hyperledger.iroha.sdk.core.model.WirePayload) instruction.getPayload();
     final NoritoHeader.DecodeResult decoded =
-        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+        NoritoHeader.decode(wirePayload.getPayloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
 
-    System.out.println("JAVA_CLAIM_WIRE_NAME=" + instruction.name());
+    System.out.println("JAVA_CLAIM_WIRE_NAME=" + instruction.getName());
     System.out.println("JAVA_CLAIM_BARE_HEX=" + toHex(decoded.payload()));
-    System.out.println("JAVA_CLAIM_FRAMED_HEX=" + toHex(wirePayload.payloadBytes()));
+    System.out.println("JAVA_CLAIM_FRAMED_HEX=" + toHex(wirePayload.getPayloadBytes()));
   }
 
   private static void claimIdentifierMatchesRustCanonicalFixture() throws Exception {
@@ -147,7 +158,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     final String liveAccountId = canonicalI105AccountId(PARITY_ACCOUNT_MULTIHASH);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
-            "phone#e164",
+            "email#retail",
             new IdentifierResolutionExecutionPayload(
                 "parity_test",
                 PARITY_HASH_HEX,
@@ -173,14 +184,14 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
 
     final InstructionBox instruction =
         ClaimIdentifierWirePayloadEncoder.encode(liveAccountId, receipt);
-    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final org.hyperledger.iroha.sdk.core.model.WirePayload wirePayload = (org.hyperledger.iroha.sdk.core.model.WirePayload) instruction.getPayload();
     final NoritoHeader.DecodeResult decoded =
-        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+        NoritoHeader.decode(wirePayload.getPayloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
 
-    assert ClaimIdentifierWirePayloadEncoder.WIRE_NAME.equals(instruction.name())
+    assert ClaimIdentifierWirePayloadEncoder.WIRE_NAME.equals(instruction.getName())
         : "ClaimIdentifier parity wire name mismatch";
-    final String actualFramedHex = toHex(wirePayload.payloadBytes());
+    final String actualFramedHex = toHex(wirePayload.getPayloadBytes());
     assert rustFramedHex.equals(actualFramedHex)
         : "ClaimIdentifier parity framed payload drifted from Rust\nexpected="
             + rustFramedHex
@@ -215,9 +226,9 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
   private static void claimIdentifierDecoderRejectsTrailingPayloadBytes() {
     final InstructionBox instruction =
         ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, sampleReceipt(ACCOUNT_ID, "A1B2C3D4"));
-    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final org.hyperledger.iroha.sdk.core.model.WirePayload wirePayload = (org.hyperledger.iroha.sdk.core.model.WirePayload) instruction.getPayload();
     final NoritoHeader.DecodeResult decoded =
-        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+        NoritoHeader.decode(wirePayload.getPayloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
     final byte[] mutated = java.util.Arrays.copyOf(decoded.payload(), decoded.payload().length + 1);
 
@@ -234,9 +245,9 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
   private static void claimIdentifierDecoderRejectsEmptyAccountPayload() {
     final InstructionBox instruction =
         ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, sampleReceipt(ACCOUNT_ID, "A1B2C3D4"));
-    final InstructionBox.WirePayload wirePayload = (InstructionBox.WirePayload) instruction.payload();
+    final org.hyperledger.iroha.sdk.core.model.WirePayload wirePayload = (org.hyperledger.iroha.sdk.core.model.WirePayload) instruction.getPayload();
     final NoritoHeader.DecodeResult decoded =
-        NoritoHeader.decode(wirePayload.payloadBytes(), null);
+        NoritoHeader.decode(wirePayload.getPayloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
     final byte[] mutated = decoded.payload().clone();
     mutated[0] = 0;
@@ -249,6 +260,24 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
       threw = ex.getMessage() != null && ex.getMessage().contains("payload bytes must not be empty");
     }
     assert threw : "ClaimIdentifier decoder must reject empty AccountId payloads";
+  }
+
+  private static void claimIdentifierRejectsPhoneRetailWithoutCanonicalityEvidence() {
+    final IdentifierResolutionReceipt ordinary = sampleReceipt(ACCOUNT_ID, "A1B2C3D4");
+    final IdentifierResolutionPayload source = ordinary.payload;
+    final IdentifierResolutionReceipt phone =
+        new IdentifierResolutionReceipt(
+            new IdentifierResolutionPayload(
+                "phone#retail", source.execution, source.opening, source.opaqueId,
+                source.receiptHash, source.uaid, source.accountId),
+            ordinary.attestation);
+    boolean threw = false;
+    try {
+      ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID, phone);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("canonicality attestation");
+    }
+    assert threw : "phone#retail claim without signed canonicality evidence must fail closed";
   }
 
   private static RamLfeOutputOpening sampleOpening(
@@ -275,7 +304,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
       final String accountId, final String signatureHex) {
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
-            "phone#retail",
+            "email#retail",
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),

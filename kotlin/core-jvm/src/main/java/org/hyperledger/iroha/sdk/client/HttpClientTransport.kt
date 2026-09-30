@@ -1548,15 +1548,26 @@ class HttpClientTransport private constructor(
         )
     }
 
-    override fun getContractManifest(codeHash: String): CompletableFuture<ContractManifestRecord> {
-        require(codeHash.length == 64) { "codeHash must contain exactly 64 hex characters" }
-        val normalizedCodeHash = normalizeExactEvenLengthHex(codeHash, "codeHash")
+    override fun getContractManifest(
+        artifactId: ContractArtifactId,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ContractManifestRecord> {
+        val networkId = config.requireLocalSigningContext().networkId()
         return fetchJson(
-            buildJsonGetRequest(
-                "/v1/contracts/code/${encodePathSegment(normalizedCodeHash)}",
-                emptyMap(),
+            buildVpnRequest(
+                "GET",
+                "/v1/contracts/artifacts/${artifactId.dataspaceId}/${artifactId.codeHashHex}",
+                null,
+                canonicalAuth,
+                24L * 1024L * 1024L,
             ),
-            ContractJsonParser::parseManifestRecord,
+            Function { payload ->
+                ContractJsonParser.parseManifestRecord(payload).also { record ->
+                    check(record.networkId == networkId && record.artifactId == artifactId) {
+                        "contract manifest response does not match the selected network and exact artifact"
+                    }
+                }
+            },
             "contract manifest",
         )
     }

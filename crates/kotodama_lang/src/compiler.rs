@@ -786,6 +786,45 @@ fn emit_store64(
 fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
     frame_prefix.saturating_add(offset) as i64
 }
+/// Reuse a scratch base across consecutive words in a stack-resident ABI table.
+/// The caller reserves `register` until the table transfer is complete. A window
+/// spans all 32 aligned offsets representable by the signed byte immediate.
+struct StackTableWindow {
+    register: u8,
+    anchor: Option<i64>,
+}
+impl StackTableWindow {
+    fn new(register: u8) -> Self {
+        Self {
+            register,
+            anchor: None,
+        }
+    }
+
+    fn address(
+        &mut self,
+        code: &mut Vec<u8>,
+        fixups: &LiteralFixups,
+        offset: usize,
+    ) -> Result<(u8, i64), String> {
+        let offset = i64::try_from(offset).map_err(|_| "stack table offset overflow")?;
+        let sp = regalloc::SP_REG as u8;
+        if let Some(anchor) = self.anchor {
+            let relative = offset - anchor;
+            if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&relative) {
+                return Ok((self.register, relative));
+            }
+        } else if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&offset) {
+            return Ok((sp, offset));
+        }
+        let anchor = offset
+            .checked_sub(i64::from(WIDE_IMM_MIN))
+            .ok_or("stack table window overflow")?;
+        emit_bounded_add(code, fixups, self.register, sp, anchor, LITERAL_SHIFT_REG)?;
+        self.anchor = Some(anchor);
+        Ok((self.register, i64::from(WIDE_IMM_MIN)))
+    }
+}
 fn encode_nop() -> u32 {
     encode_addi(0, 0, 0).expect("ADDI x0, x0, 0 must always encode")
 }
@@ -1312,6 +1351,7 @@ enum DataKind {
     Name,
     Json,
     Domain,
+    String,
     Blob,
     NoritoBytes,
     DataSpaceId,
@@ -1339,6 +1379,7 @@ impl DataKind {
             | Self::Name
             | Self::Json
             | Self::Domain
+            | Self::String
             | Self::Blob
             | Self::NoritoBytes
             | Self::DataSpaceId
@@ -1458,7 +1499,11 @@ fn state_path_literal_data_key(
         )),
     }
 }
-fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
+fn encode_pointer_tlv_bytes(
+    kind: ir::DataRefKind,
+    raw: &str,
+    is_string_literal: bool,
+) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
     let (type_id, payload) = match kind {
@@ -1511,6 +1556,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
                 ivm_abi::codec::encode_canonical_norito(&json).ok()?,
             )
         }
+        DRK::Blob if is_string_literal => (PointerType::Blob, raw.as_bytes().to_vec()),
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::Int => {
@@ -3556,7 +3602,11 @@ impl Compiler {
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                         let literal_raw = string_map.get(&(func_idx, *value)).cloned();
                         if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
-                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw)
+                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(
+                                kind,
+                                &raw,
+                                string_literal_temps.contains(&(func_idx, *value)),
+                            )
                         {
                             let hex = hex::encode(tlv_bytes);
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
@@ -3826,7 +3876,11 @@ impl Compiler {
                         let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                         let literal_raw = string_map.get(&(func_idx, *value)).cloned();
                         if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
-                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw)
+                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(
+                                kind,
+                                &raw,
+                                string_literal_temps.contains(&(func_idx, *value)),
+                            )
                         {
                             let hex = hex::encode(tlv_bytes);
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
@@ -4151,6 +4205,18 @@ impl Compiler {
                     Ok(0)
                 }
             };
+            let literal_data_key = |temp: &ir::Temp, kind: ir::DataRefKind, value: &str| {
+                // Strings and byte literals share the runtime Blob pointer ABI,
+                // but only byte literals use the compiler's hex carrier spelling.
+                // Keep source UTF-8 distinct at every rematerialization site.
+                if kind == ir::DataRefKind::Blob
+                    && string_literal_temps.contains(&(func_idx, *temp))
+                {
+                    DataKey(DataKind::String, value.to_owned())
+                } else {
+                    data_key_for_pointer(kind, value)
+                }
+            };
             let emit_values_to_syscall_registers = |values: &[ir::Temp],
                                                     code: &mut Vec<u8>|
              -> Result<(), String> {
@@ -4167,7 +4233,7 @@ impl Compiler {
                     if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
                         && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
                     {
-                        literal_loads.push((target, data_key_for_pointer(kind, &value)));
+                        literal_loads.push((target, literal_data_key(temp, kind, &value)));
                     } else if let Some(source) =
                         alloc.register_for_use(*temp, allocation_position.get())
                     {
@@ -4220,6 +4286,13 @@ impl Compiler {
                                 code: &mut Vec<u8>|
              -> Result<(), String> {
                 if let Some(value) = string_map.get(&(func_idx, *temp)) {
+                    let kind = if kind == DataKind::Blob
+                        && string_literal_temps.contains(&(func_idx, *temp))
+                    {
+                        DataKind::String
+                    } else {
+                        kind
+                    };
                     emit_literal_load(code, &fixups, target, DataKey(kind, value.clone()));
                 } else {
                     let source = src_reg(temp, scratch, code)?;
@@ -4314,7 +4387,7 @@ impl Compiler {
                         Instr::StringConst { dest, value } => {
                             // Materialize string literals as Blob pointers via the literal table.
                             let (rd, spilled, imm) = dst_reg(dest);
-                            let key = DataKey(DataKind::Blob, value.clone());
+                            let key = DataKey(DataKind::String, value.clone());
                             emit_literal_load(&mut code, &fixups, rd, key);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
@@ -4348,7 +4421,7 @@ impl Compiler {
                                         dataref_kind_map.get(&(func_idx, *src_t)).copied(),
                                         string_map.get(&(func_idx, *src_t)).cloned(),
                                     ) {
-                                        let key = data_key_for_pointer(kind, &literal);
+                                        let key = literal_data_key(src_t, kind, &literal);
                                         emit_literal_load(&mut code, &fixups, rd, key);
                                     } else {
                                         let rs = src_reg(src_t, scratch1, &mut code)?;
@@ -4384,7 +4457,7 @@ impl Compiler {
                                     && right_zero
                                 {
                                     let (rd, spilled, imm) = dst_reg(dest);
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(left, kind, &lit);
                                     emit_literal_load(&mut code, &fixups, rd, key);
                                     spill_back(dest, rd, spilled, imm, &mut code)?;
                                     continue;
@@ -4394,7 +4467,7 @@ impl Compiler {
                                     && left_zero
                                 {
                                     let (rd, spilled, imm) = dst_reg(dest);
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(right, kind, &lit);
                                     emit_literal_load(&mut code, &fixups, rd, key);
                                     spill_back(dest, rd, spilled, imm, &mut code)?;
                                     continue;
@@ -4638,7 +4711,7 @@ impl Compiler {
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
                                 && let Some(lit) = string_map.get(&(func_idx, *src)).cloned()
                             {
-                                let key = data_key_for_pointer(kind, &lit);
+                                let key = literal_data_key(src, kind, &lit);
                                 emit_literal_load(&mut code, &fixups, rd, key);
                             } else {
                                 let rs = src_reg(src, scratch1, &mut code)?;
@@ -5912,7 +5985,7 @@ impl Compiler {
                                         &mut code,
                                         &fixups,
                                         12,
-                                        data_key_for_pointer(*kind, payload_raw),
+                                        literal_data_key(payload, *kind, payload_raw),
                                     );
                                 } else {
                                     let rs_payload = src_reg(payload, scratch1, &mut code)?;
@@ -5962,7 +6035,7 @@ impl Compiler {
                                         &mut code,
                                         &fixups,
                                         12,
-                                        data_key_for_pointer(*kind, payload_raw),
+                                        literal_data_key(payload, *kind, payload_raw),
                                     );
                                 } else {
                                     let rs_payload = src_reg(payload, scratch1, &mut code)?;
@@ -5999,7 +6072,7 @@ impl Compiler {
                                         &mut code,
                                         &fixups,
                                         11,
-                                        data_key_for_pointer(*kind, message_raw),
+                                        literal_data_key(message, *kind, message_raw),
                                     );
                                 } else {
                                     let rs_message = src_reg(message, scratch1, &mut code)?;
@@ -6019,6 +6092,7 @@ impl Compiler {
                                 .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
                             // Consume every argument before staging descriptor registers. Table
                             // scratch is disjoint from spills and is reused for each loop call.
+                            let mut argument_window = StackTableWindow::new(scratchd);
                             for (index, value) in args.iter().enumerate() {
                                 let source = if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *value)).copied()
@@ -6028,18 +6102,23 @@ impl Compiler {
                                         &mut code,
                                         &fixups,
                                         scratch1,
-                                        data_key_for_pointer(kind, literal),
+                                        literal_data_key(value, kind, literal),
                                     );
                                     scratch1
                                 } else {
                                     src_reg(value, scratch1, &mut code)?
                                 };
+                                let (table_base, table_offset) = argument_window.address(
+                                    &mut code,
+                                    &fixups,
+                                    frame.outgoing_argument_base + index * 8,
+                                )?;
                                 emit_store64(
                                     &mut code,
                                     &fixups,
-                                    sp,
+                                    table_base,
                                     source,
-                                    (frame.outgoing_argument_base + index * 8) as i64,
+                                    table_offset,
                                     scratch2,
                                 )?;
                             }
@@ -6086,15 +6165,21 @@ impl Compiler {
                                     "call to `{callee}` has an inconsistent result table"
                                 ));
                             }
+                            let mut result_window = StackTableWindow::new(scratch1);
                             for (index, destination) in destinations.iter().enumerate() {
                                 let (rd, spilled, imm) = dst_reg(destination);
+                                let (table_base, table_offset) = result_window.address(
+                                    &mut code,
+                                    &fixups,
+                                    frame.outgoing_result_base + index * 8,
+                                )?;
                                 emit_load64(
                                     &mut code,
                                     &fixups,
                                     rd,
-                                    sp,
-                                    (frame.outgoing_result_base + index * 8) as i64,
-                                    Some(scratch1),
+                                    table_base,
+                                    table_offset,
+                                    Some(scratch2),
                                 )?;
                                 spill_back(destination, rd, spilled, imm, &mut code)?;
                             }
@@ -6152,7 +6237,8 @@ impl Compiler {
                                  temp: &ir::Temp|
                                  -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        let key =
+                                            literal_data_key(temp, ir::DataRefKind::Blob, bytes);
                                         emit_literal_load(code, fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, code)?;
@@ -6192,7 +6278,8 @@ impl Compiler {
                                  temp: &ir::Temp|
                                  -> Result<(), String> {
                                     if let Some(bytes) = string_map.get(&(func_idx, *temp)) {
-                                        let key = DataKey(DataKind::Blob, bytes.clone());
+                                        let key =
+                                            literal_data_key(temp, ir::DataRefKind::Blob, bytes);
                                         emit_literal_load(code, fixups, 10, key);
                                     } else {
                                         let rs = src_reg(temp, scratch1, code)?;
@@ -6398,7 +6485,7 @@ impl Compiler {
                                     &mut code,
                                     &fixups,
                                     10,
-                                    data_key_for_pointer(*kind, raw),
+                                    literal_data_key(payload, *kind, raw),
                                 );
                             } else {
                                 let r_payload = src_reg(payload, scratch1, &mut code)?;
@@ -6442,7 +6529,7 @@ impl Compiler {
                             if let Some(kind) = pointer_kind
                                 && let Some(lit) = string_map.get(&(func_idx, *value)).cloned()
                             {
-                                let key = data_key_for_pointer(kind, &lit);
+                                let key = literal_data_key(value, kind, &lit);
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 if string_map.contains_key(&(func_idx, *value))
@@ -6494,7 +6581,7 @@ impl Compiler {
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(temp, kind, &lit);
                                     emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     let rs = src_reg(temp, scratch, code)?;
@@ -6620,7 +6707,7 @@ impl Compiler {
                                     &mut code,
                                     &fixups,
                                     value_scratch,
-                                    data_key_for_pointer(kind, &literal),
+                                    literal_data_key(value, kind, &literal),
                                 );
                                 value_scratch
                             } else {
@@ -6657,7 +6744,7 @@ impl Compiler {
                                     &mut code,
                                     &fixups,
                                     value_scratch,
-                                    data_key_for_pointer(kind, &literal),
+                                    literal_data_key(value, kind, &literal),
                                 );
                                 value_scratch
                             } else {
@@ -6838,6 +6925,7 @@ impl Compiler {
                                 return Err("durable aggregate state scratch frame is undersized"
                                     .to_string());
                             }
+                            let mut state_window = StackTableWindow::new(scratch1);
                             for (index, word) in words.iter().enumerate() {
                                 let source = if let Some(kind) =
                                     dataref_kind_map.get(&(func_idx, *word)).copied()
@@ -6848,7 +6936,7 @@ impl Compiler {
                                         &mut code,
                                         &fixups,
                                         scratch2,
-                                        data_key_for_pointer(kind, &literal),
+                                        literal_data_key(word, kind, &literal),
                                     );
                                     scratch2
                                 } else {
@@ -6862,13 +6950,15 @@ impl Compiler {
                                     .ok_or_else(|| {
                                         "durable aggregate state table offset overflow".to_string()
                                     })?;
+                                let (table_base, table_offset) =
+                                    state_window.address(&mut code, &fixups, offset)?;
                                 emit_store64(
                                     &mut code,
                                     &fixups,
-                                    sp,
+                                    table_base,
                                     source,
-                                    offset as i64,
-                                    scratch1,
+                                    table_offset,
+                                    scratchd,
                                 )?;
                             }
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *schema)).copied()
@@ -6878,7 +6968,7 @@ impl Compiler {
                                     &mut code,
                                     &fixups,
                                     10,
-                                    data_key_for_pointer(kind, &literal),
+                                    literal_data_key(schema, kind, &literal),
                                 );
                             } else {
                                 let schema_reg = src_reg(schema, scratch1, &mut code)?;
@@ -7113,7 +7203,7 @@ impl Compiler {
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *value)).copied()
                                 && let Some(lit) = string_map.get(&(func_idx, *value)).cloned()
                             {
-                                let key = data_key_for_pointer(kind, &lit);
+                                let key = literal_data_key(value, kind, &lit);
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 if string_map.contains_key(&(func_idx, *value))
@@ -7163,7 +7253,7 @@ impl Compiler {
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(temp, kind, &lit);
                                     emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
@@ -7346,7 +7436,7 @@ impl Compiler {
                                                 code,
                                                 &fixups,
                                                 target,
-                                                data_key_for_pointer(kind, &lit),
+                                                literal_data_key(temp, kind, &lit),
                                             );
                                         } else {
                                             let rs = src_reg(temp, scratch, code)?;
@@ -7445,7 +7535,7 @@ impl Compiler {
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(temp, kind, &lit);
                                     emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
@@ -7558,7 +7648,7 @@ impl Compiler {
                                             &mut code,
                                             &fixups,
                                             10,
-                                            data_key_for_pointer(kind, &lit),
+                                            literal_data_key(arg, kind, &lit),
                                         );
                                     } else {
                                         let source = src_reg(arg, scratch1, &mut code)?;
@@ -7592,7 +7682,7 @@ impl Compiler {
                                         && let Some(lit) =
                                             string_map.get(&(func_idx, *arg)).cloned()
                                     {
-                                        let key = data_key_for_pointer(kind, &lit);
+                                        let key = literal_data_key(arg, kind, &lit);
                                         emit_literal_load(&mut code, &fixups, target, key);
                                     } else {
                                         let scratch = if target == scratch1 {
@@ -7721,7 +7811,7 @@ impl Compiler {
                                     dataref_kind_map.get(&(func_idx, *temp)).copied()
                                     && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
                                 {
-                                    let key = data_key_for_pointer(kind, &lit);
+                                    let key = literal_data_key(temp, kind, &lit);
                                     emit_literal_load(code, &fixups, target, key);
                                 } else {
                                     if string_map.contains_key(&(func_idx, *temp))
@@ -7975,7 +8065,7 @@ impl Compiler {
                                     &mut code,
                                     &fixups,
                                     scratch1,
-                                    data_key_for_pointer(kind, literal),
+                                    literal_data_key(value, kind, literal),
                                 );
                                 scratch1
                             } else {
@@ -8246,7 +8336,7 @@ impl Compiler {
                 _ => None,
             };
             if let Some(kind) = numeric_kind {
-                let bytes = encode_pointer_tlv_bytes(kind, &key.1).ok_or_else(|| {
+                let bytes = encode_pointer_tlv_bytes(kind, &key.1, false).ok_or_else(|| {
                     let error = format!(
                         "invalid {} literal `{}`",
                         match kind {
@@ -8381,6 +8471,7 @@ impl Compiler {
                             })?,
                     )
                 }
+                DataKey(DataKind::String, s) => (6u16, s.as_bytes().to_vec()),
                 DataKey(DataKind::Blob, s) => (
                     6u16,
                     decode_hex_or_raw_bytes(s).map_err(|e| {
@@ -10185,29 +10276,35 @@ fn record_smart_contract_lifecycle_access(
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
             let request: DMScode::RegisterSmartContractCode =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            let code_hash = request.manifest.code_hash.as_ref()?;
-            add_contract_code_r(access_set, code_hash);
-            add_contract_manifest_rw(access_set, code_hash);
+            if request.manifest.code_hash != Some(request.artifact_id.code_hash) {
+                return None;
+            }
+            add_contract_code_r(access_set, &request.artifact_id);
+            add_contract_manifest_rw(access_set, &request.artifact_id);
         }
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
             let request: DMScode::RegisterSmartContractBytes =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_rw(access_set, &request.code_hash);
+            add_contract_code_rw(access_set, &request.artifact_id);
         }
         syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
             let request: DMScode::ActivateContractInstance =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_r(access_set, &request.code_hash);
-            add_contract_manifest_r(access_set, &request.code_hash);
+            let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+                request.contract_address.dataspace_id().ok()?,
+                request.code_hash,
+            );
+            add_contract_code_r(access_set, &artifact_id);
+            add_contract_manifest_r(access_set, &artifact_id);
             add_contract_instance_rw(access_set, &request.contract_address);
-            add_contract_instance_code_hash_rw(access_set, &request.code_hash);
+            add_contract_instance_code_hash_rw(access_set, &artifact_id);
         }
         syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
             let request: DMScode::RemoveSmartContractBytes =
                 ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            add_contract_code_rw(access_set, &request.code_hash);
-            add_contract_manifest_r(access_set, &request.code_hash);
-            add_contract_instance_code_hash_r(access_set, &request.code_hash);
+            add_contract_code_rw(access_set, &request.artifact_id);
+            add_contract_manifest_r(access_set, &request.artifact_id);
+            add_contract_instance_code_hash_r(access_set, &request.artifact_id);
         }
         _ => return None,
     }
@@ -11092,17 +11189,33 @@ fn key_zk_asset(id: &AssetDefinitionId) -> String {
 fn key_peer(id: &iroha_model_base::peer::PeerId) -> String {
     format!("peer:{id}")
 }
-fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.manifest:{code_hash}")
+fn key_contract_manifest(
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) -> String {
+    format!(
+        "contract.manifest:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
-fn key_contract_code(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.code:{code_hash}")
+fn key_contract_code(artifact_id: &iroha_data_model::smart_contract::ContractArtifactId) -> String {
+    format!(
+        "contract.code:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
 fn key_contract_instance(address: &iroha_data_model::smart_contract::ContractAddress) -> String {
     format!("contract.instance:{address}")
 }
-fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
-    format!("contract.instance.code_hash:{code_hash}")
+fn key_contract_instance_code_hash(
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) -> String {
+    format!(
+        "contract.instance.code_hash:{}:{}",
+        artifact_id.dataspace_id.as_u64(),
+        artifact_id.code_hash
+    )
 }
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
@@ -11211,19 +11324,31 @@ fn add_peer_rw(set: &mut AccessSets, id: &iroha_model_base::peer::PeerId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_manifest_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_manifest(code_hash));
+fn add_contract_manifest_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads.insert(key_contract_manifest(artifact_id));
 }
-fn add_contract_manifest_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_manifest(code_hash);
+fn add_contract_manifest_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_manifest(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_code_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_code(code_hash));
+fn add_contract_code_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads.insert(key_contract_code(artifact_id));
 }
-fn add_contract_code_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_code(code_hash);
+fn add_contract_code_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_code(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -11235,11 +11360,18 @@ fn add_contract_instance_rw(
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    set.reads.insert(key_contract_instance_code_hash(code_hash));
+fn add_contract_instance_code_hash_r(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    set.reads
+        .insert(key_contract_instance_code_hash(artifact_id));
 }
-fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
-    let key = key_contract_instance_code_hash(code_hash);
+fn add_contract_instance_code_hash_rw(
+    set: &mut AccessSets,
+    artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+) {
+    let key = key_contract_instance_code_hash(artifact_id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }

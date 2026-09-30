@@ -1,15 +1,24 @@
 # ZK first-release completion goals
 
-Set: 2026-09-26. Overall status: **Active**.
+Set: 2026-09-26. Execution resumed: 2026-09-30. Overall status: **Active**.
 
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
 [privacy closure](privacy_first_release_closure.md). Implementation remains in the
-existing `optimizations` checkout. Separate SDK, Apple and network candidates preserve validation provenance; unrelated changes remain.
+existing `/Users/takemiyamakoto/devstuff/iroha` checkout on `optimizations`.
+All further implementation and validation use this checkout; earlier separate
+candidates are historical evidence only. Unrelated changes remain.
 
 The outcome is useful, safe proof algorithms with simple developer APIs. Renaming,
 disabling, status objects, source hashes or relaxed caps do not complete an algorithm.
-External review and physical-device evidence cannot be self-issued.
+Dedicated review uses independent derivations and adversarial controls bound to
+the actual artifacts. Implementation tests alone do not establish cryptographic
+qualification; physical-device and signing claims require their actual runs.
+
+The [September 30 continuation](../docs/history/2026-09-30/zk-completion-continuation.md)
+records the native/SDK provenance, current validation and pending work.
+The six unfinished outcomes remain ZK03 through ZK08; no running build, source
+review or partial test selection closes one of them.
 
 ## Goals and acceptance criteria
 
@@ -20,7 +29,7 @@ External review and physical-device evidence cannot be self-issued.
 | ZK03 | In progress | Core / honest proof semantics | Generic verification cannot confer a stronger guarantee than its compiled relation. Retire IVM binding-only circuits, registrations, keygen, service routes and SDK/CLI consumers. Production IvmProved admission requires the complete native execution relation and authoritative finalized State anchor; replay or caller-supplied commitments cannot substitute. Implement the complete RAM-LFE program relation before enabling proof receipts. |
 | ZK04 | In progress | FASTPQ / bounded private verification | Implement a sound source-state-bound relation with reviewed trace/composition masking and bounded verifier work; fit unchanged proof and total resource limits. Produce and verify real maximum-shape proofs, negative source/witness/statement cases, and CPU/accelerator parity. Full replay and unmasked offline compact proofs do not satisfy this goal. |
 | ZK05 | In progress | ZK-X509 / complete bounded credential proof | Redesign or compose the full certificate, CRL, disclosure and ownership relation below 9,437,184 bytes without reducing supported coverage. Account for all segments, recursion, openings and prover resources together. Regenerate fixed profiles and produce actual positive/negative proofs before activation. Arithmetic size projections alone are insufficient. |
-| ZK06 | Open | Cryptographic qualification | Obtain independent artifact-bound soundness, zero-knowledge, Fiat–Shamir/qROM, digest/multi-target, arithmetic and side-channel evidence for the selected release protocols. Keep explicit protocol-specific blockers; do not infer qualification from implementation markers. |
+| ZK06 | In progress | Cryptographic qualification | Obtain independent artifact-bound soundness, zero-knowledge, Fiat–Shamir/qROM, digest/multi-target, arithmetic and side-channel evidence for the selected release protocols. Keep explicit protocol-specific blockers; do not infer qualification from implementation markers. |
 | ZK07 | In progress | SDK / simple developer workflow | One typed prepare/prove/verify workflow per actual capability, actionable errors, early availability/resource checks, secure randomness and private witness ownership by default. Callers do not construct dummy inputs, choose transcript internals, or infer guarantees from backend names. Maintain executable Rust examples and equivalent supported SDK entrypoints, with public guidance in `iroha-docs`. |
 | ZK08 | In progress | Validation / reproducible candidate | Reconcile current failing Halo2/note-STARK source contracts by preserving their substantive assertions. Run changed-function tests, real proof/adversarial suites, serialization guards, formatting and applicable SDK tests; then the workspace and four-validator qualification on a fixed candidate. Record exact passes, failures and unexecuted checks separately. |
 
@@ -104,10 +113,23 @@ ceiling. Geometry is 285 base / 280 auxiliary / 102 fixed columns, 1,681
 constraints and degree four. It binds 72 authenticated times, 73 comparisons
 and nonwrapping 38-bit differences. Private columns replay from clearing owners.
 
-The recorded optimized maximum proof fails `ConstraintOpening` during composition
+The earlier optimized maximum proof fails `ConstraintOpening` during composition
 after 3,368.579 seconds. Peak RSS is 9,639,247,872 bytes, within 12 GiB; no proof
-is emitted. Complete successful proving and independent verification remain open;
-a size projection or isolated component test cannot close this goal.
+is emitted. The September 30 repair cuts the SHA outer and carried word-product
+recurrences at physical padding boundaries with the existing fixed selectors.
+The resulting profile, updated component fixtures and all 49 maximum-source native
+registrations pass their boundary controls: 2,831 edges, including mutation and
+visitor checks. After the final helper cleanup, the repeated native boundary run
+passes in 87.722 seconds with 5,895,077,888 bytes peak RSS. This is a boundary
+test, not a complete proof. The complete maximum run reaches the final producer
+self-check and fails `ProverSelfCheckFailed` after 6,241.900 seconds, with
+10,295,918,592 bytes peak RSS. It emits no verified artifact; size compliance
+is unestablished and the unchanged 300-second target is unmet. Five bounded
+performance repairs and a test-only retained-public-candidate diagnostic are
+prepared for native validation. Seven bounded replay/performance changes and
+52 controls, including maximum fixed/OODS parity, await the next normal native
+run. Complete successful proving, independent
+verification and the unchanged runtime, memory and byte ceilings remain open.
 
 ### ZK07 — developer workflow
 
@@ -150,8 +172,9 @@ integrated workspace or four-validator network qualification.
 5. Capture one integrated source after concurrent merges; rebuild SDK artifacts,
    run applicable workspace checks and current four-validator tests. Preserve
    `3f + 1` committees, exact `n - f` certificates and no idle empty blocks.
-6. Obtain independent protocol/side-channel review and physical-device/release
-   evidence. These cannot be self-issued by implementation tests.
+6. Complete dedicated independent protocol/side-channel review and run the
+   physical-device and authorized release-signing workflows. Each qualification
+   claim requires its corresponding artifact-bound evidence.
 
 ## Evidence discipline
 

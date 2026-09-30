@@ -2463,6 +2463,7 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
         Ok(base)
     }
     /// Challenge-independent endpoint.
+    #[cfg(test)]
     pub(crate) const fn endpoint_v1(self) -> &'a P256ValueBusBaseEndpointTraceV1 {
         self.endpoint
     }
@@ -2480,7 +2481,7 @@ pub(crate) struct P256ValueBusStarkAuxSourceV1<'a> {
     next_row: usize,
     trace_size: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
     fn new_v1(
         endpoint: &'a P256ValueBusBaseEndpointTraceV1,
@@ -2500,6 +2501,9 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             trace_size,
         })
     }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ValueBusStarkAuxSourceV1<'_> {
     /// Emit the next exact challenge-dependent auxiliary row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -2507,7 +2511,7 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
         if self.next_row == self.trace_size {
             return Ok(None);
         }
-        let mut aux = [F::ZERO; P256_VALUE_BUS_STARK_AUX_WIDTH_V1];
+        let mut aux = zeroize::Zeroizing::new([F::ZERO; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]);
         aux[stark_aux_product_offset_v1(0)
             ..stark_aux_product_offset_v1(0) + P256_VALUE_BUS_LANES_V1]
             .copy_from_slice(&self.running);
@@ -2534,7 +2538,7 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
         if self.next_row == self.trace_size && self.running != self.terminal {
             return Err(P256ValueBusErrorV1::Constraint);
         }
-        Ok(Some(aux))
+        Ok(Some(*aux))
     }
     /// Restart deterministic auxiliary replay.
     pub(crate) fn replay_v1(&self) -> Self {
@@ -2961,35 +2965,48 @@ impl P256ValueBusBoundSourceV1 {
             P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
         )
     }
+    /// Mint replay only from this exact immutable endpoint's checked bind result.
+    /// No external terminal, endpoint, or challenge is accepted. The final replay
+    /// row independently checks its accumulated product against the retained value.
+    fn bound_aux_source_v1(
+        &self,
+        expected: P256ValueBusStarkEndpointV1,
+    ) -> Result<P256ValueBusStarkAuxSourceV1<'_>, P256ValueBusErrorV1> {
+        let challenges = self.post_base_v1()?.p256_value();
+        challenges.validate()?;
+        let (endpoint, terminal) = match expected {
+            P256ValueBusStarkEndpointV1::Execution => {
+                (self.execution_endpoint_v1()?, self.execution_terminal)
+            }
+            P256ValueBusStarkEndpointV1::Sorted => {
+                (self.sorted_endpoint_v1()?, self.sorted_terminal)
+            }
+        };
+        P256ValueBusStarkBaseRowProviderV1::new_v1(
+            endpoint,
+            expected,
+            P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+        )?;
+        Ok(P256ValueBusStarkAuxSourceV1 {
+            endpoint,
+            challenges,
+            terminal,
+            running: [F::ONE; P256_VALUE_BUS_LANES_V1],
+            next_row: 0,
+            trace_size: P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+        })
+    }
     /// Challenge-bound execution product replay.
     pub(crate) fn execution_aux_source_v1(
         &self,
     ) -> Result<P256ValueBusStarkAuxSourceV1<'_>, P256ValueBusErrorV1> {
-        let source = P256ValueBusStarkAuxSourceV1::new_v1(
-            self.execution_endpoint_v1()?,
-            P256ValueBusStarkEndpointV1::Execution,
-            P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
-            self.post_base_v1()?.p256_value(),
-        )?;
-        if source.terminal_v1() != self.execution_terminal {
-            return Err(P256ValueBusErrorV1::Terminal);
-        }
-        Ok(source)
+        self.bound_aux_source_v1(P256ValueBusStarkEndpointV1::Execution)
     }
     /// Challenge-bound sorted product replay.
     pub(crate) fn sorted_aux_source_v1(
         &self,
     ) -> Result<P256ValueBusStarkAuxSourceV1<'_>, P256ValueBusErrorV1> {
-        let source = P256ValueBusStarkAuxSourceV1::new_v1(
-            self.sorted_endpoint_v1()?,
-            P256ValueBusStarkEndpointV1::Sorted,
-            P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
-            self.post_base_v1()?.p256_value(),
-        )?;
-        if source.terminal_v1() != self.sorted_terminal {
-            return Err(P256ValueBusErrorV1::Terminal);
-        }
-        Ok(source)
+        self.bound_aux_source_v1(P256ValueBusStarkEndpointV1::Sorted)
     }
     /// Verifier-owned fixed execution row retained across the phase transition.
     #[cfg(test)]
@@ -5247,6 +5264,73 @@ mod tests {
         let flat: Vec<_> = derived.lanes.iter().flat_map(|lane| lane.terms).collect();
         for (index, value) in flat.iter().enumerate() {
             assert!(!flat[..index].contains(value));
+        }
+    }
+    #[test]
+    fn bound_endpoint_replay_matches_direct_terminals_and_rejects_cached_mutation() {
+        let program = program(1);
+        for seed in [37, 41] {
+            let mut base = base_source_v1(&program);
+            let mut bound = base.bind_v1(post_base_v1(seed)).unwrap();
+            for expected in [
+                P256ValueBusStarkEndpointV1::Execution,
+                P256ValueBusStarkEndpointV1::Sorted,
+            ] {
+                let endpoint = match expected {
+                    P256ValueBusStarkEndpointV1::Execution => {
+                        bound.execution_endpoint_v1().unwrap()
+                    }
+                    P256ValueBusStarkEndpointV1::Sorted => bound.sorted_endpoint_v1().unwrap(),
+                };
+                let mut direct = P256ValueBusStarkAuxSourceV1::new_v1(
+                    endpoint,
+                    expected,
+                    P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+                    bound.post_base_v1().unwrap().p256_value(),
+                )
+                .unwrap();
+                let mut replay = bound.bound_aux_source_v1(expected).unwrap();
+                assert_eq!(direct.terminal_v1(), replay.terminal_v1());
+                for _ in 0..P256_VALUE_BUS_STARK_TRACE_SIZE_V1 {
+                    let wanted =
+                        zeroize::Zeroizing::new(direct.next_aux_row_v1().unwrap().unwrap());
+                    let actual =
+                        zeroize::Zeroizing::new(replay.next_aux_row_v1().unwrap().unwrap());
+                    assert_eq!(*actual, *wanted);
+                }
+                assert!(direct.next_aux_row_v1().unwrap().is_none());
+                assert!(replay.next_aux_row_v1().unwrap().is_none());
+                drop(direct);
+                drop(replay);
+                let terminal = match expected {
+                    P256ValueBusStarkEndpointV1::Execution => &mut bound.execution_terminal,
+                    P256ValueBusStarkEndpointV1::Sorted => &mut bound.sorted_terminal,
+                };
+                terminal[0] = terminal[0].add(F::ONE);
+                let mut mutated = bound.bound_aux_source_v1(expected).unwrap();
+                for _ in 0..P256_VALUE_BUS_STARK_TRACE_SIZE_V1 - 1 {
+                    let _row = zeroize::Zeroizing::new(mutated.next_aux_row_v1().unwrap().unwrap());
+                }
+                assert_eq!(
+                    mutated.next_aux_row_v1(),
+                    Err(P256ValueBusErrorV1::Constraint)
+                );
+                drop(mutated);
+                let terminal = match expected {
+                    P256ValueBusStarkEndpointV1::Execution => &mut bound.execution_terminal,
+                    P256ValueBusStarkEndpointV1::Sorted => &mut bound.sorted_terminal,
+                };
+                terminal[0] = terminal[0].sub(F::ONE);
+            }
+            bound.zeroize_private_v1();
+            assert!(matches!(
+                bound.execution_aux_source_v1(),
+                Err(P256ValueBusErrorV1::Phase)
+            ));
+            assert!(matches!(
+                bound.sorted_aux_source_v1(),
+                Err(P256ValueBusErrorV1::Phase)
+            ));
         }
     }
     #[test]

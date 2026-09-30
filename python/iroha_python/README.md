@@ -2671,8 +2671,12 @@ no environment variables need to be exported.
   bounds, and callbacks remain configurable; scope, success, and failure
   classifications are fixed by the first-release contract. Exact global,
   state-resolved `Rejected` and `Expired` fail; every other status is progress.
-- Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/call`,
-  `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
+- Contracts API wrappers (`/v1/contracts/artifacts/{dataspace_id}/{code_hash}`,
+  its `/bytes` resource, and `/v1/contracts/call`), SNS helpers, and
   ZK verifying-key helpers round out the Torii surface needed by PoC operators.
+  Artifact reads take `ContractArtifactId` and canonical account authentication;
+  responses must match the selected network and exact dataspace. Byte reads also
+  verify the complete artifact digest. Manifest registration uses a signed native
+  instruction in the shared deployment workflow.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.

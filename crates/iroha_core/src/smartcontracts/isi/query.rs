@@ -799,7 +799,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             FindAccountRecoveryPolicyByAlias,
             FindAccountRecoveryRequestByAlias,
             FindProofRecordById,
-            FindContractManifestByCodeHash,
+            FindContractManifestByArtifactId,
             FindAbiVersion,
             FindAssetById,
             FindAssetDefinitionById,

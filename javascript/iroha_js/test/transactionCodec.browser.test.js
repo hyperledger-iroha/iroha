@@ -457,26 +457,41 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
   );
 });
 
-test("browser payload rejects the retired admission field and binds its exact layout", () => {
+test("browser payload rejects retired admission fields bound to the signature", () => {
   const payload = buildBrowserTransferPayload(sampleInput());
+  const fields = payloadFields(payload);
+  assert.deepEqual(fields[8], Buffer.of(0), "canonical attachments are absent");
+
   const { hashHex, signature } = signPayload(payload);
   assert.equal(ed25519.verify(signature, Buffer.from(hashHex, "hex"), PUBLIC_KEY), true);
-  const fields = payloadFields(payload);
-  fields.splice(7, 0, u32(0));
-  const retiredPayload = struct(fields);
-  assert.equal(ed25519.verify(signature, Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"), PUBLIC_KEY), false);
-
-  expectCodecError(
-    () =>
-      validateBrowserTransferSignable({
-        networkPrefix: 753,
-        networkId: NETWORK_ID,
-        payloadBytes: retiredPayload,
-        authority: AUTHORITY,
-        signingPublicKey: PUBLIC_KEY,
-      }),
-    "malformed_payload",
-  );
+  for (const retiredAdmissionTag of [0, 1]) {
+    // The retired admission field was between fee payment and metadata. Neither
+    // old enum tag may survive as an accepted extra field in the current layout.
+    const retiredPayload = struct([
+      ...fields.slice(0, 7),
+      u32(retiredAdmissionTag),
+      ...fields.slice(7),
+    ]);
+    assert.equal(
+      ed25519.verify(
+        signature,
+        Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"),
+        PUBLIC_KEY,
+      ),
+      false,
+    );
+    expectCodecError(
+      () =>
+        validateBrowserTransferSignable({
+          networkPrefix: 753,
+          networkId: NETWORK_ID,
+          payloadBytes: retiredPayload,
+          authority: AUTHORITY,
+          signingPublicKey: PUBLIC_KEY,
+        }),
+      "malformed_payload",
+    );
+  }
 });
 
 test("browser finalizer matches the native N-API bytes and entrypoint hash", () => {

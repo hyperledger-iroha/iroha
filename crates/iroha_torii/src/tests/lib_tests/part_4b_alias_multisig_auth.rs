@@ -87,7 +87,7 @@ where
 }
 #[tokio::test]
 async fn contract_code_artifact_read_rejects_unsigned_requests() {
-    let uri: axum::http::Uri = format!("/v1/contracts/code-bytes/{}", "a".repeat(64))
+    let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{}/bytes", "a".repeat(64))
         .parse()
         .expect("contract code URI");
     let error = match handler_get_contract_code_bytes(
@@ -96,7 +96,7 @@ async fn contract_code_artifact_read_rejects_unsigned_requests() {
         uri,
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        axum::extract::Path("a".repeat(64)),
+        axum::extract::Path(("0".into(), "a".repeat(64))),
     )
     .await
     {

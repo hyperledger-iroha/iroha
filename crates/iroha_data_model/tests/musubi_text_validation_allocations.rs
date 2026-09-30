@@ -473,3 +473,300 @@ fn namespace_scratch_plan_is_borrowed_and_covers_all_sequential_segment_requests
         );
     }
 }
+
+mod signature_custody {
+    use super::{measured, *};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_data_model::{
+        NetworkId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
+        block::BlockHeader,
+        sorafs::{
+            capacity::ProviderId,
+            pin_registry::{
+                ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+            },
+        },
+    };
+    use iroha_model_base::topology::DataSpaceId;
+
+    fn algorithms() -> Vec<Algorithm> {
+        let mut values = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
+        #[cfg(feature = "pqc")]
+        values.push(Algorithm::MlDsa);
+        #[cfg(feature = "bls")]
+        values.extend([Algorithm::BlsNormal, Algorithm::BlsSmall]);
+        #[cfg(feature = "gost")]
+        values.extend([
+            Algorithm::Gost3410_2012_256ParamSetA,
+            Algorithm::Gost3410_2012_256ParamSetB,
+            Algorithm::Gost3410_2012_256ParamSetC,
+            Algorithm::Gost3410_2012_512ParamSetA,
+            Algorithm::Gost3410_2012_512ParamSetB,
+        ]);
+        #[cfg(feature = "sm")]
+        values.push(Algorithm::Sm2);
+        #[cfg(all(feature = "pqc", feature = "bls", feature = "gost", feature = "sm"))]
+        assert_eq!(values.len(), 11, "all shipping algorithms must execute");
+        values
+    }
+
+    struct Fixtures {
+        provider: MusubiProviderBundleVerificationAttestationV1,
+        ingress: MusubiSeedIngressReceiptV1,
+        delegation: MusubiNamespaceDelegationV1,
+        namespace: MusubiNamespaceBindingV1,
+    }
+
+    fn fixtures(owner: AccountId, keys: &[KeyPair]) -> Fixtures {
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([0x23; 32])),
+        );
+        let provider_binding = MusubiProviderBundleVerificationBindingV1 {
+            network_id,
+            provider_id: ProviderId::new([0x24; 32]),
+            completed_by: owner.clone(),
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                owner.clone(),
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [0x21; 32],
+                    revision: 1,
+                    predecessor_digest: None,
+                    policy_digest: [0x22; 32],
+                },
+            ),
+            replication_order: ReplicationOrderId::new([0x25; 32]),
+            assignment_revision: 3,
+            completion_epoch: 9,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: 77,
+                block_hash: [0x26; 32],
+            },
+            archive_id: ArchiveId::new([0x27; 32]),
+            bundle_digest: MusubiContentDigestV1::new([0x28; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([0x29; 32]),
+            semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x2a; 32]),
+            verification_lock_digest: MusubiVerificationLockDigestV1::new([0x2b; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([0x2c; 32]),
+        };
+        let provider_payload = MusubiProviderBundleVerificationPayloadV1 {
+            version: 1,
+            binding: provider_binding,
+        };
+        let mut provider = MusubiProviderBundleVerificationAttestationV1 {
+            approvals: keys
+                .iter()
+                .map(|key| MusubiProviderBundleVerificationApprovalV1 {
+                    public_key: key.public_key().clone(),
+                    signature: SignatureOf::try_from_hash(
+                        key.private_key(),
+                        provider_payload.signing_hash(),
+                    )
+                    .unwrap(),
+                })
+                .collect(),
+            payload: provider_payload,
+        };
+        provider
+            .approvals
+            .sort_by(|a, b| a.public_key.cmp(&b.public_key));
+        let ingress_payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: 1,
+            issued_at_ms: 10,
+            expires_at_ms: 20,
+            binding: MusubiSeedIngressReceiptBindingV1 {
+                network_id,
+                publisher: owner.clone(),
+                ingress_broker: owner.clone(),
+                seed_provider: ProviderId::new([0x31; 32]),
+                semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x32; 32]),
+                archive_id: ArchiveId::new([0x33; 32]),
+                car_body_digest: MusubiContentDigestV1::new([0x34; 32]),
+                car_body_length: 1_024,
+                nonce: [0x35; 32],
+            },
+        };
+        let mut ingress = MusubiSeedIngressReceiptV1 {
+            approvals: keys
+                .iter()
+                .map(|key| MusubiSeedIngressReceiptApprovalV1 {
+                    public_key: key.public_key().clone(),
+                    signature: SignatureOf::try_from_hash(
+                        key.private_key(),
+                        ingress_payload.signing_hash(),
+                    )
+                    .unwrap(),
+                })
+                .collect(),
+            payload: ingress_payload,
+        };
+        ingress
+            .approvals
+            .sort_by(|a, b| a.public_key.cmp(&b.public_key));
+        let namespace = MusubiNamespaceBindingV1 {
+            namespace: "dex.universal".parse().unwrap(),
+            home_dataspace: DataSpaceId::new(7),
+            scope: MusubiPackageScopeV1::Domain("dex".parse().unwrap()),
+            generation: 4,
+        };
+        let delegation_payload = MusubiNamespaceDelegationPayloadV1 {
+            version: 1,
+            namespace_binding: namespace.digest(),
+            owner_generation: 4,
+            owner: owner.clone(),
+            delegate: owner,
+            expires_at_height: 100,
+        };
+        let mut delegation = MusubiNamespaceDelegationV1 {
+            approvals: keys
+                .iter()
+                .map(|key| MusubiNamespaceDelegationApprovalV1 {
+                    public_key: key.public_key().clone(),
+                    signature: SignatureOf::try_from_hash(
+                        key.private_key(),
+                        delegation_payload.signing_hash(),
+                    )
+                    .unwrap(),
+                })
+                .collect(),
+            payload: delegation_payload,
+        };
+        delegation
+            .approvals
+            .sort_by(|a, b| a.public_key.cmp(&b.public_key));
+        Fixtures {
+            provider,
+            ingress,
+            delegation,
+            namespace,
+        }
+    }
+
+    fn verify(f: &Fixtures) -> [Result<(), &'static str>; 3] {
+        [
+            f.provider
+                .verify(&f.provider.payload.binding)
+                .map_err(|e| e.reason()),
+            f.ingress
+                .verify(&f.ingress.payload.binding, 15)
+                .map_err(|e| e.reason()),
+            f.delegation
+                .verify(
+                    &f.namespace,
+                    &f.delegation.payload.owner,
+                    4,
+                    &f.delegation.payload.delegate,
+                    100,
+                )
+                .map_err(|e| e.reason()),
+        ]
+    }
+
+    fn assert_measured(f: &Fixtures, expected: [Result<(), &'static str>; 3]) {
+        let (result, allocations) = measured(|| verify(f));
+        assert_eq!(result, expected);
+        assert_eq!(
+            allocations, 0,
+            "borrowed production signature validators allocated"
+        );
+    }
+
+    const BAD_SIGNATURE: [Result<(), &str>; 3] = [
+        Err("Musubi provider bundle signature failed"),
+        Err("Musubi seed-ingress receipt signature failed"),
+        Err("Musubi namespace delegation signature failed"),
+    ];
+
+    #[test]
+    fn every_shipping_algorithm_uses_uncached_borrowed_musubi_signature_validation() {
+        for algorithm in algorithms() {
+            let pair = KeyPair::try_from_seed(vec![algorithm as u8 + 0x31; 32], algorithm).unwrap();
+            let fixture = fixtures(AccountId::new(pair.public_key().clone()), &[pair]);
+            // Construct and sign off-thread. The measured thread has never
+            // parsed a key or populated an ordinary positive-verdict cache.
+            std::thread::spawn(move || {
+                let mut f = fixture;
+                assert_measured(&f, [Ok(()); 3]);
+                // Wrong authentic statement, same retained canonical keys/signatures.
+                f.provider.payload.binding.completion_epoch += 1;
+                f.ingress.payload.expires_at_ms += 1;
+                f.delegation.payload.expires_at_height += 1;
+                assert_measured(&f, BAD_SIGNATURE);
+                f.provider.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&vec![
+                        0;
+                        f.provider.approvals
+                            [0]
+                        .signature
+                        .payload()
+                        .len()
+                    ]));
+                f.ingress.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&vec![
+                        0;
+                        f.ingress.approvals[0]
+                            .signature
+                            .payload()
+                            .len()
+                    ]));
+                f.delegation.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&vec![
+                        0;
+                        f.delegation.approvals
+                            [0]
+                        .signature
+                        .payload()
+                        .len()
+                    ]));
+                assert_measured(&f, BAD_SIGNATURE);
+                f.provider.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&[1]));
+                f.ingress.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&[1]));
+                f.delegation.approvals[0].signature =
+                    SignatureOf::from_signature(Signature::from_bytes(&[1]));
+                assert_measured(
+                    &f,
+                    [Err("Musubi approval signature payload length is invalid"); 3],
+                );
+            })
+            .join()
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn borrowed_multisig_custody_preserves_threshold_and_signature_rejection_order() {
+        let keys: Vec<_> = [0x41, 0x42]
+            .into_iter()
+            .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap())
+            .collect();
+        let owner = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                keys.iter()
+                    .map(|k| MultisigMember::new(k.public_key().clone(), 1).unwrap())
+                    .collect(),
+            )
+            .unwrap(),
+        );
+        let mut f = fixtures(owner, &keys);
+        assert_measured(&f, [Ok(()); 3]);
+        f.provider.approvals.pop();
+        f.ingress.approvals.pop();
+        f.delegation.approvals.pop();
+        assert_measured(
+            &f,
+            [
+                Err("Musubi provider bundle approvals do not meet provider-owner threshold"),
+                Err("Musubi seed-ingress receipt does not meet broker threshold"),
+                Err("Musubi namespace delegation does not meet owner threshold"),
+            ],
+        );
+        f.provider.payload.binding.completion_epoch += 1;
+        f.ingress.payload.expires_at_ms += 1;
+        f.delegation.payload.expires_at_height += 1;
+        assert_measured(&f, BAD_SIGNATURE);
+    }
+}

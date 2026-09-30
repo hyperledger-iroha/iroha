@@ -83,6 +83,13 @@ and wire definitions below describe that candidate, not a claim of release or li
    (kind 0 = global, 1 = dataspace, 2 = lane; derivation is the application's; the core only sees
    32 opaque bytes). `I` is in every signing preimage and every block header. Instances never
    wait on each other inside the core, and the driver isolates them (§12.3 O9).
+   An independent root ledger MUST select `SumeragiRootScope` in its signed genesis context.
+   `Global` owns the universal dataspace and derives kind 0, index 0. `Dataspace` binds an
+   exact parent `NetworkId` and a non-universal 64-bit `DataSpaceId`, owns that execution
+   scope, and derives kind 1, index 0 from its own genesis hash and chain label. The full
+   dataspace identifier is committed by genesis; it MUST NOT be narrowed into the 32-bit
+   instance index. Missing scope metadata is invalid. Node startup, finality readers and
+   historical evidence MUST derive the same instance from this authenticated scope.
 
 Properties (per instance):
 - **Agreement:** no two honest nodes commit different `(block_hash, R)` at the same height.

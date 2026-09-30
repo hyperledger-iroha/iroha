@@ -79,6 +79,7 @@ def _client(
     auth_network: NetworkId = NETWORK_ID,
     captured: list[bytes] | None = None,
     default_headers: dict[str, str] | None = None,
+    api_token: str | None = None,
 ) -> ToriiClient:
     def signer(message: bytes) -> bytes:
         if captured is not None:
@@ -90,6 +91,7 @@ def _client(
         session=session,
         max_retries=4,
         default_headers=default_headers,
+        api_token=api_token,
         local_signing_context=LocalSigningContext(NETWORK_ID),
         canonical_request_auth=ToriiCanonicalRequestAuth(
             network_id=auth_network.literal,

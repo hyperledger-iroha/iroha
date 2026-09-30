@@ -1,4 +1,4 @@
-//! Test-only process-local ownership and revocation kernel for native wallet sessions.
+//! Process-local ownership and revocation kernel for native wallet sessions.
 //!
 //! This module grants no enrollment, hardware or monetary authority. Its keys and payloads
 //! must come from the native enrolled-open verifier. One retained owner serializes all uses

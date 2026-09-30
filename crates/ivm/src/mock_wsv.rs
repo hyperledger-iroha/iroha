@@ -299,9 +299,9 @@ pub struct MockWorldStateView {
     /// Durable smart-contract state (path -> NoritoBytes payload TLVs)
     state_overlay: DurableStateOverlay,
     /// Manifest registry keyed by code hash (presence-only for gating).
-    contract_manifests: HashSet<CryptoHash>,
+    contract_manifests: HashSet<iroha_data_model::smart_contract::ContractArtifactId>,
     /// Stored contract bytecode keyed by code hash.
-    contract_code: HashMap<CryptoHash, Vec<u8>>,
+    contract_code: HashMap<iroha_data_model::smart_contract::ContractArtifactId, Vec<u8>>,
     /// Active contract instances keyed by canonical contract address.
     contract_instances: HashMap<ContractAddress, CryptoHash>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
@@ -3561,19 +3561,17 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let req: scode::RemoveSmartContractBytes = decode_canonical_norito(tlv.payload)?;
-                let code_hash = *req.code_hash();
-                if self.wsv.contract_manifests.contains(&code_hash) {
+                let artifact_id = *req.artifact_id();
+                if self.wsv.contract_manifests.contains(&artifact_id) {
                     return Err(VMError::PermissionDenied);
                 }
-                if self
-                    .wsv
-                    .contract_instances
-                    .values()
-                    .any(|hash| hash == &code_hash)
-                {
+                if self.wsv.contract_instances.iter().any(|(address, hash)| {
+                    address.dataspace_id().ok() == Some(artifact_id.dataspace_id)
+                        && hash == &artifact_id.code_hash
+                }) {
                     return Err(VMError::PermissionDenied);
                 }
-                if self.wsv.contract_code.remove(&code_hash).is_some() {
+                if self.wsv.contract_code.remove(&artifact_id).is_some() {
                     Ok(Self::mutation_gas(0))
                 } else {
                     Err(VMError::PermissionDenied)

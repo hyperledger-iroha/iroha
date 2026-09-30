@@ -974,7 +974,6 @@ mod retry_and_periodic {
         let (state, source, history) = periodic_fixture();
         let id: TriggerId = "periodic_repeat".parse().unwrap();
         let (mut block, _recording) = recorded_component_block(&state, source.header());
-        let guard = exec_witness::exec_witness_guard();
         let initial_use = time_trigger_use_v1(&block.world.triggers, &id, 3).unwrap();
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
@@ -1042,7 +1041,6 @@ mod retry_and_periodic {
         assert_eq!(block.committed_fragment_count(), fragments + 4);
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
-        drop(guard);
         drop(_recording);
         drop(block);
         assert_eq!(

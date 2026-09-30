@@ -2199,6 +2199,7 @@ fn enforce_transaction_contract_permission_before_proof_verification<R>(
     transaction: &SignedTransaction,
     ivm_cache: &mut IvmCache,
     execution_height: u64,
+    execution_dataspace: DataSpaceId,
 ) -> Result<(), ValidationFail>
 where
     R: StateReadOnly,
@@ -2209,6 +2210,7 @@ where
         // validating every call against the pre-batch world would break atomic state visibility.
         Executable::Instructions(_) | Executable::Batch(_) => Ok(()),
         Executable::ContractCall(call) => {
+            root_scope::ensure_committed_contract_scope(state.world(), &call.contract_address)?;
             code::ensure_contract_execution_allowed(
                 state.world(),
                 &call.contract_address,
@@ -2226,7 +2228,12 @@ where
             let code_bytes = state
                 .world()
                 .contract_code()
-                .get(&identity.code_hash)
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    identity.contract_address.dataspace_id().map_err(|_| {
+                        ValidationFail::NotPermitted("invalid contract dataspace".into())
+                    })?,
+                    identity.code_hash,
+                ))
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract bytecode `{}` not found in WSV",
@@ -2266,7 +2273,12 @@ where
             let manifest = state
                 .world()
                 .contract_manifests()
-                .get(&identity.code_hash)
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    identity.contract_address.dataspace_id().map_err(|_| {
+                        ValidationFail::NotPermitted("invalid contract dataspace".into())
+                    })?,
+                    identity.code_hash,
+                ))
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract instance `{}` has no manifest",
@@ -2289,7 +2301,10 @@ where
                     crate::smartcontracts::ivm::validate_generic_execution_context(
                         state.world(),
                         transaction.metadata(),
-                        summary.code_hash,
+                        iroha_data_model::smart_contract::ContractArtifactId::new(
+                            execution_dataspace,
+                            summary.code_hash,
+                        ),
                     )?;
                     validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
                     return Ok(());

@@ -1,8 +1,11 @@
 import { Buffer } from "node:buffer";
-import { snapshotBoundedBytes } from "./boundedByteSnapshot.js";
+import {
+  SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1,
+  snapshotSorafsOrderbookSubmissionBytes,
+} from "./sorafsOrderbookSubmissionBytes.js";
 
 // Request custody must be captured synchronously, before optional receipt code loads.
-export const SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024;
+export { SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 };
 
 export const HASH_HEX_PATTERN = /^[0-9a-f]{63}[13579bdf]$/u;
 
@@ -205,9 +208,7 @@ export function prepareSorafsOrderbookSubmission({
     "inspectSorafsOrderbookSubmissionForDiscriminantV1",
   );
   const verifyReceipt = nativeFunction(native, "verifySorafsOrderbookSubmissionReceiptV1");
-  const body = snapshotBoundedBytes(
-    signedTransaction, `${context}.signedTransaction`, SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1, RangeError,
-  );
+  const body = snapshotSorafsOrderbookSubmissionBytes(signedTransaction, context);
   requireNonEmptyString(expectedReceiptSigner, `${context}.expectedReceiptSigner`);
   const identity = normalizeIdentity(
     inspect(

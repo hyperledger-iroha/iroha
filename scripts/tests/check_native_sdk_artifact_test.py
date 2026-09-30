@@ -37,6 +37,7 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
     "connect_norito_kagemusha_contract_vector_v1",
     "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_install_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
@@ -59,7 +60,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 35
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 36
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -114,6 +115,7 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
     assert {
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInstallV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
@@ -121,6 +123,21 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     assert not any(symbol.startswith("Java_pg_") for symbol in required)
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)
+
+
+def test_native_c_probe_rejects_an_artifact_without_the_trusted_provisioning_intake() -> None:
+    missing = "connect_norito_kagemusha_core_coordinator_install_v1"
+    library = types.SimpleNamespace(**{
+        symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
+        if symbol != missing
+    })
+    with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+        try:
+            MODULE.probe_c_abi(Path("test-only-library"), MODULE.REQUIRED_SYMBOLS["c-jni"])
+        except MODULE.ArtifactContractError as error:
+            assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+        else:
+            raise AssertionError("native probe accepted missing provisioning intake")
 
 
 def test_android_diagnostic_jni_exports_survive_minification_and_artifact_inspection() -> None:
@@ -136,7 +153,7 @@ def test_android_diagnostic_jni_exports_survive_minification_and_artifact_inspec
     owners = {
         "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1$NativeEndpoint": (),
         "org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1": (
-            "nativeContractV1", "nativeOpenV1", "nativeInvokeV1", "nativeCloseV1",
+            "nativeContractV1", "nativeInstallV1", "nativeOpenV1", "nativeInvokeV1", "nativeCloseV1",
         ),
         "org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetStateProofObservationJniV1": (
             "nativeContractV1", "nativeObserveV1",

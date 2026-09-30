@@ -332,20 +332,27 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertFalse(try XCTUnwrap(store.records.values.first { $0.operation == 19 }).acknowledged)
     XCTAssertNil(store.records.values.first { $0.operation == 19 }?.authenticatedSnapshotEvidence)
     rejectRetainedMutation = false
-    XCTAssertThrowsError(try restarted.recover(), "A rejected native reply permanently revokes this bridge") {
-      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    let callsBeforeReopen = endpoint.calls
+    let snapshotsBeforeReopen = snapshots.count
+    XCTAssertThrowsError(try restarted.recover()) { error in
+      XCTAssertEqual(error as? KagemushaCoreCoordinatorErrorV1, .unavailable)
     }
-    // Recreate the fixture's native process owner while retaining the original durable intent.
-    let afterRejection = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+    XCTAssertEqual(endpoint.calls, callsBeforeReopen, "Revoked owner cannot redispatch")
+    XCTAssertEqual(snapshots.count, snapshotsBeforeReopen)
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    // Reopen a fresh scripted native process over the original durable intents.
+    let reopenedEndpoint = Endpoint()
+    reopenedEndpoint.responseHandler = endpoint.responseHandler
+    let reopened = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+      core: try adapter(reopenedEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
     store.failAfterSave = true
-    XCTAssertThrowsError(try afterRejection.recover())
+    XCTAssertThrowsError(try reopened.recover())
     let interrupted = try XCTUnwrap(store.records.values.first { $0.operation == 19 })
     XCTAssertNotNil(interrupted.authenticatedSnapshotEvidence)
     XCTAssertFalse(interrupted.acknowledged, "Snapshot evidence must be durable before acknowledgement")
     store.failAfterSave = false
-    XCTAssertEqual(try afterRejection.recover().aggregateState, installed)
-    XCTAssertEqual(try afterRejection.recover().aggregateState, installed)
+    XCTAssertEqual(try reopened.recover().aggregateState, installed)
+    XCTAssertEqual(try reopened.recover().aggregateState, installed)
     XCTAssertEqual(Set(snapshots).count, 4)
     XCTAssertEqual(store.records.values.first { $0.operation == 19 }?.authenticatedSnapshotEvidence,
       interrupted.authenticatedSnapshotEvidence, "Retain original accepted historical evidence")
@@ -541,15 +548,21 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertNil(try original.recover().aggregateState)
     XCTAssertTrue(store.records.isEmpty, "Reads never allocate durable host intents")
     replayOld = true
+    let staleResponseEndpoint = endpoint(seed: 80)
     let recreated = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint(seed: 80)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      core: try adapter(staleResponseEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
     XCTAssertThrowsError(try recreated.recover(), "Prior-owner signature cannot satisfy the new nonce")
-    XCTAssertThrowsError(try recreated.recover(), "The rejected response revokes this native handle") {
-      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+    let callsBeforeReopen = staleResponseEndpoint.calls
+    let requestsBeforeReopen = requests.count
+    XCTAssertThrowsError(try recreated.recover()) { error in
+      XCTAssertEqual(error as? KagemushaCoreCoordinatorErrorV1, .unavailable)
     }
-    let recovered = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
+    XCTAssertEqual(staleResponseEndpoint.calls, callsBeforeReopen)
+    XCTAssertEqual(staleResponseEndpoint.closeCalls, 1)
+    XCTAssertEqual(requests.count, requestsBeforeReopen, "Revoked owner cannot issue another device read")
+    let reopened = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
       core: try adapter(endpoint(seed: 120)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
-    XCTAssertNil(try recovered.recover().aggregateState)
+    XCTAssertNil(try reopened.recover().aggregateState)
     XCTAssertEqual(Set(requests).count, 4)
     XCTAssertTrue(store.records.isEmpty)
   }
@@ -596,7 +609,8 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     func expect(_ method: KagemushaCoreCoordinatorMethodV1, _ request: [Data]?, _ response: [Data]) {
       self.method = method; expected = request; self.response = response
     }
-    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
+    func contract() -> [UInt32] { [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
+    func install(storagePath: Data) throws {}
     func open(storagePath: Data) -> UInt64 { 1 }
     func close(handle: UInt64) { XCTAssertEqual(handle, 1); closeCalls += 1 }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {

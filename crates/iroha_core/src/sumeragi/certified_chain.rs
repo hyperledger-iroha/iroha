@@ -73,7 +73,7 @@ use iroha_sumeragi::{
 use super::{
     commitment::{ExecutionResultCommitment, result_of_preimage},
     crypto::{BlsCrypto, core_key},
-    node::global_instance,
+    node::root_instance,
     schedule,
     startup::{GENESIS_HEIGHT, core_hash_of},
 };
@@ -899,7 +899,9 @@ fn authenticate_genesis(
         return Err(ChainReadError::ForeignGenesis);
     }
     let epoch = super::epoch::genesis_epoch(genesis).map_err(|_| ChainReadError::ForeignGenesis)?;
-    Ok((epoch, global_instance(genesis, &chain_id.to_string())))
+    let instance = root_instance(genesis, &chain_id.to_string())
+        .map_err(|_| ChainReadError::ForeignGenesis)?;
+    Ok((epoch, instance))
 }
 
 /// The exact source cut being verified. Pinned restoration never supplies a World or roster.

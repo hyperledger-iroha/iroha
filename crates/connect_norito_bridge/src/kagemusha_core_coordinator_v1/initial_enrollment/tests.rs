@@ -971,6 +971,8 @@ fn fresh_admission_rechecks_original_deadline_at_handoff() {
         .unwrap();
 
     assert_eq!(admission.require_live(), Ok(()));
+    // Startup pinning consumes the same admission freshness contract, without projecting
+    // or renewing its original ticket or native deadline.
     assert!(NativeStartupQualificationOwnerV1::from_fresh_issuer_admission(&admission).is_ok());
     admission.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(

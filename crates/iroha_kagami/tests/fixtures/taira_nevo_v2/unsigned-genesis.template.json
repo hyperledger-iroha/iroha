@@ -4,6 +4,10 @@
   "consensus_fingerprint": null,
   "consensus_mode": "Npos",
   "sumeragi_context": {
+    "root_scope": {
+      "kind": "global",
+      "value": null
+    },
     "da_layout": {
       "encoding": {
         "encoding": "reed_solomon16",

@@ -27,7 +27,7 @@ test("payment request text admits the full first-release wire budget", () => {
   assert.throws(() => Kagemusha.decodeText("paymentRequest", `${text}AA`));
 });
 
-function baseContext() {
+function baseContext(credentialOverrides = {}) {
   const networkId = NetworkId.fromBytes(Uint8Array.from([
     ...Array.from({ length: 31 }, (_, index) => index + 1), 1,
   ]));
@@ -52,6 +52,7 @@ function baseContext() {
     expiresAtMs: 10_000n,
     appPolicyBindingDigest: octets(13),
     governanceSignature: new Kagemusha.DeviceSignature(octets(8, 64)),
+    ...credentialOverrides,
   });
   return { networkId, asset, assetIncarnation, recipient, hardwareCredential };
 }
@@ -450,4 +451,18 @@ test("public peer schemas do not expose ancestry or accept retired transports", 
   const text = Kagemusha.encodeTypedText("paymentRequest", requestFor());
   assert.throws(() => Kagemusha.decodeTypedText("paymentRequest", ["oc", "1:"].join("") + text.slice(5)), /prefix/u);
   assert.throws(() => Kagemusha.encodeTypedText("acceptanceIntentAuthorization", {}));
+});
+
+
+test("hardware credentials require and retain the exact nonzero app-policy binding", () => {
+  const supplied = octets(0xa6);
+  const { hardwareCredential } = baseContext({ appPolicyBindingDigest: supplied });
+  supplied.fill(0);
+  assert.deepEqual(hardwareCredential.appPolicyBindingDigest, octets(0xa6));
+  const detached = hardwareCredential.appPolicyBindingDigest;
+  detached.fill(0);
+  assert.deepEqual(hardwareCredential.appPolicyBindingDigest, octets(0xa6));
+  for (const invalid of [undefined, octets(1, 31), octets(1, 33), octets(0)]) {
+    assert.throws(() => baseContext({ appPolicyBindingDigest: invalid }), /appPolicyBindingDigest/u);
+  }
 });

@@ -17,6 +17,8 @@ class KagemushaFinalityTrustAnchorV1(networkId: ByteArray, checkpoint: ByteArray
         nativeCheckpoint = checkpoint.copyOf()
     }
     fun networkId(): ByteArray = network.copyOf()
+    /** Inspect the retained transport size without allocating another full checkpoint. */
+    fun checkpointByteCount(): Int = nativeCheckpoint.size
     fun checkpoint(): ByteArray = nativeCheckpoint.copyOf()
     companion object { const val MAXIMUM_CHECKPOINT_BYTES = 68 * 1024 * 1024 }
 }

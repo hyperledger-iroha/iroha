@@ -33,7 +33,7 @@ use std::{
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
     /// Profile to verify against (`iroha3-dev`, `iroha3-taira`, `iroha3-nexus`).
-    #[clap(long, value_enum)]
+    #[clap(long)]
     profile: GenesisProfile,
     /// Path to the genesis manifest (JSON).
     #[clap(long, value_name = "PATH")]

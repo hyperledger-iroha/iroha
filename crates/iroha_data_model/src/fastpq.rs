@@ -1,6 +1,7 @@
 //! FASTPQ-specific data structures shared between the host and prover.
 
 mod balance_key;
+mod commitment;
 mod execution_effect;
 mod public_artifact;
 mod quantity_units;
@@ -8,6 +9,7 @@ mod source_archive;
 mod source_statement;
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
 pub use balance_key::{FastpqBalanceKeyV1, transfer_balance_key};
+pub use commitment::FastpqCommitmentV1;
 pub use execution_effect::*;
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::{Numeric, Quantity};

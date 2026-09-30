@@ -41,6 +41,13 @@ mod checkpoint;
 pub use checkpoint::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint};
 mod page;
 pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoint_page};
+mod world_state;
+pub use world_state::{
+    MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
+    VerifiedWorldStateSnapshotV1, WORLD_STATE_ACCUMULATOR_LANES_V1, WorldStateElementKindV1,
+    WorldStateSnapshotEntryV1, WorldStateSnapshotV1, world_state_element_v1,
+    world_state_path_hash_v1, world_state_root_from_accumulator_v1, world_state_value_hash_v1,
+};
 
 use std::collections::BTreeMap;
 
@@ -53,7 +60,7 @@ use iroha_sumeragi::{
     availability::AvailabilityFrame,
     crypto::Crypto,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
-    preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
+    preimage::{committee_digest_preimage, payload_hash},
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
 };
 use norito::{
@@ -69,6 +76,8 @@ use crate::{
     sumeragi::SumeragiStatus,
     transaction::TransactionEntrypoint,
 };
+#[cfg(test)]
+use iroha_sumeragi::preimage::{InstanceKind, instance_id};
 
 /// Maximum canonical certified block accepted by a portable proof reader.
 pub const MAX_FINALITY_BLOCK_BYTES: usize = 32 * 1024 * 1024;
@@ -544,13 +553,16 @@ impl SumeragiFinalityVerifier {
                     }),
             "selected roster differs from signed genesis authority",
         )?;
-        let instance = instance_id(
-            &crypto,
-            &Hash32(Hash::from(trusted_genesis.hash()).into()),
-            chain_id.as_bytes(),
-            InstanceKind::Global,
-            0,
-        );
+        let instance = signed_genesis_consensus_metadata(trusted_genesis)
+            .map_err(malformed)?
+            .sumeragi_context
+            .root_scope
+            .instance_id(
+                &crypto,
+                crate::NetworkId::from_genesis_hash(trusted_genesis.hash()),
+                chain_id,
+            )
+            .map_err(malformed)?;
         Ok(Self {
             genesis: trusted_genesis.clone(),
             chain_id: chain_id.to_owned(),

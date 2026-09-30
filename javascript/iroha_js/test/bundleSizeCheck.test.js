@@ -547,19 +547,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 449_852,
+      eagerBytes: 450_211,
       lazyBytes: [
         { specifier: "./sumeragiTyped.js", bytes: 9_366 },
-        { specifier: "./smartContractDeploymentSubmit.js", bytes: 8_652 },
+        { specifier: "./smartContractDeploymentSubmit.js", bytes: 8_721 },
       ],
-      combinedBytes: 467_870,
+      combinedBytes: 468_298,
       combinedLimitKb: 572,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    52_932,
-    "public browser aggregate must retain the measured 52,932-byte eager headroom",
+    52_573,
+    "public browser aggregate must retain the measured 52,573-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes < 517_186,
@@ -618,8 +618,8 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 780_444, modules: 127 }],
-    ["transactionCodec.js (browser)", { bytes: 222_606, modules: 63 }],
+    ["toriiClient.js", { bytes: 781_569, modules: 128 }],
+    ["transactionCodec.js (browser)", { bytes: 222_615, modules: 63 }],
     ["nexusApp.js (browser)", { bytes: 224_886, modules: 72 }],
     ["canonicalRequest.js (browser)", { bytes: 92_163, modules: 47 }],
   ]);
@@ -685,8 +685,8 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        26_468,
-        "Torii hard ceiling must retain the measured 26,468-byte eager headroom",
+        25_343,
+        "Torii hard ceiling must retain the measured 25,343-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
@@ -695,7 +695,7 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
           { specifier: "./sumeragiTyped.js", bytes: 9_342 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_007_332);
+      assert.equal(splitMetrics.combinedBytes, 1_008_457);
       assert.equal(splitMetrics.combinedLimitKb, 1_078);
       assert.equal(target.reviewedEagerBytes, 806_184);
       assert.equal(target.reviewedCombinedBytes, 1_101_362);
@@ -736,10 +736,10 @@ test("Kotodama compiler browser export stays below 56 KiB without Node or Buffer
   // The canonical nominal-error module shares validation across Unit, public
   // signatures, and cursor/page schemas while preserving the compact compiler.
   assert.equal(Object.keys(result.metafile.inputs).length, 8);
-  assert.equal(result.outputFiles[0].contents.byteLength, 57_300);
+  assert.equal(result.outputFiles[0].contents.byteLength, 57_309);
   assert.equal(
     target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
-    44,
+    35,
     "Kotodama compiler browser ceiling must retain its audited V1 headroom",
   );
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);

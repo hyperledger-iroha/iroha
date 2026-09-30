@@ -550,9 +550,9 @@
       "function": "iroha_contracts_code_get_tool",
       "name": "iroha.contracts.code.get",
       "effect": "read",
-      "description": "Fetch contract code metadata by canonical `path.code_hash`.",
+      "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
       "method": "GET",
-      "path_template": "/v1/contracts/code/{code_hash}",
+      "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -564,11 +564,17 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "dataspace_id",
               "code_hash"
             ],
             "properties": {
+              "dataspace_id": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,19})$"
+              },
               "code_hash": {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
               }
             }
           },
@@ -588,9 +594,9 @@
       "function": "iroha_contracts_code_bytes_get_tool",
       "name": "iroha.contracts.code.bytes.get",
       "effect": "read",
-      "description": "Fetch contract code bytes by canonical `path.code_hash` (`/v1/contracts/code-bytes/{code_hash}`).",
+      "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
       "method": "GET",
-      "path_template": "/v1/contracts/code-bytes/{code_hash}",
+      "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -602,11 +608,17 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "dataspace_id",
               "code_hash"
             ],
             "properties": {
+              "dataspace_id": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,19})$"
+              },
               "code_hash": {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
               }
             }
           },
@@ -955,94 +967,269 @@
         "type": "object",
         "x-iroha-mcp-strict-body": true,
         "additionalProperties": false,
-        "required": ["body"],
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["schema", "binding", "receipt", "fee_payment"],
+            "required": [
+              "schema",
+              "binding",
+              "receipt",
+              "fee_payment"
+            ],
             "properties": {
-              "schema": {"type": "string", "const": "iroha.accounts.onboard.prepare.v1"},
-              "binding": {"type": "object", "additionalProperties": false, "required": ["schema", "semantic_hash_hex", "kind", "request_id", "execution_expires_at_unix_ms"], "properties": {"schema": {"type": "string", "const": "iroha.prepared-operation.binding.v1"}, "kind": {"type": "string", "const": "onboarding"}, "execution_expires_at_unix_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615, "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt."}, "semantic_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Hash of the exact signed onboarding receipt or solved faucet claim."}, "request_id": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee."}}},
+              "schema": {
+                "type": "string",
+                "const": "iroha.accounts.onboard.prepare.v1"
+              },
+              "binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schema",
+                  "semantic_hash_hex",
+                  "kind",
+                  "request_id",
+                  "execution_expires_at_unix_ms"
+                ],
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "iroha.prepared-operation.binding.v1"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "onboarding"
+                  },
+                  "execution_expires_at_unix_ms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 18446744073709551615,
+                    "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt."
+                  },
+                  "semantic_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Hash of the exact signed onboarding receipt or solved faucet claim."
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee."
+                  }
+                }
+              },
               "receipt": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["body", "plan_hash", "signature"],
+                "required": [
+                  "body",
+                  "plan_hash",
+                  "signature"
+                ],
                 "properties": {
                   "body": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["version", "request", "authority", "network_id", "anchor", "resource", "acquisition", "quote_guard", "instructions", "owner_auto_renew_instruction", "valid_until_ms"],
+                    "required": [
+                      "version",
+                      "request",
+                      "authority",
+                      "network_id",
+                      "anchor",
+                      "resource",
+                      "acquisition",
+                      "quote_guard",
+                      "instructions",
+                      "owner_auto_renew_instruction",
+                      "valid_until_ms"
+                    ],
                     "properties": {
-                      "version": {"type": "integer", "const": 1},
+                      "version": {
+                        "type": "integer",
+                        "const": 1
+                      },
                       "request": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["version", "alias", "account_id", "permissions"],
+                        "required": [
+                          "version",
+                          "alias",
+                          "account_id",
+                          "permissions"
+                        ],
                         "properties": {
-                          "version": {"type": "integer", "const": 1},
-                          "alias": {"type": "string", "minLength": 3, "maxLength": 255},
-                          "account_id": {"type": "string", "minLength": 8},
-                          "permissions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 255}}
+                          "version": {
+                            "type": "integer",
+                            "const": 1
+                          },
+                          "alias": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 255
+                          },
+                          "account_id": {
+                            "type": "string",
+                            "minLength": 8
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            }
+                          }
                         }
                       },
-                      "authority": {"type": "string", "minLength": 8},
-                      "network_id": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"},
+                      "authority": {
+                        "type": "string",
+                        "minLength": 8
+                      },
+                      "network_id": {
+                        "type": "string",
+                        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                      },
                       "anchor": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["block_height", "block_hash"],
+                        "required": [
+                          "block_height",
+                          "block_hash"
+                        ],
                         "properties": {
-                          "block_height": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
-                          "block_hash": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"}
+                          "block_height": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          },
+                          "block_hash": {
+                            "type": "string",
+                            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                          }
                         }
                       },
                       "resource": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["intent", "disposition", "quote", "instruction_index"],
+                        "required": [
+                          "intent",
+                          "disposition",
+                          "quote",
+                          "instruction_index"
+                        ],
                         "properties": {
                           "intent": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["kind", "intent"],
+                            "required": [
+                              "kind",
+                              "intent"
+                            ],
                             "properties": {
-                              "kind": {"type": "string", "const": "account_alias"},
+                              "kind": {
+                                "type": "string",
+                                "const": "account_alias"
+                              },
                               "intent": {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["alias", "target_account", "provision", "role"],
+                                "required": [
+                                  "alias",
+                                  "target_account",
+                                  "provision",
+                                  "role"
+                                ],
                                 "properties": {
                                   "alias": {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "required": ["canonical_name", "dataspace_id"],
+                                    "required": [
+                                      "canonical_name",
+                                      "dataspace_id"
+                                    ],
                                     "properties": {
                                       "canonical_name": {
                                         "type": "object",
                                         "additionalProperties": false,
-                                        "required": ["label", "domain", "dataspace"],
+                                        "required": [
+                                          "label",
+                                          "domain",
+                                          "dataspace"
+                                        ],
                                         "properties": {
-                                          "label": {"type": "string", "minLength": 1, "maxLength": 255},
-                                          "domain": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]},
-                                          "dataspace": {"type": "string", "minLength": 1, "maxLength": 255}
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 255
+                                          },
+                                          "domain": {
+                                            "oneOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "dataspace": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 255
+                                          }
                                         }
                                       },
-                                      "dataspace_id": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+                                      "dataspace_id": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 18446744073709551615
+                                      }
                                     }
                                   },
-                                  "target_account": {"type": "string", "minLength": 8},
+                                  "target_account": {
+                                    "type": "string",
+                                    "minLength": 8
+                                  },
                                   "provision": {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "required": ["kind", "value"],
-                                    "properties": {"kind": {"type": "string", "const": "create"}, "value": {"type": "null"}}
+                                    "required": [
+                                      "kind",
+                                      "value"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "create"
+                                      },
+                                      "value": {
+                                        "type": "null"
+                                      }
+                                    }
                                   },
                                   "role": {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "required": ["kind", "value"],
-                                    "properties": {"kind": {"type": "string", "const": "primary"}, "value": {"type": "null"}}
+                                    "required": [
+                                      "kind",
+                                      "value"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "primary"
+                                      },
+                                      "value": {
+                                        "type": "null"
+                                      }
+                                    }
                                   }
                                 }
                               }
@@ -1051,84 +1238,234 @@
                           "disposition": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["kind", "value"],
-                            "properties": {"kind": {"type": "string", "enum": ["no_op", "repair", "create", "conflict"]}, "value": {"type": "null"}}
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "no_op",
+                                  "repair",
+                                  "create",
+                                  "conflict"
+                                ]
+                              },
+                              "value": {
+                                "type": "null"
+                              }
+                            }
                           },
                           "quote": {
                             "oneOf": [
-                              {"type": "null"},
+                              {
+                                "type": "null"
+                              },
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["target", "pricing_class", "exact_amount", "guard", "expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms"],
+                                "required": [
+                                  "target",
+                                  "pricing_class",
+                                  "exact_amount",
+                                  "guard",
+                                  "expires_at_ms",
+                                  "grace_expires_at_ms",
+                                  "redemption_expires_at_ms"
+                                ],
                                 "properties": {
                                   "target": {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "required": ["kind", "resource"],
+                                    "required": [
+                                      "kind",
+                                      "resource"
+                                    ],
                                     "properties": {
-                                      "kind": {"type": "string", "const": "account_alias"},
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "account_alias"
+                                      },
                                       "resource": {
                                         "type": "object",
                                         "additionalProperties": false,
-                                        "required": ["canonical_name", "dataspace_id"],
+                                        "required": [
+                                          "canonical_name",
+                                          "dataspace_id"
+                                        ],
                                         "properties": {
                                           "canonical_name": {
                                             "type": "object",
                                             "additionalProperties": false,
-                                            "required": ["label", "domain", "dataspace"],
+                                            "required": [
+                                              "label",
+                                              "domain",
+                                              "dataspace"
+                                            ],
                                             "properties": {
-                                              "label": {"type": "string", "minLength": 1, "maxLength": 255},
-                                              "domain": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]},
-                                              "dataspace": {"type": "string", "minLength": 1, "maxLength": 255}
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              },
+                                              "domain": {
+                                                "oneOf": [
+                                                  {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 255
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "dataspace": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              }
                                             }
                                           },
-                                          "dataspace_id": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+                                          "dataspace_id": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 18446744073709551615
+                                          }
                                         }
                                       }
                                     }
                                   },
-                                  "pricing_class": {"type": "integer", "minimum": 0, "maximum": 255},
-                                  "exact_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"},
+                                  "pricing_class": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  },
+                                  "exact_amount": {
+                                    "type": "string",
+                                    "maxLength": 155,
+                                    "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                  },
                                   "guard": {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "required": ["expected_policy_version", "expected_payment_asset", "max_amount", "valid_until_ms"],
+                                    "required": [
+                                      "expected_policy_version",
+                                      "expected_payment_asset",
+                                      "max_amount",
+                                      "valid_until_ms"
+                                    ],
                                     "properties": {
-                                      "expected_policy_version": {"type": "integer", "minimum": 0, "maximum": 65535},
-                                      "expected_payment_asset": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"},
-                                      "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"},
-                                      "valid_until_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+                                      "expected_policy_version": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 65535
+                                      },
+                                      "expected_payment_asset": {
+                                        "type": "string",
+                                        "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                      },
+                                      "max_amount": {
+                                        "type": "string",
+                                        "maxLength": 155,
+                                        "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                      },
+                                      "valid_until_ms": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 18446744073709551615
+                                      }
                                     }
                                   },
-                                  "expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
-                                  "grace_expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
-                                  "redemption_expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+                                  "expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  },
+                                  "grace_expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  },
+                                  "redemption_expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  }
                                 }
                               }
                             ]
                           },
-                          "instruction_index": {"oneOf": [{"type": "integer", "const": 0}, {"type": "null"}]}
+                          "instruction_index": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "const": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
                         }
                       },
                       "acquisition": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["term_years", "pricing_class_hint"],
+                        "required": [
+                          "term_years",
+                          "pricing_class_hint"
+                        ],
                         "properties": {
-                          "term_years": {"type": "integer", "minimum": 1, "maximum": 255},
-                          "pricing_class_hint": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "null"}]}
+                          "term_years": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 255
+                          },
+                          "pricing_class_hint": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 255
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
                         }
                       },
                       "quote_guard": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["expected_policy_version", "expected_payment_asset", "max_amount", "valid_until_ms"],
+                        "required": [
+                          "expected_policy_version",
+                          "expected_payment_asset",
+                          "max_amount",
+                          "valid_until_ms"
+                        ],
                         "properties": {
-                          "expected_policy_version": {"type": "integer", "minimum": 0, "maximum": 65535},
-                          "expected_payment_asset": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"},
-                          "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"},
-                          "valid_until_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
+                          "expected_policy_version": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 65535
+                          },
+                          "expected_payment_asset": {
+                            "type": "string",
+                            "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                          },
+                          "max_amount": {
+                            "type": "string",
+                            "maxLength": 155,
+                            "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                          },
+                          "valid_until_ms": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          }
                         }
                       },
                       "instructions": {
@@ -1136,32 +1473,73 @@
                         "items": {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["wire_id", "framed_payload"],
+                          "required": [
+                            "wire_id",
+                            "framed_payload"
+                          ],
                           "properties": {
-                            "wire_id": {"type": "string", "minLength": 1},
-                            "framed_payload": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0, "maximum": 255}}
+                            "wire_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "framed_payload": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 255
+                              }
+                            }
                           }
                         }
                       },
                       "owner_auto_renew_instruction": {
                         "oneOf": [
-                          {"type": "null"},
+                          {
+                            "type": "null"
+                          },
                           {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["wire_id", "framed_payload"],
+                            "required": [
+                              "wire_id",
+                              "framed_payload"
+                            ],
                             "properties": {
-                              "wire_id": {"type": "string", "const": "iroha.alias.auto_renew.configure"},
-                              "framed_payload": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0, "maximum": 255}}
+                              "wire_id": {
+                                "type": "string",
+                                "const": "iroha.alias.auto_renew.configure"
+                              },
+                              "framed_payload": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 255
+                                }
+                              }
                             }
                           }
                         ]
                       },
-                      "valid_until_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
+                      "valid_until_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 18446744073709551615
+                      }
                     }
                   },
-                  "plan_hash": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"},
-                  "signature": {"type": "string", "minLength": 2, "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"}
+                  "plan_hash": {
+                    "type": "string",
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                  },
+                  "signature": {
+                    "type": "string",
+                    "minLength": 2,
+                    "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"
+                  }
                 }
               },
               "fee_payment": {
@@ -1169,13 +1547,22 @@
                   {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["payer", "value"],
+                    "required": [
+                      "payer",
+                      "value"
+                    ],
                     "properties": {
-                      "payer": {"type": "string", "const": "authority"},
+                      "payer": {
+                        "type": "string",
+                        "const": "authority"
+                      },
                       "value": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["charge_limits", "gas_limit"],
+                        "required": [
+                          "charge_limits",
+                          "gas_limit"
+                        ],
                         "properties": {
                           "charge_limits": {
                             "type": "array",
@@ -1183,15 +1570,56 @@
                             "items": {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["kind", "asset_definition_id", "max_amount"],
+                              "required": [
+                                "kind",
+                                "asset_definition_id",
+                                "max_amount"
+                              ],
                               "properties": {
-                                "kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}},
-                                "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"},
-                                "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}
+                                "kind": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "value"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "nexus",
+                                        "pipeline_gas"
+                                      ]
+                                    },
+                                    "value": {
+                                      "type": "null"
+                                    }
+                                  }
+                                },
+                                "asset_definition_id": {
+                                  "type": "string",
+                                  "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                },
+                                "max_amount": {
+                                  "type": "string",
+                                  "maxLength": 155,
+                                  "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                }
                               }
                             }
                           },
-                          "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}
+                          "gas_limit": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 18446744073709551615
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
                         }
                       }
                     }
@@ -1199,36 +1627,105 @@
                   {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["payer", "value"],
+                    "required": [
+                      "payer",
+                      "value"
+                    ],
                     "properties": {
-                      "payer": {"type": "string", "const": "sponsor"},
+                      "payer": {
+                        "type": "string",
+                        "const": "sponsor"
+                      },
                       "value": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["program_id", "program_revision", "charge_limits", "gas_limit"],
+                        "required": [
+                          "program_id",
+                          "program_revision",
+                          "charge_limits",
+                          "gas_limit"
+                        ],
                         "properties": {
                           "program_id": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["sponsor", "name"],
-                            "properties": {"sponsor": {"type": "string", "minLength": 8}, "name": {"type": "string", "minLength": 1, "maxLength": 255}}
+                            "required": [
+                              "sponsor",
+                              "name"
+                            ],
+                            "properties": {
+                              "sponsor": {
+                                "type": "string",
+                                "minLength": 8
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              }
+                            }
                           },
-                          "program_revision": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+                          "program_revision": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          },
                           "charge_limits": {
                             "type": "array",
                             "maxItems": 2,
                             "items": {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["kind", "asset_definition_id", "max_amount"],
+                              "required": [
+                                "kind",
+                                "asset_definition_id",
+                                "max_amount"
+                              ],
                               "properties": {
-                                "kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}},
-                                "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"},
-                                "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}
+                                "kind": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "value"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "nexus",
+                                        "pipeline_gas"
+                                      ]
+                                    },
+                                    "value": {
+                                      "type": "null"
+                                    }
+                                  }
+                                },
+                                "asset_definition_id": {
+                                  "type": "string",
+                                  "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                },
+                                "max_amount": {
+                                  "type": "string",
+                                  "maxLength": 155,
+                                  "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                }
                               }
                             }
                           },
-                          "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}
+                          "gas_limit": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 18446744073709551615
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
                         }
                       }
                     }
@@ -1239,10 +1736,14 @@
           },
           "headers": {
             "type": "object",
-            "additionalProperties": {"type": "string"},
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
           },
-          "accept": {"type": "string"}
+          "accept": {
+            "type": "string"
+          }
         }
       }
     },
@@ -1257,34 +1758,847 @@
         "type": "object",
         "x-iroha-mcp-strict-body": true,
         "additionalProperties": false,
-        "required": ["body"],
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["schema", "binding", "operation", "receipt", "semantic_hash_hex", "account_id", "alias", "disposition", "transaction_hash_hex", "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment", "server_signature"],
+            "required": [
+              "schema",
+              "binding",
+              "operation",
+              "receipt",
+              "semantic_hash_hex",
+              "account_id",
+              "alias",
+              "disposition",
+              "transaction_hash_hex",
+              "signed_transaction_wire_hex",
+              "signed_transaction_wire_sha256",
+              "fee_payment",
+              "server_signature"
+            ],
             "properties": {
-              "schema": {"type": "string", "const": "iroha.prepared-transaction.v1"},
-              "binding": {"type": "object", "additionalProperties": false, "required": ["schema", "semantic_hash_hex", "kind", "request_id", "execution_expires_at_unix_ms"], "properties": {"schema": {"type": "string", "const": "iroha.prepared-operation.binding.v1"}, "kind": {"type": "string", "const": "onboarding"}, "execution_expires_at_unix_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615, "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt."}, "semantic_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Hash of the exact signed onboarding receipt or solved faucet claim."}, "request_id": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee."}}},
-              "operation": {"type": "string", "const": "onboarding"},
-              "receipt": {"type": "object", "additionalProperties": false, "required": ["body", "plan_hash", "signature"], "properties": {"body": {"type": "object", "additionalProperties": false, "required": ["version", "request", "authority", "network_id", "anchor", "resource", "acquisition", "quote_guard", "instructions", "owner_auto_renew_instruction", "valid_until_ms"], "properties": {"version": {"type": "integer", "const": 1}, "request": {"type": "object", "additionalProperties": false, "required": ["version", "alias", "account_id", "permissions"], "properties": {"version": {"type": "integer", "const": 1}, "alias": {"type": "string", "minLength": 3, "maxLength": 255}, "account_id": {"type": "string", "minLength": 8}, "permissions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 255}}}}, "authority": {"type": "string", "minLength": 8}, "network_id": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"}, "anchor": {"type": "object", "additionalProperties": false, "required": ["block_height", "block_hash"], "properties": {"block_height": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "block_hash": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"}}}, "resource": {"type": "object", "additionalProperties": false, "required": ["intent", "disposition", "quote", "instruction_index"], "properties": {"intent": {"type": "object", "additionalProperties": false, "required": ["kind", "intent"], "properties": {"kind": {"type": "string", "const": "account_alias"}, "intent": {"type": "object", "additionalProperties": false, "required": ["alias", "target_account", "provision", "role"], "properties": {"alias": {"type": "object", "additionalProperties": false, "required": ["canonical_name", "dataspace_id"], "properties": {"canonical_name": {"type": "object", "additionalProperties": false, "required": ["label", "domain", "dataspace"], "properties": {"label": {"type": "string", "minLength": 1, "maxLength": 255}, "domain": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]}, "dataspace": {"type": "string", "minLength": 1, "maxLength": 255}}}, "dataspace_id": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}, "target_account": {"type": "string", "minLength": 8}, "provision": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "const": "create"}, "value": {"type": "null"}}}, "role": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "const": "primary"}, "value": {"type": "null"}}}}}}}, "disposition": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["no_op", "repair", "create", "conflict"]}, "value": {"type": "null"}}}, "quote": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["target", "pricing_class", "exact_amount", "guard", "expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms"], "properties": {"target": {"type": "object", "additionalProperties": false, "required": ["kind", "resource"], "properties": {"kind": {"type": "string", "const": "account_alias"}, "resource": {"type": "object", "additionalProperties": false, "required": ["canonical_name", "dataspace_id"], "properties": {"canonical_name": {"type": "object", "additionalProperties": false, "required": ["label", "domain", "dataspace"], "properties": {"label": {"type": "string", "minLength": 1, "maxLength": 255}, "domain": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]}, "dataspace": {"type": "string", "minLength": 1, "maxLength": 255}}}, "dataspace_id": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}}}, "pricing_class": {"type": "integer", "minimum": 0, "maximum": 255}, "exact_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}, "guard": {"type": "object", "additionalProperties": false, "required": ["expected_policy_version", "expected_payment_asset", "max_amount", "valid_until_ms"], "properties": {"expected_policy_version": {"type": "integer", "minimum": 0, "maximum": 65535}, "expected_payment_asset": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}, "valid_until_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}, "expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}, "grace_expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}, "redemption_expires_at_ms": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}]}, "instruction_index": {"oneOf": [{"type": "integer", "const": 0}, {"type": "null"}]}}}, "acquisition": {"type": "object", "additionalProperties": false, "required": ["term_years", "pricing_class_hint"], "properties": {"term_years": {"type": "integer", "minimum": 1, "maximum": 255}, "pricing_class_hint": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "null"}]}}}, "quote_guard": {"type": "object", "additionalProperties": false, "required": ["expected_policy_version", "expected_payment_asset", "max_amount", "valid_until_ms"], "properties": {"expected_policy_version": {"type": "integer", "minimum": 0, "maximum": 65535}, "expected_payment_asset": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}, "valid_until_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}}}, "instructions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["wire_id", "framed_payload"], "properties": {"wire_id": {"type": "string", "minLength": 1}, "framed_payload": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0, "maximum": 255}}}}}, "owner_auto_renew_instruction": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["wire_id", "framed_payload"], "properties": {"wire_id": {"type": "string", "const": "iroha.alias.auto_renew.configure"}, "framed_payload": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0, "maximum": 255}}}}]}, "valid_until_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}}}, "plan_hash": {"type": "string", "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"}, "signature": {"type": "string", "minLength": 2, "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"}}},
-              "semantic_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "account_id": {"type": "string", "minLength": 8},
-              "alias": {"type": "string", "minLength": 3, "maxLength": 255},
-              "disposition": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["no_op", "repair", "create"]}, "value": {"type": "null"}}},
-              "transaction_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "signed_transaction_wire_hex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"},
-              "signed_transaction_wire_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "fee_payment": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "authority"}, "value": {"type": "object", "additionalProperties": false, "required": ["charge_limits", "gas_limit"], "properties": {"charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}, {"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "sponsor"}, "value": {"type": "object", "additionalProperties": false, "required": ["program_id", "program_revision", "charge_limits", "gas_limit"], "properties": {"program_id": {"type": "object", "additionalProperties": false, "required": ["sponsor", "name"], "properties": {"sponsor": {"type": "string", "minLength": 8}, "name": {"type": "string", "minLength": 1, "maxLength": 255}}}, "program_revision": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}]},
-              "server_signature": {"type": "string", "minLength": 2, "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"}
+              "schema": {
+                "type": "string",
+                "const": "iroha.prepared-transaction.v1"
+              },
+              "binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schema",
+                  "semantic_hash_hex",
+                  "kind",
+                  "request_id",
+                  "execution_expires_at_unix_ms"
+                ],
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "iroha.prepared-operation.binding.v1"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "onboarding"
+                  },
+                  "execution_expires_at_unix_ms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 18446744073709551615,
+                    "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt."
+                  },
+                  "semantic_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Hash of the exact signed onboarding receipt or solved faucet claim."
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee."
+                  }
+                }
+              },
+              "operation": {
+                "type": "string",
+                "const": "onboarding"
+              },
+              "receipt": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "body",
+                  "plan_hash",
+                  "signature"
+                ],
+                "properties": {
+                  "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "version",
+                      "request",
+                      "authority",
+                      "network_id",
+                      "anchor",
+                      "resource",
+                      "acquisition",
+                      "quote_guard",
+                      "instructions",
+                      "owner_auto_renew_instruction",
+                      "valid_until_ms"
+                    ],
+                    "properties": {
+                      "version": {
+                        "type": "integer",
+                        "const": 1
+                      },
+                      "request": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "version",
+                          "alias",
+                          "account_id",
+                          "permissions"
+                        ],
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "const": 1
+                          },
+                          "alias": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 255
+                          },
+                          "account_id": {
+                            "type": "string",
+                            "minLength": 8
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            }
+                          }
+                        }
+                      },
+                      "authority": {
+                        "type": "string",
+                        "minLength": 8
+                      },
+                      "network_id": {
+                        "type": "string",
+                        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                      },
+                      "anchor": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "block_height",
+                          "block_hash"
+                        ],
+                        "properties": {
+                          "block_height": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          },
+                          "block_hash": {
+                            "type": "string",
+                            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                          }
+                        }
+                      },
+                      "resource": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "intent",
+                          "disposition",
+                          "quote",
+                          "instruction_index"
+                        ],
+                        "properties": {
+                          "intent": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "intent"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "account_alias"
+                              },
+                              "intent": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "alias",
+                                  "target_account",
+                                  "provision",
+                                  "role"
+                                ],
+                                "properties": {
+                                  "alias": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "canonical_name",
+                                      "dataspace_id"
+                                    ],
+                                    "properties": {
+                                      "canonical_name": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "label",
+                                          "domain",
+                                          "dataspace"
+                                        ],
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 255
+                                          },
+                                          "domain": {
+                                            "oneOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "dataspace": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 255
+                                          }
+                                        }
+                                      },
+                                      "dataspace_id": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 18446744073709551615
+                                      }
+                                    }
+                                  },
+                                  "target_account": {
+                                    "type": "string",
+                                    "minLength": 8
+                                  },
+                                  "provision": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "kind",
+                                      "value"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "create"
+                                      },
+                                      "value": {
+                                        "type": "null"
+                                      }
+                                    }
+                                  },
+                                  "role": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "kind",
+                                      "value"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "primary"
+                                      },
+                                      "value": {
+                                        "type": "null"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "disposition": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "no_op",
+                                  "repair",
+                                  "create",
+                                  "conflict"
+                                ]
+                              },
+                              "value": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          "quote": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "target",
+                                  "pricing_class",
+                                  "exact_amount",
+                                  "guard",
+                                  "expires_at_ms",
+                                  "grace_expires_at_ms",
+                                  "redemption_expires_at_ms"
+                                ],
+                                "properties": {
+                                  "target": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "kind",
+                                      "resource"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "account_alias"
+                                      },
+                                      "resource": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "canonical_name",
+                                          "dataspace_id"
+                                        ],
+                                        "properties": {
+                                          "canonical_name": {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": [
+                                              "label",
+                                              "domain",
+                                              "dataspace"
+                                            ],
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              },
+                                              "domain": {
+                                                "oneOf": [
+                                                  {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 255
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "dataspace": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 255
+                                              }
+                                            }
+                                          },
+                                          "dataspace_id": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 18446744073709551615
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "pricing_class": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  },
+                                  "exact_amount": {
+                                    "type": "string",
+                                    "maxLength": 155,
+                                    "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                  },
+                                  "guard": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "expected_policy_version",
+                                      "expected_payment_asset",
+                                      "max_amount",
+                                      "valid_until_ms"
+                                    ],
+                                    "properties": {
+                                      "expected_policy_version": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 65535
+                                      },
+                                      "expected_payment_asset": {
+                                        "type": "string",
+                                        "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                      },
+                                      "max_amount": {
+                                        "type": "string",
+                                        "maxLength": 155,
+                                        "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                      },
+                                      "valid_until_ms": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 18446744073709551615
+                                      }
+                                    }
+                                  },
+                                  "expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  },
+                                  "grace_expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  },
+                                  "redemption_expires_at_ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 18446744073709551615
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "instruction_index": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "const": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "acquisition": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "term_years",
+                          "pricing_class_hint"
+                        ],
+                        "properties": {
+                          "term_years": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 255
+                          },
+                          "pricing_class_hint": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 255
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "quote_guard": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "expected_policy_version",
+                          "expected_payment_asset",
+                          "max_amount",
+                          "valid_until_ms"
+                        ],
+                        "properties": {
+                          "expected_policy_version": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 65535
+                          },
+                          "expected_payment_asset": {
+                            "type": "string",
+                            "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                          },
+                          "max_amount": {
+                            "type": "string",
+                            "maxLength": 155,
+                            "pattern": "^(?:0|[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                          },
+                          "valid_until_ms": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          }
+                        }
+                      },
+                      "instructions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "wire_id",
+                            "framed_payload"
+                          ],
+                          "properties": {
+                            "wire_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "framed_payload": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 255
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "owner_auto_renew_instruction": {
+                        "oneOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "wire_id",
+                              "framed_payload"
+                            ],
+                            "properties": {
+                              "wire_id": {
+                                "type": "string",
+                                "const": "iroha.alias.auto_renew.configure"
+                              },
+                              "framed_payload": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 255
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "valid_until_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 18446744073709551615
+                      }
+                    }
+                  },
+                  "plan_hash": {
+                    "type": "string",
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
+                  },
+                  "signature": {
+                    "type": "string",
+                    "minLength": 2,
+                    "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"
+                  }
+                }
+              },
+              "semantic_hash_hex": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "account_id": {
+                "type": "string",
+                "minLength": 8
+              },
+              "alias": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 255
+              },
+              "disposition": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "no_op",
+                      "repair",
+                      "create"
+                    ]
+                  },
+                  "value": {
+                    "type": "null"
+                  }
+                }
+              },
+              "transaction_hash_hex": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "signed_transaction_wire_hex": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{2})+$"
+              },
+              "signed_transaction_wire_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "fee_payment": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "payer",
+                      "value"
+                    ],
+                    "properties": {
+                      "payer": {
+                        "type": "string",
+                        "const": "authority"
+                      },
+                      "value": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "charge_limits",
+                          "gas_limit"
+                        ],
+                        "properties": {
+                          "charge_limits": {
+                            "type": "array",
+                            "maxItems": 2,
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "asset_definition_id",
+                                "max_amount"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "value"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "nexus",
+                                        "pipeline_gas"
+                                      ]
+                                    },
+                                    "value": {
+                                      "type": "null"
+                                    }
+                                  }
+                                },
+                                "asset_definition_id": {
+                                  "type": "string",
+                                  "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                },
+                                "max_amount": {
+                                  "type": "string",
+                                  "maxLength": 155,
+                                  "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                }
+                              }
+                            }
+                          },
+                          "gas_limit": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 18446744073709551615
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "payer",
+                      "value"
+                    ],
+                    "properties": {
+                      "payer": {
+                        "type": "string",
+                        "const": "sponsor"
+                      },
+                      "value": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "program_id",
+                          "program_revision",
+                          "charge_limits",
+                          "gas_limit"
+                        ],
+                        "properties": {
+                          "program_id": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "sponsor",
+                              "name"
+                            ],
+                            "properties": {
+                              "sponsor": {
+                                "type": "string",
+                                "minLength": 8
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              }
+                            }
+                          },
+                          "program_revision": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 18446744073709551615
+                          },
+                          "charge_limits": {
+                            "type": "array",
+                            "maxItems": 2,
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "asset_definition_id",
+                                "max_amount"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "kind",
+                                    "value"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "nexus",
+                                        "pipeline_gas"
+                                      ]
+                                    },
+                                    "value": {
+                                      "type": "null"
+                                    }
+                                  }
+                                },
+                                "asset_definition_id": {
+                                  "type": "string",
+                                  "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"
+                                },
+                                "max_amount": {
+                                  "type": "string",
+                                  "maxLength": 155,
+                                  "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"
+                                }
+                              }
+                            }
+                          },
+                          "gas_limit": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 18446744073709551615
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "server_signature": {
+                "type": "string",
+                "minLength": 2,
+                "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"
+              }
             }
           },
           "headers": {
             "type": "object",
-            "additionalProperties": {"type": "string"},
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
           },
-          "accept": {"type": "string"}
+          "accept": {
+            "type": "string"
+          }
         }
       }
     },

@@ -286,7 +286,7 @@ transactions and use the by-reference call/view routes described above.
 
 ## Verified Kotodama source bundles
 
-The SDK-projected `POST /v1/contracts/code/{code_hash}/verified-source/jobs`
+The SDK-projected `POST /v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source/jobs`
 accepts `language: "kotodama"`, `source_text`, and an optional `source_name`.
 Multifile submissions require `source_name` and may supply:
 
@@ -306,9 +306,13 @@ remains in the bundle. A stored record must recompile to the requested code hash
 ABI hash, and compiler fingerprint on every read, including all reached package
 companions; changed or missing dependencies fail verification.
 
-`GET /v1/contracts/code/{code_hash}/contract-view` retains the original root in
+`GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}/contract-view` retains the original root in
 `rendered_source_text` and its path in `verified_source_ref.source_name`. It adds
 `source_files`, `source_imports`, and `source_packages` for a verified bundle,
 omitting empty arrays. These fields preserve individual files for reproduction
-and editor navigation. The source and job routes remain SDK projections in the
+and editor navigation. Source and job responses carry mandatory `network_id` and `artifact_id`; local
+records are keyed by network, full-width dataspace, and code hash. Every read and
+submission verifies canonical account authentication and current exact-dataspace
+visibility. Private listeners also require the owner token.
+The source and job routes remain SDK projections in the
 route catalog; they are not OpenAPI projections.

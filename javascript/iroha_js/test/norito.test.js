@@ -1,3 +1,4 @@
+import { universalArtifactInstruction } from "./contractArtifactTestHelpers.js";
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1184,7 +1185,7 @@ baseTest("injected native codec encodes supported instruction JSON", () => {
 });
 
 test("contract manifest codec preserves the canonical seiyaku name", () => {
-  const instruction = {
+  const instruction = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         seiyaku_name: "Ledger",
@@ -1192,12 +1193,12 @@ test("contract manifest codec preserves the canonical seiyaku name", () => {
         kotoba: null,
       },
     },
-  };
+  });
   let encoded;
   {
     encoded = Buffer.from(boundNoritoEncodeInstruction(instruction, 753));
   }
-  assert.deepEqual(noritoDecodeInstruction(encoded, 753), {
+  assert.deepEqual(noritoDecodeInstruction(encoded, 753), universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         seiyaku_name: "Ledger",
@@ -1214,16 +1215,16 @@ test("contract manifest codec preserves the canonical seiyaku name", () => {
         provenance: null,
       },
     },
-  });
+  }));
 });
 
 test("contract manifest codec matches Rust V1 trigger bytes", () => {
   const fixture = JSON.parse(
     fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
   );
-  const instruction = {
+  const instruction = universalArtifactInstruction({
     RegisterSmartContractCode: { manifest: fixture.manifest },
-  };
+  });
   const encoded = Buffer.from(boundNoritoEncodeInstruction(instruction, 753));
   const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
   assert.notEqual(
@@ -1233,14 +1234,14 @@ test("contract manifest codec matches Rust V1 trigger bytes", () => {
   );
   assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
 
-  const signedInstruction = {
+  const signedInstruction = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         ...fixture.manifest,
         provenance: fixture.signed_provenance,
       },
     },
-  };
+  });
   const signedEncoded = Buffer.from(boundNoritoEncodeInstruction(signedInstruction, 753));
   assert.notEqual(
     signedEncoded.indexOf(Buffer.from(fixture.signed_manifest_compact_hex, "hex")),
@@ -1341,7 +1342,7 @@ test("contract manifest codec roundtrips every V1 descriptor field", () => {
     },
   };
   const encoded = Buffer.from(
-      boundNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753),
+      boundNoritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest } }), 753),
     );
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest, {
@@ -1356,7 +1357,7 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
     fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
   );
   const encodeManifest = (manifest) =>
-    boundNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+    boundNoritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest } }), 753);
 
   assert.throws(
     () => encodeManifest({ ...fixture.manifest, contract_name: "Legacy" }),
@@ -1502,7 +1503,7 @@ test("contract manifest codec validates every flat query schema and ordinary str
       [leaf("NftId"), leaf("AccountId"), leaf("Json")],
     ],
   ];
-  const instruction = (returnType, nodes) => ({
+  const instruction = (returnType, nodes) => (universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         ...fixture.manifest,
@@ -1519,7 +1520,7 @@ test("contract manifest codec validates every flat query schema and ordinary str
         ],
       },
     },
-  });
+  }));
   const roundtrip = (returnType, nodes) => {
     const value = instruction(returnType, nodes);
     const encoded = boundNoritoEncodeInstruction(value, 753);
@@ -1554,7 +1555,7 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
   );
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
   const encodeNodes = (nodes, returnType = "schema-under-test") =>
-    boundNoritoEncodeInstruction({
+    boundNoritoEncodeInstruction(universalArtifactInstruction({
         RegisterSmartContractCode: {
           manifest: {
             ...fixture.manifest,
@@ -1571,7 +1572,7 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
             ],
           },
         },
-      }, 753);
+      }), 753);
 
   for (const malformed of [
     [],

@@ -115,6 +115,7 @@ internal static class ToriiContractManifestJson
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     };
     private static readonly HashSet<string> RetiredNumericTypeNames = new(StringComparer.Ordinal)
     {

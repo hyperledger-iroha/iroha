@@ -744,7 +744,9 @@ public enum CanonicalNorito {
         writer.writeUInt64LE(UInt64(keys.count))
         for key in keys {
             guard !key.isEmpty, key.utf8.count <= 255,
-                  key.utf8.elementsEqual(key.precomposedStringWithCanonicalMapping.utf8),
+                  // Swift String equality normalizes Unicode; canonical Name wire
+                  // spelling requires byte equality with the NFC representation.
+                  key.precomposedStringWithCanonicalMapping.utf8.elementsEqual(key.utf8),
                   key.unicodeScalars.allSatisfy({ scalar in
                       scalar.properties.generalCategory != .control
                           && !CharacterSet.whitespacesAndNewlines.contains(scalar)

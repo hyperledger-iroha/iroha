@@ -25,6 +25,7 @@ struct BaseConfig {
     chain: String,
     network_id: NetworkId,
     torii_url: String,
+    api_token: Option<Zeroizing<String>>,
     basic_auth: Option<BasicAuth>,
 }
 struct BasicAuth {
@@ -34,7 +35,7 @@ struct BasicAuth {
 /// Generate per-client CLI configs from a base client.toml.
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Base client config to copy `chain`, `torii_url`, and `basic_auth` from.
+    /// Base client config to copy `chain`, `network_id`, `torii_url`, `api_token`, and `basic_auth` from.
     #[arg(long, value_name = "PATH")]
     base_config: PathBuf,
     /// Output directory for generated client configs (default: <base-config-dir>/clients).
@@ -156,10 +157,16 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         Some(_) => return Err(eyre!("base config `basic_auth` must be a TOML table")),
         None => None,
     };
+    let api_token = match value.get("api_token") {
+        Some(toml::Value::String(token)) => Some(Zeroizing::new(token.clone())),
+        Some(_) => return Err(eyre!("base config `api_token` must be a TOML string")),
+        None => None,
+    };
     Ok(BaseConfig {
         chain,
         network_id,
         torii_url,
+        api_token,
         basic_auth,
     })
 }
@@ -306,6 +313,12 @@ fn render_client_config(
         "torii_url".into(),
         toml::Value::String(base.torii_url.clone()),
     );
+    if let Some(token) = &base.api_token {
+        root.insert(
+            "api_token".into(),
+            toml::Value::String(token.as_str().into()),
+        );
+    }
 
     let mut transaction = toml::Table::new();
     transaction.insert(
@@ -379,6 +392,7 @@ mod tests {
 chain = "demo-chain"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:8080/"
+api_token = "owner-listener-token"
 
 [basic_auth]
 password = "secret"
@@ -405,9 +419,35 @@ web_login = "demo"
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         );
         assert_eq!(base.torii_url, "http://127.0.0.1:8080/");
+        assert_eq!(
+            base.api_token.as_deref().map(String::as_str),
+            Some("owner-listener-token")
+        );
         let auth = base.basic_auth.expect("basic auth present");
         assert_eq!(auth.web_login, "demo");
         assert_eq!(auth.password.as_str(), "secret");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn load_base_config_preserves_optional_token_and_rejects_wrong_type_without_exposure() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("client.toml");
+        write_base_config(&path);
+        let original = fs::read_to_string(&path).unwrap();
+        let without_token = original.replace("api_token = \"owner-listener-token\"\n", "");
+        fs::write(&path, &without_token).unwrap();
+        assert!(load_base_config(&path).unwrap().api_token.is_none());
+        let malformed = original.replace(
+            "api_token = \"owner-listener-token\"",
+            "api_token = { secret = \"must-stay-private\" }",
+        );
+        fs::write(&path, malformed).unwrap();
+        let error = load_base_config(&path)
+            .err()
+            .expect("invalid token type")
+            .to_string();
+        assert_eq!(error, "base config `api_token` must be a TOML string");
+        assert!(!error.contains("must-stay-private"));
     }
     #[cfg(unix)]
     #[test]
@@ -520,6 +560,7 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
+            api_token: Some(Zeroizing::new("owner-listener-token".into())),
             basic_auth: Some(BasicAuth {
                 web_login: "demo".to_owned(),
                 password: Zeroizing::new("secret".to_owned()),
@@ -541,6 +582,10 @@ basic_auth = "not a table"
         assert_eq!(
             value.get("torii_url").and_then(toml::Value::as_str),
             Some("http://127.0.0.1:8080/")
+        );
+        assert_eq!(
+            value.get("api_token").and_then(toml::Value::as_str),
+            Some("owner-listener-token")
         );
         let account = value
             .get("account")
@@ -605,12 +650,14 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
+            api_token: None,
             basic_auth: None,
         };
         let key_pair = KeyPair::try_from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
         let rendered = render_client_config(&base, "cbuae", &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
+        assert!(value.get("api_token").is_none());
         let account = value
             .get("account")
             .and_then(toml::Value::as_table)
@@ -629,6 +676,7 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "https://example.test/path?value=\"quoted\"".to_owned(),
+            api_token: Some(Zeroizing::new("escaped-\"token\"".into())),
             basic_auth: Some(BasicAuth {
                 web_login: "operator\"name".to_owned(),
                 password: Zeroizing::new("line one\nline \"two\"".to_owned()),
@@ -639,6 +687,10 @@ basic_auth = "not a table"
         let rendered =
             render_client_config(&base, "acme.universal", &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(rendered.as_str()).expect("parse rendered config");
+        assert_eq!(
+            value.get("api_token").and_then(toml::Value::as_str),
+            Some("escaped-\"token\"")
+        );
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
             Some(base.chain.as_str())

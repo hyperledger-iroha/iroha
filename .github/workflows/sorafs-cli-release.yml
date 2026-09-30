@@ -300,6 +300,8 @@ on:
       - "scripts/tests/state_source_bundle.py"
       - "xtask/src/main.rs"
       - "crates/iroha_core/**"
+      - "crates/iroha_core_privacy/**"
+      - "crates/iroha_core_timed_ovn/**"
       - "crates/iroha_core_zk/**"
       - "crates/iroha_panic_hook/**"
       - "crates/iroha_sccp/**"

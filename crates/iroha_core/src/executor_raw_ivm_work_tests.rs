@@ -168,10 +168,20 @@ seiyaku RawMeteredFailure {
         )
         .unwrap();
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(code_hash, program.clone());
-        world
-            .contract_manifests
-            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &address, &ALICE_ID, code_hash);
         let state = state_for_testing(world);
         let mut metadata = Metadata::default();
@@ -260,10 +270,20 @@ seiyaku UnverifiedBallot {
         )
         .unwrap();
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(code_hash, program.clone());
-        world
-            .contract_manifests
-            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &address, &ALICE_ID, code_hash);
         let state = state_for_testing(world);
         let mut metadata = Metadata::default();

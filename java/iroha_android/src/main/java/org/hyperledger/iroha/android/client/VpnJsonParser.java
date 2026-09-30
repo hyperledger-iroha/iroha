@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Minimal JSON parser for Sora VPN Torii responses. */

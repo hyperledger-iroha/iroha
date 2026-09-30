@@ -194,7 +194,8 @@ fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results()
             .unwrap();
             let mut rows = changed.witness_rows(&forged).unwrap();
             rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&prefixes);
-            rows[0][MULTIPLY..].copy_from_slice(&multiply::witness(value, 0, &prefixes, false));
+            rows[0][MULTIPLY..ABSOLUTE]
+                .copy_from_slice(&multiply::witness(value, 0, &prefixes, false));
             rows[0][RESULT] = F(false_count);
             assert!(rejects(&changed, &rows));
         }
@@ -271,8 +272,8 @@ fn bit_count_modes_constrain_every_interior_column_and_nonselected_prefixes() {
 fn count_family_maximum_words_and_steps_fit_unchanged_security_and_envelope() {
     let (segment, records) = maximum_segment();
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-    assert_eq!(segment.base_width_v1(), 1_305);
-    assert_eq!(segment.profile_constraint_count_v1(), 2_819);
+    assert_eq!(segment.base_width_v1(), 1_351);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_940);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     assert_eq!(protocol.parameters.query_count, 136);
@@ -290,8 +291,8 @@ fn count_family_maximum_words_and_steps_fit_unchanged_security_and_envelope() {
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_038_912);
-    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 155_392);
+    assert_eq!(bound, 4_141_952);
+    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xf9; 32],
@@ -309,7 +310,7 @@ fn native_stark_proves_maximum_count_segment_and_binds_result_and_orientation() 
     let (segment, records) = maximum_segment();
     let proof =
         prove_proof_managed_note_stark_v1(&segment, &segment.columns(&records).unwrap()).unwrap();
-    assert!(proof.len() <= 4_038_912);
+    assert!(proof.len() <= 4_141_952);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for register in [8, 9, 10] {
         let mut after = segment.after;

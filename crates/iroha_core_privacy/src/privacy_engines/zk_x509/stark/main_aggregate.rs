@@ -21,11 +21,23 @@ mod main_composition_ownership_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_fixed_coset.rs"]
 mod main_fixed_coset;
+#[cfg(test)]
+#[path = "main_fixed_replay_batch_tests.rs"]
+mod main_fixed_replay_batch_tests;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_fri_retention.rs"]
+mod main_fri_retention;
+#[cfg(test)]
+#[path = "main_native_boundary_tests.rs"]
+mod main_native_boundary_tests;
 #[path = "main_oods.rs"]
 mod main_oods;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_cache.rs"]
 mod main_quotient_cache;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_quotient_denominators.rs"]
+mod main_quotient_denominators;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_stripes.rs"]
 mod main_quotient_stripes;
@@ -862,56 +874,55 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         let (canonical_deep_traces, canonical_deep_compositions) =
             canonical_deep_values_v1(&deep, &self.layout)?;
         let mixes = derive_fri_mixes_v1(&mut self.transcript, &self.layout)?;
-        let mut fri_bases = main_fri_bases_from_polynomials_v1(
-            &self.layout,
-            &self.base_polynomials,
-            &self.aux_polynomials,
-            &sources,
-            &composition_material.coefficient_chunks,
-            &mixes,
-            deep_point,
-            &canonical_deep_traces,
-            &canonical_deep_compositions,
+        let mut fri_bases = main_fri_retention::MainRetainedFriInputsV1::new_v1(
+            main_fri_bases_from_polynomials_v1(
+                &self.layout,
+                &self.base_polynomials,
+                &self.aux_polynomials,
+                &sources,
+                &composition_material.coefficient_chunks,
+                &mixes,
+                deep_point,
+                &canonical_deep_traces,
+                &canonical_deep_compositions,
+            )?,
+            self.layout.common_lde_size(),
         )?;
-        for (base, mask) in fri_bases.iter_mut().zip(&fri_masks) {
+        for (base, mask) in fri_bases.lanes_mut_v1().zip(&fri_masks) {
             aggregate::add_fri_mask_oracle_v1(base, mask).map_err(map_aggregate_error_v1)?;
         }
+        let fri_buffer_plan = main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?;
+        let retained_fri_payload = fri_bases.allocated_payload_bytes_v1()?;
+        let mask_fri_payload = main_fri_retention::mask_evaluation_payload_v1(&fri_masks)?;
         let mut fri_materials = Vec::new();
         fri_materials
             .try_reserve_exact(SECURITY_LANES)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         for lane in 0..SECURITY_LANES {
-            let base_values = core::mem::take(
-                fri_bases
-                    .get_mut(lane)
-                    .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-            );
+            let mut base_values = fri_bases.copy_lane_v1(lane, |outgoing_capacity| {
+                fri_buffer_plan
+                    .check_retained_fri_copy_v1(
+                        &self.layout,
+                        retained_fri_payload,
+                        mask_fri_payload,
+                        outgoing_capacity,
+                    )
+                    .map(|_| ())
+            })?;
             fri_materials.push(
                 aggregate::build_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
                     AGGREGATE_DOMAINS_V1,
                     &shared_layout,
                     lane,
-                    base_values,
+                    core::mem::take(&mut base_values.0),
                     &mut self.transcript,
                 )
                 .map_err(map_aggregate_error_v1)?,
             );
         }
-        fri_bases = main_fri_bases_from_polynomials_v1(
-            &self.layout,
-            &self.base_polynomials,
-            &self.aux_polynomials,
-            &sources,
-            &composition_material.coefficient_chunks,
-            &mixes,
-            deep_point,
-            &canonical_deep_traces,
-            &canonical_deep_compositions,
-        )?;
-        for (base, mask) in fri_bases.iter_mut().zip(&fri_masks) {
-            aggregate::add_fri_mask_oracle_v1(base, mask).map_err(map_aggregate_error_v1)?;
-        }
+        // The original masked FRI inputs remain in clearing owners. Reuse them
+        // once queries are fixed instead of replaying every private trace column.
         let grinding_state = self.transcript.state();
         let grinding_nonce = grind_nonce_v1(
             ZK_X509_DIGEST_CONTEXT_V1,
@@ -1007,15 +1018,15 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         fri_openings
             .try_reserve_exact(SECURITY_LANES)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for (lane, (base_values, material)) in fri_bases.into_iter().zip(&fri_materials).enumerate()
-        {
+        for (lane, material) in fri_materials.iter().enumerate() {
+            let mut base_values = fri_bases.take_lane_v1(lane)?;
             fri_openings.push(
                 aggregate::open_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
                     AGGREGATE_DOMAINS_V1,
                     &shared_layout,
                     lane,
-                    base_values,
+                    core::mem::take(&mut base_values.0),
                     material,
                     &query_indices,
                 )
@@ -1247,6 +1258,8 @@ impl MainProverConstraintProviderV1<'_, '_> {
             Self::Log19(source) => source.stream_fixed_polynomials_v1(consume),
         }
     }
+    // The direct path remains a test oracle; the independent verifier is separate.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn composition_value_v1(
         &self,
@@ -1306,6 +1319,73 @@ impl MainProverConstraintProviderV1<'_, '_> {
             ),
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    fn composition_value_on_stripe_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        denominators: &main_quotient_denominators::MainQuotientDenominatorsV1,
+        row: usize,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        alphas: &[E],
+    ) -> Result<E, ZkX509StarkErrorV1> {
+        if fixed_current.len() != registration.segment.fixed_width
+            || fixed_next.len() != registration.segment.fixed_width
+            || alphas.len() != registration.segment.constraint_count
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let inverse = denominators.at_v1(registration.segment.trace_log2, row)?;
+        let residues = match self {
+            Self::Log5(source) => {
+                source.constraint_residues_v1(registration, opening, fixed_current)?
+            }
+            Self::P256Scalar(source) => source.constraint_residues_v1(
+                registration,
+                opening,
+                fixed_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            )?,
+            Self::Projection(source) => {
+                if registration != source.registration {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                projection_constraint_residues_v1(
+                    opening.base_current,
+                    opening.base_next,
+                    opening.aux_current,
+                    opening.aux_next,
+                    fixed_current,
+                    source.challenges,
+                )?
+            }
+            Self::Log16(source) => {
+                source.constraint_residues_v1(registration, opening, fixed_current)?
+            }
+            Self::Io(source) => source.constraint_residues_v1(
+                registration,
+                opening,
+                fixed_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            )?,
+            Self::Log19(source) => {
+                source.constraint_residues_v1(registration, opening, fixed_current, fixed_next)?
+            }
+        };
+        if residues.len() != registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(residues
+            .iter()
+            .zip(alphas)
+            .fold(E::ZERO, |sum, (residue, alpha)| {
+                sum.add(alpha.mul_base(*residue))
+            })
+            .mul_base(inverse))
+    }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainFixedPolynomialSetV1 {
@@ -1327,6 +1407,13 @@ fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
     mut consume: impl FnMut(&mut ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
+    if let MainProverConstraintProviderV1::Log19(source) = provider {
+        for registration in source.source.registrations.iter().copied() {
+            let mut completed = main_log19_fixed_polynomial_set_v1(source, registration)?;
+            consume(&mut completed)?;
+        }
+        return Ok(());
+    }
     let mut pending: Option<ZeroizingMainFixedPolynomialSetV1> = None;
     provider.stream_fixed_polynomials_v1(|registration, local_column, coefficients| {
         if registration.segment.trace_log2 != provider.native_trace_log2_v1()
@@ -1372,6 +1459,63 @@ fn stream_main_fixed_polynomial_sets_v1(
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     consume(&mut completed)
+}
+/// Construct the existing final fixed matrix directly, avoiding a second
+/// pending copy. Arithmetic rows are shared by eight columns; each independent
+/// inverse transform then runs in place within that same bounded batch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn main_log19_fixed_polynomial_set_v1(
+    source: &MainLog19ProverConstraintSourceV1<'_, '_>,
+    registration: RegisteredSegmentLayoutV1,
+) -> Result<ZeroizingMainFixedPolynomialSetV1, ZkX509StarkErrorV1> {
+    let index = source.source.registration_index_v1(registration)?;
+    let root = goldilocks_primitive_root_v1(registration.segment.trace_log2)
+        .map_err(map_transparent_error_v1)?;
+    let mut set = ZeroizingMainFixedPolynomialSetV1 {
+        registration,
+        columns: Vec::new(),
+    };
+    set.columns
+        .try_reserve_exact(registration.segment.fixed_width)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    let arithmetic = if index >= 6 {
+        let binding = source.source.p256_binding_v1(registration)?;
+        (binding.p256.adapter_v1() == P256MainAdapterV1::Arithmetic
+            && binding.p256.local_instance_v1() == 0)
+            .then_some(binding.p256)
+    } else {
+        None
+    };
+    if let Some(binding) = arithmetic {
+        for _ in 0..registration.segment.fixed_width {
+            set.columns.push(
+                zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
+            );
+        }
+        for (batch_index, batch) in set
+            .columns
+            .chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .enumerate()
+        {
+            let first = batch_index * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+            let mut outputs = batch.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
+            source
+                .source
+                .p256
+                .fill_arithmetic_fixed_columns_v1(binding, first, &mut outputs)?;
+            drop(outputs);
+            batch.par_iter_mut().try_for_each(|column| {
+                goldilocks_ifft_v1(column, root).map_err(map_transparent_error_v1)
+            })?;
+        }
+    } else {
+        for column in 0..registration.segment.fixed_width {
+            let mut values = source.source.native_fixed_column_v1(registration, column)?;
+            goldilocks_ifft_v1(&mut values, root).map_err(map_transparent_error_v1)?;
+            set.columns.push(values.into_vec_v1());
+        }
+    }
+    Ok(set)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_main_registration_index_v1(
@@ -1569,6 +1713,10 @@ fn main_registration_composition_coefficient_chunks_v1(
             plan.quotient_coset_log2,
             ordinal,
         )?;
+        let denominators = main_quotient_denominators::MainQuotientDenominatorsV1::new_v1(
+            registration.segment.trace_log2,
+            stripe,
+        )?;
         let base = main_registration_trace_columns_on_coset_v1(
             layout,
             base_polynomials,
@@ -1610,7 +1758,6 @@ fn main_registration_composition_coefficient_chunks_v1(
                             let first_row = chunk_index
                                 .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
                                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                            let mut x = stripe.shift.mul(stripe.root.pow(first_row as u128));
                             for (offset, target) in output
                                 .iter_mut()
                                 .skip(stripe.ordinal)
@@ -1622,15 +1769,15 @@ fn main_registration_composition_coefficient_chunks_v1(
                                     .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
                                 let next = (row + stripe.next_stride) % stripe.rows;
                                 scratch.fill_v1(row, next, &base, &aux, fixed_columns);
-                                *target = provider.composition_value_v1(
+                                *target = provider.composition_value_on_stripe_v1(
                                     registration,
-                                    x,
+                                    &denominators,
+                                    row,
                                     scratch.opening_v1(),
                                     &scratch.fixed_current,
                                     &scratch.fixed_next,
                                     &alphas[lane],
                                 )?;
-                                x = x.mul(stripe.root);
                             }
                             Ok::<_, ZkX509StarkErrorV1>(())
                         },
@@ -2053,18 +2200,24 @@ fn main_fri_bases_from_polynomials_v1(
     }
     let common_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
-    accumulators
-        .iter()
-        .map(|coefficients| {
+    let mut evaluated = ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
+    evaluated
+        .try_reserve_exact(SECURITY_LANES)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    for coefficients in &accumulators {
+        let mut lane = ZeroizingExtensionColumnV1(
             goldilocks_fp4_evaluate_coset_v1(
                 coefficients,
                 layout.common_lde_size(),
                 common_root,
                 F(GOLDILOCKS_GENERATOR_V1),
             )
-            .map_err(map_transparent_error_v1)
-        })
-        .collect()
+            .map_err(map_transparent_error_v1)?,
+        );
+        evaluated.push(core::mem::take(&mut lane.0));
+    }
+    // The caller immediately adopts this allocation in MainRetainedFriInputsV1.
+    Ok(evaluated.into_vec())
 }
 #[cfg(test)]
 /// Exact six-provider registry used only for verifier-safe opened-row evaluation.
@@ -3667,13 +3820,51 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     credential_binding: ZkX509CredentialPreAuxBindingV1,
     proof_bytes: &[u8],
 ) -> Result<ZkX509MainCaBindingV1, ZkX509StarkErrorV1> {
-    let verifier_profile = construct_zk_x509_main_verifier_profile_v1()?;
-    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
-    let envelope = decode_zk_x509_main_proof_envelope_v1(proof_bytes)?;
-    let proof = decode_zk_x509_segmented_stark_proof_v1(envelope.aggregate_proof, &layout)?;
+    let verifier_profile = construct_zk_x509_main_verifier_profile_v1().inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-profile",
+            _error,
+        );
+    })?;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-layout",
+            _error,
+        );
+    })?;
+    let envelope = decode_zk_x509_main_proof_envelope_v1(proof_bytes).inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-envelope-decode",
+            _error,
+        );
+    })?;
+    let proof = decode_zk_x509_segmented_stark_proof_v1(envelope.aggregate_proof, &layout)
+        .inspect_err(|_error| {
+            #[cfg(test)]
+            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                "main-segmented-decode",
+                _error,
+            );
+        })?;
     let main_pre_aux =
-        main_pre_aux_from_decoded_proof_v1(public, verifier_profile, &layout, &proof)?;
+        main_pre_aux_from_decoded_proof_v1(public, verifier_profile, &layout, &proof).inspect_err(
+            |_error| {
+                #[cfg(test)]
+                super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                    "main-pre-aux",
+                    _error,
+                );
+            },
+        )?;
     if !credential_binding.matches_main_pre_aux_v1(main_pre_aux) {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-pre-aux-binding",
+            &ZkX509StarkErrorV1::TranscriptMismatch,
+        );
         return Err(ZkX509StarkErrorV1::TranscriptMismatch);
     }
     let mut transcript =
@@ -3729,6 +3920,13 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &shared_layout,
         &mut transcript,
     )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-fri-commitments",
+            _error,
+        );
+    })
     .map_err(map_aggregate_error_v1)?;
     let grinding_state = transcript.state();
     verify_grinding_nonce_v1(
@@ -3737,6 +3935,13 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         ZK_X509_GRINDING_BITS_V1,
         proof.aggregate.grinding_nonce,
     )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-grinding",
+            _error,
+        );
+    })
     .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
     absorb_grinding_nonce_v1(&mut transcript, proof.aggregate.grinding_nonce)?;
     let expected_indices = query_indices_v1(&transcript, &layout)?;
@@ -3747,6 +3952,13 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &shared_layout,
         &expected_indices,
     )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-merkle-openings",
+            _error,
+        );
+    })
     .map_err(map_aggregate_error_v1)?;
     let post_base = credential_binding.main_post_base();
     let p256_fixed = P256MainVerifierFixedSourceV1::new_v1()?;
@@ -3755,17 +3967,53 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &p256_fixed,
         post_base,
         envelope.claims.p256,
-    )?;
+    )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-p256-context",
+            _error,
+        );
+    })?;
     let projection =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)?;
-    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)?;
+        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)
+            .inspect_err(|_error| {
+                #[cfg(test)]
+                super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                    "main-projection-context",
+                    _error,
+                );
+            })?;
+    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)
+        .inspect_err(|_error| {
+            #[cfg(test)]
+            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                "main-io-context",
+                _error,
+            );
+        })?;
     let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
         &layout,
         rfc_statement,
         post_base,
         envelope.claims,
-    )?;
-    log19.prepare_complete_oods_fixed_v1()?;
+    )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-log19-context",
+            _error,
+        );
+    })?;
+    log19
+        .prepare_complete_oods_fixed_v1()
+        .inspect_err(|_error| {
+            #[cfg(test)]
+            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+                "main-oods-fixed-schedule",
+                _error,
+            );
+        })?;
     main_oods::verify_main_deep_constraints_v1(
         &layout,
         &proof.deep,
@@ -3775,7 +4023,14 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &projection,
         &io,
         &log19,
-    )?;
+    )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-complete-oods",
+            _error,
+        );
+    })?;
     aggregate::verify_opened_query_relations_after_complete_oods_v1(
         &proof.aggregate,
         &proof.deep,
@@ -3787,6 +4042,13 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &fri_betas,
         &terminal_fields,
     )
+    .inspect_err(|_error| {
+        #[cfg(test)]
+        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
+            "main-opened-query-relations",
+            _error,
+        );
+    })
     .map_err(map_aggregate_error_v1)?;
     Ok(ZkX509MainCaBindingV1 {
         public,

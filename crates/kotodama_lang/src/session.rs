@@ -1910,9 +1910,9 @@ mod tests {
             ("Pair(1, 2)", "Pair { left: 1, right: 2, }")
         );
         let mixed =
-            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
+            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, first: 2); } }";
         let mixed_error = reject(mixed);
-        let mixed_diagnostic = diagnostic(&mixed_error, "E_NAMED_ARGUMENTS_REQUIRED");
+        let mixed_diagnostic = diagnostic(&mixed_error, "E_DUPLICATE_NAMED_ARGUMENT");
         assert!(mixed_diagnostic.primary_span.is_some());
         let reversed = "seiyaku C { fn f() { target(first: 1, 2); } }";
         let reversed_error = reject(reversed);

@@ -3748,9 +3748,7 @@ fn acquire_sidecar_store_lease_v1(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
     use crate::privacy_engines::atomic_private_settlement::test_fixtures::*;
-
     use crate::private_settlement::protocol::{
         private_settlement_prepare_barrier_v1, private_settlement_prepared_bundle_digest_v1,
     };
@@ -3778,8 +3776,6 @@ pub(crate) mod tests {
         },
         privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
     };
-
-    use rand_08::SeedableRng as _;
 
     pub(crate) struct SidecarFixtureV1 {
         pub(crate) sidecar: PrivateSettlementRestrictedSidecarV1,

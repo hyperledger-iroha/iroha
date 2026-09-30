@@ -973,6 +973,7 @@ fn verify_pulse(
         let cursor = NativeJournalCursor::new(
             config.common.chain.clone(),
             network,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             native_finality_limits(),
         )
         .map_err(|error| eyre!(error))?;
@@ -1087,7 +1088,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         let kagami_dir = root.join("kagami");
         let mut generate = Command::new(&kagami);
         generate
-            .args(["localnet", "--peers", "4", "--chain-id", TAIRA_CHAIN])
+            .args(["localnet", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
             .args(["--sora-profile", "nexus", "--consensus-mode", "npos"])
             .args(["--seed", "sora-nexus-v1-qual-predeal"])
             .arg("--block-cadence-ms")

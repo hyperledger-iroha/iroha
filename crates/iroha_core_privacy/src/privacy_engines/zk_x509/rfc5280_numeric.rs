@@ -89,6 +89,7 @@ pub(super) enum NumericOperandV1 {
 impl NumericOperandV1 {
     /// A private operand query removes its public affine offset before lookup.
     /// Public operands are bound directly to verifier-generated fixed cells.
+    #[cfg(test)]
     pub(super) fn timestamp_tuple_v1<A: PolynomialAirFieldV1>(
         self,
         certificate_two: A,

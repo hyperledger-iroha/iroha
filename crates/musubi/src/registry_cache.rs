@@ -10,9 +10,9 @@
 //! Torii's current finalized query pages do not carry a portable consensus
 //! inclusion proof.  Cache authenticity is therefore rooted in the online
 //! reader's validation plus the private, identity-checked user cache directory; the
-//! domain-separated snapshot commitment detects subsequent corruption. Qualified Unix hosts bind
-//! catalog reads to the retained cache-root descriptor through native descriptor-relative,
-//! no-follow opens, checking both file and root identity before accepting bytes.
+//! domain-separated snapshot commitment detects subsequent corruption. Native Unix and Windows
+//! catalog reads retain no-follow root and file authority, checking custody and exact identity
+//! before accepting bytes.
 //! TODO: Verify and retain a portable finalized-state inclusion proof here once the public query
 //! contract exposes one.
 #[cfg(test)]
@@ -36,13 +36,11 @@ use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
 };
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt, fs, io,
+    fmt, io,
     path::{Path, PathBuf},
 };
 const CACHE_SCHEMA: &str = "musubi-resolver-cache";
@@ -378,7 +376,7 @@ impl ResolverIndexCacheCatalogV1 {
 #[derive(Debug)]
 pub struct ResolverIndexCacheV1 {
     write_root: AtomicWriteRoot,
-    root_identity: DirectoryIdentityV1,
+    root_identity: iroha_fs::PrivateDirectory,
 }
 impl ResolverIndexCacheV1 {
     /// Open the resolver cache below an explicit trusted user cache root.
@@ -386,14 +384,13 @@ impl ResolverIndexCacheV1 {
         let archive_cache =
             MusubiCache::open(user_cache_root).map_err(ResolverIndexCacheErrorV1::Cache)?;
         let registry_root = archive_cache.root().join("registry-v1");
-        let metadata = fs::symlink_metadata(&registry_root)
-            .map_err(|source| io_error("inspect resolver cache root", &registry_root, source))?;
-        validate_private_directory(&registry_root, &metadata)?;
+        let root_identity = iroha_fs::PrivateDirectory::open(&registry_root)
+            .map_err(|source| io_error("retain resolver cache root", &registry_root, source))?;
         let write_root =
             AtomicWriteRoot::new(&registry_root).map_err(ResolverIndexCacheErrorV1::AtomicWrite)?;
         Ok(Self {
             write_root,
-            root_identity: DirectoryIdentityV1::capture(&metadata),
+            root_identity,
         })
     }
     /// Atomically merge one successfully collected coherent snapshot.
@@ -489,14 +486,16 @@ impl ResolverIndexCacheV1 {
         Ok(Some(catalog))
     }
     fn validate_root(&self) -> Result<(), ResolverIndexCacheErrorV1> {
-        let path = self.write_root.path();
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|source| io_error("revalidate resolver cache root", path, source))?;
-        validate_private_directory(path, &metadata)?;
-        if !self.root_identity.matches(&metadata) {
+        if self.root_identity.path() != self.write_root.path() {
             return Err(invalid("resolver cache root identity changed"));
         }
-        Ok(())
+        self.root_identity.revalidate().map_err(|source| {
+            io_error(
+                "revalidate resolver cache root",
+                self.write_root.path(),
+                source,
+            )
+        })
     }
 }
 /// Online source wrapper that records only successfully returned validated pages.
@@ -602,7 +601,7 @@ impl CachedResolverSourceV1 {
         ))
     }
     /// Return the exact finalized anchor represented by this source.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }
@@ -918,52 +917,9 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Resolver
         source,
     }
 }
-#[derive(Clone, Debug)]
-struct DirectoryIdentityV1 {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-}
-impl DirectoryIdentityV1 {
-    fn capture(metadata: &fs::Metadata) -> Self {
-        Self {
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(unix)]
-            inode: metadata.ino(),
-        }
-    }
-    fn matches(&self, metadata: &fs::Metadata) -> bool {
-        #[cfg(unix)]
-        {
-            self.device == metadata.dev() && self.inode == metadata.ino()
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = metadata;
-            false
-        }
-    }
-}
-fn validate_private_directory(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ResolverIndexCacheErrorV1> {
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(invalid(format!(
-            "`{}` is not a real cache directory",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(invalid(format!("`{}` is not private", path.display())));
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
+    use std::fs;
     #[test]
     fn captured_resolver_cache_frames_preserve_existing_fixture_bytes() {
         let snapshot = image("apps.sora", 10, 10);
@@ -995,6 +951,23 @@ mod tests {
     };
     use iroha_model_base::topology::DataSpaceId;
     use tempfile::TempDir;
+
+    #[test]
+    fn native_resolver_catalog_round_trip_retains_exact_snapshot() {
+        let temporary = TempDir::new().expect("native cache root");
+        let path = temporary.path().join("cache");
+        let cache = ResolverIndexCacheV1::open(&path).expect("retained resolver cache");
+        cache
+            .publish(image("apps.sora", 10, 10))
+            .expect("publish exact catalog");
+        drop(cache);
+        let reopened = ResolverIndexCacheV1::open(&path).expect("reopen native catalog");
+        let sources = reopened
+            .sources(None, None)
+            .expect("authenticated catalog read");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].snapshot(), snapshot(10, 10));
+    }
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
@@ -1205,7 +1178,7 @@ exports = []
             snapshot(10, 10)
         );
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn resolver_cache_open_fails_closed_without_a_safe_root_handle() {
         let temp = TempDir::new().expect("temp root");

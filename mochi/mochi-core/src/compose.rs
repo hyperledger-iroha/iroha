@@ -24,6 +24,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_primitives::numeric::Quantity;
+#[cfg(any(test, feature = "test"))]
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use norito::json::{self, Map, Value};
@@ -32,7 +33,6 @@ use std::{
     fmt,
     num::{NonZeroU32, NonZeroU64},
     str::FromStr,
-    sync::LazyLock,
     time::Duration,
 };
 
@@ -313,24 +313,27 @@ impl SigningAuthority {
         Ok(())
     }
 }
-static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(|| {
-    let all_permissions = InstructionPermission::all();
-    vec![
-        SigningAuthority::with_permissions(
-            "Alice (dev)",
-            ALICE_ID.clone(),
-            ALICE_KEYPAIR.clone(),
-            all_permissions.into_iter(),
-        ),
-        SigningAuthority::with_permissions(
-            "Bob (dev)",
-            BOB_ID.clone(),
-            BOB_KEYPAIR.clone(),
-            [InstructionPermission::TransferAsset].into_iter(),
-        ),
-    ]
-});
-/// Access the bundled development signing authorities.
+#[cfg(any(test, feature = "test"))]
+static DEVELOPMENT_AUTHORITIES: std::sync::LazyLock<Vec<SigningAuthority>> =
+    std::sync::LazyLock::new(|| {
+        let all_permissions = InstructionPermission::all();
+        vec![
+            SigningAuthority::with_permissions(
+                "Alice (dev)",
+                ALICE_ID.clone(),
+                ALICE_KEYPAIR.clone(),
+                all_permissions.into_iter(),
+            ),
+            SigningAuthority::with_permissions(
+                "Bob (dev)",
+                BOB_ID.clone(),
+                BOB_KEYPAIR.clone(),
+                [InstructionPermission::TransferAsset].into_iter(),
+            ),
+        ]
+    });
+/// Deterministic mock authorities for tests; managed networks always generate their own keys.
+#[cfg(any(test, feature = "test"))]
 #[must_use]
 pub fn development_signing_authorities() -> &'static [SigningAuthority] {
     DEVELOPMENT_AUTHORITIES.as_slice()

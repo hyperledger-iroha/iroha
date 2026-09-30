@@ -98,6 +98,57 @@ final class KagemushaAppEnrollmentPreparationVerifierV1Tests: XCTestCase {
       canonicalAccountID: try account(seed: 0x32), binding: selected))
   }
 
+  func testQualifiedPreparationRequiresEachSelectedNonzeroPointIdentity() throws {
+    let issuer = try Curve25519.Signing.PrivateKey(
+      rawRepresentation: Data(repeating: 0x42, count: 32))
+    let canonicalAccount = try account(seed: 0x31)
+    let original = try binding()
+    let pointKey = try P256.Signing.PrivateKey(
+      rawRepresentation: Data(repeating: 0, count: 31) + Data([1]))
+    let pointID = Data(SHA256.hash(data: pointKey.publicKey.x963Representation))
+    let verifier = try KagemushaAppEnrollmentPreparationVerifierV1(
+      issuerPublicKey: issuer.publicKey.rawRepresentation, issuerPolicyID: policyID)
+
+    for platform in [KagemushaHardwarePlatformClassV1.androidOEMService,
+      .appleOEMService, .dedicatedSecureElement, .otherQualified] {
+      func selected(_ keyID: Data) throws -> KagemushaAppEnrollmentPreparationBindingV1 {
+        try KagemushaAppEnrollmentPreparationBindingV1(
+          platformClass: platform,
+          clientNonce: original.clientNonce, serverNonce: original.serverNonce,
+          releaseID: original.releaseID, profileID: original.profileID,
+          attestedKeyID: keyID, laneID: original.laneID)
+      }
+      let binding = try selected(pointID)
+      let frame = try preparation(key: issuer, account: canonicalAccount, binding: binding)
+      XCTAssertNoThrow(try verifier.verify(frame, canonicalAccountID: canonicalAccount,
+        binding: binding, nowMS: 1_000_001))
+      XCTAssertThrowsError(try selected(Data(repeating: 0, count: 32))) { error in
+        XCTAssertEqual(error as? KagemushaAppEnrollmentPreparationErrorV1, .invalidBinding)
+      }
+
+      var substitutedID = pointID
+      substitutedID[0] ^= 1
+      let substituted = try selected(substitutedID)
+      XCTAssertThrowsError(try verifier.verify(frame, canonicalAccountID: canonicalAccount,
+        binding: substituted, nowMS: 1_000_001)) { error in
+          XCTAssertEqual(error as? KagemushaAppEnrollmentPreparationErrorV1, .selectionMismatch)
+        }
+
+      // Even a genuinely issuer-signed zero-key frame cannot replace the selected point.
+      var zeroKeyFrame = frame
+      zeroKeyFrame.replaceSubrange(145..<177, with: Data(repeating: 0, count: 32))
+      var message = Data("iroha:kagemusha:v1:app-enrollment-preparation\0".utf8)
+      message.append(zeroKeyFrame[1..<209])
+      message.append(policyID)
+      message.append(contentsOf: SHA256.hash(data: Data(canonicalAccount.utf8)))
+      zeroKeyFrame.replaceSubrange(209..<273, with: try issuer.signature(for: message))
+      XCTAssertThrowsError(try verifier.verify(zeroKeyFrame, canonicalAccountID: canonicalAccount,
+        binding: binding, nowMS: 1_000_001)) { error in
+          XCTAssertEqual(error as? KagemushaAppEnrollmentPreparationErrorV1, .selectionMismatch)
+        }
+    }
+  }
+
   func testIndependentlyIssuedAndroidPreparationCrossSDKFixture() throws {
     let fixture = try loadAndroidPreparationFixture()
     XCTAssertEqual(try XCTUnwrap(fixture["schema"] as? String),

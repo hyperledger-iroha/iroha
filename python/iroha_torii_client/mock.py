@@ -25,6 +25,14 @@ _CURRENT_DATA_MODEL_VERSION = 4
 _MOCK_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
+def _artifact_fixture_key(value: str) -> str:
+    """Fixture keys bind one canonical full-width dataspace and artifact digest."""
+    match = re.fullmatch(r"(0|[1-9][0-9]*)/([0-9a-f]{64})", value)
+    if match is None or int(match[1]) >= 1 << 64 or int(match[2][-1], 16) & 1 != 1:
+        raise ValueError("artifact fixture key must be canonical dataspace/code-hash")
+    return value
+
+
 def _default_governance_proposal_draft() -> Dict[str, Any]:
     return {
         "proposal_id": "11" * 32,
@@ -194,12 +202,13 @@ class _MockState:
             return self._gov_ballot_plain(body)
         if method == "POST" and path == "/v1/gov/ballots/zk-v1":
             return self._gov_ballot_zk_v1(body)
-        if method == "GET" and path.startswith("/v1/contracts/code-bytes/"):
-            code_hash = path.split("/")[-1]
-            return self._contracts_code_bytes(code_hash)
-        if method == "GET" and path.startswith("/v1/contracts/code/"):
-            code_hash = path.split("/")[-1]
-            return self._contracts_manifest_get(code_hash)
+        if method == "GET" and path.startswith("/v1/contracts/artifacts/"):
+            segments = path.split("/")
+            if len(segments) == 6:
+                return self._contracts_manifest_get(segments[4], segments[5])
+            if len(segments) == 7 and segments[6] == "bytes":
+                return self._contracts_code_bytes(segments[4], segments[5])
+            return _json_response(HTTPStatus.NOT_FOUND, {"error": "unknown artifact route"})
         if method == "GET" and path.startswith("/v1/gov/tally/"):
             referendum_id = path.split("/")[-1]
             return self._gov_tally_get(referendum_id)
@@ -353,7 +362,7 @@ class _MockState:
             for key, value in manifests_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("manifest entry must be an object")
-                normalized_manifests[str(key).lower()] = value
+                normalized_manifests[_artifact_fixture_key(str(key))] = value
             self.contract_manifests = normalized_manifests
         else:
             self.contract_manifests = {}
@@ -366,7 +375,7 @@ class _MockState:
             for key, value in code_bytes_payload.items():
                 if not isinstance(value, dict):
                     raise ValueError("code_bytes entry must be an object")
-                normalized_code_bytes[str(key).lower()] = value
+                normalized_code_bytes[_artifact_fixture_key(str(key))] = value
             self.contract_code_bytes = normalized_code_bytes
         else:
             self.contract_code_bytes = {}
@@ -715,15 +724,21 @@ class _MockState:
         payload.setdefault("contract_address", contract_address)
         return _json_response(HTTPStatus.OK, payload)
 
-    def _contracts_manifest_get(self, code_hash: str) -> _Response:
-        key = code_hash.lower()
+    def _contracts_manifest_get(self, dataspace: str, code_hash: str) -> _Response:
+        try:
+            key = _artifact_fixture_key(f"{dataspace}/{code_hash}")
+        except ValueError:
+            return _json_response(HTTPStatus.BAD_REQUEST, {"error": "invalid artifact identity"})
         payload = self.contract_manifests.get(key)
         if payload is None:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "manifest not found"})
         return _json_response(HTTPStatus.OK, payload)
 
-    def _contracts_code_bytes(self, code_hash: str) -> _Response:
-        key = code_hash.lower()
+    def _contracts_code_bytes(self, dataspace: str, code_hash: str) -> _Response:
+        try:
+            key = _artifact_fixture_key(f"{dataspace}/{code_hash}")
+        except ValueError:
+            return _json_response(HTTPStatus.BAD_REQUEST, {"error": "invalid artifact identity"})
         payload = self.contract_code_bytes.get(key)
         if payload is None:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "code bytes not found"})

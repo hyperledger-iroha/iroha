@@ -2,6 +2,11 @@
 //!
 //! Callers must independently authenticate the contract code/schema and approval
 //! authority. Construction is not proof of deployment, authorization or finality.
+//! Freeze a positive Propose creation timestamp before constructing or signing
+//! the call. The exact attempt timestamp is part of the trigger instruction and
+//! metadata. Retrying a retired attempt requires a fresh timestamp and fresh
+//! consent; an Approve transaction retains the original proposal hash. Terminal
+//! proposal identities and their original controller history are immutable.
 use crate::{
     account::AccountId,
     events::execute_trigger::ExecuteTriggerEventFilter,
@@ -19,7 +24,7 @@ use crate::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_model_base::{metadata::Metadata, name::Name};
 use iroha_primitives::json::Json;
-use std::str::FromStr;
+use std::{num::NonZeroU64, str::FromStr};
 
 /// Native call material to be incorporated into the caller's complete signed transaction.
 pub struct CanonicalMultisigContractCall {
@@ -38,6 +43,7 @@ pub fn contract_call_metadata(
     alias: &ContractAlias,
     entrypoint: &str,
     payload: &Json,
+    attempt_created_at_ms: NonZeroU64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
     for (key, value) in [
@@ -58,6 +64,10 @@ pub fn contract_call_metadata(
         Name::from_str("contract_payload").expect("static metadata key"),
         payload.clone(),
     );
+    metadata.insert(
+        Name::from_str("contract_attempt_created_at_ms").expect("static metadata key"),
+        Json::new(attempt_created_at_ms.get()),
+    );
     metadata
 }
 
@@ -73,6 +83,7 @@ pub fn derive_multisig_contract_call_trigger_id(
     entrypoint: &str,
     payload: &Json,
     code_hash: &Hash,
+    attempt_created_at_ms: NonZeroU64,
 ) -> Result<TriggerId, String> {
     let material = (
         authority.clone(),
@@ -80,9 +91,10 @@ pub fn derive_multisig_contract_call_trigger_id(
         entrypoint.to_owned(),
         payload.clone(),
         *code_hash,
+        attempt_created_at_ms.get(),
     );
     let wire = norito::encode_canonical(&material).map_err(|error| error.to_string())?;
-    let hash = Hash::new_from_chunks(&[b"iroha:multisig-contract-trigger:v1\0", &wire]);
+    let hash = Hash::new_from_chunks(&[b"iroha:multisig-contract-trigger:v2\0", &wire]);
     let name = Name::from_str(&format!("msig_cc_{}", hex::encode(hash.as_ref())))
         .map_err(|error| error.to_string())?;
     Ok(TriggerId::new(name))
@@ -90,6 +102,9 @@ pub fn derive_multisig_contract_call_trigger_id(
 
 /// Construct the exact current proposal from independently reviewed typed inputs.
 /// No ledger I/O, signature, alias resolution, or application authority inference occurs.
+/// The positive attempt timestamp must equal the frozen Propose transaction's
+/// creation time. A fresh retry receives a distinct real instruction identity;
+/// approvals continue to bind the original attempt's exact instruction hash.
 ///
 /// # Errors
 /// Rejects an empty, overlong, or whitespace-padded entrypoint, a payload that is
@@ -102,6 +117,7 @@ pub fn build_multisig_contract_call(
     payload: &Json,
     arguments: Option<ContractArgumentRecord>,
     code_hash: &Hash,
+    attempt_created_at_ms: NonZeroU64,
 ) -> Result<CanonicalMultisigContractCall, String> {
     if entrypoint.is_empty() || entrypoint.len() > 128 || entrypoint.trim() != entrypoint {
         return Err("exact bounded contract entrypoint required".to_owned());
@@ -113,9 +129,21 @@ pub fn build_multisig_contract_call(
         return Err("exact contract object payload required".to_owned());
     }
     let trigger_id = derive_multisig_contract_call_trigger_id(
-        authority, address, entrypoint, payload, code_hash,
+        authority,
+        address,
+        entrypoint,
+        payload,
+        code_hash,
+        attempt_created_at_ms,
     )?;
-    let metadata = contract_call_metadata(address, code_hash, alias, entrypoint, payload);
+    let metadata = contract_call_metadata(
+        address,
+        code_hash,
+        alias,
+        entrypoint,
+        payload,
+        attempt_created_at_ms,
+    );
     let action = Action::new(
         Executable::ContractCall(ContractInvocation {
             contract_address: address.clone(),
@@ -172,6 +200,7 @@ mod tests {
                 &payload,
                 Some(ContractArgumentRecord::try_new(args).expect("args")),
                 code,
+                NonZeroU64::new(1).unwrap(),
             )
             .expect("call")
         };
@@ -190,7 +219,14 @@ mod tests {
         assert_eq!(original.instructions.len(), 2);
         assert_eq!(
             original.metadata,
-            contract_call_metadata(&address, &code, &alias, "finalize_mint_request", &payload)
+            contract_call_metadata(
+                &address,
+                &code,
+                &alias,
+                "finalize_mint_request",
+                &payload,
+                NonZeroU64::new(1).unwrap()
+            )
         );
         assert!(
             build_multisig_contract_call(
@@ -201,6 +237,7 @@ mod tests {
                 &Json::new("scalar"),
                 None,
                 &code,
+                NonZeroU64::new(1).unwrap(),
             )
             .is_err()
         );
@@ -214,6 +251,7 @@ mod tests {
             "a|b",
             &Json::new(norito::json!({"value":"c"})),
             &code,
+            NonZeroU64::new(1).unwrap(),
         )
         .expect("first");
         let second = derive_multisig_contract_call_trigger_id(
@@ -222,6 +260,7 @@ mod tests {
             "a",
             &Json::new(norito::json!({"value":"b|c"})),
             &code,
+            NonZeroU64::new(1).unwrap(),
         )
         .expect("second");
         assert_ne!(first, second);
@@ -234,8 +273,55 @@ mod tests {
                 &Json::new(norito::json!({})),
                 None,
                 &code,
+                NonZeroU64::new(1).unwrap(),
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn frozen_propose_attempt_is_reproducible_and_retry_has_distinct_instruction_identity() {
+        let (owner, address, alias, code) = fixture();
+        let payload = Json::new(norito::json!({"proposal_id": "unchanged-economic-intent"}));
+        let build = |attempt| {
+            build_multisig_contract_call(
+                &owner,
+                &address,
+                &alias,
+                "finalize_mint_request",
+                &payload,
+                None,
+                &code,
+                NonZeroU64::new(attempt).unwrap(),
+            )
+            .unwrap()
+        };
+        let original = build(1_700_000_000_001);
+        let reproduced = build(1_700_000_000_001);
+        let retry = build(1_700_000_000_002);
+        assert_eq!(original.instructions, reproduced.instructions);
+        assert_eq!(original.metadata, reproduced.metadata);
+        assert_eq!(original.instructions_hash, reproduced.instructions_hash);
+        assert_ne!(original.instructions_hash, retry.instructions_hash);
+        assert_ne!(original.instructions, retry.instructions);
+        assert_eq!(
+            original
+                .metadata
+                .get(&Name::from_str("contract_payload").unwrap()),
+            retry
+                .metadata
+                .get(&Name::from_str("contract_payload").unwrap())
+        );
+        assert_eq!(
+            original
+                .metadata
+                .get(&Name::from_str("contract_attempt_created_at_ms").unwrap()),
+            Some(&Json::new(1_700_000_000_001_u64))
+        );
+        let retained_approval_hash = original.instructions_hash;
+        assert_eq!(retained_approval_hash, reproduced.instructions_hash);
+        assert_ne!(
+            retained_approval_hash, retry.instructions_hash,
+            "old consent cannot authorize a fresh attempt"
         );
     }
 }

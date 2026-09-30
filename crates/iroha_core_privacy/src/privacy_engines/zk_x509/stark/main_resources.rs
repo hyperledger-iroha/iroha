@@ -161,6 +161,14 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
     })
 }
 
+// Row replay uses the existing clearing batch helper. Fixed fields are public;
+// this conservative row+metadata charge fits independently of backend choice.
+type P256AggregateFixedReplayScratchV1 = (
+    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+    [usize; 16],
+);
+
 /// Conservative simultaneous owners for one registration, excluding replay/cache.
 fn registration_quotient_payload_v1(
     layout: &AggregateProofLayoutV1,
@@ -181,6 +189,19 @@ fn registration_quotient_payload_v1(
     // coefficients become stripe values in the same owned matrix; subsequent
     // stripes recover coefficients in place, so no second fixed matrix lives.
     sum(&[
+        // The final public fixed matrix is built in place. Charge its column
+        // headers and bounded borrowed targets/one arithmetic row explicitly;
+        // inverse FFTs are in place and allocate no second coefficient batch.
+        product(&[segment.fixed_width, core::mem::size_of::<Vec<F>>()])?,
+        product(&[
+            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+            core::mem::size_of::<&mut [F]>(),
+        ])?,
+        core::mem::size_of::<P256AggregateFixedReplayScratchV1>(),
+        main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
+            segment.trace_log2,
+            stripe,
+        )?,
         product(&[
             sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?,
             stripe.rows,
@@ -225,6 +246,40 @@ fn uncertain_device_completion_rejects_new_cpu_or_gpu_proof_admission() {
 }
 
 impl MainProverBufferPlanV1 {
+    /// Admit the retained original plus the outgoing FRI copy and its largest
+    /// simultaneously live successor inside the existing four-column allowance.
+    /// The mask tree and DEEP accumulator keep their separate original charges.
+    pub(super) fn check_retained_fri_copy_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        retained_inputs_payload: usize,
+        mask_evaluations_payload: usize,
+        outgoing_capacity: usize,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        layout.validate_exact_full_profile_registration_v1()?;
+        let rows = layout.common_lde_size();
+        let extension = core::mem::size_of::<E>();
+        if SECURITY_LANES != 1
+            || outgoing_capacity < rows
+            || retained_inputs_payload < product(&[rows, extension])?
+            || mask_evaluations_payload < product(&[rows, extension])?
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let required = sum(&[
+            retained_inputs_payload,
+            mask_evaluations_payload,
+            product(&[outgoing_capacity, extension])?,
+            product(&[rows / 2, extension])?,
+            2 * core::mem::size_of::<Vec<E>>(),
+        ])?;
+        let allowance = product(&[SECURITY_LANES, 4, rows, extension])?;
+        if required > allowance || allowance > self.fri_stage {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(required)
+    }
+
     /// Inspect private source extents before constructing any corresponding
     /// matrix; forecast arithmetic must fit the admitted source allowances.
     pub(super) fn check_source_shapes_v1(
@@ -418,7 +473,9 @@ impl MainProverBufferPlanV1 {
             quotient_stage = quotient_stage.max(candidate);
         }
         // Mask coefficients/evaluations and all binary digest-tree levels, plus
-        // current/successor FRI layers and a DEEP coefficient accumulator.
+        // retained original plus outgoing/current/successor FRI layers and a
+        // DEEP coefficient accumulator. The retained-copy admission checks
+        // actual vector capacities against this unchanged four-column allowance.
         let fri_stage = sum(&[
             product(&[SECURITY_LANES, 4, rows, extension])?,
             product(&[SECURITY_LANES, 2, rows, digest])?,

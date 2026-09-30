@@ -105,16 +105,13 @@ impl NativeJournalCursor {
     pub fn new(
         chain_id: ChainId,
         network: NetworkId,
+        root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
         limits: NativeFinalityLimits,
     ) -> Result<Self, String> {
         limits.validate()?;
-        let instance = iroha_sumeragi::preimage::instance_id(
-            &super::crypto::BlsCrypto::new(),
-            &iroha_sumeragi::types::Hash32(*network.as_bytes()),
-            chain_id.to_string().as_bytes(),
-            iroha_sumeragi::preimage::InstanceKind::Global,
-            0,
-        );
+        let instance = root_scope
+            .instance_id(&super::crypto::BlsCrypto::new(), network, chain_id.as_str())
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             chain_id,
             network,
@@ -331,6 +328,7 @@ mod tests {
         let mut cursor = NativeJournalCursor::new(
             ChainId::from("sumeragi-certified-test-chain"),
             chain.network_id(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             limits(),
         )
         .unwrap();

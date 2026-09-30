@@ -36,11 +36,15 @@
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
-use super::{CellBlock, Hash, StorageBlock, WorldBlock, WorldProjection, hash_value};
+use super::{CellField, Hash, StorageField, WorldBlock, WorldProjection, hash_value};
 use crate::state::authority_registry::{Canonical, Field, Role, Schema, WORLD_FIELDS};
 use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
     MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
+};
+use iroha_data_model::sumeragi_finality::{
+    WorldStateElementKindV1, world_state_element_v1, world_state_path_hash_v1,
+    world_state_root_from_accumulator_v1,
 };
 use mv::{Key, Value, storage::StorageReadOnly};
 use norito::codec::Encode;
@@ -48,14 +52,10 @@ use norito::codec::Encode;
 /// Number of 16-bit lanes of the accumulator (LtHash16, 2 KiB of state).
 pub(crate) const LANES: usize = 1024;
 const LANE_BYTES: usize = 2 * LANES;
-/// BLAKE3 key-derivation context of the element expansion.
-const ELEMENT_CONTEXT: &str = "iroha 2026-09-30 world-state lthash16 element v1";
 const SCHEMA_START: &[u8] = b"iroha:world-state:schema:start:v1\0";
 const SCHEMA_FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
 const SCHEMA_VALUE: &[u8] = b"iroha:world-state:schema:value:v1\0";
 const SCHEMA_NO_KEY: &[u8] = b"iroha:world-state:schema:no-key:v1\0";
-const PATH: &[u8] = b"iroha:world-state:path:v1\0";
-const ROOT: &[u8] = b"iroha:world-state:root:v1\0";
 const TABLE: u8 = 0;
 const CELL: u8 = 1;
 
@@ -121,16 +121,11 @@ impl WorldStateAccumulator {
     /// module's tests catch).
     pub(crate) fn root(&self) -> Result<Hash, String> {
         let schema = field_index().as_ref().map_err(Clone::clone)?.schema;
-        let mut lanes = [0_u8; LANE_BYTES];
-        for (bytes, lane) in lanes.chunks_exact_mut(2).zip(self.lanes.iter()) {
-            bytes.copy_from_slice(&lane.to_le_bytes());
-        }
-        Ok(Hash::new_from_chunks(&[
-            ROOT,
-            schema.as_ref(),
-            &self.entries.to_le_bytes(),
-            &lanes,
-        ]))
+        Ok(world_state_root_from_accumulator_v1(
+            schema,
+            self.entries,
+            &self.lanes,
+        ))
     }
 
     /// Cold capture of every canonical value of the overlay's current World, in `O(N)`.
@@ -369,13 +364,15 @@ fn flatten(fields: &'static [Field], out: &mut Vec<&'static Field>) {
 }
 
 fn path_hash(id: &str, kind: u8) -> Result<Hash, String> {
-    let len = u64::try_from(id.len()).map_err(|_| "World field identity exceeds u64")?;
-    Ok(Hash::new_from_chunks(&[
-        PATH,
-        &[kind],
-        &len.to_le_bytes(),
-        id.as_bytes(),
-    ]))
+    world_state_path_hash_v1(id, element_kind(kind)?).map_err(|error| error.to_string())
+}
+
+fn element_kind(kind: u8) -> Result<WorldStateElementKindV1, String> {
+    match kind {
+        TABLE => Ok(WorldStateElementKindV1::Table),
+        CELL => Ok(WorldStateElementKindV1::Cell),
+        _ => Err("World field kind is invalid".into()),
+    }
 }
 
 fn schema_fingerprint(schema: Schema) -> Result<Hash, String> {
@@ -404,14 +401,7 @@ fn schema_fingerprint(schema: Schema) -> Result<Hash, String> {
 
 /// Expand one entry into its lanes.
 fn element(path: &Hash, key: Option<&Hash>, value: &Hash) -> [u8; LANE_BYTES] {
-    let mut hasher = blake3::Hasher::new_derive_key(ELEMENT_CONTEXT);
-    hasher.update(path.as_ref());
-    hasher.update(&[u8::from(key.is_some())]);
-    hasher.update(key.map_or(&[0_u8; Hash::LENGTH], |key| key.as_ref()));
-    hasher.update(value.as_ref());
-    let mut lanes = [0_u8; LANE_BYTES];
-    hasher.finalize_xof().fill(&mut lanes);
-    lanes
+    world_state_element_v1(path, key, value)
 }
 
 /// One projection pass over the World overlay.
@@ -420,6 +410,8 @@ struct Builder<'a> {
     accumulator: WorldStateAccumulator,
     direction: Direction,
     visited: Vec<bool>,
+    snapshot: Option<world_state_snapshot::SnapshotCollector<'a>>,
+    snapshot_field: Option<(usize, u8)>,
 }
 
 impl Builder<'_> {
@@ -434,6 +426,8 @@ impl Builder<'_> {
             accumulator,
             direction,
             visited: vec![false; index.canonical],
+            snapshot: None,
+            snapshot_field: None,
         };
         world.project_world(&mut builder)?;
         builder.finish()
@@ -468,6 +462,9 @@ impl Builder<'_> {
                     return Err(format!("World state field visited twice: {name}"));
                 }
                 *visited = true;
+                if self.snapshot.is_some() {
+                    self.snapshot_field = Some((*slot, kind));
+                }
                 Ok(Some(*path))
             }
         }
@@ -479,9 +476,9 @@ impl Builder<'_> {
         key: Option<&Hash>,
         before: Option<Hash>,
         after: Option<Hash>,
-    ) {
+    ) -> Result<(), String> {
         if before == after {
-            return;
+            return Ok(());
         }
         let (removed, added) = match self.direction {
             #[cfg(test)]
@@ -492,8 +489,20 @@ impl Builder<'_> {
             self.accumulator.remove(&element(path, key, &value));
         }
         if let Some(value) = added {
+            if let Some(snapshot) = self.snapshot.as_mut() {
+                let (slot, kind) = self
+                    .snapshot_field
+                    .ok_or("World snapshot has no canonical field owner")?;
+                snapshot.push(
+                    self.index.ids[slot],
+                    element_kind(kind)?,
+                    key.copied(),
+                    value,
+                )?;
+            }
             self.accumulator.add(&element(path, key, &value));
         }
+        Ok(())
     }
 }
 
@@ -508,7 +517,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_archive_availability(
         &mut self,
-        storage: &StorageBlock<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
+        storage: &StorageField<'_, ArchiveId, MusubiArchiveAvailabilityV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_archive_availability", storage, |row| {
             let anchor = crate::state::authority_registry::world::musubi_availability_policy::MusubiAvailabilityAuthorityV1::from_record(row);
@@ -518,7 +527,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_resolver_index(
         &mut self,
-        storage: &StorageBlock<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        storage: &StorageField<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_resolver_index", storage, |row| {
             let authority = crate::state::authority_registry::world::musubi_universal_policy::MusubiResolverAuthorityV1::from_record(row);
@@ -528,7 +537,7 @@ impl WorldProjection for Builder<'_> {
 
     fn append_musubi_public_directory(
         &mut self,
-        storage: &StorageBlock<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+        storage: &StorageField<'_, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     ) -> Result<(), Self::Error> {
         self.append_storage_with("musubi_public_directory", storage, |row| {
             let authority = crate::state::authority_registry::world::musubi_universal_policy::MusubiDirectoryAuthorityV1::from_record(row);
@@ -539,7 +548,7 @@ impl WorldProjection for Builder<'_> {
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         let Some(path) = self.field(name, TABLE)? else {
@@ -549,7 +558,7 @@ impl WorldProjection for Builder<'_> {
             Direction::Capture => {
                 for (key, value) in storage.iter() {
                     let key = hash_value(key)?;
-                    self.change(&path, Some(&key), None, Some(encode(value)?));
+                    self.change(&path, Some(&key), None, Some(encode(value)?))?;
                 }
             }
             _ => {
@@ -558,7 +567,7 @@ impl WorldProjection for Builder<'_> {
                     let after = entry.after.map(&encode).transpose()?;
                     if before != after {
                         let key = hash_value(entry.key)?;
-                        self.change(&path, Some(&key), before, after);
+                        self.change(&path, Some(&key), before, after)?;
                     }
                 }
             }
@@ -569,14 +578,14 @@ impl WorldProjection for Builder<'_> {
     fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V, C>,
+        cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         let Some(path) = self.field(name, CELL)? else {
             return Ok(());
         };
         match self.direction {
-            Direction::Capture => self.change(&path, None, None, Some(encode(cell.get())?)),
+            Direction::Capture => self.change(&path, None, None, Some(encode(cell.get())?))?,
             _ => {
                 if let Some(value) = cell.touched_value() {
                     self.change(
@@ -584,7 +593,7 @@ impl WorldProjection for Builder<'_> {
                         None,
                         Some(encode(value.before)?),
                         Some(encode(value.after)?),
-                    );
+                    )?;
                 }
             }
         }
@@ -686,3 +695,9 @@ impl crate::state::State {
 #[cfg(test)]
 #[path = "world_state_accumulator_tests.rs"]
 mod tests;
+
+#[path = "world_state_snapshot.rs"]
+mod world_state_snapshot;
+
+#[path = "world_state_cut.rs"]
+pub(crate) mod world_state_cut;

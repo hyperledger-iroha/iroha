@@ -40,8 +40,16 @@ object KagemushaOmapiDeviceLifecycleV1 {
         val bridge: KagemushaDeviceLifecycleBridgeV1,
         val status: DiscoveryStatus,
         failures: List<DiscoveryFailure>,
+        private val closeUndelivered: () -> Unit = {},
     ) {
+        private val disposalRequested = AtomicBoolean(false)
         val failures: List<DiscoveryFailure> = java.util.Collections.unmodifiableList(failures.toList())
+
+        internal fun discardIfUndelivered() {
+            if (status == DiscoveryStatus.AVAILABLE && disposalRequested.compareAndSet(false, true)) {
+                closeUndelivered()
+            }
+        }
         init {
             require((status == DiscoveryStatus.AVAILABLE) ==
                 (bridge.availability == KagemushaDeviceLifecycleBridgeV1.Availability.AVAILABLE))
@@ -65,8 +73,23 @@ object KagemushaOmapiDeviceLifecycleV1 {
     fun openAsync(context: Context, executor: Executor, configuration: Configuration = Configuration(),
         discoveryTimeoutMillis: Long = DEFAULT_DISCOVERY_TIMEOUT_MILLIS): CompletableFuture<KagemushaDeviceLifecycleBridgeV1> {
         val discovery = openWithDiagnosticsAsync(context, executor, configuration, discoveryTimeoutMillis)
-        val bridge = discovery.thenApply { it.bridge }
+        return projectDiscovery(discovery)
+    }
+
+    /** Transfer discovery ownership only when the caller-facing completion succeeds. */
+    internal fun projectDiscovery(
+        discovery: CompletableFuture<DiscoveryResult>,
+    ): CompletableFuture<KagemushaDeviceLifecycleBridgeV1> {
+        val bridge = CompletableFuture<KagemushaDeviceLifecycleBridgeV1>()
         bridge.whenComplete { _, _ -> if (bridge.isCancelled) discovery.cancel(false) }
+        discovery.whenComplete { discovered, failure ->
+            if (failure != null) {
+                bridge.completeExceptionally(failure)
+            } else if (!bridge.complete(discovered.bridge)) {
+                // Discovery may already have won while cancellation prevents transfer to the caller.
+                discovered.discardIfUndelivered()
+            }
+        }
         return bridge
     }
 
@@ -194,7 +217,9 @@ object KagemushaOmapiDeviceLifecycleV1 {
             if (admitted.size == 1) {
                 val (bridge, owned) = admitted.single()
                 owned.attach(service)
-                if (!result.complete(DiscoveryResult(bridge, DiscoveryStatus.AVAILABLE, failures))) owned.close()
+                if (!result.complete(DiscoveryResult(bridge, DiscoveryStatus.AVAILABLE, failures, owned::close))) {
+                    owned.close()
+                }
             } else {
                 admitted.forEach { (_, owned) -> owned.close() }
                 shutdownService()
@@ -225,15 +250,6 @@ object KagemushaOmapiDeviceLifecycleV1 {
     // Android OMAPI names embedded readers eSE, eSE1, eSE2, ...; SIM/SD readers can be removable.
     private fun isEmbeddedReaderName(candidate: String): Boolean =
         candidate == "eSE" || EMBEDDED_READER_NAME.matches(candidate)
-
-    internal fun completeUnavailableUnlessResolved(
-        result: CompletableFuture<KagemushaDeviceLifecycleBridgeV1>,
-        onTimeout: () -> Unit,
-    ): Boolean {
-        val completed = result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
-        if (completed) onTimeout()
-        return completed
-    }
 
     /** Cleanup must still run if the caller shuts down its executor after discovery returns. */
     internal fun <T : Any> closeServiceWhenReady(

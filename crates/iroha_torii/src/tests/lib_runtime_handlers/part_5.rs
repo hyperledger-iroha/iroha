@@ -167,29 +167,38 @@ async fn pipeline_status_handler_returns_queued() {
     app.queue
         .push(accepted, app.state.view())
         .expect("queue push");
-    let resp =
-        pipeline_status_response(app.clone(), tx.hash().to_string(), Some("local"), "ok").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let payload = torii_json_body(resp).await;
-    let status_kind = payload
-        .get("status")
-        .and_then(|status| status.get("kind"))
-        .and_then(norito::json::Value::as_str);
-    assert_eq!(status_kind, Some("Queued"));
-    let resp_entry = pipeline_status_response(
-        app.clone(),
-        tx.hash_as_entrypoint().to_string(),
-        Some("local"),
-        "ok",
-    )
-    .await;
-    assert_eq!(resp_entry.status(), StatusCode::OK);
-    let payload_entry = torii_json_body(resp_entry).await;
-    let status_kind_entry = payload_entry
-        .get("status")
-        .and_then(|status| status.get("kind"))
-        .and_then(norito::json::Value::as_str);
-    assert_eq!(status_kind_entry, Some("Queued"));
+    for hash in [tx.hash().to_string(), tx.hash_as_entrypoint().to_string()] {
+        for scope in ["local", "global"] {
+            let response = execute_pipeline_status_local_read(
+                &app,
+                &PipelineStatusQuery {
+                    hash: Some(hash.clone()),
+                    scope: Some(scope.into()),
+                },
+                ResponseFormat::Json,
+                None,
+            )
+            .expect("an admitted routed input remains visible in either scope");
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = torii_json_body(response).await;
+            assert_eq!(
+                payload.get("hash").and_then(norito::json::Value::as_str),
+                Some(hash.as_str())
+            );
+            assert_eq!(
+                payload.get("scope").and_then(norito::json::Value::as_str),
+                Some(scope)
+            );
+            assert_eq!(
+                payload
+                    .get("status")
+                    .and_then(|status| status.get("kind"))
+                    .and_then(norito::json::Value::as_str),
+                Some("Queued"),
+                "an accepted input must block exact absence before its signed TTL",
+            );
+        }
+    }
 }
 #[tokio::test]
 async fn pipeline_status_handler_returns_typed_norito_when_requested() {
@@ -365,7 +374,7 @@ async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
     );
 }
 #[tokio::test]
-async fn pipeline_status_global_read_skips_non_terminal_local_cache() {
+async fn pipeline_status_global_read_evicts_stale_queued_cache() {
     let app = mk_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x74; Hash::LENGTH]));
@@ -384,6 +393,7 @@ async fn pipeline_status_global_read_skips_non_terminal_local_cache() {
     )
     .expect("global local observation");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
     for scope in [
         PipelineStatusReadScope::Global,
         PipelineStatusReadScope::Local,
@@ -527,7 +537,7 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_some());
 }
 #[test]
-fn pipeline_status_local_read_keeps_approved_cache() {
+fn pipeline_status_both_scopes_keep_approved_cache() {
     let app = mk_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x75; Hash::LENGTH]));
@@ -535,17 +545,19 @@ fn pipeline_status_local_read_keeps_approved_cache() {
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Approved, None, None),
     );
-    let response = execute_pipeline_status_local_read(
-        &app,
-        &PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: Some("local".to_owned()),
-        },
-        ResponseFormat::Json,
-        None,
-    )
-    .expect("local reads should keep block-pipeline cache entries");
-    assert_eq!(response.status(), StatusCode::OK);
+    for scope in ["local", "global"] {
+        let response = execute_pipeline_status_local_read(
+            &app,
+            &PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some(scope.to_owned()),
+            },
+            ResponseFormat::Json,
+            None,
+        )
+        .expect("both scopes must keep block-pipeline cache entries");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
 #[tokio::test]
 async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
@@ -2381,6 +2393,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
             account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: format!("http://{address}/").parse().unwrap(),
             torii_request_timeout: Duration::from_secs(5),
             transaction_ttl: Duration::from_secs(30),
@@ -3181,7 +3194,8 @@ async fn public_pipeline_status_does_not_expose_rejection_details() {
             Some(pipeline_rejection_summary(&reason)),
         ),
     );
-    let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
+    let resp =
+        pipeline_status_response(app.clone(), tx_hash.to_string(), Some("local"), "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
     assert_eq!(

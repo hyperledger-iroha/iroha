@@ -1,3 +1,5 @@
+//! Acceptance checks for complete native Mochi developer runtime bundles.
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
@@ -50,6 +52,13 @@ fn mochi_bundle_command_generates_manifest() {
             .iter()
             .any(|entry| entry["path"] == Value::String(kagami_name.clone())),
         "manifest should list {kagami_name}"
+    );
+    let daemon_name = format!("bin/iroha3d{}", env::consts::EXE_SUFFIX);
+    assert!(
+        files
+            .iter()
+            .any(|entry| entry["path"] == Value::String(daemon_name.clone())),
+        "manifest should list {daemon_name}"
     );
 }
 #[test]

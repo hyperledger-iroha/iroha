@@ -46,6 +46,9 @@ fn state() -> State {
     // Component setup supplies committed native policy/state, not a certificate substitute.
     let mut parameters = world.parameters.view().get().clone();
     parameters.set_parameter(Parameter::Custom(policy.into_custom_parameter()));
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        SumeragiRootScope::Global,
+    ));
     world.parameters = mv::cell::Cell::new(parameters);
     let mut lanes = SumeragiLaneState::default();
     lanes.upsert(SumeragiLaneRecord {
@@ -525,7 +528,16 @@ fn policy_rows_remain_charged_until_the_original_block_owner_drops() {
 fn only_genesis_carries_explicit_bootstrap_policy_and_normal_scope_has_no_fallback() {
     let state = state();
     let entry = input(&state, "bootstrap");
-    let genesis = source(vec![entry.clone()], 1, None);
+    let genesis = crate::sumeragi::test_chain::signed_genesis_fixture(
+        &state.chain_id,
+        &ALICE_KEYPAIR,
+        &crate::sumeragi::test_chain::fixture_validators(),
+        vec![Log::new(iroha_data_model::Level::INFO, "bootstrap".to_owned()).into()],
+        1_000,
+        iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+        None,
+    )
+    .unwrap();
     before_effects(&state, &genesis, false, |block| {
         let (native, token) = block
             .network_policy_routes
@@ -534,7 +546,10 @@ fn only_genesis_carries_explicit_bootstrap_policy_and_normal_scope_has_no_fallba
             .get(&genesis, 0)
             .unwrap();
         assert_eq!(native, RoutingDecision::default());
-        assert!(matches!(token.projection, PolicyProjection::Genesis));
+        assert!(matches!(
+            token.projection,
+            PolicyProjection::Genesis(SumeragiRootScope::Global)
+        ));
     });
     let absent = state.block(carrier(vec![entry]).header());
     assert!(absent.network_policy_routes.is_none());
@@ -641,4 +656,139 @@ fn allocation_refusal_precedes_normal_and_replacement_pristine_callbacks() {
         assert_eq!(budget.reserved_bytes(), before);
         assert_eq!(state.committed_height(), 0);
     }
+}
+
+#[test]
+fn height_one_ordinary_carrier_cannot_acquire_genesis_bootstrap_authority() {
+    let state = state();
+    let forged = source(
+        vec![input(&state, "ordinary domain is not genesis")],
+        1,
+        None,
+    );
+    before_effects(&state, &forged, false, |block| {
+        assert_eq!(
+            block
+                .network_policy_routes
+                .as_ref()
+                .unwrap()
+                .validate_carrier(&forged),
+            Err("Network genesis has no authenticated original authority"),
+        );
+    });
+}
+
+#[test]
+fn genesis_scope_comes_from_original_signed_body_and_private_bootstrap_stays_scoped() {
+    let state = state(); // Its synthetic committed metadata deliberately says Global.
+    let own = DataSpaceId::new((1_u64 << 40) + 9);
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: state.network_id,
+        dataspace_id: own,
+    };
+    let genesis = crate::sumeragi::lanes::routing::test_support::signed_genesis(scope);
+    before_effects(&state, &genesis, false, |block| {
+        let (native, token) = block
+            .network_policy_routes
+            .as_ref()
+            .unwrap()
+            .get(&genesis, 0)
+            .unwrap();
+        assert_eq!(native, RoutingDecision::new(LaneId::SINGLE, own));
+        assert!(matches!(token.projection, PolicyProjection::Genesis(actual) if actual == scope));
+        let TransactionEntrypoint::External(signed) = genesis.network_entrypoint_at(0).unwrap()
+        else {
+            unreachable!()
+        };
+        let tx = block.transaction();
+        assert!(
+            token.for_signed(signed, &tx, native).is_err(),
+            "private genesis cannot use the universal physical default"
+        );
+    });
+}
+
+#[test]
+fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
+    let state = state();
+    let source = carrier(vec![input(&state, "no scope fallback")]);
+    before_effects(&state, &source, false, |block| {
+        let mut parameters = block.world.parameters.get().clone();
+        parameters.set_parameter(Parameter::Custom(
+            iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
+                iroha_primitives::json::Json::from_norito_value_ref(&norito::json::Value::Bool(
+                    false,
+                ))
+                .unwrap(),
+            ),
+        ));
+        *block.world.parameters.get_mut() = parameters;
+        let budget = AllocationBudget::new(1024 * 1024);
+        let mut owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
+        owner.fill_from_preblock(block, &source);
+        assert_eq!(
+            owner.validate_carrier(&source),
+            Err("Network source has no immutable root scope")
+        );
+    });
+}
+
+#[test]
+fn genesis_instruction_capability_requires_both_signed_route_and_exact_authenticated_input() {
+    let state = state();
+    let genesis =
+        crate::sumeragi::lanes::routing::test_support::signed_genesis(SumeragiRootScope::Global);
+    let authenticated =
+        crate::block::authenticate_genesis_block_intents(&genesis, &ALICE_ID).unwrap();
+    let original = authenticated.transaction_for(&genesis, 0).unwrap();
+    before_effects(&state, &genesis, false, |block| {
+        let (_, route) = block
+            .network_policy_routes
+            .as_ref()
+            .unwrap()
+            .get(&genesis, 0)
+            .unwrap();
+        let TransactionEntrypoint::External(signed) = genesis.network_entrypoint_at(0).unwrap()
+        else {
+            unreachable!()
+        };
+        let mut tx = block.transaction();
+        tx.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+        tx.current_entrypoint_index = Some(0);
+        assert!(route.genesis_execution_scope(signed, &tx, None).is_err());
+        let capability = route
+            .genesis_execution_scope(signed, &tx, Some(&original))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            capability.for_transaction(&tx),
+            Some(SumeragiRootScope::Global)
+        );
+        tx.genesis_execution_scope = Some(capability);
+        assert_eq!(
+            crate::executor::root_scope::execution_root_scope(&tx).unwrap(),
+            SumeragiRootScope::Global
+        );
+        let log: iroha_data_model::isi::InstructionBox = Log::new(
+            iroha_data_model::Level::INFO,
+            "authenticated bootstrap".into(),
+        )
+        .into();
+        crate::executor::Executor::Initial
+            .execute_instruction(&mut tx, &ALICE_ID, log)
+            .unwrap();
+        tx.current_entrypoint_index = Some(1);
+        assert!(crate::executor::root_scope::execution_root_scope(&tx).is_err());
+        assert!(
+            route
+                .genesis_execution_scope(signed, &tx, Some(&original))
+                .is_err()
+        );
+        tx.current_entrypoint_index = Some(0);
+        tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"substituted genesis input",
+        )));
+        assert!(crate::executor::root_scope::execution_root_scope(&tx).is_err());
+    });
 }

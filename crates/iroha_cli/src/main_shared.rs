@@ -85,6 +85,14 @@ fn compiled_build_identity() -> core::result::Result<
 }
 static BUILD_METADATA: std::sync::OnceLock<CompiledBuildMetadata> = std::sync::OnceLock::new();
 
+/// Install one immutable identity, accepting retries only when exactly identical.
+fn install_build_metadata(
+    slot: &std::sync::OnceLock<CompiledBuildMetadata>,
+    build: CompiledBuildMetadata,
+) -> bool {
+    slot.set(build).is_ok() || slot.get() == Some(&build)
+}
+
 fn build_metadata() -> CompiledBuildMetadata {
     BUILD_METADATA.get().copied().unwrap_or_else(|| {
         CompiledBuildMetadata::from_compiled_parts(
@@ -1162,9 +1170,7 @@ impl Run for Version {
 ///
 /// The process installs its metadata once, before parsing or dispatching commands.
 pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
-    if let Err(build) = BUILD_METADATA.set(build)
-        && BUILD_METADATA.get() != Some(&build)
-    {
+    if !install_build_metadata(&BUILD_METADATA, build) {
         eprintln!("CLI executable build metadata is already installed with a different identity");
         return std::process::ExitCode::from(7);
     }
@@ -1760,6 +1766,7 @@ fn client_config_with_defaults(
         account_chain_discriminant,
         key_pair,
         basic_auth: None,
+        api_token: None,
         torii_api_url,
         torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -4929,7 +4936,7 @@ mod query {
             // sign it with the client's key/authority, submit via /query, and print the response.
             // Accepted JSON shapes:
             // {"singular": {"type": "FindParameters"}}
-            // {"singular": {"type": "FindContractManifestByCodeHash", "payload": {"code_hash": "0x.."}}}
+            // {"singular": {"type": "FindContractManifestByArtifactId", "payload": {"artifact_id": {"dataspace_id": 0, "code_hash": "hash:..."}}}}
             // {"iterable": {"type": "FindPeers", "params": {"limit": 100, "offset": 0, "fetch_size": 128}}}
             use iroha::data_model::query::json::QueryEnvelopeJson;
             let client = context.client_from_config()?;
@@ -9905,7 +9912,7 @@ mod cli_integration_harness {
         pub executor_data_model: Option<ExecutorDataModel>,
         pub parameters: Option<Parameters>,
         pub proof_records: BTreeMap<ProofId, ProofRecord>,
-        pub manifests: BTreeMap<Hash, ContractManifest>,
+        pub manifests: BTreeMap<iroha::data_model::smart_contract::ContractArtifactId, ContractManifest>,
         pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
@@ -10079,12 +10086,12 @@ mod cli_integration_harness {
                     .cloned()
                     .map(SingularQueryOutputBox::ProofRecord)
                     .ok_or_else(|| eyre!(format!("proof record `{}` not found", req.id))),
-                SingularQueryBox::FindContractManifestByCodeHash(req) => self
+                SingularQueryBox::FindContractManifestByArtifactId(req) => self
                     .manifests
-                    .get(&req.code_hash)
+                    .get(&req.artifact_id)
                     .cloned()
                     .map(SingularQueryOutputBox::ContractManifest)
-                    .ok_or_else(|| eyre!("contract manifest not found for supplied code hash")),
+                    .ok_or_else(|| eyre!("contract manifest not found for supplied artifact identity")),
                 SingularQueryBox::FindAbiVersion(_) => self
                     .abi_version
                     .clone()
@@ -10939,7 +10946,7 @@ mod cli_integration_harness {
     }
     #[test]
     fn harness_singular_contract_manifest() {
-        use iroha::data_model::query::smart_contract::prelude::FindContractManifestByCodeHash;
+        use iroha::data_model::query::smart_contract::prelude::FindContractManifestByArtifactId;
         let mut server = MockQueryServer::default();
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
@@ -10956,10 +10963,12 @@ mod cli_integration_harness {
             error_types: None,
             provenance: None,
         };
-        server.manifests.insert(code_hash.clone(), manifest.clone());
+        let artifact_id = iroha::data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash);
+        server.manifests.insert(artifact_id, manifest.clone());
         let out = server
-            .execute_singular_query(SingularQueryBox::FindContractManifestByCodeHash(
-                FindContractManifestByCodeHash { code_hash },
+            .execute_singular_query(SingularQueryBox::FindContractManifestByArtifactId(
+                FindContractManifestByArtifactId { artifact_id },
             ))
             .expect("manifest present");
         match out {

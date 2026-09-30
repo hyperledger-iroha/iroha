@@ -1,6 +1,6 @@
 # FASTPQ compact digest qualification boundary
 
-Updated: 2026-09-06. The current six-lane construction is **unqualified**.
+Updated: 2026-09-30. The current six-lane construction is **unqualified**.
 No full six-lane collision or admissible proof forgery was demonstrated in this
 audit. No applicable theorem was established for its required commitment and
 quantum random-oracle guarantees either. Implementation parity and output width
@@ -10,8 +10,14 @@ do not settle those questions.
 
 The canonical implementation is
 [`poseidon_digest384.rs`](../crates/fastpq_isi/src/poseidon_digest384.rs), SHA-256
-`d97552e693a324b96cc4149945aca538656dd14a6ba8500481ee3efff5fc6899`.
-Its source remains frozen. Each of six parallel lanes uses a three-element
+`3f81cae5f751595c7ab01108624ef51470da03a5ee0dfeccdf70b94a38573081`, and its shared SHAKE256 parameter-generation owner
+[`keccak256.rs`](../crates/fastpq_isi/src/keccak256.rs), SHA-256
+`8c9693d7e8ba9089af38c7411d8fcbc5a1d7c635a4f4b8ad51e0dbe8d92c5d1b`.
+The shared owner is extracted from the previously reviewed implementation;
+parameter bytes, framing and all 31 reference vectors remain unchanged. Native
+parity must pass for this source revision before the extraction is qualified.
+The earlier September 30 independent reproduction applies to the retained
+reference vectors, and does not by itself certify the refactored implementation. Each of six parallel lanes uses a three-element
 Goldilocks state, two rate elements, one capacity element and one output element.
 Each applies eight full and 57 partial rounds with exponent seven and the same
 three-by-three matrix; lane-specific constants and initial states come from
@@ -58,9 +64,9 @@ The compact verifier uses several distinct message families:
 
 | Role | Payload and binding |
 | --- | --- |
-| AIR row | 342 canonical field words, 2,736 bytes; natural row index bound |
+| Committed DEEP row | 301 canonical field words, 2,408 bytes; natural row index bound; 41 public AIR columns reconstructed independently |
 | Binary Merkle parent | Two separately framed 48-byte canonical digests; role, level, position and FRI counter bound |
-| FRI pair / terminal | 64 / 128 bytes of canonical Fp4 coordinates |
+| DEEP FRI fiber / terminal | 16, 16, 8, 8 or 4 canonical Fp4 values per fiber; complete 128-value terminal oracle |
 | Public statement | Bounded statement plus canonical enclosing frame; substantially longer than a parent |
 | Public digest API / preprocessing column | Up to `u32::MAX` bytes per field; column callers can hash complete traces |
 
@@ -73,6 +79,26 @@ iterated-hash multicollision slogan nor the restricted alphabet alone settles
 this construction's security. The longer public API and statement messages
 must be included in any general hash claim. Count internal permutations and
 message lengths when translating external hash-query work.
+
+The September 30 review makes the compensating-block concern concrete under
+an explicit random reachable-state assumption: equal lane capacities and two
+rate differences in `[-2^56+1, 2^56-1]` permit legal seven-byte compensators.
+The random-pair probability is `(2*2^56-1)^2/p^3`, corresponding to about
+`2^39` lane-permutation birthday work with substantial storage. The large search
+was not executed, no six-lane collision or proof forgery was obtained, and a
+complete comparison-game/simulator argument remains open. This analytical
+direction is not a validated exploitable vulnerability.
+
+The current masked protocol also has a separate soundness-budget gap. Even
+the optimistic 64-query Johnson-limit term, after the inherited 54-target and
+quadratic `2^32`-query compiler losses, screens at approximately 117.663 bits
+against the requested aggregate 128-bit target. This is a limitation of that
+reduction, not a lower bound on an attack's success. Increasing the same layout
+to 68 queries requires 530,031 bytes and exceeds the 524,288-byte child cap.
+The [current continuation](../docs/history/2026-09-30/zk-completion-continuation.md)
+records the independent checks and retained conditional argument. A reviewed
+construction or tighter applicable theorem is required; passing vectors does
+not close either issue.
 
 ## Required release argument
 

@@ -37,7 +37,7 @@ positional-after-named	seiyaku MixedCall {\nfn target(int first, int second) {}\
 unsafe-list-read	seiyaku UnsafeListRead {\nfn read(List<int, 2> values) -> Option<int> { return values[0]; }\n}	Semantic	E_LIST_UNSAFE_INDEX	unchecked List indexing is not part of Kotodama V1	2
 unsafe-list-write	seiyaku UnsafeListWrite {\nfn write() { var List<int, 2> values = [1]; values[0] = 2; }\n}	Semantic	E_LIST_UNSAFE_INDEX	indexed List assignment is unsupported	2
 legacy-option-placeholder	seiyaku LegacyOption {\nfn read() -> Option<int> { option::none(0) }\n}	Parse	E_LEGACY_SUM_CONSTRUCTOR	`option::none` is retired	2
-declared-call-label	seiyaku NamedOnly {\nfn target(int left, int right) {} fn run() { target(1, 2); }\n}	Semantic	E_NAMED_ARGUMENTS_REQUIRED	requires its declared name	2
+builtin-call-label	seiyaku NamedOnly {\nfn run(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }\n}	Semantic	E_NAMED_ARGUMENTS_REQUIRED	requires its declared name	2
 contextless-option-none	seiyaku ContextlessNone {\nfn run() { let value = Option::none; }\n}	Semantic	E_SUM_MISSING_CONTEXT	`Option::none` requires an exact `Option<T>` context	2
 option-propagation-context	seiyaku PropagationContext {\nfn read(Option<int> value) -> int { value? }\n}	Semantic	E_PROPAGATE_CONTEXT	postfix `?` on Option requires an Option-returning function	2
 non-exhaustive-option-match	seiyaku NonExhaustive {\nfn read(Option<int> value) -> int { match value { Option::some(item) => { item }, } }\n}	Semantic	E_MATCH_NON_EXHAUSTIVE	match must cover every namespaced variant	2

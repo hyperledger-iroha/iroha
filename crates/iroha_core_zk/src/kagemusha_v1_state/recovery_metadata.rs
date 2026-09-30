@@ -38,7 +38,6 @@ pub trait KagemushaCurrentRecoveryOwnerV1: current_recovery_owner_sealed::Sealed
 #[derive(Clone, Copy)]
 pub struct KagemushaCurrentRecoverySelectionV1<'a> {
     enrollment: &'a KagemushaRecoveryEnrollmentBindingV1,
-    #[cfg(test)]
     credential_floor: &'a KagemushaAcceptedCredentialFloorV1,
     checkpoint: &'a DurabilityAnchorV1,
 }
@@ -50,7 +49,6 @@ impl<'a> KagemushaCurrentRecoverySelectionV1<'a> {
         self.enrollment
     }
 
-    #[cfg(test)]
     /// Original governed credential and its independently authenticated historical release.
     #[must_use]
     pub fn accepted_credential_floor(&self) -> &'a KagemushaAcceptedCredentialFloorV1 {
@@ -113,7 +111,6 @@ where
         }
         Ok(KagemushaCurrentRecoverySelectionV1 {
             enrollment: &self.recovery_metadata.enrollment,
-            #[cfg(test)]
             credential_floor: &self.recovery_metadata.accepted_credential,
             checkpoint: &checkpoint.anchor,
         })
@@ -229,7 +226,6 @@ impl KagemushaAcceptedCredentialFloorV1 {
             .map_err(|_| KagemushaStateErrorV1::InvalidHardwareProfile)
     }
 
-    #[cfg(test)]
     pub(super) fn validate_current(
         &self,
         state: &KagemushaStateV1,
@@ -298,7 +294,6 @@ impl KagemushaRecoveryCheckpointIdentityV1 {
         snapshot_commitment: [0; 32],
     };
 
-    #[cfg(test)]
     fn from_anchor(anchor: &DurabilityAnchorStatementV1) -> Self {
         Self {
             revision: anchor.metadata_revision,
@@ -365,7 +360,6 @@ pub struct KagemushaRecoveryMetadataV1 {
 }
 
 impl KagemushaRecoveryMetadataV1 {
-    #[cfg(test)]
     pub(super) fn initial(
         state: &KagemushaStateV1,
         release: &KagemushaStateProofReleaseV1,
@@ -461,7 +455,6 @@ pub struct KagemushaRecoveryCheckpointStatementV1 {
     pub successor: DurabilityAnchorStatementV1,
 }
 
-#[cfg(test)]
 /// Opaque proposal derived from one exact current machine. Preparing it changes no state.
 #[derive(Clone)]
 pub struct KagemushaRecoveryCheckpointCandidateV1 {
@@ -470,7 +463,6 @@ pub struct KagemushaRecoveryCheckpointCandidateV1 {
     pub(super) statement: KagemushaRecoveryCheckpointStatementV1,
 }
 
-#[cfg(test)]
 impl KagemushaRecoveryCheckpointCandidateV1 {
     /// Exact material the native owner must persist before requesting hardware CAS.
     #[must_use]
@@ -710,7 +702,6 @@ where
     }
 
     // Only the two opaque publication owners invoke this after exclusive ownership transfer.
-    #[cfg(test)]
     pub(super) fn install_recovery_checkpoint(
         &mut self,
         candidate: &KagemushaRecoveryCheckpointCandidateV1,

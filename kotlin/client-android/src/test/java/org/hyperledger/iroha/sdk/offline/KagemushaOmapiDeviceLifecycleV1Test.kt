@@ -50,28 +50,28 @@ class KagemushaOmapiDeviceLifecycleV1Test {
 
     @Test
     fun `timeout wins once and cannot replace an earlier terminal result`() {
-        val pending = CompletableFuture<KagemushaDeviceLifecycleBridgeV1>()
+        val pending = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
         var timeoutCallbacks = 0
         assertTrue(
-            KagemushaOmapiDeviceLifecycleV1.completeUnavailableUnlessResolved(pending) {
+            KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) {
                 timeoutCallbacks += 1
             },
         )
         assertEquals(
             KagemushaDeviceLifecycleBridgeV1.Availability.ONLINE_ONLY,
-            pending.join().availability,
+            pending.join().bridge.availability,
         )
         assertFalse(
-            KagemushaOmapiDeviceLifecycleV1.completeUnavailableUnlessResolved(pending) {
+            KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) {
                 timeoutCallbacks += 1
             },
         )
         assertEquals(1, timeoutCallbacks)
 
-        val failed = CompletableFuture<KagemushaDeviceLifecycleBridgeV1>()
+        val failed = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
         failed.completeExceptionally(IllegalStateException("terminal discovery failure"))
         assertFalse(
-            KagemushaOmapiDeviceLifecycleV1.completeUnavailableUnlessResolved(failed) {
+            KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(failed) {
                 timeoutCallbacks += 1
             },
         )
@@ -113,6 +113,63 @@ class KagemushaOmapiDeviceLifecycleV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
             KagemushaDeviceLifecycleBridgeV1.onlineOnly(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE, emptyList()) }
     }
+
+    @Test
+    fun `cancelled bridge projection disposes already completed undelivered available owner once`() {
+        val discovery = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
+        val projected = KagemushaOmapiDeviceLifecycleV1.projectDiscovery(discovery)
+        var closed = 0
+        val available = KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
+            availableBridge(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE,
+            emptyList(), { closed++ },
+        )
+        // Completion callbacks are stacked: cancel after discovery completes but before projection.
+        discovery.whenComplete { _, _ -> projected.cancel(false) }
+        assertTrue(discovery.complete(available))
+        assertTrue(discovery.isDone)
+        assertFalse(discovery.isCancelled)
+        assertTrue(projected.isCancelled)
+        assertEquals(1, closed)
+        available.discardIfUndelivered()
+        assertEquals(1, closed)
+    }
+
+    @Test
+    fun `delivered discovery bridge retains its owner and cancellation cannot dispose it`() {
+        val discovery = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
+        val projected = KagemushaOmapiDeviceLifecycleV1.projectDiscovery(discovery)
+        var closed = 0
+        val bridge = availableBridge()
+        discovery.complete(KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
+            bridge, KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE, emptyList(), { closed++ },
+        ))
+        assertTrue(projected.join() === bridge)
+        assertFalse(projected.cancel(false))
+        assertEquals(0, closed)
+    }
+
+    @Test
+    fun `cancelled projection cancels still pending discovery and preserves discovery failures`() {
+        val pending = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
+        val projected = KagemushaOmapiDeviceLifecycleV1.projectDiscovery(pending)
+        assertTrue(projected.cancel(false))
+        assertTrue(pending.isCancelled)
+
+        val failed = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
+        val failedProjection = KagemushaOmapiDeviceLifecycleV1.projectDiscovery(failed)
+        val original = IllegalStateException("original discovery failure")
+        failed.completeExceptionally(original)
+        val failure = assertFailsWith<java.util.concurrent.CompletionException> { failedProjection.join() }
+        assertTrue(failure.cause === original)
+    }
+
+    private fun availableBridge(): KagemushaDeviceLifecycleBridgeV1 =
+        KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(object : KagemushaDeviceLifecycleBridgeV1.Endpoint {
+            override fun capabilities() = KagemushaDeviceLifecycleBridgeV1.Codec.encodeCapabilitiesForTests(
+                1, ByteArray(32) { 1 }, ByteArray(32) { 2 },
+            )
+            override fun execute(command: ByteArray): ByteArray = error("mapping-only discovery fixture cannot execute")
+        })
 
     @Test
     fun `service cleanup runs after late completion without a caller executor`() {

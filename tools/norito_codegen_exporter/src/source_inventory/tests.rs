@@ -368,12 +368,32 @@ fn source_selection_rejects_symlink_ancestors_and_nonregular_rust_files() {
 }
 
 #[test]
-fn source_selection_rejects_outside_paths_non_utf8_and_oversized_inputs() {
+fn source_selection_rejects_outside_paths_and_non_utf8() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("bad.rs"), [0xff_u8]).unwrap();
     assert!(inventory(directory.path(), &["../outside.rs".into()]).is_err());
     assert!(inventory(directory.path(), &["bad.rs".into()]).is_err());
-    let file = fs::File::create(directory.path().join("large.rs")).unwrap();
-    file.set_len(MAX_SOURCE_BYTES + 1).unwrap();
-    assert!(inventory(directory.path(), &["large.rs".into()]).is_err());
+}
+
+#[test]
+fn source_selection_accepts_large_comments_with_exact_hashes_and_spans() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut source = String::from("/*");
+    source.extend(std::iter::repeat_n(' ', 32 * 1024 * 1024 + 1));
+    source.push_str("*/\nstruct LargeSource;\n");
+    fs::write(directory.path().join("large.rs"), &source).unwrap();
+    let report = inventory(directory.path(), &["large.rs".into()]).unwrap();
+    assert_eq!(report.files.len(), 1);
+    let file = &report.files[0];
+    assert!(file.parse_error.is_none());
+    assert_eq!(file.bytes, source.len());
+    assert_eq!(file.sha256, hex::encode(Sha256::digest(source.as_bytes())));
+    assert_eq!(file.declarations.len(), 1);
+    let item = &file.declarations[0];
+    assert_eq!(item.identifier, "LargeSource");
+    assert_eq!(item.span.source, "struct LargeSource;");
+    assert_eq!(
+        &source[item.span.start_byte..item.span.end_byte],
+        item.span.source
+    );
 }

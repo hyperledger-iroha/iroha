@@ -6,18 +6,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
-description = "Integration harnesses for the MOCHI supervisor and Torii client."
+description = "Integration harnesses for Mochi canonical Torii observations."
 
 [lib]
 path = "src/lib.rs"
-
-[[bin]]
-name = "kagami_mock"
-path = "src/bin/kagami_mock.rs"
-required-features = ["dev-tools"]
-
-[features]
-dev-tools = ["mochi-core/test"]
 
 [dependencies]
 iroha_model_base = { workspace = true }
@@ -28,7 +20,7 @@ axum = { workspace = true, features = ["http1", "macros", "tokio", "ws"] }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
 iroha_torii_shared = { workspace = true }
-mochi-core = { path = "../mochi-core" }
+mochi-core = { path = "../mochi-core", features = ["test"] }
 parking_lot = { workspace = true }
 norito = { workspace = true, features = ["node-codec"], default-features = false }
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
@@ -36,8 +28,6 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"
 [dev-dependencies]
 tempfile = { workspace = true }
 toml = { workspace = true }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
-iroha_genesis.workspace = true
 
 [[test]]
 name = "readiness_smoke"

@@ -350,5 +350,14 @@ impl StateTransaction<'_, '_> {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: complete State capture work and custody before consuming the World-only prerequisite"
+    )
+)]
+mod finalized_world;
+
 #[cfg(test)]
 mod tests;

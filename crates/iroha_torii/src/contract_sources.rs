@@ -6,7 +6,7 @@ use iroha_core::state::StateReadOnly as _;
 use iroha_core::state::{State as CoreState, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ValidationFail,
+    NetworkId, ValidationFail,
     isi::{
         InstructionBox,
         smart_contract_code::{
@@ -14,6 +14,7 @@ use iroha_data_model::{
         },
     },
     query::error::QueryExecutionFail,
+    smart_contract::ContractArtifactId,
     smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
     transaction::TransactionEntrypoint,
 };
@@ -195,6 +196,8 @@ pub struct ContractVerifiedSourceRefDto {
     norito::derive::NoritoDeserialize,
 )]
 pub struct ContractCodeViewDto {
+    pub network_id: NetworkId,
+    pub artifact_id: ContractArtifactId,
     pub code_hash: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub declared_code_hash: Option<String>,
@@ -326,6 +329,8 @@ pub struct ContractSourcePackageDto {
     norito::derive::NoritoDeserialize,
 )]
 pub struct ContractVerifiedSourceJobResponseDto {
+    pub network_id: NetworkId,
+    pub artifact_id: ContractArtifactId,
     pub job_id: String,
     pub code_hash: String,
     pub status: String,
@@ -350,6 +355,8 @@ pub struct ContractVerifiedSourceJobResponseDto {
     norito::derive::NoritoDeserialize,
 )]
 struct StoredVerifiedSourceRecord {
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     version: u32,
     code_hash: String,
     #[norito(default)]
@@ -382,6 +389,8 @@ struct StoredVerifiedSourceRecord {
     norito::derive::NoritoDeserialize,
 )]
 struct StoredVerifiedSourceJob {
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     version: u32,
     job_id: String,
     code_hash: String,
@@ -397,6 +406,8 @@ struct StoredVerifiedSourceJob {
     verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
 struct ContractViewBuildInput {
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     code_hash: Option<String>,
     declared_code_hash: Option<String>,
     manifest: Option<ContractManifest>,
@@ -438,25 +449,6 @@ fn manifest_from_verified_artifact(
     manifest.code_hash = Some(code_hash);
     manifest
 }
-fn parse_code_hash_hex(raw: &str) -> Result<(Hash, String), Error> {
-    if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
-        return Err(conversion_error(format!(
-            "invalid code hash length {}; expected {FIXED_HEX_COMPONENT_CHARS_V1} hexadecimal characters",
-            raw.len()
-        )));
-    }
-    let mut array = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
-    hex::decode_to_slice(raw, &mut array)
-        .map_err(|err| conversion_error(format!("invalid code hash: {err}")))?;
-    let hash = Hash::prehashed(array);
-    let canonical = hash_hex(&hash);
-    if canonical != raw {
-        return Err(conversion_error(
-            "code hash must use the exact canonical lowercase hexadecimal spelling",
-        ));
-    }
-    Ok((hash, canonical))
-}
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
     if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
         return Err(conversion_error(format!(
@@ -481,31 +473,48 @@ fn now_rfc3339() -> String {
 fn contracts_dir() -> PathBuf {
     data_dir::base_dir().join("contracts")
 }
-fn verified_source_record_path(code_hash: &str) -> PathBuf {
-    contracts_dir()
-        .join("verified_sources")
-        .join(format!("{code_hash}.json"))
+fn artifact_storage_key(network_id: NetworkId, artifact_id: ContractArtifactId) -> String {
+    format!(
+        "{}-{}-{}",
+        hex::encode(network_id.as_bytes()),
+        artifact_id.dataspace_id.as_u64(),
+        hash_hex(&artifact_id.code_hash)
+    )
 }
-fn verified_source_job_path(code_hash: &str, job_id: &str) -> PathBuf {
+fn verified_source_record_path(network_id: NetworkId, artifact_id: ContractArtifactId) -> PathBuf {
+    contracts_dir().join("verified_sources").join(format!(
+        "{}.json",
+        artifact_storage_key(network_id, artifact_id)
+    ))
+}
+fn verified_source_job_path(
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
+    job_id: &str,
+) -> PathBuf {
     contracts_dir()
         .join("verified_source_jobs")
-        .join(code_hash)
+        .join(artifact_storage_key(network_id, artifact_id))
         .join(format!("{job_id}.json"))
 }
 fn verified_source_mutation_locks() -> &'static Mutex<HashMap<String, Weak<Mutex<()>>>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
-fn verified_source_mutation_lock(code_hash: &str) -> Arc<Mutex<()>> {
+fn verified_source_mutation_lock(
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
+) -> Arc<Mutex<()>> {
+    let key = artifact_storage_key(network_id, artifact_id);
     let mut locks = verified_source_mutation_locks()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     locks.retain(|_, lock| lock.strong_count() != 0);
-    if let Some(lock) = locks.get(code_hash).and_then(Weak::upgrade) {
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
         return lock;
     }
     let lock = Arc::new(Mutex::new(()));
-    locks.insert(code_hash.to_owned(), Arc::downgrade(&lock));
+    locks.insert(key, Arc::downgrade(&lock));
     lock
 }
 fn write_json_file_atomic<T: norito::json::JsonSerialize>(
@@ -1461,8 +1470,15 @@ fn validate_verified_source_ref(reference: &ContractVerifiedSourceRefDto) -> Res
 
 fn validate_verified_source_record_schema(
     record: &StoredVerifiedSourceRecord,
-    expected_code_hash: &str,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
 ) -> Result<(), Error> {
+    let expected_code_hash = hash_hex(&artifact_id.code_hash);
+    if record.network_id != network_id || record.artifact_id != artifact_id {
+        return Err(storage_error(
+            "stored verified-source record network or dataspace differs from its canonical path",
+        ));
+    }
     if record.version != VERIFIED_SOURCE_VERSION {
         return Err(storage_error(format!(
             "stored verified-source record advertises unsupported version {}; expected V{VERIFIED_SOURCE_VERSION}",
@@ -1510,9 +1526,11 @@ fn validate_verified_source_record_schema(
 
 fn validate_verified_source_record(
     record: &StoredVerifiedSourceRecord,
-    expected_code_hash: &str,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
 ) -> Result<(), Error> {
-    validate_verified_source_record_schema(record, expected_code_hash)?;
+    let expected_code_hash = hash_hex(&artifact_id.code_hash);
+    validate_verified_source_record_schema(record, network_id, artifact_id)?;
     let compiled = compile_verified_source(
         record.source_name.as_deref(),
         &record.source_text,
@@ -1545,9 +1563,17 @@ fn validate_verified_source_record(
 
 fn validate_verified_source_job(
     job: &StoredVerifiedSourceJob,
-    expected_code_hash: &str,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     expected_job_id: &str,
 ) -> Result<(), Error> {
+    let expected_hash = hash_hex(&artifact_id.code_hash);
+    let expected_code_hash = expected_hash.as_str();
+    if job.network_id != network_id || job.artifact_id != artifact_id {
+        return Err(storage_error(
+            "stored verified-source job network or dataspace differs from its canonical path",
+        ));
+    }
     if job.version != VERIFIED_SOURCE_VERSION {
         return Err(storage_error(format!(
             "stored verified-source job advertises unsupported version {}; expected V{VERIFIED_SOURCE_VERSION}",
@@ -1598,36 +1624,38 @@ fn validate_verified_source_job(
 }
 
 fn load_verified_source_record(
-    code_hash: &str,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
 ) -> Result<Option<StoredVerifiedSourceRecord>, Error> {
     let record = read_canonical_json_file(
-        &verified_source_record_path(code_hash),
+        &verified_source_record_path(network_id, artifact_id),
         VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
         "verified-source record",
     )?;
     if let Some(record) = &record {
-        validate_verified_source_record(record, code_hash)?;
+        validate_verified_source_record(record, network_id, artifact_id)?;
     }
     Ok(record)
 }
 fn load_verified_source_job(
-    code_hash: &str,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     job_id: &str,
 ) -> Result<Option<ContractVerifiedSourceJobResponseDto>, Error> {
     let job = read_canonical_json_file::<StoredVerifiedSourceJob>(
-        &verified_source_job_path(code_hash, job_id),
+        &verified_source_job_path(network_id, artifact_id, job_id),
         VERIFIED_SOURCE_JOB_MAX_BYTES_V1,
         "verified-source job",
     )?;
     if let Some(job) = &job {
-        validate_verified_source_job(job, code_hash, job_id)?;
+        validate_verified_source_job(job, network_id, artifact_id, job_id)?;
     }
     Ok(job.map(Into::into))
 }
 fn persist_verified_source_record_locked(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
-    validate_verified_source_record_schema(record, &record.code_hash)?;
+    validate_verified_source_record_schema(record, record.network_id, record.artifact_id)?;
     write_json_file_atomic(
-        &verified_source_record_path(&record.code_hash),
+        &verified_source_record_path(record.network_id, record.artifact_id),
         record,
         VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
         "verified-source record",
@@ -1635,16 +1663,16 @@ fn persist_verified_source_record_locked(record: &StoredVerifiedSourceRecord) ->
 }
 #[cfg(test)]
 fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
-    let mutation_lock = verified_source_mutation_lock(&record.code_hash);
+    let mutation_lock = verified_source_mutation_lock(record.network_id, record.artifact_id);
     let _guard = mutation_lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     persist_verified_source_record_locked(record)
 }
 fn persist_verified_source_job(job: &StoredVerifiedSourceJob) -> Result<(), Error> {
-    validate_verified_source_job(job, &job.code_hash, &job.job_id)?;
+    validate_verified_source_job(job, job.network_id, job.artifact_id, &job.job_id)?;
     write_json_file_atomic(
-        &verified_source_job_path(&job.code_hash, &job.job_id),
+        &verified_source_job_path(job.network_id, job.artifact_id, &job.job_id),
         job,
         VERIFIED_SOURCE_JOB_MAX_BYTES_V1,
         "verified-source job",
@@ -1671,6 +1699,8 @@ fn verified_source_ref_from_record(
 impl From<StoredVerifiedSourceJob> for ContractVerifiedSourceJobResponseDto {
     fn from(value: StoredVerifiedSourceJob) -> Self {
         Self {
+            network_id: value.network_id,
+            artifact_id: value.artifact_id,
             job_id: value.job_id,
             code_hash: value.code_hash,
             status: value.status,
@@ -1686,6 +1716,8 @@ fn persist_job_response(
     job: ContractVerifiedSourceJobResponseDto,
 ) -> Result<ContractVerifiedSourceJobResponseDto, Error> {
     let stored = StoredVerifiedSourceJob {
+        network_id: job.network_id,
+        artifact_id: job.artifact_id,
         version: VERIFIED_SOURCE_VERSION,
         job_id: job.job_id.clone(),
         code_hash: job.code_hash.clone(),
@@ -2119,7 +2151,11 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
             return Err(not_found());
         }
     }
-    let verified_source_record = load_verified_source_record(&code_hash)?;
+    input.artifact_id = crate::routing::parse_contract_artifact_path(
+        &input.artifact_id.dataspace_id.as_u64().to_string(),
+        &code_hash,
+    )?;
+    let verified_source_record = load_verified_source_record(input.network_id, input.artifact_id)?;
     let verified_source_ref = verified_source_record
         .as_ref()
         .and_then(verified_source_ref_from_record);
@@ -2137,6 +2173,8 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         rendered_source_text = render_manifest_stub(&code_hash, manifest.as_ref(), &input.warnings);
     }
     Ok(ContractCodeViewDto {
+        network_id: input.network_id,
+        artifact_id: input.artifact_id,
         code_hash,
         declared_code_hash,
         abi_hash,
@@ -2174,18 +2212,20 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         verified_source_ref,
     })
 }
-fn resolve_contract_view_input_for_code_hash(
+fn resolve_contract_view_input_for_artifact(
     state: &CoreState,
-    code_hash_hex: &str,
+    artifact_id: ContractArtifactId,
 ) -> Result<ContractViewBuildInput, Error> {
-    let (code_hash, code_hash_hex) = parse_code_hash_hex(code_hash_hex)?;
+    let code_hash_hex = hash_hex(&artifact_id.code_hash);
     let world = state.world_view();
-    let manifest = world.contract_manifests().get(&code_hash).cloned();
-    let code_bytes = world.contract_code().get(&code_hash).cloned();
+    let manifest = world.contract_manifests().get(&artifact_id).cloned();
+    let code_bytes = world.contract_code().get(&artifact_id).cloned();
     if manifest.is_none() && code_bytes.is_none() {
         return Err(not_found());
     }
     Ok(ContractViewBuildInput {
+        network_id: *state.network_id_ref(),
+        artifact_id,
         code_hash: Some(code_hash_hex),
         declared_code_hash: None,
         manifest,
@@ -2200,8 +2240,10 @@ fn resolve_contract_view_input_for_instruction(
     let any = instruction.as_any();
     if let Some(register_bytes) = any.downcast_ref::<RegisterSmartContractBytes>() {
         return Ok(ContractViewBuildInput {
-            code_hash: Some(hash_hex(&register_bytes.code_hash)),
-            declared_code_hash: Some(hash_hex(&register_bytes.code_hash)),
+            network_id: *state.network_id_ref(),
+            artifact_id: register_bytes.artifact_id,
+            code_hash: Some(hash_hex(&register_bytes.artifact_id.code_hash)),
+            declared_code_hash: Some(hash_hex(&register_bytes.artifact_id.code_hash)),
             manifest: None,
             code_bytes: Some(register_bytes.code.clone()),
             warnings: vec![
@@ -2212,6 +2254,8 @@ fn resolve_contract_view_input_for_instruction(
     if let Some(register_code) = any.downcast_ref::<RegisterSmartContractCode>() {
         let declared = register_code.manifest.code_hash.as_ref().map(hash_hex);
         return Ok(ContractViewBuildInput {
+            network_id: *state.network_id_ref(),
+            artifact_id: register_code.artifact_id,
             code_hash: declared.clone(),
             declared_code_hash: declared,
             manifest: Some(register_code.manifest.clone()),
@@ -2222,8 +2266,10 @@ fn resolve_contract_view_input_for_instruction(
         });
     }
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
-        let code_hash_hex = hash_hex(&activate.code_hash);
-        let mut input = resolve_contract_view_input_for_code_hash(state, &code_hash_hex)?;
+        let artifact_id =
+            ContractArtifactId::for_address(&activate.contract_address, activate.code_hash)
+                .map_err(|error| conversion_error(error.to_string()))?;
+        let mut input = resolve_contract_view_input_for_artifact(state, artifact_id)?;
         input.warnings.push(format!(
             "Showing the contract currently bound to {}.",
             activate.contract_address
@@ -2600,22 +2646,26 @@ pub async fn handle_get_instruction_contract_view(
 }
 pub async fn handle_get_contract_code_view(
     state: Arc<CoreState>,
-    code_hash_hex: String,
+    artifact_id: ContractArtifactId,
 ) -> Result<impl IntoResponse, Error> {
-    let input = resolve_contract_view_input_for_code_hash(state.as_ref(), &code_hash_hex)?;
+    let input = resolve_contract_view_input_for_artifact(state.as_ref(), artifact_id)?;
     let view = build_contract_view(input)?;
     Ok(JsonBody(view))
 }
 pub fn handle_post_verified_source_job(
-    code_hash_hex: String,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     request: SubmitVerifiedContractSourceDto,
     _sorafs_node: sorafs_node::NodeHandle,
 ) -> Result<(StatusCode, JsonBody<ContractVerifiedSourceJobResponseDto>), Error> {
-    let (requested_hash, code_hash_hex) = parse_code_hash_hex(&code_hash_hex)?;
+    let requested_hash = artifact_id.code_hash;
+    let code_hash_hex = hash_hex(&requested_hash);
     let submitted_at = now_rfc3339();
     let job_id = new_job_id()?;
     if let Some(message) = verified_source_request_bound_error(&request) {
         let response = ContractVerifiedSourceJobResponseDto {
+            network_id,
+            artifact_id,
             job_id,
             code_hash: code_hash_hex,
             status: "error".to_owned(),
@@ -2631,6 +2681,8 @@ pub fn handle_post_verified_source_job(
     let language = request.language;
     if language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA {
         let response = ContractVerifiedSourceJobResponseDto {
+            network_id,
+            artifact_id,
             job_id,
             code_hash: code_hash_hex.clone(),
             status: "error".to_owned(),
@@ -2673,6 +2725,8 @@ pub fn handle_post_verified_source_job(
     }
     if source_text.trim().is_empty() {
         let response = ContractVerifiedSourceJobResponseDto {
+            network_id,
+            artifact_id,
             job_id,
             code_hash: code_hash_hex.clone(),
             status: "error".to_owned(),
@@ -2736,6 +2790,8 @@ pub fn handle_post_verified_source_job(
             let actual_code_hash = hash_hex(&actual_hash);
             if actual_hash != requested_hash {
                 ContractVerifiedSourceJobResponseDto {
+                    network_id,
+                    artifact_id,
                     job_id,
                     code_hash: code_hash_hex.clone(),
                     status: "mismatch".to_owned(),
@@ -2748,11 +2804,11 @@ pub fn handle_post_verified_source_job(
                     verified_source_ref: None,
                 }
             } else {
-                let mutation_lock = verified_source_mutation_lock(&code_hash_hex);
+                let mutation_lock = verified_source_mutation_lock(network_id, artifact_id);
                 let _guard = mutation_lock
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(existing) = load_verified_source_record(&code_hash_hex)? {
+                if let Some(existing) = load_verified_source_record(network_id, artifact_id)? {
                     if existing.source_text == source_text
                         && existing.source_name == source_name
                         && existing.sources == sources
@@ -2760,6 +2816,8 @@ pub fn handle_post_verified_source_job(
                         && existing.packages == packages
                     {
                         ContractVerifiedSourceJobResponseDto {
+                            network_id,
+                            artifact_id,
                             job_id,
                             code_hash: code_hash_hex.clone(),
                             status: "accepted".to_owned(),
@@ -2773,6 +2831,8 @@ pub fn handle_post_verified_source_job(
                         }
                     } else {
                         ContractVerifiedSourceJobResponseDto {
+                            network_id,
+                            artifact_id,
                             job_id,
                             code_hash: code_hash_hex.clone(),
                             status: "conflict".to_owned(),
@@ -2792,6 +2852,8 @@ pub fn handle_post_verified_source_job(
                     // ingest outbox, never as a side effect of this route.
                     let verified_source_ref: Option<ContractVerifiedSourceRefDto> = None;
                     let record = StoredVerifiedSourceRecord {
+                        network_id,
+                        artifact_id,
                         version: VERIFIED_SOURCE_VERSION,
                         code_hash: code_hash_hex.clone(),
                         abi_hash: Some(hash_hex(&verified.abi_hash)),
@@ -2815,6 +2877,8 @@ pub fn handle_post_verified_source_job(
                     };
                     persist_verified_source_record_locked(&record)?;
                     ContractVerifiedSourceJobResponseDto {
+                        network_id,
+                        artifact_id,
                         job_id,
                         code_hash: code_hash_hex.clone(),
                         status: "accepted".to_owned(),
@@ -2828,6 +2892,8 @@ pub fn handle_post_verified_source_job(
             }
         }
         Err(err) => ContractVerifiedSourceJobResponseDto {
+            network_id,
+            artifact_id,
             job_id,
             code_hash: code_hash_hex.clone(),
             status: "compile_error".to_owned(),
@@ -2847,17 +2913,24 @@ pub fn handle_post_verified_source_job(
     Ok((status_code, JsonBody(persisted)))
 }
 pub async fn handle_get_verified_source_job(
-    code_hash_hex: String,
+    network_id: NetworkId,
+    artifact_id: ContractArtifactId,
     job_id: String,
 ) -> Result<impl IntoResponse, Error> {
-    let (_, code_hash_hex) = parse_code_hash_hex(&code_hash_hex)?;
     let job_id = canonical_verified_source_job_id(&job_id)?;
-    let job = load_verified_source_job(&code_hash_hex, &job_id)?.ok_or_else(not_found)?;
+    let job = load_verified_source_job(network_id, artifact_id, &job_id)?.ok_or_else(not_found)?;
     Ok(JsonBody(job))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn source_network() -> NetworkId {
+        crate::test_utils::signed_query_network_id()
+    }
+    fn source_artifact(hash: &str) -> ContractArtifactId {
+        crate::routing::parse_contract_artifact_path("0", hash)
+            .expect("canonical source fixture artifact")
+    }
     use crate::test_utils::TestDataDirGuard;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
@@ -2974,6 +3047,8 @@ mod tests {
             ivm::verify_contract_artifact(&original.artifact).expect("verified artifact");
         let code_hash = hash_hex(&canonical_code_hash(&original.artifact).expect("code hash"));
         let mut record = StoredVerifiedSourceRecord {
+            network_id: source_network(),
+            artifact_id: source_artifact(&code_hash),
             version: VERIFIED_SOURCE_VERSION,
             code_hash: code_hash.clone(),
             abi_hash: Some(hash_hex(&verified.abi_hash)),
@@ -2989,12 +3064,13 @@ mod tests {
             payload_digest_hex: None,
             content_length: None,
         };
-        validate_verified_source_record(&record, &code_hash)
+        validate_verified_source_record(&record, record.network_id, record.artifact_id)
             .expect("full stored closure revalidates");
         record.packages[0].sources[0].source_text =
             "export fn value() -> int { return 100; }".into();
         assert!(
-            validate_verified_source_record(&record, &code_hash).is_err(),
+            validate_verified_source_record(&record, record.network_id, record.artifact_id)
+                .is_err(),
             "tampered companion must fail record hash validation"
         );
         let encoded = norito::json::to_json(&record).expect("serialize complete record");
@@ -3064,13 +3140,15 @@ mod tests {
     #[test]
     fn fixed_hex_path_components_require_exact_canonical_spelling() {
         let uppercase = "AB".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
-        assert!(parse_code_hash_hex(&uppercase).is_err());
+        assert!(crate::routing::parse_contract_artifact_path("0", &uppercase).is_err());
         assert!(canonical_verified_source_job_id(&uppercase).is_err());
         let lowercase = "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         assert_eq!(
-            parse_code_hash_hex(&lowercase)
-                .expect("canonical code hash")
-                .1,
+            hash_hex(
+                &crate::routing::parse_contract_artifact_path("0", &lowercase)
+                    .expect("canonical code hash")
+                    .code_hash
+            ),
             lowercase
         );
         assert_eq!(
@@ -3083,12 +3161,14 @@ mod tests {
             "g".repeat(FIXED_HEX_COMPONENT_CHARS_V1),
             format!("../{}", "a".repeat(FIXED_HEX_COMPONENT_CHARS_V1 - 3)),
         ] {
-            assert!(parse_code_hash_hex(&invalid).is_err());
+            assert!(crate::routing::parse_contract_artifact_path("0", &invalid).is_err());
             assert!(canonical_verified_source_job_id(&invalid).is_err());
         }
     }
     fn persisted_json_size_fixture() -> StoredVerifiedSourceRecord {
         StoredVerifiedSourceRecord {
+            network_id: source_network(),
+            artifact_id: source_artifact(&"ab".repeat(32)),
             sources: Vec::new(),
             imports: Vec::new(),
             packages: Vec::new(),
@@ -3115,6 +3195,11 @@ mod tests {
         let verified = ivm::verify_contract_artifact(&compiled.artifact)
             .expect("verify source record fixture");
         StoredVerifiedSourceRecord {
+            network_id: source_network(),
+            artifact_id: ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                verified.code_hash,
+            ),
             sources: Vec::new(),
             imports: Vec::new(),
             packages: Vec::new(),
@@ -3144,6 +3229,8 @@ mod tests {
             record_bytes
         );
         let job = StoredVerifiedSourceJob {
+            network_id: record.network_id,
+            artifact_id: record.artifact_id,
             version: VERIFIED_SOURCE_VERSION,
             job_id: "ef".repeat(FIXED_HEX_COMPONENT_BYTES_V1),
             code_hash: record.code_hash.clone(),
@@ -3255,10 +3342,10 @@ mod tests {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Exact { kotoage fn main() authorize(\"Run\") {} }";
         let record = valid_verified_source_record(source, "exact.ko");
-        let path = verified_source_record_path(&record.code_hash);
+        let path = verified_source_record_path(record.network_id, record.artifact_id);
         persist_verified_source_record(&record).expect("persist valid source record");
         assert!(
-            load_verified_source_record(&record.code_hash)
+            load_verified_source_record(record.network_id, record.artifact_id)
                 .expect("load valid source record")
                 .is_some()
         );
@@ -3270,7 +3357,7 @@ mod tests {
             norito::json::to_vec(&corrupt).expect("encode wrong-version record"),
         )
         .expect("replace record with wrong version");
-        assert!(load_verified_source_record(&record.code_hash).is_err());
+        assert!(load_verified_source_record(record.network_id, record.artifact_id).is_err());
 
         corrupt = record.clone();
         corrupt.code_hash = "ff".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
@@ -3279,7 +3366,7 @@ mod tests {
             norito::json::to_vec(&corrupt).expect("encode wrong-identity record"),
         )
         .expect("replace record with wrong identity");
-        assert!(load_verified_source_record(&record.code_hash).is_err());
+        assert!(load_verified_source_record(record.network_id, record.artifact_id).is_err());
 
         corrupt = record.clone();
         corrupt.source_text =
@@ -3289,7 +3376,49 @@ mod tests {
             norito::json::to_vec(&corrupt).expect("encode wrong-source record"),
         )
         .expect("replace record with wrong source");
-        assert!(load_verified_source_record(&record.code_hash).is_err());
+        assert!(load_verified_source_record(record.network_id, record.artifact_id).is_err());
+    }
+    #[test]
+    fn verified_sources_are_isolated_by_network_and_full_dataspace_id() {
+        let _guard = TestDataDirGuard::new();
+        let mut record = valid_verified_source_record(
+            "seiyaku Scoped { view fn value() -> int { return 1; } }",
+            "scoped.ko",
+        );
+        record.artifact_id.dataspace_id = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
+        persist_verified_source_record(&record).expect("persist private source");
+        let other_scope = ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            record.artifact_id.code_hash,
+        );
+        assert!(
+            load_verified_source_record(record.network_id, other_scope)
+                .unwrap()
+                .is_none()
+        );
+        let other_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"another source network"),
+        ));
+        assert!(
+            load_verified_source_record(other_network, record.artifact_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(validate_verified_source_record(&record, record.network_id, other_scope).is_err());
+        assert!(
+            validate_verified_source_record(&record, other_network, record.artifact_id).is_err()
+        );
+        assert_eq!(
+            load_verified_source_record(record.network_id, record.artifact_id)
+                .unwrap()
+                .unwrap()
+                .source_text,
+            record.source_text
+        );
+        assert_ne!(
+            verified_source_record_path(record.network_id, record.artifact_id),
+            verified_source_record_path(record.network_id, other_scope)
+        );
     }
     #[test]
     fn verified_source_job_load_rejects_embedded_identity_corruption() {
@@ -3297,6 +3426,8 @@ mod tests {
         let code_hash = "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         let job_id = "cd".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         let mut job = StoredVerifiedSourceJob {
+            network_id: source_network(),
+            artifact_id: source_artifact(&code_hash),
             version: VERIFIED_SOURCE_VERSION,
             job_id: job_id.clone(),
             code_hash: code_hash.clone(),
@@ -3308,14 +3439,17 @@ mod tests {
             verified_source_ref: None,
         };
         persist_verified_source_job(&job).expect("persist source job");
-        let path = verified_source_job_path(&code_hash, &job_id);
+        let path = verified_source_job_path(source_network(), source_artifact(&code_hash), &job_id);
         job.job_id = "ef".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         fs::write(
             path,
             norito::json::to_vec(&job).expect("encode wrong-identity source job"),
         )
         .expect("replace source job with wrong identity");
-        assert!(load_verified_source_job(&code_hash, &job_id).is_err());
+        assert!(
+            load_verified_source_job(source_network(), source_artifact(&code_hash), &job_id)
+                .is_err()
+        );
     }
     #[test]
     fn immutable_source_writer_never_replaces_a_concurrent_winner() {
@@ -3597,10 +3731,21 @@ mod tests {
             .execute(authority, &mut stx)
             .expect("grant CanEnactGovernance");
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
-        let code_hash =
-            register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
+        let code_hash = register_code_bytes(
+            authority,
+            contract_address.dataspace_id().expect("fixture scope"),
+            code,
+            &mut stx,
+        )
+        .expect("register contract bytes");
         let manifest = verified.manifest.signed(authority_keypair);
-        register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        register_manifest(
+            authority,
+            contract_address.dataspace_id().expect("fixture scope"),
+            manifest,
+            &mut stx,
+        )
+        .expect("register manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
             authority.clone(),
@@ -3619,7 +3764,10 @@ mod tests {
         let program = crate::test_utils::minimal_ivm_program(1);
         let code_hash = canonical_code_hash(&program).expect("canonical hash");
         let instruction = dm::InstructionBox::from(RegisterSmartContractBytes {
-            code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             code: program,
         });
         let (state, hash) = build_state_with_single_transaction(vec![instruction]);
@@ -3678,6 +3826,8 @@ mod tests {
         );
         let code_hash_hex = hash_hex(&code_hash);
         let record = StoredVerifiedSourceRecord {
+            network_id,
+            artifact_id: source_artifact(&code_hash_hex),
             sources: Vec::new(),
             imports: Vec::new(),
             packages: Vec::new(),
@@ -3694,7 +3844,7 @@ mod tests {
             content_length: Some(24),
         };
         persist_verified_source_record(&record).expect("persist verified source");
-        let response = handle_get_contract_code_view(state, code_hash_hex)
+        let response = handle_get_contract_code_view(state, source_artifact(&code_hash_hex))
             .await
             .expect("contract view response")
             .into_response();
@@ -3727,6 +3877,8 @@ mod tests {
         assert_ne!(declared.code_hash, actual_hash);
 
         let view = build_contract_view(ContractViewBuildInput {
+            network_id: declared.network_id,
+            artifact_id: declared.artifact_id,
             code_hash: Some(declared.code_hash.clone()),
             declared_code_hash: Some(declared.code_hash),
             manifest: None,
@@ -3767,13 +3919,17 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             &request,
             "iroha_torii::contract_sources::SubmitVerifiedContractSourceDto",
         );
-        let (status, JsonBody(response)) =
-            handle_post_verified_source_job(code_hash_hex.clone(), request, node)
-                .expect("submit verified source");
+        let (status, JsonBody(response)) = handle_post_verified_source_job(
+            source_network(),
+            source_artifact(&code_hash_hex),
+            request,
+            node,
+        )
+        .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(response.status, "accepted");
         assert!(response.verified_source_ref.is_none());
-        let record = load_verified_source_record(&code_hash_hex)
+        let record = load_verified_source_record(source_network(), source_artifact(&code_hash_hex))
             .expect("load record")
             .expect("record exists");
         assert_eq!(record.source_text.trim(), source.trim());
@@ -3785,7 +3941,8 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let code_hash = "11".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
         let (status, JsonBody(response)) = handle_post_verified_source_job(
-            code_hash.clone(),
+            source_network(),
+            source_artifact(&code_hash),
             SubmitVerifiedContractSourceDto {
                 sources: Vec::new(),
                 imports: Vec::new(),
@@ -3799,9 +3956,13 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         .expect("reject language alias");
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(response.status, "error");
-        let stored = load_verified_source_job(&code_hash, &response.job_id)
-            .expect("load language error job")
-            .expect("language error job exists");
+        let stored = load_verified_source_job(
+            source_network(),
+            source_artifact(&code_hash),
+            &response.job_id,
+        )
+        .expect("load language error job")
+        .expect("language error job exists");
         assert_eq!(stored.status, "error");
     }
     #[test]
@@ -3820,7 +3981,8 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         );
         let inspect_node = node.clone();
         let (status, JsonBody(response)) = handle_post_verified_source_job(
-            code_hash_hex,
+            source_network(),
+            source_artifact(&code_hash_hex),
             SubmitVerifiedContractSourceDto {
                 sources: Vec::new(),
                 imports: Vec::new(),
@@ -3849,7 +4011,8 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let wrong_hash = "11".repeat(32);
         let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
         let (status, JsonBody(response)) = handle_post_verified_source_job(
-            wrong_hash.clone(),
+            source_network(),
+            source_artifact(&wrong_hash),
             SubmitVerifiedContractSourceDto {
                 sources: Vec::new(),
                 imports: Vec::new(),
@@ -3864,9 +4027,13 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(response.status, "mismatch");
         assert!(response.actual_code_hash.is_some());
-        let stored = load_verified_source_job(&wrong_hash, &response.job_id)
-            .expect("load job")
-            .expect("job exists");
+        let stored = load_verified_source_job(
+            source_network(),
+            source_artifact(&wrong_hash),
+            &response.job_id,
+        )
+        .expect("load job")
+        .expect("job exists");
         assert_eq!(stored.status, "mismatch");
     }
 }

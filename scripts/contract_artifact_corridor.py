@@ -151,7 +151,6 @@ EXPECTED_COMPILERS = {
 }
 EXECUTABLE_FORMATS = ("elf-x86-64", "elf-aarch64", "macho-universal-arm64-x86-64")
 MAX_COMPILER_BYTES = 64 * 1024 * 1024
-MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_COMPILER_INPUT_BYTES = 16 * 1024 * 1024
 MAX_COMPILER_OUTPUT_BYTES = 128 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 16 * 1024
@@ -653,7 +652,7 @@ def _stable_file_identity(info: os.stat_result) -> Tuple[int, int, int, int, int
 
 
 def _read_stable_regular_file(path: Path, maximum_bytes: int, label: str) -> bytes:
-    """Read one bounded regular file through a no-follow descriptor exactly once."""
+    """Read one stable regular inode, with explicit bounds for resource inputs."""
 
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -667,7 +666,7 @@ def _read_stable_regular_file(path: Path, maximum_bytes: int, label: str) -> byt
         if before.st_size <= 0 or before.st_size > maximum_bytes:
             raise CorridorError(f"{label} is empty or exceeds the bounded size policy")
         chunks: List[bytes] = []
-        remaining = maximum_bytes + 1
+        remaining = before.st_size + 1
         while remaining > 0:
             chunk = os.read(descriptor, min(1024 * 1024, remaining))
             if not chunk:
@@ -688,6 +687,8 @@ def _read_stable_regular_file(path: Path, maximum_bytes: int, label: str) -> byt
 def validate_native_compiler_input(payload: bytes, settings: Mapping[str, object]) -> None:
     """Admit content-only Solidity sources compiled with exactly the locked settings."""
 
+    if not payload or len(payload) > MAX_COMPILER_INPUT_BYTES:
+        raise CorridorError("standard-json compiler input is empty or exceeds 16 MiB")
     value = _require_object(parse_json_bytes(payload, "native compiler input"), "native compiler input")
     _require_exact_keys(value, ("language", "sources", "settings"), "native compiler input")
     if value["language"] != "Solidity":
@@ -700,8 +701,12 @@ def validate_native_compiler_input(payload: bytes, settings: Mapping[str, object
         source = _require_object(entry, "native compiler source")
         _require_exact_keys(source, ("content",), "native compiler source")
         content = source["content"]
-        if not isinstance(content, str) or not 0 < len(content.encode("utf-8")) <= MAX_SOURCE_BYTES:
-            raise CorridorError("native compiler source content exceeds the bounded size policy")
+        if not isinstance(content, str) or not content:
+            raise CorridorError("native compiler source content must be nonempty UTF-8 text")
+        try:
+            content.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise CorridorError("native compiler source content must be UTF-8 text") from error
     if value["settings"] != settings:
         raise CorridorError("native compiler input must use exactly the locked settings")
 
@@ -843,7 +848,10 @@ def validate_solidity_source_policy(source: str, relative: str) -> None:
         raise CorridorError(f"contract source must be self-contained without imports: {relative}")
 
 
-def _read_source(repo_root: Path, relative: str) -> bytes:
+def _read_source(
+    repo_root: Path, relative: str, *, maximum_bytes: int = MAX_COMPILER_INPUT_BYTES
+) -> bytes:
+    """Read exact source bytes within the remaining total compiler-input envelope."""
     root = repo_root.resolve(strict=True)
     candidate = repo_root / relative
     try:
@@ -856,7 +864,10 @@ def _read_source(repo_root: Path, relative: str) -> bytes:
         candidate.resolve(strict=True).relative_to(root)
     except ValueError as error:
         raise CorridorError(f"contract source escapes the repository root: {relative}") from error
-    payload = _read_stable_regular_file(candidate, MAX_SOURCE_BYTES, f"contract source {relative}")
+    # Raw source bytes are a lower bound on serialized compiler input. Refuse an
+    # impossible input before allocation; JSON escapes and overhead are admitted
+    # separately against the same total input envelope.
+    payload = _read_stable_regular_file(candidate, maximum_bytes, f"contract source {relative}")
     try:
         source = payload.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -874,8 +885,10 @@ def standard_json_input(
         raise CorridorError("unknown contract compilation target")
     source_map: Dict[str, object] = {}
     inventory: List[Mapping[str, object]] = []
+    remaining_source_bytes = MAX_COMPILER_INPUT_BYTES
     for relative in config.sources[target]:
-        payload = _read_source(repo_root, relative)
+        payload = _read_source(repo_root, relative, maximum_bytes=remaining_source_bytes)
+        remaining_source_bytes -= len(payload)
         source_map[relative] = {"content": payload.decode("utf-8")}
         inventory.append(
             {

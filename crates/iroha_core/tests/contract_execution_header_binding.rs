@@ -162,13 +162,25 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     let original_hash = verified.code_hash;
     let signed_manifest = verified.manifest.signed(&key_pair);
     RegisterSmartContractBytes {
-        code_hash: original_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            original_hash,
+        ),
         code: original.clone(),
     }
     .execute(&authority, &mut transaction)
     .expect("register original bytecode");
-    RegisterSmartContractCode {
-        manifest: signed_manifest.clone(),
+    {
+        let scoped_manifest = signed_manifest.clone();
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut transaction)
     .expect("register original signed manifest");
@@ -185,7 +197,10 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
             "{field} mutation must change the canonical artifact hash"
         );
         let error = RegisterSmartContractBytes {
-            code_hash: original_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                original_hash,
+            ),
             code: mutated.clone(),
         }
         .execute(&authority, &mut transaction)
@@ -198,7 +213,10 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
             transaction
                 .world
                 .contract_code()
-                .get(&original_hash)
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    original_hash
+                ))
                 .map(Vec::as_slice),
             Some(original.as_slice()),
             "{field} mutation changed registered bytecode"
@@ -209,14 +227,26 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
             continue;
         };
         RegisterSmartContractBytes {
-            code_hash: mutated_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                mutated_hash,
+            ),
             code: mutated,
         }
         .execute(&authority, &mut transaction)
         .unwrap_or_else(|error| panic!("{field} structurally valid mutation: {error}"));
         mutated_verified.manifest.provenance = signed_manifest.provenance.clone();
-        let error = RegisterSmartContractCode {
-            manifest: mutated_verified.manifest,
+        let error = {
+            let scoped_manifest = mutated_verified.manifest;
+            RegisterSmartContractCode {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    scoped_manifest
+                        .code_hash
+                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+                ),
+                manifest: scoped_manifest,
+            }
         }
         .execute(&authority, &mut transaction)
         .expect_err("the original signature must not authorize a mutated header");
@@ -225,13 +255,21 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
             transaction
                 .world
                 .contract_manifests()
-                .get(&mutated_hash)
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    mutated_hash
+                ))
                 .is_none(),
             "{field} mutation registered a forged manifest"
         );
     }
     assert_eq!(
-        transaction.world.contract_manifests().get(&original_hash),
+        transaction.world.contract_manifests().get(
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                original_hash
+            )
+        ),
         Some(&signed_manifest),
         "adversarial attempts changed the original manifest"
     );

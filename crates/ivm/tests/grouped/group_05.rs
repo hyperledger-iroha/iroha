@@ -8,6 +8,8 @@ mod kotodama_argument_record;
 mod kotodama_checked_arithmetic;
 #[path = "../kotodama_lists.rs"]
 mod kotodama_lists;
+#[path = "../kotodama_simple_contracts.rs"]
+mod kotodama_simple_contracts;
 #[path = "../kotodama_state_aggregate_literal_runtime.rs"]
 mod kotodama_state_aggregate_literal_runtime;
 #[path = "../kotodama_state_map_lowering.rs"]

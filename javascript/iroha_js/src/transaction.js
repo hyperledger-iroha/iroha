@@ -3348,6 +3348,7 @@ export function buildRegisterSmartContractCodeTransaction(input) {
     networkId,
     authority,
     feePayment,
+    artifactId,
     manifest,
     metadata = null,
     creationTimeMs = null,
@@ -3356,7 +3357,7 @@ export function buildRegisterSmartContractCodeTransaction(input) {
     privateKey,
     privateKeyAlgorithm,
   } = input;
-  const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
+  const instruction = buildRegisterSmartContractCodeInstruction({ artifactId, manifest });
   return buildTransaction.call(this, {
     networkId,
     authority,
@@ -3380,7 +3381,7 @@ export function buildRegisterSmartContractBytesTransaction(input) {
     networkId,
     authority,
     feePayment,
-    codeHash,
+    artifactId,
     code,
     metadata = null,
     creationTimeMs = null,
@@ -3390,7 +3391,7 @@ export function buildRegisterSmartContractBytesTransaction(input) {
     privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterSmartContractBytesInstruction({
-    codeHash,
+    artifactId,
     code,
   });
   return buildTransaction.call(this, {
@@ -3416,7 +3417,7 @@ export function buildRemoveSmartContractBytesTransaction(input) {
     networkId,
     authority,
     feePayment,
-    codeHash,
+    artifactId,
     reason = null,
     metadata = null,
     creationTimeMs = null,
@@ -3426,7 +3427,7 @@ export function buildRemoveSmartContractBytesTransaction(input) {
     privateKeyAlgorithm,
   } = input;
   const instruction = buildRemoveSmartContractBytesInstruction({
-    codeHash,
+    artifactId,
     reason,
   });
   return buildTransaction.call(this, {

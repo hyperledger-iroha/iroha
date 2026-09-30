@@ -2445,6 +2445,7 @@ impl CaptureContext {
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
             torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -2862,6 +2863,32 @@ fn library_test_build_metadata_is_an_explicit_development_identity() {
         compiled_build_identity().unwrap().release_source_commit(),
         Err(iroha_core::release_identity::BuildIdentityError::DevelopmentSource)
     );
+}
+
+#[test]
+fn metadata_installation_preserves_the_first_identity() {
+    let slot = std::sync::OnceLock::new();
+    let initial = CompiledBuildMetadata::from_compiled_parts(
+        "executable-version",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(install_build_metadata(&slot, initial));
+    assert!(install_build_metadata(&slot, initial));
+    let different = CompiledBuildMetadata::from_compiled_parts(
+        "another-executable-version",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(!install_build_metadata(&slot, different));
+    assert_eq!(slot.get(), Some(&initial));
+    assert!(install_build_metadata(&slot, initial));
 }
 
 #[test]

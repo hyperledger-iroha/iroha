@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.Collections
@@ -259,12 +260,23 @@ class ContractManifest(
     }
 }
 
-/** Full response from `GET /v1/contracts/code/{code_hash}`. */
+/** Authenticated response from one exact dataspace artifact registry. */
 class ContractManifestRecord(
+    @JvmField val networkId: NetworkId,
+    @JvmField val artifactId: ContractArtifactId,
     @JvmField val manifest: ContractManifest,
     @JvmField val codeHashHex: String?,
     @JvmField val abiHashHex: String?,
-)
+) {
+    init {
+        require(codeHashHex == artifactId.codeHashHex && codeHashHex == manifest.codeHashHex) {
+            "record code hash must equal the artifact identity and manifest"
+        }
+        require(abiHashHex == manifest.abiHashHex) {
+            "record ABI hash must equal the manifest"
+        }
+    }
+}
 
 /** Strict parser for the full Rust `ContractManifest` JSON shape. */
 object ContractManifestJsonParser {
@@ -370,6 +382,7 @@ object ContractManifestJsonParser {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     )
     private val retiredNumericTypeNames = setOf(
         "i8",
@@ -447,10 +460,27 @@ object ContractManifestJsonParser {
     @JvmStatic
     fun parseRecord(payload: ByteArray): ContractManifestRecord {
         val root = objectValue(parse(payload, "contract manifest response"), "contract manifest response")
-        exactKeys(root, setOf("manifest", "code_hash", "abi_hash"), "contract manifest response")
+        exactKeys(root, setOf("network_id", "artifact_id", "manifest", "code_hash", "abi_hash"), "contract manifest response")
+        val networkId = try {
+            NetworkId.parse(exactString(required(root, "network_id", "contract manifest response"), "network_id"))
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("contract manifest response.network_id is not canonical", error)
+        }
+        val artifact = objectValue(required(root, "artifact_id", "contract manifest response"), "artifact_id")
+        exactKeys(artifact, setOf("dataspace_id", "code_hash"), "artifact_id")
+        val artifactId = try {
+            ContractArtifactId(
+                unsignedInteger(required(artifact, "dataspace_id", "artifact_id"), maxU64, "artifact_id.dataspace_id"),
+                exactString(required(artifact, "code_hash", "artifact_id"), "artifact_id.code_hash"),
+            )
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("contract manifest response.artifact_id is not canonical", error)
+        }
         val manifest = parseManifest(
             objectValue(required(root, "manifest", "contract manifest response"), "contract manifest response.manifest"),
         )
+        required(root, "code_hash", "contract manifest response")
+        required(root, "abi_hash", "contract manifest response")
         val codeHash = optionalConvenienceHash(root, "code_hash", "contract manifest response.code_hash")
         val abiHash = optionalConvenienceHash(root, "abi_hash", "contract manifest response.abi_hash")
         check(codeHash == manifest.codeHashHex) {
@@ -459,7 +489,10 @@ object ContractManifestJsonParser {
         check(abiHash == manifest.abiHashHex) {
             "contract manifest response.abi_hash must exactly match manifest.abi_hash"
         }
-        return ContractManifestRecord(manifest, codeHash, abiHash)
+        check(codeHash == artifactId.codeHashHex) {
+            "contract manifest response artifact_id must exactly match manifest.code_hash"
+        }
+        return ContractManifestRecord(networkId, artifactId, manifest, codeHash, abiHash)
     }
 
     /** Parse and validate one full Rust `ContractManifest` object. */

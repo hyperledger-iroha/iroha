@@ -57,6 +57,8 @@ on:
       - "crates/iroha_cli/**"
       - "crates/iroha_config/**"
       - "crates/iroha_core/**"
+      - "crates/iroha_core_privacy/**"
+      - "crates/iroha_core_timed_ovn/**"
       - "crates/iroha_core_zk/**"
       - "crates/iroha_panic_hook/**"
       - "crates/iroha_data_model/**"

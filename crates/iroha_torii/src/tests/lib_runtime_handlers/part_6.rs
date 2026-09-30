@@ -2750,3 +2750,126 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     assert_eq!(captured[0].handler_path, "/");
     upstream_task.abort();
 }
+
+fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
+    use iroha_data_model::{
+        block::consensus::{SumeragiRootScope, ValidatorPower},
+        parameter::{
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                consensus_metadata,
+            },
+        },
+    };
+    let world = World::new();
+    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
+        .into_iter()
+        .map(|(validator, _)| ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    if private {
+        context.root_scope = SumeragiRootScope::Dataspace {
+            parent_network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
+            ),
+            dataspace_id: DataSpaceId::new(u64::MAX - 1),
+        };
+    }
+    let metadata = ConsensusHandshakeMetadata {
+        mode: SumeragiConsensusMode::Permissioned,
+        block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
+        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+        consensus_fingerprint: ConsensusFingerprint::new([0xB7; 32]),
+        kagemusha_mint_finality:
+            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
+        sumeragi_context: context,
+    };
+    metadata.validate().unwrap();
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::new(metadata),
+        )));
+        parameters.commit();
+    }
+    mk_app_state_for_tests_with_world(world)
+}
+
+#[tokio::test]
+async fn private_root_listener_token_closes_public_gateway_and_config_bypass() {
+    use tower::ServiceExt as _;
+    for private in [false, true] {
+        for configured in [false, true] {
+            let mut app = app_with_root_scope_for_token_test(private);
+            assert_eq!(app.is_private_root(), private);
+            let app_mut = Arc::get_mut(&mut app).unwrap();
+            // Even a false local setting cannot open an authenticated private root.
+            app_mut.require_api_token = !private;
+            app_mut.api_token_digests = Arc::new(if configured {
+                limits::ApiTokenDigestSet::from_tokens(["owner-private-listener-token"])
+            } else {
+                limits::ApiTokenDigestSet::default()
+            });
+            assert!(app.requires_api_token());
+            let router = axum::Router::new()
+                .fallback(any(|| async { "private content" }))
+                .layer(axum::middleware::from_fn_with_state(
+                    app.clone(),
+                    enforce_api_token,
+                ))
+                .layer(axum::middleware::from_fn_with_state(
+                    app,
+                    enforce_required_api_token_private_no_store,
+                ));
+            for tokens in [
+                vec![],
+                vec!["wrong"],
+                vec!["owner-private-listener-token"],
+                vec![
+                    "owner-private-listener-token",
+                    "owner-private-listener-token",
+                ],
+            ] {
+                let mut request = axum::http::Request::builder()
+                    .uri(route_catalog::sorafs::SITE_MANIFEST.path())
+                    .extension(MatchedRouteMetadata::from_descriptor(
+                        route_catalog::sorafs::SITE_MANIFEST,
+                    ))
+                    .body(Body::empty())
+                    .unwrap();
+                for token in &tokens {
+                    request
+                        .headers_mut()
+                        .append(HEADER_API_TOKEN, HeaderValue::from_str(token).unwrap());
+                }
+                let response = router.clone().oneshot(request).await.unwrap();
+                let expected =
+                    if !private || (configured && tokens == ["owner-private-listener-token"]) {
+                        StatusCode::OK
+                    } else if !configured {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    };
+                assert_eq!(response.status(), expected);
+                if private {
+                    assert_eq!(
+                        response.headers()[axum::http::header::CACHE_CONTROL],
+                        "private, no-store"
+                    );
+                } else {
+                    assert!(
+                        !response
+                            .headers()
+                            .contains_key(axum::http::header::CACHE_CONTROL)
+                    );
+                }
+            }
+        }
+    }
+}

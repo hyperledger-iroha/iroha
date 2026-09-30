@@ -65,6 +65,37 @@ protocol. Arithmetic is checked, so `value + delta` deterministically fails and
 reverts if it overflows. Use an explicit `math::wrapping_*` operation only when
 modular arithmetic is the intended protocol.
 
+## Record updates without extraction boilerplate
+
+Keep related fields in one record. `get(id).expect(Error::Missing)` handles
+absence with a typed rejection; a mutable local updates selected fields before
+one explicit durable write. Ordinary helper calls accept positional arguments,
+record literals accept same-name field shorthand, and numeric literals inherit
+the `quantity` type from their context. The runtime regression owner is
+`crates/ivm/tests/kotodama_simple_contracts.rs`.
+
+```kotodama
+seiyaku Proposals {
+    error enum Failure { Missing = 1, NotPending = 2, InvalidAmount = 3, Exists = 4 }
+    struct Proposal { quantity amount, int status, int finalized_at_ms }
+    state StateMap<Name, Proposal> Requests;
+
+    kotoage fn create(Name id, quantity amount) authorize("CreateProposal") {
+        require(amount > 0, Failure::InvalidAmount);
+        require(!Requests.contains(id), Failure::Exists);
+        Requests[id] = Proposal { amount, status: 1, finalized_at_ms: 0 };
+    }
+
+    kotoage fn finalize(Name id, int finalized_at_ms) authorize("FinalizeProposal") {
+        var request = Requests.get(id).expect(Failure::Missing);
+        require(request.status == 1, Failure::NotPending);
+        request.status = 2;
+        request.finalized_at_ms = finalized_at_ms;
+        Requests[id] = request;
+    }
+}
+```
+
 ## Namespaced ledger operations
 
 Host capabilities are namespaced. Typed constructors produce validated

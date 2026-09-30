@@ -6125,6 +6125,7 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     }
 )
 
@@ -7871,9 +7872,45 @@ class ContractManifest:
 
 
 @dataclass(frozen=True)
-class ContractManifestRecord:
-    """Contract manifest record returned by Torii (`/v1/contracts/code/{hash}`)."""
+class ContractArtifactId:
+    """Exact dataspace and complete contract artifact hash within one network."""
 
+    dataspace_id: int
+    code_hash: str
+
+    def __post_init__(self) -> None:
+        _require_u64(self.dataspace_id, "artifact_id.dataspace_id")
+        if _contract_hash_convenience_hex(self.code_hash, "artifact_id.code_hash") is None:
+            raise TypeError("artifact_id.code_hash is required")
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractArtifactId":
+        if not isinstance(payload, Mapping):
+            raise TypeError("artifact_id must be an object")
+        _require_wire_fields(payload, required=("dataspace_id", "code_hash"), context="artifact_id")
+        code_hash = _contract_canonical_hash_hex(payload["code_hash"], "artifact_id.code_hash")
+        if code_hash is None:
+            raise TypeError("artifact_id.code_hash is required")
+        return cls(payload["dataspace_id"], code_hash)
+
+    def to_payload(self) -> Mapping[str, Any]:
+        """Return the exact Norito JSON representation."""
+        body = self.code_hash.upper()
+        return {"dataspace_id": self.dataspace_id,
+                "code_hash": f"hash:{body}#{_contract_hash_crc16(body):04X}"}
+
+    @property
+    def path(self) -> str:
+        """The canonical artifact resource path, without an origin."""
+        return f"/v1/contracts/artifacts/{self.dataspace_id}/{self.code_hash}"
+
+
+@dataclass(frozen=True)
+class ContractManifestRecord:
+    """Contract manifest bound to one exact network and dataspace artifact."""
+
+    network_id: str
+    artifact_id: ContractArtifactId
     manifest: ContractManifest
     code_hash: Optional[str]
     abi_hash: Optional[str]
@@ -7884,7 +7921,7 @@ class ContractManifestRecord:
             raise TypeError("manifest response must be an object")
         _contract_exact_fields(
             payload,
-            ("manifest", "code_hash", "abi_hash"),
+            ("network_id", "artifact_id", "manifest", "code_hash", "abi_hash"),
             "manifest response",
         )
         manifest_payload = payload.get("manifest")
@@ -7902,7 +7939,14 @@ class ContractManifestRecord:
                 "top-level contract hash conveniences must exactly match "
                 "the canonical manifest hashes"
             )
-        return cls(manifest=manifest, code_hash=code_hash, abi_hash=abi_hash)
+        network_id = payload.get("network_id")
+        if _contract_canonical_hash_hex(network_id, "manifest response.network_id") is None:
+            raise TypeError("manifest response.network_id is required")
+        artifact_id = ContractArtifactId.from_payload(payload.get("artifact_id"))
+        if artifact_id.code_hash != manifest.code_hash:
+            raise TypeError("artifact_id.code_hash differs from the manifest hash")
+        return cls(network_id=network_id, artifact_id=artifact_id,
+                   manifest=manifest, code_hash=code_hash, abi_hash=abi_hash)
 
 
 @dataclass(frozen=True)
@@ -8395,7 +8439,11 @@ class AccountTransaction:
 
 @dataclass(frozen=True)
 class VerifiedCommittedTransaction:
-    """A selected full output authenticated by a rooted consensus finality chain."""
+    """A selected full output authenticated by a rooted consensus finality chain.
+
+    Contract rejection schema hashes are canonical 64-character uppercase
+    Norito hexadecimal strings.
+    """
 
     proof_kind: str
     transaction_hash: str
@@ -8576,8 +8624,15 @@ class VerifiedCommittedTransaction:
             if not _canonical_contract_error_identity(contract_error_type):
                 raise ValueError("verified transaction contract rejection error_type is not canonical")
             contract_schema_hash = contract_rejection_value["schema_hash"]
-            if not isinstance(contract_schema_hash, list) or len(contract_schema_hash) != 32 or any(isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255 for byte in contract_schema_hash) or contract_schema_hash[-1] & 1 != 1:
-                raise ValueError("verified transaction contract rejection schema_hash must be exactly 32 canonical hash bytes")
+            if (
+                not isinstance(contract_schema_hash, str)
+                or re.fullmatch(r"[0-9A-F]{64}", contract_schema_hash) is None
+                or int(contract_schema_hash[-2:], 16) & 1 != 1
+            ):
+                raise ValueError(
+                    "verified transaction contract rejection schema_hash must be "
+                    "exactly 32 canonical hash bytes encoded as uppercase hexadecimal"
+                )
             contract_error_name = _require_exact_non_empty_string(
                 contract_rejection_value["name"],
                 "verified transaction contract rejection name",
@@ -8614,7 +8669,7 @@ class VerifiedCommittedTransaction:
             contract_rejection = {
                 "contract": contract_name,
                 "error_type": contract_error_type,
-                "schema_hash": tuple(contract_schema_hash),
+                "schema_hash": contract_schema_hash,
                 "name": contract_error_name,
                 "code": contract_error_code,
                 "message": contract_error_message,
@@ -11835,6 +11890,7 @@ class _ContractCallBatchPlan:
 
 
 __all__ = [
+    "ContractArtifactId",
     "ToriiClient",
     "OperatorSigningContext",
     "SorafsOrderbookSubmissionAmbiguousError",
@@ -20208,16 +20264,6 @@ class ToriiClient(
             "r#final": final_payload,
         }
 
-    def register_contract_code(self, manifest: Mapping[str, Any]) -> Optional[Any]:
-        response = self._request(
-            "POST",
-            "/v1/contracts/code",
-            data=json.dumps(manifest).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        self._expect_status(response, {200, 202})
-        return self._maybe_json(response)
-
     @staticmethod
     def _canonical_contract_batch_base64(value: Any, context: str) -> bytes:
         if not isinstance(value, str) or not value:
@@ -20650,31 +20696,72 @@ class ToriiClient(
         result["tx_hashes"] = [result["hash"]]
         return result
 
-    def get_contract_manifest(self, code_hash_hex: str) -> Optional[Any]:
-        response = self._request(
-            "GET",
-            f"/v1/contracts/code/{code_hash_hex}",
+    def get_contract_manifest(
+        self, artifact_id: ContractArtifactId, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> Optional[Mapping[str, Any]]:
+        """Read one exact artifact with one-shot canonical account authentication."""
+        if not isinstance(artifact_id, ContractArtifactId):
+            raise TypeError("artifact_id must be a ContractArtifactId")
+        expected_network = self._require_local_signing_context("contract manifest").network_id.literal
+        response = self._account_request(
+            "GET", artifact_id.path, canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"}, stream=True, context="contract manifest",
         )
         self._expect_status(response, {200, 404})
-        return self._maybe_json(response)
+        if response.status_code == 404:
+            response.close()
+            return None
+        payload = self._bounded_strict_json_object_response(response, 16 * 1024 * 1024, "contract manifest")
+        record = ContractManifestRecord.from_payload(payload)
+        if record.network_id != expected_network or record.artifact_id != artifact_id:
+            raise RuntimeError("contract manifest response substitutes network or artifact identity")
+        return payload
 
-    def get_contract_manifest_typed(self, code_hash_hex: str) -> ContractManifestRecord:
+    def get_contract_manifest_typed(
+        self, artifact_id: ContractArtifactId, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> ContractManifestRecord:
         """Typed wrapper for :meth:`get_contract_manifest`."""
-
-        payload = self.get_contract_manifest(code_hash_hex)
+        payload = self.get_contract_manifest(artifact_id, canonical_auth=canonical_auth)
         if payload is None:
             raise RuntimeError("contract manifest endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("contract manifest endpoint returned non-object payload")
         return ContractManifestRecord.from_payload(payload)
 
-    def get_contract_code_bytes(self, code_hash_hex: str) -> Optional[Any]:
-        response = self._request(
-            "GET",
-            f"/v1/contracts/code-bytes/{code_hash_hex}",
+    def get_contract_code_bytes(
+        self, artifact_id: ContractArtifactId, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> Optional[Mapping[str, Any]]:
+        """Read and authenticate the complete domain-separated artifact bytes."""
+        if not isinstance(artifact_id, ContractArtifactId):
+            raise TypeError("artifact_id must be a ContractArtifactId")
+        expected_network = self._require_local_signing_context("contract bytes").network_id.literal
+        response = self._account_request(
+            "GET", artifact_id.path + "/bytes", canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"}, stream=True, context="contract bytes",
         )
         self._expect_status(response, {200, 404})
-        return self._maybe_json(response)
+        if response.status_code == 404:
+            response.close()
+            return None
+        payload = self._bounded_strict_json_object_response(response, 23 * 1024 * 1024, "contract bytes")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("contract bytes response is missing")
+        _require_wire_fields(payload, required=("network_id", "artifact_id", "code_b64"), context="contract bytes")
+        returned_artifact = ContractArtifactId.from_payload(payload["artifact_id"])
+        if payload["network_id"] != expected_network or returned_artifact != artifact_id:
+            raise RuntimeError("contract bytes response substitutes network or artifact identity")
+        encoded = payload["code_b64"]
+        if not isinstance(encoded, str):
+            raise TypeError("contract bytes code_b64 must be a string")
+        try:
+            code = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError("contract bytes code_b64 must be canonical base64") from error
+        if base64.b64encode(code).decode("ascii") != encoded or len(code) > 16 * 1024 * 1024:
+            raise ValueError("contract bytes are noncanonical or exceed the artifact limit")
+        digest = bytearray(hashlib.blake2b(b"iroha:ivm:contract-artifact:v1\0" + code, digest_size=32).digest())
+        digest[-1] |= 1
+        if digest.hex() != artifact_id.code_hash:
+            raise RuntimeError("contract bytes digest differs from the requested artifact")
+        return payload
 
     # ------------------------------------------------------------------
     # Connect API

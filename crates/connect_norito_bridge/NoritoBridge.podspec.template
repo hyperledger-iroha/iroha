@@ -13,7 +13,8 @@ Pod::Spec.new do |s|
     :sha256 => '__ARCHIVE_SHA256__'
   }
   s.vendored_frameworks = 'NoritoBridge.xcframework'
-  s.frameworks       = ['CoreGraphics', 'Metal']
+  # Match the native archive's complete Apple framework dependencies.
+  s.frameworks       = ['Foundation', 'Security', 'Metal', 'CoreGraphics', 'Accelerate']
   s.platform         = :ios, '15.0'
   s.swift_versions   = ['5.9']
 end

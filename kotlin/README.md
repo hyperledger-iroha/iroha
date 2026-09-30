@@ -1037,8 +1037,8 @@ apply after decompression. Close each streaming response/body when finished.
 
 ## Reading Kotodama Manifests
 
-`HttpClientTransport.getContractManifest(codeHash)` reads
-`/v1/contracts/code/{code_hash}` into the complete Kotodama V1 manifest model.
+`HttpClientTransport.getContractManifest(artifactId, canonicalAuth)` reads
+`/v1/contracts/artifacts/{dataspace_id}/{code_hash}` using canonical account authentication and verifies the configured network and exact full-width artifact identity before returning the complete Kotodama V1 manifest model.
 The decoder preserves `seiyaku_name`, branded `kotoage`/`hajimari`/`kaizen`
 kinds, exact flat-preorder argument and return schemas, access completeness,
 triggers, state, error-code, `kotoba`, and provenance metadata. A `List` node

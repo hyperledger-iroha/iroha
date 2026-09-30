@@ -3093,14 +3093,13 @@ private_key = "{}"
         assert!(image.path().is_absolute());
         assert_eq!(image.path(), path.as_path());
     }
-    #[cfg(not(unix))]
     #[test]
-    fn public_config_is_unsupported_before_path_io() {
+    fn missing_public_config_never_creates_its_parent() {
         let parent = tempdir().expect("temporary parent");
         let path = parent.path().join("must-remain-absent/client.toml");
         let error = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect_err("non-Unix public configuration must fail closed");
-        assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+            .expect_err("missing public configuration must fail closed");
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_CONFIG_NOT_FOUND");
         assert!(!path.parent().expect("requested path has a parent").exists());
     }
     #[test]

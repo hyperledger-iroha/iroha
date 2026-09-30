@@ -1444,10 +1444,10 @@ ledger::nft::create_for_all_users();
         contract_authority.clone(),
         BTreeSet::from([entrypoint_permission]),
     );
-    world.contract_code.insert(code_hash, program);
+    world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), program);
     world
         .contract_manifests
-        .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest.signed(&ALICE_KEYPAIR));
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let mut state_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut state_transaction = state_block.transaction_for_callback_testing();
@@ -26421,8 +26421,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
     let_row! { step = transaction .execute_called_trigger(&trigger_id, &event) .expect("generic IVM trigger executes at pc zero") };
     assert!(step.0.is_empty());
-    transaction.world.contract_manifests.insert(
-        generic_code_hash,
+    transaction.world.contract_manifests.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, generic_code_hash),
         iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: None,
             code_hash: Some(generic_code_hash),
@@ -26537,10 +26536,10 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
-        let_row! { registered_hash = register_code_bytes(&ALICE_ID, program, &mut stx) .expect("register raw trigger bytecode") };
+        let_row! { registered_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, program, &mut stx) .expect("register raw trigger bytecode") };
         assert_eq!(registered_hash, code_hash);
         manifest.code_hash = Some(code_hash);
-        register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&ALICE_KEYPAIR), &mut stx)
             .expect("register raw trigger manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
@@ -26729,7 +26728,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
                 .checked_add(1)
                 .expect("test lifecycle revision advances");
         }
-        let_row! { live_manifest = stx .world .contract_manifests .remove(code_hash) .expect("remove raw-trigger manifest for adversarial check") };
+        let_row! { live_manifest = stx .world .contract_manifests .remove(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)) .expect("remove raw-trigger manifest for adversarial check") };
         let missing_manifest_events_before = stx.world.external_event_buf.len();
         ivm::reset_argument_record_decode_count();
         let_row! { missing_manifest = stx .execute_called_trigger(&trigger_id, &event) .expect_err("raw trigger must reject a missing live manifest even with warm code") };
@@ -26762,11 +26761,11 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         );
         stx.world
             .contract_manifests
-            .insert(code_hash, live_manifest);
-        let_row! { live_code = stx .world .contract_code .remove(code_hash) .expect("remove live raw-trigger code for adversarial check") };
+            .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), live_manifest);
+        let_row! { live_code = stx .world .contract_code .remove(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)) .expect("remove live raw-trigger code for adversarial check") };
         stx.world
             .contract_code
-            .insert(code_hash, vec![0xFF; live_code.len().max(1)]);
+            .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), vec![0xFF; live_code.len().max(1)]);
         let mismatched_code_events_before = stx.world.external_event_buf.len();
         ivm::reset_argument_record_decode_count();
         let_row! { mismatched_code = stx .execute_called_trigger(&trigger_id, &event) .expect_err("cached raw trigger must reject mismatched live WSV code") };
@@ -26798,10 +26797,10 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
             "mismatched live code must apply no queued effect"
         );
         assert!(
-            stx.world.contract_code.remove(code_hash).is_some(),
+            stx.world.contract_code.remove(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_some(),
             "remove forged live code before restoring authoritative bytes"
         );
-        stx.world.contract_code.insert(code_hash, live_code);
+        stx.world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), live_code);
         Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("revoke raw IVM trigger entrypoint permission");
@@ -27010,10 +27009,10 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
-        let_row! { code_hash = register_code_bytes(&ALICE_ID, code, &mut stx).expect("register contract bytecode") };
+        let_row! { code_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code, &mut stx).expect("register contract bytecode") };
         manifest.code_hash = Some(code_hash);
         let manifest = manifest.signed(&ALICE_KEYPAIR);
-        register_manifest(&ALICE_ID, manifest, &mut stx).expect("register contract manifest");
+        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest, &mut stx).expect("register contract manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
             ALICE_ID.clone(),
@@ -27302,10 +27301,10 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant alias-transfer callback deployment permission");
-        let_row! { registered_hash = register_code_bytes(&ALICE_ID, program, &mut stx) .expect("register alias-transfer callback bytecode") };
+        let_row! { registered_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, program, &mut stx) .expect("register alias-transfer callback bytecode") };
         assert_eq!(registered_hash, code_hash);
         manifest.code_hash = Some(code_hash);
-        register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&ALICE_KEYPAIR), &mut stx)
             .expect("register alias-transfer callback manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),

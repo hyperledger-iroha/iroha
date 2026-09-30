@@ -6940,7 +6940,13 @@ mod tests {
             )),
             "NotPermitted"
         );
-        let schema_hash = [7_u8; 32];
+        assert_eq!(
+            transaction_contract_rejection_json(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("permission denied".into()),
+            )),
+            None
+        );
+        let schema_hash = [0xAB_u8; 32];
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
             iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
@@ -6952,13 +6958,12 @@ mod tests {
             },
         ));
         assert_eq!(transaction_rejection_code(&contract), "BelowMinimum");
-        let schema_hash_bytes = schema_hash.to_vec();
         assert_eq!(
             transaction_contract_rejection_json(&contract),
             Some(norito::json!({
                 "contract": "BoiFiLiquidity",
                 "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
-                "schema_hash": schema_hash_bytes,
+                "schema_hash": ("AB".repeat(32)),
                 "name": "BelowMinimum",
                 "code": 18,
                 "message": null,
@@ -11876,16 +11881,7 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
         "error_type".into(),
         json::Value::String(rejection.error_type.clone()),
     );
-    value.insert(
-        "schema_hash".into(),
-        json::Value::Array(
-            rejection
-                .schema_hash
-                .into_iter()
-                .map(json::Value::from)
-                .collect(),
-        ),
-    );
+    value.insert("schema_hash".into(), norito::json!(rejection.schema_hash));
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));
     value.insert(

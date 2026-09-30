@@ -499,7 +499,7 @@ class TrustedInrouGuestArtifact:
 CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "kagami",
-        ("localnet",),
+        ("localnet", "generate"),
         (
             "--out-dir",
             "--sora-profile",
@@ -2612,6 +2612,7 @@ def generate_network(
         [
             str(kagami),
             "localnet",
+            "generate",
             "--out-dir",
             str(target),
             "--sora-profile",

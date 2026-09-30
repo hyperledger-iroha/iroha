@@ -7,6 +7,8 @@
 //! The parameter descriptor mirrors the implementation-coupled specification.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+pub mod compact_challenge;
+pub mod keccak256;
 pub mod params;
 pub mod poseidon;
 pub mod poseidon_digest384;

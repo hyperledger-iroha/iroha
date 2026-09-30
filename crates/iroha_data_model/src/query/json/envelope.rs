@@ -200,10 +200,10 @@ pub enum SingularQueryJson {
         /// Trigger identifier.
         id: String,
     },
-    /// Looks up a contract manifest by code hash.
-    FindContractManifestByCodeHash {
-        /// Hex-encoded 32-byte code hash identifying the contract.
-        code_hash: String,
+    /// Looks up a contract manifest in one exact dataspace.
+    FindContractManifestByArtifactId {
+        /// Complete dataspace artifact identity.
+        artifact_id: crate::smart_contract::ContractArtifactId,
     },
     /// Looks up a twitter follow binding by keyed hash.
     FindTwitterBindingByHash {
@@ -277,9 +277,12 @@ impl SingularQueryJson {
         Ok(Self::FindAccountRecoveryRequestByAlias { alias })
     }
     fn parse_contract_manifest(payload: &Map) -> Result<Self, QueryJsonError> {
-        Ok(Self::FindContractManifestByCodeHash {
-            code_hash: payload_required_string(payload, "code_hash")?.to_owned(),
-        })
+        let value = payload
+            .get("artifact_id")
+            .ok_or(QueryJsonError::MissingField("payload", "artifact_id"))?;
+        let artifact_id = json::from_value(value.clone())
+            .map_err(|_| QueryJsonError::InvalidField("payload", "artifact_id"))?;
+        Ok(Self::FindContractManifestByArtifactId { artifact_id })
     }
     fn parse_fee_sponsor_program_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindFeeSponsorProgramById {
@@ -385,20 +388,6 @@ impl SingularQueryJson {
             .parse()
             .map_err(|_| QueryJsonError::InvalidField("payload", "nft_id"))
     }
-    fn decode_contract_hash(code_hash: &str) -> Result<iroha_crypto::Hash, QueryJsonError> {
-        let bytes = hex::decode(code_hash.trim_start_matches("0x"))
-            .map_err(|_| QueryJsonError::InvalidHex("code_hash".to_owned()))?;
-        if bytes.len() != 32 {
-            return Err(QueryJsonError::InvalidLength {
-                field: "code_hash".to_owned(),
-                expected: 32,
-                actual: bytes.len(),
-            });
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        Ok(iroha_crypto::Hash::prehashed(arr))
-    }
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -419,9 +408,12 @@ impl SingularQueryJson {
                     Value::Object(Self::alias_payload(alias)),
                 );
             }
-            Self::FindContractManifestByCodeHash { code_hash } => {
+            Self::FindContractManifestByArtifactId { artifact_id } => {
                 let mut payload = Map::new();
-                payload.insert("code_hash".to_owned(), Value::String(code_hash.clone()));
+                payload.insert(
+                    "artifact_id".to_owned(),
+                    json::to_value(artifact_id).expect("fixed artifact identity serializes"),
+                );
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             Self::FindAssetById {
@@ -520,7 +512,7 @@ impl SingularQueryJson {
             "FindAccountRecoveryRequestByAlias" => {
                 Self::parse_recovery_request(singular_payload(map)?)
             }
-            "FindContractManifestByCodeHash" => {
+            "FindContractManifestByArtifactId" => {
                 Self::parse_contract_manifest(singular_payload(map)?)
             }
             "FindAssetById" => Self::parse_asset_by_id(singular_payload(map)?),
@@ -562,8 +554,8 @@ impl SingularQueryJson {
             SingularQueryJson::FindNftById { .. } => "FindNftById",
             SingularQueryJson::FindAssetEscrowById { .. } => "FindAssetEscrowById",
             SingularQueryJson::FindTriggerById { .. } => "FindTriggerById",
-            SingularQueryJson::FindContractManifestByCodeHash { .. } => {
-                "FindContractManifestByCodeHash"
+            SingularQueryJson::FindContractManifestByArtifactId { .. } => {
+                "FindContractManifestByArtifactId"
             }
             SingularQueryJson::FindTwitterBindingByHash { .. } => "FindTwitterBindingByHash",
             SingularQueryJson::FindDomainById { .. } => "FindDomainById",
@@ -659,11 +651,10 @@ impl SingularQueryJson {
                     crate::query::trigger::prelude::FindTriggerById::new(id),
                 ))
             }
-            SingularQueryJson::FindContractManifestByCodeHash { code_hash } => {
-                let hash = Self::decode_contract_hash(&code_hash)?;
-                Ok(SingularQueryBox::FindContractManifestByCodeHash(
-                    crate::query::smart_contract::prelude::FindContractManifestByCodeHash {
-                        code_hash: hash,
+            SingularQueryJson::FindContractManifestByArtifactId { artifact_id } => {
+                Ok(SingularQueryBox::FindContractManifestByArtifactId(
+                    crate::query::smart_contract::prelude::FindContractManifestByArtifactId {
+                        artifact_id,
                     },
                 ))
             }

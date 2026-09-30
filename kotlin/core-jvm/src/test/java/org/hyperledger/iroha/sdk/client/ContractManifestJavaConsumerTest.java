@@ -14,6 +14,17 @@ import org.junit.jupiter.api.Test;
 
 /** Java consumers use the Kotlin-owned exact nominal manifest parser and immutable models. */
 final class ContractManifestJavaConsumerTest {
+  private static final class ManifestFixture {
+    final ContractManifest manifest;
+    ManifestFixture(ContractManifest manifest) { this.manifest = manifest; }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static ManifestFixture parseManifestFixture(byte[] bytes) {
+    java.util.Map<String, Object> root = (java.util.Map<String, Object>) JsonParser.parse(new String(bytes, StandardCharsets.UTF_8));
+    return new ManifestFixture(ContractManifestJsonParser.parseManifest((java.util.Map<String, Object>) root.get("manifest")));
+  }
+
   @Test
   void sharedNominalErrorsPreserveJapaneseIdentityAndUnit() throws Exception {
     File directory = new File(".").getAbsoluteFile();
@@ -25,7 +36,7 @@ final class ContractManifestJavaConsumerTest {
     }
     if (fixture == null) throw new AssertionError("missing shared nominal fixture");
     String payload = new String(Files.readAllBytes(fixture.toPath()), StandardCharsets.UTF_8);
-    ContractManifest manifest = ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8)).manifest;
+    ContractManifest manifest = parseManifestFixture(payload.getBytes(StandardCharsets.UTF_8)).manifest;
     EntrypointValueTypeV1 schema = manifest.entrypoints.get(0).returnSchema;
     assertEquals("Result<(), example/vault@1.0.0::金庫::拒否>", schema.canonicalTypeName);
     assertEquals(EntrypointValueTypeNodeKindV1.UNIT, schema.nodes.get(1).kind);
@@ -39,15 +50,15 @@ final class ContractManifestJavaConsumerTest {
     assertEquals("StatePage<int, bool, 8>", manifest.entrypoints.get(2).returnSchema.canonicalTypeName);
     assertEquals(2, manifest.entrypoints.get(2).returnSchema.wordCount);
     assertThrows(UnsupportedOperationException.class, () -> manifest.errorTypes.clear());
-    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+    assertThrows(IllegalStateException.class, () -> parseManifestFixture(
         payload.replaceFirst("CapacityExceeded", "DifferentMeaning").getBytes(StandardCharsets.UTF_8)));
     String stateOnlyUnknown = payload.replace(
         "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
         "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"");
-    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+    assertThrows(IllegalStateException.class, () -> parseManifestFixture(
         stateOnlyUnknown.getBytes(StandardCharsets.UTF_8)));
     for (String forged : new String[] {"StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}"}) {
-      assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(payload.replace(
+      assertThrows(IllegalStateException.class, () -> parseManifestFixture(payload.replace(
           "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", forged).getBytes(StandardCharsets.UTF_8)));
     }
   }
@@ -70,7 +81,7 @@ final class ContractManifestJavaConsumerTest {
         + String.join(",", parameters) + "],\"argument_schema\":{\"fields\":["
         + String.join(",", fields) + "]},\"return_type\":\"" + tupleType
         + "\",\"return_schema\":{\"nodes\":[" + String.join(",", resultNodes) + "]}}]}}";
-    ContractEntrypointDescriptor entrypoint = ContractJsonParser.parseManifestRecord(
+    ContractEntrypointDescriptor entrypoint = parseManifestFixture(
         payload.getBytes(StandardCharsets.UTF_8)).manifest.entrypoints.get(0);
     assertEquals(14, entrypoint.parameters.size());
     assertEquals(14, entrypoint.argumentSchema.wordCount);
@@ -84,7 +95,7 @@ final class ContractManifestJavaConsumerTest {
     String overLimit = "{\"manifest\":{\"entrypoints\":[{\"name\":\"wide\",\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":["
         + overLimitParameters + "],\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]}}]}}";
     IllegalStateException error = assertThrows(IllegalStateException.class, () ->
-        ContractJsonParser.parseManifestRecord(overLimit.getBytes(StandardCharsets.UTF_8)));
+        parseManifestFixture(overLimit.getBytes(StandardCharsets.UTF_8)));
     assertTrue(error.getMessage().contains("V1 argument limit"));
   }
 
@@ -96,22 +107,22 @@ final class ContractManifestJavaConsumerTest {
         + "\"dynamic_reads\":[";
     String suffix = "],\"dynamic_writes\":[]},\"states\":[{\"name\":\"Balances\","
         + "\"type_name\":\"StateMap<AccountId, quantity>\"}]}}";
-    ContractManifest manifest = ContractJsonParser.parseManifestRecord(
+    ContractManifest manifest = parseManifestFixture(
         (prefix + hint + suffix).getBytes(StandardCharsets.UTF_8)).manifest;
     assertEquals("state:Balances", manifest.accessSetHints.dynamicReads.get(0).baseKey);
     assertEquals(1L, manifest.accessSetHints.dynamicReads.get(0).maxKeys);
-    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+    assertThrows(IllegalStateException.class, () -> parseManifestFixture(
         (prefix + hint + "," + hint + suffix).getBytes(StandardCharsets.UTF_8)));
-    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+    assertThrows(IllegalStateException.class, () -> parseManifestFixture(
         (prefix + hint.replace("state:Balances", "state:Missing") + suffix)
             .getBytes(StandardCharsets.UTF_8)));
 
     String statePrefix = "{\"manifest\":{\"states\":[{\"name\":\"Stored\",\"type_name\":\"";
     String stateSuffix = "\"}]}}";
-    ContractManifest emptyProduct = ContractJsonParser.parseManifestRecord(
+    ContractManifest emptyProduct = parseManifestFixture(
         (statePrefix + "Transfer{}" + stateSuffix).getBytes(StandardCharsets.UTF_8)).manifest;
     assertEquals("Transfer{}", emptyProduct.states.get(0).typeName);
-    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+    assertThrows(IllegalStateException.class, () -> parseManifestFixture(
         (statePrefix + "Transfer{ }" + stateSuffix).getBytes(StandardCharsets.UTF_8)));
   }
 }

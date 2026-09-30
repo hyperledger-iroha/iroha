@@ -197,8 +197,13 @@ testDependencies.append(bridgeDependency)
 // Retain every native bridge export used by dlsym, without force-loading Swift's
 // unrelated compatibility archives twice in executable consumers.
 irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-force-lNoritoBridge"], .when(platforms: [.iOS, .macOS])))
-irohaSwiftLinkerSettings.append(.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])))
+// The retained Rust archive uses these Apple frameworks directly. Declare them
+// on the library so executable and test consumers inherit the native link inputs.
+irohaSwiftLinkerSettings.append(.linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("Security", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Metal", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("Accelerate", .when(platforms: [.iOS, .macOS])))
 
 var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),

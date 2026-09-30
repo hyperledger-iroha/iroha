@@ -159,6 +159,7 @@ mod status_observation_tests {
             torii_api_url: "http://status-observation.invalid/".parse().unwrap(),
             torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
+            api_token: None,
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),

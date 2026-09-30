@@ -12,7 +12,10 @@ fn bundled_default_user_provided_executor() -> super::Executor {
 }
 fn contract_upload_instruction(code_hash: Hash, chunk_index: u32) -> InstructionBox {
     UploadSmartContractCodeChunk {
-        code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
         total_size: if chunk_index == 0 { 1 } else { 65_537 },
         chunk_index,
         chunk_count: if chunk_index == 0 { 1 } else { 2 },
@@ -108,7 +111,13 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
         assert!(
             state_transaction
                 .world
-                .contract_code_upload_progress(&builder, &code_hash)
+                .contract_code_upload_progress(
+                    &builder,
+                    &iroha_data_model::smart_contract::ContractArtifactId::new(
+                        DataSpaceId::UNIVERSAL,
+                        code_hash
+                    )
+                )
                 .is_some()
         );
         state_transaction.apply();
@@ -116,7 +125,13 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
         assert!(
             block
                 .world
-                .contract_code_upload_progress(&builder, &code_hash)
+                .contract_code_upload_progress(
+                    &builder,
+                    &iroha_data_model::smart_contract::ContractArtifactId::new(
+                        DataSpaceId::UNIVERSAL,
+                        code_hash
+                    )
+                )
                 .is_some()
         );
     }
@@ -317,7 +332,13 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
     assert!(
         block
             .world
-            .contract_code_upload_progress(&authority, &code_hash)
+            .contract_code_upload_progress(
+                &authority,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none()
     );
 }
@@ -421,7 +442,13 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         assert!(
             block
                 .world
-                .contract_code_upload_progress(&authority, &code_hash)
+                .contract_code_upload_progress(
+                    &authority,
+                    &iroha_data_model::smart_contract::ContractArtifactId::new(
+                        DataSpaceId::UNIVERSAL,
+                        code_hash
+                    )
+                )
                 .is_none(),
             "rejected {label} must not commit upload staging"
         );
@@ -531,7 +558,13 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
     assert!(
         state_transaction
             .world
-            .contract_code_upload_progress(&authority, &code_hash)
+            .contract_code_upload_progress(
+                &authority,
+                &iroha_data_model::smart_contract::ContractArtifactId::new(
+                    DataSpaceId::UNIVERSAL,
+                    code_hash
+                )
+            )
             .is_none()
     );
 }

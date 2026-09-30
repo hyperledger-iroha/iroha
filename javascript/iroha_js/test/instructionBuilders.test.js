@@ -1,3 +1,5 @@
+import { universalArtifactInstruction } from "./contractArtifactTestHelpers.js";
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -2317,7 +2319,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
   const signature = `ed25519:${"22".repeat(64)}`;
   const signerCanonical = signer.split(":")[1];
   const signatureCanonical = signature.split(":")[1].toUpperCase();
-  const instruction = buildRegisterSmartContractCodeInstruction({
+  const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
     manifest: {
       seiyakuName: "Ledger",
       codeHash: codeHashBytes,
@@ -2371,8 +2373,8 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         signature,
       },
     },
-  });
-  const expected = {
+  }));
+  const expected = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         seiyaku_name: "Ledger",
@@ -2437,14 +2439,14 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         },
       },
     },
-  };
-  const expectedDecoded = {
+  });
+  const expectedDecoded = universalArtifactInstruction({
     RegisterSmartContractCode: {
       manifest: {
         ...expected.RegisterSmartContractCode.manifest,
       },
     },
-  };
+  });
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expectedDecoded);
@@ -2453,23 +2455,23 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
 baseTest("smart-contract manifests reject unknown V1 feature bits", () => {
   assert.throws(
     () =>
-      buildRegisterSmartContractCodeInstruction({
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: { featuresBitmap: 4 },
-      }),
+      })),
     /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
   );
   assert.throws(
     () =>
-      buildRegisterSmartContractCodeInstruction({
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: { features_bitmap: "4" },
-      }),
+      })),
     /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
   );
 });
 
 baseTest("smart-contract dynamic access hints enforce the exact V1 contract", () => {
   const buildWithHint = (hint) =>
-    buildRegisterSmartContractCodeInstruction({
+    buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         states: [
           { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
@@ -2485,7 +2487,7 @@ baseTest("smart-contract dynamic access hints enforce the exact V1 contract", ()
           }],
         },
       },
-    });
+    }));
 
   for (const baseKey of ["state:Balances", "state:amount"]) {
     assert.doesNotThrow(() => buildWithHint({ baseKey }));
@@ -2576,12 +2578,12 @@ baseTest("smart-contract dynamic access hints resolve declared StateMaps per lis
     dynamicWrites = [],
     states = [{ name: "Balances", typeName: "StateMap<AccountId, quantity>" }],
   }) =>
-    buildRegisterSmartContractCodeInstruction({
+    buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         states,
         accessSetHints: { dynamicReads, dynamicWrites },
       },
-    });
+    }));
 
   for (const field of ["dynamicReads", "dynamicWrites"]) {
     assert.doesNotThrow(() =>
@@ -2652,7 +2654,7 @@ baseTest("smart-contract parameter and state type aliases must agree", () => {
     nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }],
   };
   const build = (param, state) =>
-    buildRegisterSmartContractCodeInstruction({
+    buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         entrypoints: [{
           name: "read",
@@ -2665,7 +2667,7 @@ baseTest("smart-contract parameter and state type aliases must agree", () => {
         }],
         states: [{ name: "amount", ...state }],
       },
-    });
+    }));
 
   assert.doesNotThrow(() =>
     build(
@@ -2700,9 +2702,9 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
   for (const seiyakuName of ["Amount", "amount"]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: { seiyakuName },
-        }),
+        })),
       /seiyakuName must be a canonical Kotodama V1 type declaration identifier/u,
     );
   }
@@ -2714,22 +2716,22 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
   ]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             states: [{ name: "Balances", typeName }],
           },
-        }),
+        })),
       /states\[0\]\.type_name must be a canonical Kotodama V1 state type/u,
     );
   }
   for (const namespace of ["Invalid Error", "Error<Injected>"]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             errorTypes: [{ identity: namespace, variants: [{ name: "Denied", code: 7 }] }],
           },
-        }),
+        })),
       /errorTypes\[0\]\.identity must be a stable package\/unit\/enum identity/u,
     );
   }
@@ -2747,7 +2749,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
   ]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             accessSetHints: {
               readKeys: [],
@@ -2761,7 +2763,7 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
               dynamicWrites: [],
             },
           },
-        }),
+        })),
       /dynamicReads\[0\]\.keyType must be an exact Kotodama V1 StateMap key scalar/u,
     );
   }
@@ -2771,7 +2773,7 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
   const quantity = {
     nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }],
   };
-  const valid = buildRegisterSmartContractCodeInstruction({
+  const valid = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
     manifest: {
       entrypoints: [{
         name: "read",
@@ -2784,7 +2786,7 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
         returnSchema: quantity,
       }],
     },
-  });
+  }));
   assert.equal(
     valid.RegisterSmartContractCode.manifest.entrypoints[0].params[0].type_name,
     "quantity",
@@ -2793,7 +2795,7 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
   for (const retired of ["Amount", "amount"]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             entrypoints: [{
               name: "read",
@@ -2804,12 +2806,12 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
               },
             }],
           },
-        }),
+        })),
       /argument_schema\.fields\[0\] does not match its declared parameter/u,
     );
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             entrypoints: [{
               name: "read",
@@ -2818,14 +2820,14 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
               returnSchema: quantity,
             }],
           },
-        }),
+        })),
       /return_schema does not match return_type/u,
     );
   }
 
   assert.throws(
     () =>
-      buildRegisterSmartContractCodeInstruction({
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: {
           entrypoints: [{
             name: "read",
@@ -2833,12 +2835,12 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
             params: [{ name: "value", typeName: "quantity" }],
           }],
         },
-      }),
+      })),
     /argument_schema is required for declared parameters/u,
   );
   assert.throws(
     () =>
-      buildRegisterSmartContractCodeInstruction({
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: {
           entrypoints: [{
             name: "read",
@@ -2846,18 +2848,18 @@ baseTest("smart-contract entrypoint schemas exactly bind declared V1 types", () 
             returnType: "quantity",
           }],
         },
-      }),
+      })),
     /return_type and return_schema must be present together/u,
   );
 });
 
 baseTest("smart-contract entrypoint kinds use only the V1 interface names", () => {
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
-    const instruction = buildRegisterSmartContractCodeInstruction({
+    const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
       },
-    });
+    }));
     assert.equal(
       instruction.RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
       canonical,
@@ -2867,11 +2869,11 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
   for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
     assert.throws(
       () =>
-        buildRegisterSmartContractCodeInstruction({
+        buildRegisterSmartContractCodeInstruction(universalArtifactInput({
           manifest: {
             entrypoints: [{ name: "legacy", kind: retired }],
           },
-        }),
+        })),
       /must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'/,
     );
   }
@@ -2879,11 +2881,11 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
 
 baseTest("smart-contract branded entrypoint kinds preserve their Norito tag order", () => {
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
-    const instruction = buildRegisterSmartContractCodeInstruction({
+    const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
       },
-    });
+    }));
     assert.equal(
       encodeAndDecode(instruction).RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
       canonical,
@@ -2894,7 +2896,7 @@ baseTest("smart-contract branded entrypoint kinds preserve their Norito tag orde
 baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tapes", () => {
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
   const build = (nodes) =>
-    buildRegisterSmartContractCodeInstruction({
+    buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
         entrypoints: [
           {
@@ -2905,7 +2907,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
           },
         ],
       },
-    });
+    }));
 
   const pair = [
     { kind: "Struct", value: { name: "Pair", fields: ["left", "right"] } },
@@ -2990,16 +2992,16 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {
   const codeBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
   const hashBytes = Buffer.alloc(32, 0xcc);
-  const instruction = buildRegisterSmartContractBytesInstruction({
+  const instruction = buildRegisterSmartContractBytesInstruction(universalArtifactInput({
     codeHash: hashBytes,
     code: codeBytes,
-  });
-  const expected = {
+  }));
+  const expected = universalArtifactInstruction({
     RegisterSmartContractBytes: {
       code_hash: normalizedHashHex(hashBytes),
       code: codeBytes.toString("base64"),
     },
-  };
+  });
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
@@ -3008,10 +3010,10 @@ test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically
 test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () => {
   assert.throws(
     () =>
-      buildRegisterSmartContractBytesInstruction({
+      buildRegisterSmartContractBytesInstruction(universalArtifactInput({
         codeHash: Buffer.alloc(32, 0x11),
         code: Buffer.alloc(0),
-      }),
+      })),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
       assert.match(String(error?.message), /non-empty base64/i);
@@ -3021,22 +3023,22 @@ test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () =
 });
 
 test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
-  const instruction = buildRemoveSmartContractBytesInstruction({
+  const instruction = buildRemoveSmartContractBytesInstruction(universalArtifactInput({
     codeHash: Buffer.alloc(32, 0x11),
     reason: "cleanup",
-  });
-  const expected = {
+  }));
+  const expected = universalArtifactInstruction({
     RemoveSmartContractBytes: {
       code_hash: normalizedHashHex(Buffer.alloc(32, 0x11)),
       reason: "cleanup",
     },
-  };
+  });
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
 
-  const withoutReason = buildRemoveSmartContractBytesInstruction({
+  const withoutReason = buildRemoveSmartContractBytesInstruction(universalArtifactInput({
     codeHash: Buffer.alloc(32, 0x22),
-  });
+  }));
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
@@ -3091,14 +3093,14 @@ test("smart-contract instructions bind canonical outer ids to Rust payload schem
   const cases = [
     [
       "RegisterSmartContractCode",
-      buildRegisterSmartContractCodeInstruction({ manifest }),
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest })),
     ],
     [
       "RegisterSmartContractBytes",
-      buildRegisterSmartContractBytesInstruction({
+      buildRegisterSmartContractBytesInstruction(universalArtifactInput({
         codeHash: hash,
         code: Buffer.of(1),
-      }),
+      })),
     ],
     [
       "DeactivateContractInstance",
@@ -3169,29 +3171,29 @@ test("smart-contract instructions bind canonical outer ids to Rust payload schem
     ],
     [
       "UploadSmartContractCodeChunk",
-      buildUploadSmartContractCodeChunkInstruction({
+      buildUploadSmartContractCodeChunkInstruction(universalArtifactInput({
         codeHash: hash,
         totalSize: 1,
         chunkIndex: 0,
         chunkCount: 1,
         chunk: Buffer.of(1),
-      }),
+      })),
     ],
     [
       "FinalizeSmartContractCodeUpload",
-      buildFinalizeSmartContractCodeUploadInstruction({
+      buildFinalizeSmartContractCodeUploadInstruction(universalArtifactInput({
         codeHash: hash,
         totalSize: 1,
         chunkCount: 1,
-      }),
+      })),
     ],
     [
       "CancelSmartContractCodeUpload",
-      buildCancelSmartContractCodeUploadInstruction({ codeHash: hash }),
+      buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({ codeHash: hash })),
     ],
     [
       "RemoveSmartContractBytes",
-      buildRemoveSmartContractBytesInstruction({ codeHash: hash }),
+      buildRemoveSmartContractBytesInstruction(universalArtifactInput({ codeHash: hash })),
     ],
   ];
 

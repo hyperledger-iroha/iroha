@@ -80,8 +80,8 @@ fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
                 if let ir::Instr::PointerFromNorito { dest, kind, .. } = instr {
                     dataref_kind_map.insert((func_idx, *dest), *kind);
                 }
-                if let ir::Instr::StateGet { dest, .. }
-                | ir::Instr::StateMapKeyAt { dest, .. } = instr
+                if let ir::Instr::StateGet { dest, .. } | ir::Instr::StateMapKeyAt { dest, .. } =
+                    instr
                 {
                     dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                 }
@@ -90,7 +90,11 @@ fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
                     let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
                     let literal_raw = string_map.get(&(func_idx, *value)).cloned();
                     if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
-                        && let Some(tlv_bytes) = super::encode_pointer_tlv_bytes(kind, &raw)
+                        && let Some(tlv_bytes) = super::encode_pointer_tlv_bytes(
+                            kind,
+                            &raw,
+                            string_literal_temps.contains(&(func_idx, *value)),
+                        )
                     {
                         let hex = hex::encode(tlv_bytes);
                         string_map.insert((func_idx, *dest), format!("0x{hex}"));

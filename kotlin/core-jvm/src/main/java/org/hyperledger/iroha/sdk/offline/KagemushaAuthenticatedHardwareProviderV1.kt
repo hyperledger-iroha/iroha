@@ -1253,7 +1253,7 @@ class KagemushaPreEnrollmentDeviceQualificationV1 private constructor(
             // Ordinary app profiles are candidates here; paired native Core remains required
             // before any monetary wallet readiness. This path never calls requireProductionReady.
             return KagemushaPreEnrollmentDeviceQualificationV1(decoded.profile, decoded.credential,
-                decoded.releaseId, decoded.hardwarePolicyDigest, payload, reply.canonicalArchive(), response.authenticator())
+                decoded.releaseId, decoded.hardwarePolicyDigest, reply.canonicalArchive(), reply.canonicalArchive(), response.authenticator())
         }
     }
 }

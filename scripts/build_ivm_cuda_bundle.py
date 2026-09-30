@@ -39,7 +39,6 @@ STEMS = (
 HEADER = "ivm-cuda-ptx-provenance-v1"
 GENERATION_DOMAIN = b"ivm-cuda-ptx-generation-v1\0"
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
-MAX_SOURCE_BYTES = 1024 * 1024
 MAX_PTX_BYTES = 8 * 1024 * 1024
 MAX_MANIFEST_BYTES = 16 * 1024
 TARGET_RE = re.compile(r"arch=compute_[0-9]+,code=sm_[0-9]+\Z")
@@ -55,22 +54,38 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def read_regular_bounded(path: Path, maximum: int) -> bytes:
-    """Bound a regular inode and read it through one no-follow file descriptor."""
+def read_regular_file(path: Path, maximum: int | None = None) -> bytes:
+    """Read one no-follow regular inode, retaining explicit artifact bounds."""
     if not hasattr(os, "O_NOFOLLOW"):
         raise BundleError("no-follow file admission is unavailable on this host")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
         raise BundleError(f"{path} must be a bounded regular file: {error.strerror}") from error
     with os.fdopen(descriptor, "rb") as handle:
         metadata = os.fstat(handle.fileno())
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+        if not stat.S_ISREG(metadata.st_mode) or (maximum is not None and metadata.st_size > maximum):
             raise BundleError(f"{path} must be a bounded regular file")
-        data = handle.read(maximum + 1)
-        if len(data) > maximum:
+        data = handle.read(metadata.st_size + 1)
+        after = os.fstat(handle.fileno())
+        try:
+            after_path = path.lstat()
+        except OSError as error:
+            raise BundleError(f"{path} changed while its inode was read") from error
+        if maximum is not None and len(data) > maximum:
             raise BundleError(f"{path} grew beyond its byte limit")
+        fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (
+            len(data) != metadata.st_size
+            or not stat.S_ISREG(after_path.st_mode)
+            or any(
+                getattr(metadata, field) != getattr(observed, field)
+                for observed in (after, after_path)
+                for field in fields
+            )
+        ):
+            raise BundleError(f"{path} changed while its inode was read")
         return data
 
 
@@ -84,7 +99,7 @@ def validate_sources(source_dir: Path) -> dict[str, bytes]:
             f"unexpected={sorted(observed - set(STEMS))}"
         )
     return {
-        stem: read_regular_bounded(source_dir / f"{stem}.cu", MAX_SOURCE_BYTES)
+        stem: read_regular_file(source_dir / f"{stem}.cu")
         for stem in STEMS
     }
 
@@ -148,7 +163,7 @@ def compile_run(
             command.append(f"-ccbin={host_compiler}")
         command.extend(("-gencode", target_profile, *extra))
         subprocess.run(command, cwd=sources, check=True)
-        data = read_regular_bounded(target, MAX_PTX_BYTES)
+        data = read_regular_file(target, MAX_PTX_BYTES)
         validate_ptx(stem, data)
         result[stem] = data
     return result
@@ -207,7 +222,7 @@ def sign_manifest(openssl: Path, key: Path, bundle: Path, manifest: bytes) -> st
         check=True,
         capture_output=True,
     )
-    signature = read_regular_bounded(signature_path, 64)
+    signature = read_regular_file(signature_path, 64)
     if len(signature) != 64:
         raise BundleError("Ed25519 signature must be exactly 64 raw bytes")
     public_der_path = bundle.parent / "public.der"
@@ -238,7 +253,7 @@ def build_candidate(
 ) -> tuple[str, str]:
     """Publish an atomic candidate only after two equal runs and a valid signature."""
     signing_key = signing_key.resolve(strict=True)
-    read_regular_bounded(signing_key, 64 * 1024)
+    read_regular_file(signing_key, 64 * 1024)
     if not SHA256_RE.fullmatch(image_digest) or image_digest == "0" * 64:
         raise BundleError("CUDA image digest must be a nonzero lowercase SHA-256")
     if not TARGET_RE.fullmatch(target_profile):
@@ -272,7 +287,7 @@ def build_candidate(
         if first != second or first_digest != second_digest:
             raise BundleError("two independent clean nvcc runs produced different PTX")
         for stem in STEMS:
-            if read_regular_bounded(bundle / f"{stem}.cu", MAX_SOURCE_BYTES) != sources[stem]:
+            if read_regular_file(bundle / f"{stem}.cu") != sources[stem]:
                 raise BundleError(f"source snapshot changed during generation: {stem}")
         for stem in STEMS:
             (bundle / f"{stem}.ptx").write_bytes(first[stem])

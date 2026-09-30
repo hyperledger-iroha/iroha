@@ -57,7 +57,7 @@ import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.Blake3;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
@@ -1005,13 +1005,13 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Drafts one typed Parliament attempt for local transaction signing. */
   public CompletableFuture<ParliamentApiV1.AttemptDraftResponse> draftParliamentAttemptV1(
-      final ParliamentApiV1.Proposal proposal,
+      final org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal proposal,
       final long attemptSequence,
       final String expectedProposalContentId,
       final String expectedGovernanceAttemptId,
       final ToriiCanonicalRequestAuth canonicalAuth) {
     final byte[] body =
-        ParliamentApiV1.attemptDraftRequestJson(proposal, attemptSequence);
+        org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(proposal, attemptSequence);
     return fetchJson(
         buildVpnRequest(
             "POST",
@@ -1104,7 +1104,7 @@ public final class HttpClientTransport implements IrohaClient {
             canonicalAuth);
     return fetchExactNoritoBytes(
             request, "Parliament timed-OVN casting proof", true)
-        .thenApply(ParliamentApiV1::parseTimedOvnCastingProofResponse);
+        .thenApply(org.hyperledger.iroha.sdk.client.ParliamentApiV1::parseTimedOvnCastingProofResponse);
   }
 
   /** Convenience overload for positive signed checkpoint heights. */

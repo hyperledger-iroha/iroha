@@ -11,7 +11,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.TransactionFinality;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;

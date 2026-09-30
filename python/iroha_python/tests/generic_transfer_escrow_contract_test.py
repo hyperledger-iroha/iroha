@@ -687,7 +687,7 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "contract_rejection": {
             "contract": "BoiFiLiquidity",
             "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
-            "schema_hash": [7] * 32,
+            "schema_hash": "AB" * 32,
             "name": "BelowMinimum",
             "code": 18,
             "message": "  支払額が不足しています。  ",
@@ -700,7 +700,7 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     assert verified.contract_rejection == {
         "contract": "BoiFiLiquidity",
         "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
-        "schema_hash": (7,) * 32,
+        "schema_hash": "AB" * 32,
         "name": "BelowMinimum",
         "code": 18,
         "message": "  支払額が不足しています。  ",
@@ -712,6 +712,17 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     del missing_message["message"]
     with pytest.raises(ValueError, match="must contain exactly"):
         VerifiedCommittedTransaction.from_payload({**payload, "contract_rejection": missing_message})
+
+    digit_hash_payload = {
+        **payload,
+        "contract_rejection": {**payload["contract_rejection"], "schema_hash": "07" * 32},
+    }
+    assert VerifiedCommittedTransaction.from_payload(
+        digit_hash_payload
+    ).contract_rejection == {
+        **verified.contract_rejection,
+        "schema_hash": "07" * 32,
+    }
 
     unknown_field = {**payload, "unverified_hint": "ignored"}
     with pytest.raises(ValueError, match="must contain exactly"):
@@ -751,12 +762,16 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     for field, invalid_value in (
         ("error_type", "bad identity"),
         ("error_type", "__kotodama_link_hidden"),
-        ("schema_hash", [7] * 31),
-        ("schema_hash", [7] * 33),
-        ("schema_hash", [7] * 31 + [True]),
-        ("schema_hash", [7] * 31 + [256]),
-        ("schema_hash", [7] * 31 + [6]),
-        ("schema_hash", "07" * 32),
+        ("schema_hash", "AB" * 31),
+        ("schema_hash", "AB" * 33),
+        ("schema_hash", True),
+        ("schema_hash", "AB" * 31 + "100"),
+        ("schema_hash", "AB" * 31 + "A8"),
+        ("schema_hash", [7] * 32),
+        ("schema_hash", "ab" * 32),
+        ("schema_hash", "Ab" * 32),
+        ("schema_hash", "AB" * 31 + "AG"),
+        ("schema_hash", "AB" * 31 + "A "),
         ("name", "bad name"),
         ("message", True),
         ("message", ""),

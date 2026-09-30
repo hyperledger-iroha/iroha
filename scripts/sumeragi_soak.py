@@ -470,10 +470,11 @@ class Localnet:
         return self.net_dir / "state" / f"peer{index}"
 
     def generate(self) -> None:
-        """Run ``kagami localnet`` (fresh genesis, configs, start/stop scripts)."""
+        """Run ``kagami localnet generate`` (fresh genesis and node configurations)."""
         command = [
             str(self.bins["kagami"]),
             "localnet",
+            "generate",
             "--peers",
             str(self.validators),
             "--seed",

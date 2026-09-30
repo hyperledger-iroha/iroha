@@ -17,7 +17,7 @@ use iroha::{
             SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
         prelude::*,
-        smart_contract::{ContractAddress, ContractAlias},
+        smart_contract::{ContractAddress, ContractAlias, ContractArtifactId},
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
@@ -458,6 +458,44 @@ impl DeploymentService {
         self.validate_plan(&record)?;
         self.execute_record(&record, &journal, progress)
     }
+    /// Authenticate retained deployment inputs using the original execution authority.
+    /// This performs no network requests, signing, submission or journal writes.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage, altered plans, or a different network, authority or signing key.
+    pub fn retained_preflight(&self, journal_dir: &Path) -> DeploymentResult<DeploymentPreflight> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        Ok(record.preflight)
+    }
+
+    /// Verify a completed deployment still names its current alias and exact stored artifact.
+    /// This is the idempotent deployment check; historical receipt inspection remains available
+    /// separately through [`Self::completed_receipt`]. No transaction is submitted.
+    ///
+    /// # Errors
+    /// Rejects invalid retained evidence, a changed authority, unresolved finality or changed
+    /// alias/artifact state. An uncompleted authenticated plan returns `None`.
+    pub fn current_completed_receipt(
+        &self,
+        journal_dir: &Path,
+    ) -> DeploymentResult<Option<DeploymentReceipt>> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        let Some(receipt) = self.verify_completed_receipt(&record, &journal)? else {
+            return Ok(None);
+        };
+        self.read_back(&record, &receipt.commit)?;
+        Ok(Some(receipt))
+    }
     /// Authenticate an existing completed journal and recheck its exact commit on this network.
     ///
     /// Returns `None` for a valid plan that has no finalized receipt. This operation never submits
@@ -641,13 +679,17 @@ impl DeploymentService {
             fee_payment: &request.fee_payment,
             metadata: &metadata,
         };
-        let upload = build_native_upload_transaction_plan(&signing, code_hash, &request.artifact)
+        let artifact_id = ContractArtifactId::new(state.dataspace_id, code_hash);
+        let upload = build_native_upload_transaction_plan(&signing, artifact_id, &request.artifact)
             .map_err(|source| preflight_error("native upload plan", source))?;
         debug_assert_eq!(upload.chunk_count as usize, upload.pre_stage.len() + 1);
         let mut uploads = upload.pre_stage;
         uploads.push(upload.finalize);
         let register = signing
-            .sign([InstructionBox::from(RegisterSmartContractCode { manifest })])
+            .sign([InstructionBox::from(RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            })])
             .map_err(|source| preflight_error("manifest registration", source))?;
         let commit = build_commit_deployment_transaction(
             &signing,
@@ -719,7 +761,10 @@ impl DeploymentService {
         let stored = self
             .client
             .client()
-            .get_contract_code_bytes(&hex::encode(preflight.code_hash.as_ref()))
+            .get_contract_code_bytes(&ContractArtifactId::new(
+                preflight.dataspace_id,
+                preflight.code_hash,
+            ))
             .map_err(DeploymentError::Readback)?;
         if hex::encode(&stored) != record.artifact_hex {
             return Err(DeploymentError::Readback(eyre!(

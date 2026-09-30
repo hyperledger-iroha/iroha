@@ -969,6 +969,30 @@ pub(crate) fn replace_account_controller(
     old_account: &AccountId,
     new_controller: iroha_data_model::account::AccountController,
 ) -> Result<AccountId, InstructionExecutionError> {
+    // Explicit controller replacement cannot carry approvals granted to the
+    // old policy into the new policy. Its owner must first invalidate them in
+    // this same atomic instruction batch (as regulated recovery also does).
+    let prefix = multisig_proposal_state_prefix(old_account);
+    for (key, value) in state_transaction
+        .world
+        .smart_contract_state
+        .range(prefix.clone()..)
+    {
+        if !key.as_ref().starts_with(prefix.as_ref()) {
+            break;
+        }
+        let proposal = norito::decode_from_bytes::<MultisigProposalState>(value)
+            .map_err(multisig_state_decode_error)
+            .map_err(map_validation_fail)?;
+        if proposal.is_relayed != Some(true) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "controller replacement requires outstanding multisig proposal invalidation"
+                        .into(),
+                ),
+            ));
+        }
+    }
     let new_account = match new_controller {
         iroha_data_model::account::AccountController::Single(signatory) => {
             AccountId::new(signatory)
@@ -1948,6 +1972,21 @@ fn execute_propose(
             );
             return Err(err);
         }
+    }
+    // Terminal proposal identity is permanent. Reusing its instruction hash
+    // would make historical cancellation and execution evidence ambiguous.
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&multisig_proposal_terminal_state_key(
+            &multisig_account,
+            &instructions_hash,
+        ))
+        .is_some()
+    {
+        return Err(ValidationFail::NotPermitted(
+            "multisig proposal instruction identity is already terminal".to_owned(),
+        ));
     }
     let expires_at_ms = {
         let ttl_ms = instruction
@@ -2995,13 +3034,22 @@ fn store_multisig_proposal_terminal_state(
     terminal_state: &MultisigProposalTerminalState,
 ) -> Result<(), ValidationFail> {
     let bytes = norito::to_bytes(terminal_state).map_err(multisig_state_encode_error)?;
-    state_transaction.world.smart_contract_state.insert(
-        multisig_proposal_terminal_state_key(
-            &terminal_state.multisig_account_id,
-            &terminal_state.instructions_hash,
-        ),
-        bytes,
+    let key = multisig_proposal_terminal_state_key(
+        &terminal_state.multisig_account_id,
+        &terminal_state.instructions_hash,
     );
+    if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+        if existing != &bytes {
+            return Err(ValidationFail::InternalError(
+                "conflicting immutable multisig terminal proposal state".into(),
+            ));
+        }
+        return Ok(());
+    }
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(key, bytes);
     Ok(())
 }
 fn store_multisig_proposal_terminal_execution_state(
@@ -3192,26 +3240,8 @@ fn move_multisig_proposals(
         store_multisig_proposal_state(state_transaction, &proposal_state)?;
         state_transaction.world.smart_contract_state.remove(old_key);
     }
-    let terminal_prefix = multisig_proposal_terminal_state_prefix(old_account);
-    let terminal_prefix_literal = terminal_prefix.as_ref().to_owned();
-    let mut terminal_entries = Vec::new();
-    for (key, value) in state_transaction
-        .world
-        .smart_contract_state
-        .range(terminal_prefix.clone()..)
-    {
-        if !key.as_ref().starts_with(terminal_prefix_literal.as_str()) {
-            break;
-        }
-        let state = norito::decode_from_bytes::<MultisigProposalTerminalState>(value)
-            .map_err(multisig_state_decode_error)?;
-        terminal_entries.push((key.clone(), state));
-    }
-    for (old_key, mut terminal_state) in terminal_entries {
-        terminal_state.multisig_account_id = new_account.clone();
-        store_multisig_proposal_terminal_state(state_transaction, &terminal_state)?;
-        state_transaction.world.smart_contract_state.remove(old_key);
-    }
+    // Terminal records retain their original policy identity and approvals.
+    // Rekey cannot rewrite history or fabricate a new execution witness.
     Ok(())
 }
 /// Cancel every outstanding native multisig proposal owned by `account`.
@@ -7023,18 +7053,35 @@ seiyaku TriggerDispatch {
         let rekey_entrypoint_hash = Hash::prehashed([0xc9; Hash::LENGTH]);
         tx.tx_call_hash = Some(rekey_entrypoint_hash);
         move_multisig_proposals(&mut tx, &old_account, &new_account)
-            .expect("terminal state should move during rekey");
+            .expect("rekey must preserve terminal history");
         let moved_bytes = tx
             .world
             .smart_contract_state
             .get(&multisig_proposal_terminal_state_key(
-                &new_account,
+                &old_account,
                 &instructions_hash,
             ))
-            .expect("rekeyed terminal state should exist");
+            .expect("original terminal state must remain queryable");
         let moved_state = norito::decode_from_bytes::<MultisigProposalTerminalState>(moved_bytes)
             .expect("rekeyed terminal state should decode");
-        assert_eq!(moved_state.multisig_account_id, new_account);
+        assert_eq!(moved_state.multisig_account_id, old_account);
+        assert_eq!(moved_state, terminal_state);
+        assert!(
+            tx.world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &new_account,
+                    &instructions_hash,
+                ))
+                .is_none(),
+            "rekey must not rewrite terminal history under the new policy"
+        );
+        let mut changed_history = terminal_state;
+        changed_history.terminal_at_ms += 1;
+        assert!(
+            store_multisig_proposal_terminal_state(&mut tx, &changed_history).is_err(),
+            "terminal history must be immutable after rekey"
+        );
         assert!(
             tx.world
                 .smart_contract_state
@@ -7185,22 +7232,16 @@ seiyaku TriggerDispatch {
             assert!(
                 tx.world
                     .smart_contract_state
-                    .get(&multisig_proposal_terminal_state_key(
-                        &recovered_account,
-                        &hash,
-                    ))
+                    .get(&multisig_proposal_terminal_state_key(&multisig_id, &hash,))
                     .is_some(),
-                "rekey must preserve terminal recovery evidence"
+                "rekey must preserve terminal evidence under its original controller"
             );
         }
         let terminal_status = |hash| {
             let bytes = tx
                 .world
                 .smart_contract_state
-                .get(&multisig_proposal_terminal_state_key(
-                    &recovered_account,
-                    &hash,
-                ))
+                .get(&multisig_proposal_terminal_state_key(&multisig_id, &hash))
                 .expect("terminal policy-change evidence");
             norito::decode_from_bytes::<MultisigProposalTerminalState>(bytes)
                 .expect("terminal policy-change evidence should decode")
@@ -7397,7 +7438,7 @@ seiyaku TriggerDispatch {
         );
     }
     #[test]
-    fn multisig_propose_replaces_expired_duplicate() {
+    fn multisig_propose_rejects_terminal_identity_and_accepts_fresh_semantic_payload() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
@@ -7443,21 +7484,74 @@ seiyaku TriggerDispatch {
         let mut tx = block.transaction();
         let instructions = Vec::<InstructionBox>::new();
         let instructions_hash = HashOf::new(&instructions);
+        let rejected = execute_propose(
+            &mut tx,
+            &signer2_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect_err("expired proposal identity cannot be reused");
+        assert!(matches!(rejected, ValidationFail::NotPermitted(message)
+            if message.contains("instruction identity is already terminal")));
+        assert!(proposal_value(&tx, &multisig_id, &instructions_hash).is_err());
+        let terminal_bytes = tx
+            .world
+            .smart_contract_state
+            .get(&multisig_proposal_terminal_state_key(
+                &multisig_id,
+                &instructions_hash,
+            ))
+            .expect("original expired tombstone")
+            .clone();
+        let terminal = norito::decode_from_bytes::<MultisigProposalTerminalState>(&terminal_bytes)
+            .expect("original terminal identity decodes");
+        assert_eq!(terminal.status, MultisigProposalTerminalStatus::Expired);
+        let instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "fresh semantic request after expiry".to_owned(),
+        ))];
+        let fresh_hash = HashOf::new(&instructions);
+        assert_ne!(fresh_hash, instructions_hash);
         execute_propose(
             &mut tx,
             &signer2_id,
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
-        .expect("expired duplicate should be replaced");
-        let proposal =
-            proposal_value(&tx, &multisig_id, &instructions_hash).expect("replacement proposal");
+        .expect("fresh semantic request may collect approvals");
+        let proposal = proposal_value(&tx, &multisig_id, &fresh_hash).expect("fresh proposal");
         assert_eq!(proposal.proposed_at_ms, 3);
         assert_eq!(proposal.expires_at_ms, 4);
         assert_eq!(
             proposal.approvals,
-            BTreeSet::from([signer2_id]),
-            "replacement proposal should record only the new proposer approval"
+            BTreeSet::from([signer2_id.clone()]),
+            "fresh proposal should record only the new proposer approval"
         );
+        assert_eq!(
+            tx.world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &multisig_id,
+                    &instructions_hash
+                )),
+            Some(&terminal_bytes),
+            "fresh proposal must retain original history"
+        );
+        let canceled = MultisigProposalTerminalState::new(
+            multisig_id.clone(),
+            fresh_hash,
+            proposal,
+            MultisigProposalTerminalStatus::Canceled,
+            3,
+        );
+        store_multisig_proposal_terminal_state(&mut tx, &canceled).unwrap();
+        prune_down(&mut tx, &multisig_id, &fresh_hash).unwrap();
+        let rejected = execute_propose(
+            &mut tx,
+            &signer2_id,
+            &MultisigPropose::new(multisig_id, canceled.proposal.instructions, None),
+        )
+        .expect_err("canceled identity cannot be reused");
+        assert!(matches!(rejected, ValidationFail::NotPermitted(message)
+            if message.contains("instruction identity is already terminal")));
     }
     #[test]
     fn multisig_register_accepts_cross_domain_signatory_subjects() {
@@ -8190,8 +8284,7 @@ seiyaku TriggerDispatch {
         assert_eq!(tx.world.account_aliases.get(&alias), Some(&updated_account));
     }
     #[test]
-    fn replace_account_controller_multisig_to_multisig_repoints_memberships_and_preserves_outstanding_proposals()
-     {
+    fn replace_account_controller_requires_invalidation_and_retains_original_terminal_history() {
         let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("repoint", "universal").unwrap();
         let signer1 = checked_keypair();
@@ -8210,7 +8303,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("replace-multisig-to-multisig"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1_000, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         Register::domain(Domain::new(domain_id.clone()))
@@ -8236,7 +8329,7 @@ seiyaku TriggerDispatch {
         );
         let outstanding_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
-            "ordinary rekey must preserve me".to_owned(),
+            "pending request cannot inherit replacement approvals".to_owned(),
         ))];
         let outstanding_hash = HashOf::new(&outstanding_instructions);
         Executor::Initial
@@ -8251,6 +8344,45 @@ seiyaku TriggerDispatch {
             )
             .expect("create outstanding proposal before ordinary rekey");
         let replacement_policy = multisig_policy_for_members(&[(&signer2, 1), (&signer3, 1)]);
+        let rejected = replace_account_controller(
+            &signer1_id,
+            &mut tx,
+            &multisig_id,
+            AccountController::multisig(replacement_policy.clone()),
+        )
+        .expect_err("replacement must first invalidate outstanding proposals");
+        assert!(
+            matches!(rejected, InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(message))
+            if message.contains("outstanding multisig proposal invalidation"))
+        );
+        assert!(proposal_state(&tx, &multisig_id, &outstanding_hash).is_ok());
+        assert!(tx.world.accounts.get(&multisig_id).is_some());
+        execute_invalidate_outstanding(
+            &mut tx,
+            &multisig_id,
+            &MultisigInvalidateOutstanding::new(multisig_id.clone()),
+        )
+        .expect("owner invalidates old approvals atomically before replacement");
+        let original_terminal = tx
+            .world
+            .smart_contract_state
+            .get(&multisig_proposal_terminal_state_key(
+                &multisig_id,
+                &outstanding_hash,
+            ))
+            .expect("original canceled evidence")
+            .clone();
+        let historical =
+            norito::decode_from_bytes::<MultisigProposalTerminalState>(&original_terminal)
+                .expect("original controller history decodes");
+        assert_eq!(historical.multisig_account_id, multisig_id);
+        assert_eq!(historical.status, MultisigProposalTerminalStatus::Canceled);
+        assert_eq!(historical.terminal_at_ms, 1_000);
+        assert_eq!(
+            historical.proposal.approvals,
+            BTreeSet::from([signer1_id.clone()])
+        );
         let updated_account = replace_account_controller(
             &signer1_id,
             &mut tx,
@@ -8284,9 +8416,28 @@ seiyaku TriggerDispatch {
             proposal_state(&tx, &multisig_id, &outstanding_hash).is_err(),
             "ordinary rekey must remove the old-account proposal key",
         );
-        let migrated = proposal_state(&tx, &updated_account, &outstanding_hash)
-            .expect("ordinary rekey must preserve the outstanding proposal");
-        assert_eq!(migrated.multisig_account_id, updated_account);
-        assert_eq!(migrated.instructions_hash, outstanding_hash);
+        assert!(
+            proposal_state(&tx, &updated_account, &outstanding_hash).is_err(),
+            "replacement policy must never inherit old approvals"
+        );
+        assert_eq!(
+            tx.world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &multisig_id,
+                    &outstanding_hash
+                )),
+            Some(&original_terminal),
+            "original policy history survives controller replacement"
+        );
+        assert!(
+            tx.world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &updated_account,
+                    &outstanding_hash
+                ))
+                .is_none()
+        );
     }
 }

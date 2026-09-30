@@ -123,7 +123,12 @@ comment         = "//" non-newline-character* ;
 
 String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
 `\u{...}`. Raw and raw-byte strings preserve their contents without escape
-processing. Decimal fractions and decimal exponents are exact: they never
+processing. Quoted strings retain their decoded UTF-8 text even when it starts
+with `0x`: `"0x6162"` is six characters, not `"ab"`. Byte literals also retain
+their explicit contents: `b"0x6162"` contains six bytes, while `b"\x61\x62"`
+contains two. The shared runtime Blob pointer ABI does not permit the compiler
+to reinterpret a string as its internal hexadecimal byte-literal carrier.
+Decimal fractions and decimal exponents are exact: they never
 create a binary floating-point value. Separators are permitted only between
 digits. Spellings such as `1.`, `.5`, `1__0`, and an exponent without digits
 are invalid. Leading zeroes are valid in source numeric literals: `0007` is
@@ -271,10 +276,12 @@ the enum's numeric codes or nominal identity.
 
 
 Every parameter, field, constant, and state declaration has an explicit type.
-Parameters are named at calls by default. `int _ value` declares a positional-only
-parameter; positional parameters form a contiguous prefix of the signature.
-For example, `fn clamp(int _ value, int minimum, int maximum)` is called as
-`clamp(7, minimum: 0, maximum: 10)`.
+Ordinary function parameters accept positional values or their declared names.
+`int _ value` declares a positional-only parameter; these parameters form a
+contiguous prefix of the signature. For example,
+`fn clamp(int _ value, int minimum, int maximum)` accepts both `clamp(7, 0, 10)`
+and `clamp(7, minimum: 0, maximum: 10)`. Builtins retain their explicit registry
+call policies, including required names for ledger operations.
 Declaration types always precede names; the retired `name: Type` form is a
 syntax error with a type-first diagnostic. Every error variant has an explicit,
 non-zero `u32` code, and names and codes are unique within the
@@ -396,7 +403,21 @@ pointer or numeric zero as a request to re-read JSON trigger arguments.
 
 ## Bindings and assignment
 
-`let` creates an immutable local. `var` creates a mutable local. Assigning to a `let`, parameter, constant, or immutable field is an error. Redeclaring or shadowing a name in an enclosing scope is an error.
+`let` creates an immutable local. `var` creates a mutable local. Struct and tuple
+fields inherit their root binding's mutability: `record.lifecycle = ACTIVE`,
+`record.details.nonce += 1`, and `pair.0 = value` update a mutable value. The
+compiler rebuilds the enclosing products, so copies retain their previous
+values; changing a record read from a `StateMap` requires an explicit
+`map[key] = record` to persist it. Assigning through a `let`, parameter, or
+constant is an error, as is assigning a field of a temporary expression.
+Redeclaring or shadowing a name in an enclosing scope is an error.
+
+The compiler eliminates projections of known products in SSA before register
+allocation, preserving evaluation order while removing intermediate record
+reconstructions. Branches and loops carry the product's leaf words so updates
+and copies retain value semantics. Calls and state encoding keep the same ABI
+and reuse address bases for consecutive stack-table words; these optimizations
+require no changes to contract source.
 
 ```ebnf
 binding         = ("let" | "var") (type identifier | binding-pattern)
@@ -407,6 +428,8 @@ struct-pattern  = type-name "{" (pattern-field ("," pattern-field)*)?
                   (","? "..")? ","? "}" ;
 pattern-field   = identifier (":" identifier)? ;
 assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
+place           = identifier ("." (identifier | integer-literal))*
+                | identifier "[" expression "]" ;
 ```
 
 Every local binding is initialized at its declaration. Positional destructuring
@@ -540,8 +563,15 @@ The same integer constant evaluator handles generic capacities such as
 `List<int, PAGE_SIZE * 2>` and `StatePage<int, int, PAGE_SIZE>`, numeric
 `range(PAGE_SIZE * 2)`, and `items.take(PAGE_SIZE)`. Integer constants are
 available to type annotations independently of the annotation's source order;
-constant declarations may reference earlier constants. Runtime variables cannot
-determine a capacity or loop limit.
+constant declarations may reference earlier constants. Constants also accept
+nominal error variants and canonical typed literal constructors over constant
+strings, such as
+`const Name ADMIN_KEY = Name::parse("admin");` and
+`const VaultError MISSING = VaultError::Missing;`. These values are expanded
+through the same typed literal and error paths as their inline forms. Live
+account aliases are not constant account identifiers: store an alias as bytes
+and resolve it explicitly when needed. Runtime variables cannot determine a
+capacity or loop limit.
 
 Each scan follows canonical state-key order and examines at most 64 candidate
 positions, stopping once it finds `N` live entries. Tombstones count toward
@@ -574,7 +604,7 @@ comparison      = additive (("==" | "!=" | "<" | "<=" | ">" | ">=") additive)* ;
 additive        = multiplicative (("+" | "-") multiplicative)* ;
 multiplicative  = unary (("*" | "/" | "%") unary)* ;
 unary           = ("!" | "-") unary | postfix ;
-postfix         = primary (("." identifier) | ("[" expression "]")
+postfix         = primary (("." (identifier | integer-literal)) | ("[" expression "]")
                 | call-arguments | "?")* ;
 primary         = integer-literal | exact-decimal-literal
                 | string-literal | bytes-literal
@@ -631,10 +661,11 @@ error type returned by the enclosing function; V1 performs no implicit error
 conversion. The retired lowercase placeholder constructors are syntax errors
 with active-only fix-its.
 
-Calls accept the declared positional prefix followed by named arguments.
-Named arguments may appear in any order; argument expressions always evaluate
-left to right in source order. A positional argument after a named argument,
-a name for a positional-only parameter, or a missing declared name is an error.
+Ordinary function calls accept a positional prefix followed by optional named
+arguments. Named arguments may appear in any order; argument expressions always
+evaluate left to right in source order. A positional argument after a named
+argument, a name for a positional-only parameter, a duplicate argument, or a
+missing required argument is an error.
 Keywords are contextual argument labels immediately before `:`, so canonical
 builtins can use labels such as `trigger:`. This does not make keywords valid
 local binding names. Call labels depend only on the signature and are included in package interface
@@ -853,7 +884,12 @@ successful `hajimari`/`始まり` path before it can be observed. `StateMap` is
 host-backed and does not require allocation in `hajimari`.
 
 `StateMap.get` returns `Option<V>`; absence is not represented by a zero, empty
-string, or implicit default. Rvalue indexing such as `map[key]` and compound
+string, or implicit default. `map.get(key).expect(Error::Missing)` extracts a
+present value and rejects absence with the exact nominal error. It evaluates
+the receiver and error once in source order, and aborts before reading the
+absent payload. `value.unwrap_or(default)` explicitly supplies an eager fallback;
+`value.is_some()` and `value.is_none()` inspect presence. Rvalue indexing such
+as `map[key]` and compound
 indexed assignment such as `map[key] += value` are errors because both would
 read a possibly absent value without handling `Option<V>`. Simple
 `map[key] = value` remains the canonical per-key write form. The flat spelling
@@ -881,6 +917,24 @@ complete paths are capped at 16 KiB, and iteration pages are canonical
 passing a `Name` directly to `state::get`, `set`, `delete`, `keys`, `has`,
 `len`, or `count` is a type error.
 
+Record updates keep the absence check and durable write explicit:
+
+```kotodama
+seiyaku Notebook {
+    error enum NoteError { Missing = 1 }
+    struct Note { int nonce, bytes commitment }
+    state StateMap<Name, Note> Notes;
+    const NoteError MISSING = NoteError::Missing;
+
+    kotoage fn revise(Name id, bytes commitment) authorize("Revise") {
+        var note = Notes.get(id).expect(MISSING);
+        note.nonce += 1;
+        note.commitment = commitment;
+        Notes[id] = note;
+    }
+}
+```
+
 Compiler-derived access metadata is advisory until independently verified from bytecode. Unknown, dynamic, incomplete, or transitively unresolved access forces conservative scheduler serialization.
 
 ## Errors and requirements
@@ -893,7 +947,8 @@ link order never determines identity. Exported errors and structs resolve throug
 the locked module graph. The signed interface includes the complete descriptors.
 
 `require(condition, error)` takes both arguments positionally and aborts with
-that exact nominal error value. Rejections preserve the error identity, variant
+that exact nominal error value. `Option.expect(error)` uses the same rejection
+identity and returns the contained value without a placeholder or sentinel. Rejections preserve the error identity, variant
 schema hash and code, as well as the originating contract and symbolic variant,
 through nested calls and rollback. A wrong identity, schema or undeclared code
 rejects. Free-form failure strings are not part of the release contract.
@@ -1124,7 +1179,11 @@ The compiler-owned `EditorSnapshot` retains source/package identities, resolved
 symbols and lexical bindings, exact argument-label ranges, typed expression
 facts, and canonical callable signatures. LSP completion filters by source,
 scope, explicit import/export graph, and receiver type. Argument templates use
-the declaration's explicit positional prefix and named suffix. Hover and
+the declaration's positional-only prefix and optional named parameters. Optional
+receivers offer `expect`, `unwrap_or`, and presence checks, including after
+chained reads such as `Requests.get(id).`; signatures retain the extracted
+payload type. Result receivers offer their supported extraction and status
+methods without advertising `Option.expect`. Hover and
 signature help expose types and effect/permission metadata; definition,
 references, and rename use resolved identities. Rename rechecks the complete
 source and export graph and verifies that every reference retains its resolver

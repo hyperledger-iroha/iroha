@@ -17,6 +17,8 @@ mod multifile_syntax;
 mod parser_recovery;
 #[path = "secret_security_diagnostics.rs"]
 mod secret_security_diagnostics;
+#[path = "simple_contracts.rs"]
+mod simple_contracts;
 #[path = "sugar_zero_cost.rs"]
 mod sugar_zero_cost;
 #[path = "v1_contract_edges.rs"]

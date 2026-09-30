@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.tx;
 import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 

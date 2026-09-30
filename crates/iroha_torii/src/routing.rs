@@ -10262,10 +10262,22 @@ mod nts_tests {
         assert!(val.get("note").is_some(), "missing note");
     }
 }
+/// Parse the exact first-release artifact path without aliases or numeric normalization.
+pub(crate) fn parse_contract_artifact_path(
+    dataspace_id: &str,
+    code_hash: &str,
+) -> Result<iroha_data_model::smart_contract::ContractArtifactId> {
+    <iroha_data_model::smart_contract::ContractArtifactId as norito::json::JsonKeyCodec>::decode_json_key(&format!("{dataspace_id}|{code_hash}"))
+        .map_err(|error| conversion_error(format!("invalid contract artifact path: {error}")))
+}
 fn contract_manifest_response_body(
+    network_id: iroha_data_model::NetworkId,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
     manifest: &manifest::ContractManifest,
 ) -> core::result::Result<String, norito::json::Error> {
     let response = ContractCodeRecordDto {
+        network_id,
+        artifact_id,
         code_hash: manifest
             .code_hash
             .as_ref()
@@ -10279,44 +10291,28 @@ fn contract_manifest_response_body(
     };
     norito::json::to_json_pretty(&response)
 }
-/// Fetch on-chain contract manifest by code_hash.
+/// Fetch an on-chain contract manifest by its exact dataspace-scoped identity.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
     state: Arc<CoreState>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<impl IntoResponse> {
-    let parse_hash = |s: &str| -> core::result::Result<iroha_crypto::Hash, String> {
-        if s.len() != 64
-            || !s
-                .as_bytes()
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err("code hash must be exactly 32 lowercase hexadecimal bytes".to_owned());
-        }
-        let mut arr = [0_u8; 32];
-        hex::decode_to_slice(s, &mut arr)
-            .map_err(|e| format!("failed to decode exact code hash `{s}`: {e}"))?;
-        Ok(iroha_crypto::Hash::prehashed(arr))
-    };
-    let h = parse_hash(&code_hash).map_err(|e| {
-        // Treat bad path parameter as a query conversion error (HTTP 400)
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
-        ))
-    })?;
     let world = state.world_view();
-    let manifest = world.contract_manifests().get(&h).cloned().ok_or_else(|| {
-        // Map absence to a query NotFound (HTTP 404)
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))
-    })?;
-    let body = contract_manifest_response_body(&manifest).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to serialize the complete contract manifest: {error}"
-        )))
-    })?;
+    let manifest = world
+        .contract_manifests()
+        .get(&artifact_id)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let body = contract_manifest_response_body(*state.network_id_ref(), artifact_id, &manifest)
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to serialize the complete contract manifest: {error}"
+            )))
+        })?;
     Ok(application_json_response(body))
 }
 #[cfg(test)]
@@ -10331,6 +10327,16 @@ mod contract_manifest_response_tests {
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
         KotobaTranslationEntry, StateDescriptor,
     };
+    routing_test! { sync artifact_paths_bind_full_dataspace_and_reject_noncanonical_components
+        let hash = hex::encode(Hash::new(b"artifact path").as_ref());
+        let artifact = parse_contract_artifact_path(&u64::MAX.to_string(), &hash).unwrap();
+        assert_eq!(artifact.dataspace_id.as_u64(), u64::MAX);
+        for dataspace in ["00", "-1", "18446744073709551616", "../1"] {
+            assert!(parse_contract_artifact_path(dataspace, &hash).is_err());
+        }
+        assert!(parse_contract_artifact_path("0", &hash.to_ascii_uppercase()).is_err());
+        assert!(parse_contract_artifact_path("0", &format!("{hash}0")).is_err());
+    }
     routing_test! { sync response_serializes_the_complete_canonical_manifest
         let expected_manifest = ContractManifest {
             seiyaku_name: Some("Treasury".to_owned()),
@@ -10392,7 +10398,8 @@ mod contract_manifest_response_tests {
             }]),
             provenance: None,
         };
-        let body = contract_manifest_response_body(&expected_manifest)
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(u64::MAX), expected_manifest.code_hash.unwrap());
+        let body = contract_manifest_response_body(crate::test_utils::signed_query_network_id(), artifact_id, &expected_manifest)
             .expect("serialize manifest response");
         let value = norito::json::parse_value(&body).expect("parse manifest response");
         assert_eq!(
@@ -10604,8 +10611,9 @@ fn collect_contract_state_schemas(
 ) -> core::result::Result<BTreeMap<String, Option<ivm::EmbeddedStateType>>, ()> {
     let mut registry = BTreeMap::new();
     let mut retained_canonical_bytes = 0usize;
-    let mut register_schemas_for = |code_hash: &iroha_crypto::Hash| {
-        let Some(code_bytes) = world.contract_code().get(code_hash) else {
+    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| {
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(address, *code_hash).map_err(|_| ())?;
+        let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
         };
         let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
@@ -10628,12 +10636,12 @@ fn collect_contract_state_schemas(
     };
     if let Some(contract_address) = contract_address {
         if let Some(code_hash) = world.contract_instances().get(contract_address) {
-            register_schemas_for(code_hash)?;
+            register_schemas_for(contract_address, code_hash)?;
         }
         return Ok(registry);
     }
-    for (_, code_hash) in world.contract_instances().iter() {
-        register_schemas_for(code_hash)?;
+    for (contract_address, code_hash) in world.contract_instances().iter() {
+        register_schemas_for(contract_address, code_hash)?;
     }
     Ok(registry)
 }
@@ -13357,44 +13365,22 @@ mod contract_state_tests {
         );
     }
 }
-/// Fetch on-chain contract code bytes (base64) by code_hash.
+/// Fetch on-chain contract bytes with an explicit network and dataspace binding.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code_bytes(
     state: Arc<CoreState>,
-    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<impl IntoResponse> {
-    let parse_hash = |s: &str| -> core::result::Result<iroha_crypto::Hash, String> {
-        if s.len() != 64
-            || !s
-                .as_bytes()
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err("code hash must be exactly 32 lowercase hexadecimal bytes".to_owned());
-        }
-        let mut arr = [0_u8; 32];
-        hex::decode_to_slice(s, &mut arr)
-            .map_err(|e| format!("failed to decode exact code hash `{s}`: {e}"))?;
-        Ok(iroha_crypto::Hash::prehashed(arr))
-    };
-    let h = parse_hash(&code_hash).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
-        ))
-    })?;
     let world = state.world_view();
-    let code = world.contract_code().get(&h).cloned().ok_or_else(|| {
+    let code = world.contract_code().get(&artifact_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
     })?;
     let mut obj = norito::json::Map::new();
-    obj.insert(
-        "code_b64".into(),
-        norito::json::Value::from(
-            base64::engine::general_purpose::STANDARD.encode(code.as_slice()),
-        ),
-    );
+    obj.insert("network_id".into(), norito::json::to_value(state.network_id_ref()).map_err(|error| conversion_error(error.to_string()))?);
+    obj.insert("artifact_id".into(), norito::json::to_value(&artifact_id).map_err(|error| conversion_error(error.to_string()))?);
+    obj.insert("code_b64".into(), norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode(code.as_slice())));
     let body = norito::json::to_vec(&obj)
         .map_err(|error| conversion_error(format!("failed to serialize code bytes: {error}")))?;
     Ok(application_json_response(body))
@@ -17117,6 +17103,7 @@ fn derive_multisig_contract_call_trigger_id(
         entrypoint,
         payload,
         code_hash,
+        NonZeroU64::new(1).expect("positive fixture attempt"),
     )
     .map_err(conversion_error)
 }
@@ -17129,6 +17116,7 @@ fn build_multisig_contract_call_instructions(
     arguments: Option<&[u8]>,
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
+    attempt_created_at_ms: NonZeroU64,
 ) -> Result<(
     Vec<iroha_data_model::isi::InstructionBox>,
     HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -17156,6 +17144,7 @@ fn build_multisig_contract_call_instructions(
         payload,
         arguments,
         code_hash,
+        attempt_created_at_ms,
     )
     .map_err(conversion_error)?;
     Ok((call.instructions, call.instructions_hash))
@@ -17555,6 +17544,37 @@ fn resolve_multisig_account_and_spec(
     }
     Ok((multisig_account_id, spec))
 }
+/// Proposal history may be read under its immutable original controller id.
+/// Alias selection, specification reads, and every mutation remain live-only.
+fn resolve_multisig_proposal_read_account(
+    state: &CoreState,
+    selector: &MultisigAccountSelectorDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<(AccountId, Option<iroha_executor_data_model::isi::multisig::MultisigSpec>)> {
+    let account = resolve_multisig_account_selector(state, selector, resolve_authority)?;
+    let world = state.world_view();
+    if world.account(&account).is_ok() {
+        drop(world);
+        let (account, spec) = resolve_multisig_account_and_spec(state, selector, resolve_authority)?;
+        return Ok((account, Some(spec)));
+    }
+    if selector.multisig_account_id.as_ref() != Some(&account) || account.multisig_policy().is_none() {
+        return Err(multisig_not_found_error());
+    }
+    let storage = world.smart_contract_state();
+    let active_prefix = multisig_proposal_state_prefix(&account);
+    if storage.range(active_prefix.clone()..).next()
+        .is_some_and(|(key, _)| key.as_ref().starts_with(active_prefix.as_ref())) {
+        return Err(conversion_error("retired multisig controller retains active proposal state".into()));
+    }
+    let terminal_prefix = multisig_proposal_terminal_state_prefix(&account);
+    if !storage.range(terminal_prefix.clone()..).next()
+        .is_some_and(|(key, _)| key.as_ref().starts_with(terminal_prefix.as_ref())) {
+        return Err(multisig_not_found_error());
+    }
+    Ok((account, None))
+}
+
 fn resolve_multisig_proposal_hash(
     proposal_id: Option<String>,
     instructions_hash: Option<String>,
@@ -17625,6 +17645,17 @@ fn validate_multisig_proposal_approvals(
         return Err(conversion_error(
             "multisig proposal contains an approval outside the active specification".to_owned(),
         ));
+    }
+    Ok(())
+}
+fn validate_historical_multisig_proposal_approvals(
+    account: &AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Result<()> {
+    let policy = account.multisig_policy().ok_or_else(multisig_not_found_error)?;
+    if proposal.approvals.iter().any(|approver| !policy.members().iter()
+        .any(|member| AccountId::new(member.public_key().clone()) == *approver)) {
+        return Err(conversion_error("historical multisig proposal approval differs from its original controller policy".into()));
     }
     Ok(())
 }
@@ -17815,6 +17846,30 @@ fn load_multisig_proposal_record(
         terminal_at_ms: Some(terminal_state.terminal_at_ms),
     }))
 }
+fn load_historical_multisig_terminal_record(
+    state: &CoreState,
+    account: &AccountId,
+    hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+) -> Result<Option<MultisigProposalRecord>> {
+    let world = state.world_view();
+    let storage = world.smart_contract_state();
+    if storage.get(multisig_proposal_state_contract_key(account, hash).as_ref()).is_some() {
+        return Err(conversion_error("retired multisig controller retains active proposal state".into()));
+    }
+    let key = multisig_proposal_terminal_state_contract_key(account, hash);
+    let Some(bytes) = storage.get(key.as_ref()) else { return Ok(None); };
+    let terminal = norito::decode_from_bytes::<iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState>(bytes)
+        .map_err(|error| conversion_error(format!("invalid historical multisig terminal state: {error}")))?;
+    validate_multisig_terminal_proposal_binding(account, hash, &terminal)?;
+    validate_historical_multisig_proposal_approvals(account, &terminal.proposal)?;
+    let status = match terminal.status {
+        iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Finalized => MultisigProposalStatus::Finalized,
+        iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Canceled => MultisigProposalStatus::Canceled,
+        iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Expired => MultisigProposalStatus::Expired,
+    };
+    Ok(Some(MultisigProposalRecord { proposal: terminal.proposal, status, terminal_at_ms: Some(terminal.terminal_at_ms) }))
+}
+
 const MULTISIG_PROPOSAL_VISIBILITY_WAIT_WINDOW: Duration = Duration::from_secs(15);
 const MULTISIG_PROPOSAL_VISIBILITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 async fn wait_for_multisig_proposal_record_visibility(
@@ -18190,9 +18245,10 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     if binding != &invocation.expected_code_hash {
         return None;
     }
-    let code = world.contract_code().get(binding)?;
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&invocation.contract_address, *binding).ok()?;
+    let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
-    let stored_manifest = world.contract_manifests().get(binding)?;
+    let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
         return None;
     }
@@ -18480,9 +18536,10 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
         return None;
     }
     let binding = world.contract_instances().get(&parsed.contract_address)?;
-    let code = world.contract_code().get(binding)?;
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&parsed.contract_address, *binding).ok()?;
+    let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
-    let stored_manifest = world.contract_manifests().get(binding)?;
+    let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
         return None;
     }
@@ -18699,14 +18756,14 @@ fn status_matches_requested_set(
 fn query_multisig_proposals(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
-    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    spec: Option<&iroha_executor_data_model::isi::multisig::MultisigSpec>,
     requested_statuses: &BTreeSet<String>,
     remaining_scan_budget: &mut usize,
 ) -> Result<Vec<MultisigProposalEntryDto>> {
     let world = state.world_view();
-    world.account(multisig_account_id).map_err(|_| {
-        conversion_error(format!("multisig account not found: {multisig_account_id}"))
-    })?;
+    if spec.is_some() {
+        world.account(multisig_account_id).map_err(|_| conversion_error(format!("multisig account not found: {multisig_account_id}")))?;
+    }
     let storage = world.smart_contract_state();
     let mut proposals = Vec::new();
     let mut seen_hashes = BTreeSet::new();
@@ -18718,6 +18775,7 @@ fn query_multisig_proposals(
         let Some(hash_literal) = key_str.strip_prefix(active_prefix_literal.as_str()) else {
             break;
         };
+        let spec = spec.ok_or_else(|| conversion_error("retired multisig controller retains active proposal state".into()))?;
         *remaining_scan_budget = (*remaining_scan_budget).checked_sub(1).ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -18806,7 +18864,11 @@ fn query_multisig_proposals(
             &instructions_hash,
             &terminal_state,
         )?;
-        validate_multisig_proposal_approvals(spec, &terminal_state.proposal)?;
+        if let Some(spec) = spec {
+            validate_multisig_proposal_approvals(spec, &terminal_state.proposal)?;
+        } else {
+            validate_historical_multisig_proposal_approvals(multisig_account_id, &terminal_state.proposal)?;
+        }
         if !multisig_proposal_is_user_visible(&terminal_state.proposal) {
             continue;
         }
@@ -19021,6 +19083,7 @@ mod multisig_contract_call_tests {
             None,
             &manifest,
             &code_hash,
+            NonZeroU64::new(1).expect("positive fixture attempt"),
         )
         .expect("instructions");
         assert_eq!(instructions.len(), 2);
@@ -19123,6 +19186,7 @@ mod multisig_contract_call_tests {
                 None,
                 &manifest,
                 &code_hash,
+                NonZeroU64::new(1).expect("positive fixture attempt"),
             )
             .expect("build strict contract proposal")
             .0
@@ -20840,13 +20904,13 @@ mod multisig_selector_tests {
             .expect("grant CanEnactGovernance");
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
-            register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
+            register_code_bytes(authority,contract_address.dataspace_id().expect("test contract dataspace"), code, &mut stx).expect("register contract bytes");
         assert_eq!(
             verified.code_hash, code_hash,
             "verified code hash must match stored bytes"
         );
         let manifest = verified.manifest.signed(authority_keypair);
-        register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        register_manifest(authority,contract_address.dataspace_id().expect("test contract dataspace"), manifest, &mut stx).expect("register manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
             authority.clone(),
@@ -22292,6 +22356,63 @@ mod multisig_selector_tests {
         assert_eq!(resolve_response.terminal_at_ms, Some(1_700_000_000_333));
         assert_eq!(resolve_response.proposal, canceled_value);
     }
+    routing_test! { async multisig_terminal_history_is_read_only_under_retired_controller_identity
+        let (_, old_account, old_signer, other_signer, _, _) = multisig_test_world();
+        assert!(old_account.multisig_policy().is_some());
+        let instructions = vec![dm::Log::new(dm::Level::INFO, "retired canceled quote".into()).into()];
+        let hash = HashOf::new(&instructions);
+        let terminal = iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState::new(
+            old_account.clone(), hash,
+            iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+                instructions.clone(), 1_700_000_000_222, 4_000_000_000_000,
+                BTreeSet::from([old_signer]), None,
+            ),
+            iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Canceled,
+            1_700_000_000_333,
+        );
+        let history_world = || {
+            let mut world = World::new();
+            world.smart_contract_state_mut_for_testing().insert(
+                multisig_proposal_terminal_state_contract_key(&old_account, &hash),
+                norito::to_bytes(&terminal).expect("original terminal evidence"),
+            );
+            world
+        };
+        let state = build_state(history_world());
+        let selector = concrete_selector(old_account.clone());
+        let JsonBody(query) = handle_post_multisig_proposals_query(state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto { selector: selector.clone(),
+                status: vec!["CANCELED".into()], cursor: None, limit: None }),
+        ).await.expect("retired original policy history");
+        assert_eq!(query.resolved_multisig_account_id, old_account);
+        assert_eq!(query.proposals.len(), 1);
+        assert_eq!(query.proposals[0].proposal, terminal.proposal);
+        let JsonBody(resolved) = handle_post_multisig_proposals_resolve(state.clone(),
+            NoritoJson(MultisigProposalsResolveRequestDto { selector: selector.clone(),
+                proposal_id: Some(hash.to_string()), instructions_hash: None }),
+        ).await.expect("exact original terminal record");
+        assert_eq!(resolved.resolved_multisig_account_id, old_account);
+        assert_eq!(resolved.status, "CANCELED");
+        assert!(resolve_multisig_account_and_spec(&state, &selector, None).is_err(),
+            "history must not authorize specification access or mutation");
+        let unknown = AccountId::new_multisig(iroha_data_model::account::MultisigPolicy::new(1,
+            vec![iroha_data_model::account::MultisigMember::new(
+                other_signer.controller().single_signatory().unwrap().clone(), 1,
+            ).unwrap()],
+        ).unwrap());
+        assert!(resolve_multisig_proposal_read_account(&state, &concrete_selector(unknown), None).is_err(),
+            "an intrinsic policy without authenticated history is not a known retired account");
+        let mut invalid = history_world();
+        invalid.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&old_account, &hash),
+            norito::to_bytes(&iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                old_account.clone(), hash, instructions, 1_700_000_000_222, 4_000_000_000_000,
+                BTreeSet::new(), None,
+            )).unwrap(),
+        );
+        assert!(resolve_multisig_proposal_read_account(&build_state(invalid), &selector, None).is_err(),
+            "a retired controller cannot retain actionable proposal state");
+    }
     routing_test! { async multisig_proposals_query_and_resolve_include_asset_transfer_control_intent
         let (
             mut world,
@@ -22987,6 +23108,7 @@ seiyaku BytesPayloadNormalizeTest {
             arguments.as_deref(),
             &manifest,
             &code_hash,
+            NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt"),
         )
         .expect("normalized instructions");
         let expected_hash = expected_hash.to_string();
@@ -23897,13 +24019,21 @@ pub async fn handle_post_contract_call_multisig_propose(
     .map_err(conversion_error)?;
     let signed_arguments =
         bound_signed_contract_arguments(arguments.clone()).map_err(conversion_error)?;
-    let tx_metadata = build_contract_call_metadata(
+    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    let attempt_created_at_ms = NonZeroU64::new(creation_time_ms).ok_or_else(|| {
+        multisig_selector_validation_error("positive Propose creation_time_ms is required")
+    })?;
+    let mut tx_metadata = build_contract_call_metadata(
         &manifest,
         &contract_address,
         &code_hash,
         contract_alias.as_ref(),
         Some(&entrypoint),
         normalized_payload.as_ref(),
+    );
+    tx_metadata.insert(
+        Name::from_str("contract_attempt_created_at_ms").expect("static metadata key"),
+        IrohaJson::new(attempt_created_at_ms.get()),
     );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
@@ -23914,6 +24044,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         arguments.as_deref(),
         &manifest,
         &code_hash,
+        attempt_created_at_ms,
     )?;
     let proposal_id = hex::encode(proposal_hash.as_ref());
     let instructions_hash = proposal_id.clone();
@@ -23931,7 +24062,6 @@ pub async fn handle_post_contract_call_multisig_propose(
             proposal_hash.clone(),
         )));
     }
-    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
         *state.network_id_ref(),
         signer_account_id.clone().into(),
@@ -24692,7 +24822,7 @@ fn multisig_proposals_query_response(
     let page_limit = usize::try_from(requested_limit)
         .map_err(|_| multisig_selector_validation_error("limit exceeds usize"))?;
     let (resolved_multisig_account_id, spec) =
-        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+        resolve_multisig_proposal_read_account(state, &req.selector, resolve_authority)?;
     let cursor = req
         .cursor
         .as_deref()
@@ -24709,7 +24839,7 @@ fn multisig_proposals_query_response(
     let mut proposals = query_multisig_proposals(
         state,
         &resolved_multisig_account_id,
-        &spec,
+        spec.as_ref(),
         &requested_statuses,
         &mut remaining_scan_budget,
     )?;
@@ -25192,8 +25322,9 @@ fn account_recovery_invalidation_evidence(
                 "recovery-invalidated proposal `{proposal_hash}` remains active"
             )));
         }
-        let terminal_key =
-            multisig_proposal_terminal_state_contract_key(active_account, proposal_hash);
+        let terminal_key = multisig_proposal_terminal_state_contract_key(
+            &request.active_account_id_at_proposal, proposal_hash,
+        );
         let bytes = storage.get(terminal_key.as_ref()).ok_or_else(|| {
             conversion_error(format!(
                 "recovery-invalidated proposal `{proposal_hash}` is missing terminal evidence"
@@ -25206,7 +25337,7 @@ fn account_recovery_invalidation_evidence(
                 ))
             },
         )?;
-        validate_multisig_terminal_proposal_binding(active_account, proposal_hash, &terminal)?;
+        validate_multisig_terminal_proposal_binding(&request.active_account_id_at_proposal, proposal_hash, &terminal)?;
         if terminal.terminal_at_ms == 0 {
             return Err(conversion_error(format!(
                 "recovery-invalidated proposal `{proposal_hash}` is missing its terminal timestamp"
@@ -25500,15 +25631,14 @@ fn multisig_proposals_resolve_response(
     resolve_authority: Option<&AccountId>,
 ) -> Result<MultisigProposalResolveResponseDto> {
     let (resolved_multisig_account_id, spec) =
-        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+        resolve_multisig_proposal_read_account(state, &req.selector, resolve_authority)?;
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
-    let proposal_record = load_multisig_proposal_record(
-        state,
-        &resolved_multisig_account_id,
-        &spec,
-        &instructions_hash,
-    )?
+    let proposal_record = if let Some(spec) = spec.as_ref() {
+        load_multisig_proposal_record(state, &resolved_multisig_account_id, spec, &instructions_hash)?
+    } else {
+        load_historical_multisig_terminal_record(state, &resolved_multisig_account_id, &instructions_hash)?
+    }
     .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
     .ok_or_else(multisig_not_found_error)?;
     let world = state.world_view();
@@ -26564,6 +26694,10 @@ derived_items! {
 /// DTO used by Torii for POST/GET registry endpoints.
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 pub struct ContractCodeRecordDto {
+    /// Exact network serving the authenticated registry.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Exact dataspace and complete artifact content identity.
+    pub artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
     /// Optional hex-encoded `code_hash` (from manifest) for convenience
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -26634,7 +26768,8 @@ fn prepare_contract_call(
                 format!("contract instance `{contract_address}` is not active"),
             )
         })?;
-    let code_bytes = world.contract_code().get(&binding).ok_or_else(|| {
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(contract_address, binding).map_err(|error| conversion_error(error.to_string()))?;
+    let code_bytes = world.contract_code().get(&artifact_id).ok_or_else(|| {
         contract_not_found_error(
             "contract_code_not_found",
             format!(
@@ -26669,7 +26804,7 @@ fn prepare_contract_call(
         })?;
     let manifest = world
         .contract_manifests()
-        .get(&binding)
+        .get(&artifact_id)
         .cloned()
         .ok_or_else(|| {
             contract_not_found_error(
@@ -27365,9 +27500,11 @@ pub struct ContractViewErrorResponseDto {
 }
 ( Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
-/// Selects a multisig authority either by its active concrete account id or by stable alias.
+/// Selects a live multisig authority by concrete id or stable alias. Read-only
+/// proposal query/resolve additionally accept an explicit retired controller id
+/// with authenticated terminal history; aliases and mutations remain live-only.
 pub struct MultisigAccountSelectorDto {
-    /// Active concrete multisig account id.
+    /// Concrete multisig account id; historical ids are accepted only by proposal reads.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
     /// Stable alias in canonical `name@domain.dataspace` or `name@dataspace` format.
@@ -45110,13 +45247,13 @@ mod validation_fee_torii_ingress_tests {
         let (contract_artifact, contract_manifest) = payout_contract_artifact();
         let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-            contract_artifact,
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_artifact,
             &mut stx,
         )
         .expect("register payout-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-            contract_manifest.signed(authority_key_pair),
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed payout-contract manifest");
@@ -45135,13 +45272,13 @@ mod validation_fee_torii_ingress_tests {
         let (pool_artifact, pool_manifest) = pool_contract_artifact();
         let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-            pool_artifact,
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_artifact,
             &mut stx,
         )
         .expect("register pool-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-            pool_manifest.signed(authority_key_pair),
+iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed pool-contract manifest");

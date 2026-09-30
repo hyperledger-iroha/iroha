@@ -1,5 +1,6 @@
-//! Lane routing (`specs/sumeragi_lanes.md` §5.1): the lane a transaction belongs to at a global
-//! height, from committed state only.
+//! Lane routing (`specs/sumeragi_lanes.md` §5.1) from immutable root scope and committed state.
+//! A private root owns lane zero in its signed dataspace and admits no foreign/global work.
+//! Missing or malformed genesis metadata grants no execution route.
 //!
 //! Concrete instruction/address scopes choose the matching admitted fixed dataspace lane;
 //! control-plane registry batches use lane zero. Otherwise the policy's explicit routes apply,
@@ -9,7 +10,9 @@
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
     nexus::DataSpaceCatalog,
+    parameter::system::{ConsensusHandshakeMetadata, consensus_metadata},
     sumeragi_lanes::{SumeragiLanePolicy, SumeragiLaneState},
 };
 use iroha_model_base::topology::LaneId;
@@ -20,11 +23,13 @@ use crate::{
     state::{StateReadOnly, WorldReadOnly},
 };
 
-/// The lane of the global chain itself.
+/// Lane zero of the authenticated root ledger (global or private dataspace).
 pub const GLOBAL_LANE: LaneId = LaneId::new(0);
 
 /// Routing inputs taken from committed state.
 pub struct RoutingInputs<'a, W> {
+    /// Immutable signed root scope. Missing or malformed metadata admits no route.
+    pub root_scope: Option<SumeragiRootScope>,
     /// The committed lane policy (`None`: the chain has only lane `0`).
     pub policy: Option<&'a SumeragiLanePolicy>,
     /// The committed lane set.
@@ -46,21 +51,25 @@ impl<W> Clone for RoutingInputs<'_, W> {
 impl<W> Copy for RoutingInputs<'_, W> {}
 
 impl<W: WorldReadOnly> RoutingInputs<'_, W> {
-    /// Whether `lane` receives transactions at global height `height`: lane `0` always, any
+    /// Whether `lane` receives transactions at global height `height`: authenticated lane `0`, any
     /// other lane while its record admits blocks anchored at `height - 1`, the tip a block at
     /// `height` is built on (a lane carries nothing before the global chain has applied its
     /// activation height, and nothing anchored from its closing height).
     #[must_use]
     pub fn admitted(&self, lane: LaneId, height: u64) -> bool {
+        let Some(scope) = self.root_scope.filter(|scope| scope.validate().is_ok()) else {
+            return false;
+        };
         lane == GLOBAL_LANE
-            || self
-                .lanes
-                .lane(lane)
-                .is_some_and(|record| record.admits_anchor(height.saturating_sub(1)))
+            || matches!(scope, SumeragiRootScope::Global)
+                && self
+                    .lanes
+                    .lane(lane)
+                    .is_some_and(|record| record.admits_anchor(height.saturating_sub(1)))
     }
 
     /// The sole execution route of a transaction at the next global height.
-    /// The global lane owns the universal dataspace; another lane keeps its original record's
+    /// Lane zero owns the signed root scope; another lane keeps its original record's
     /// dataspace even when the global chain rescues the transaction directly.
     pub fn execution_route(
         &self,
@@ -69,7 +78,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
     ) -> Option<crate::queue::RoutingDecision> {
         let lane = self.route(tx, height)?;
         let dataspace = if lane == GLOBAL_LANE {
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL
+            self.root_scope?.dataspace_id()
         } else {
             self.lanes.lane(lane)?.dataspace
         };
@@ -79,6 +88,12 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
     /// The default-route lanes at `height`: lane `0` and the admitted elastic lanes, ascending.
     #[must_use]
     pub fn shards(&self, height: u64) -> Vec<LaneId> {
+        let Some(scope) = self.root_scope.filter(|scope| scope.validate().is_ok()) else {
+            return Vec::new();
+        };
+        if matches!(scope, SumeragiRootScope::Dataspace { .. }) {
+            return vec![GLOBAL_LANE];
+        }
         let mut shards = vec![GLOBAL_LANE];
         if let Some(policy) = self.policy {
             shards.extend(
@@ -99,8 +114,33 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
     /// dataspace fails closed; it must never be executed in the universal dataspace.
     #[must_use]
     pub fn route(&self, tx: &dyn TransactionRoutingView, height: u64) -> Option<LaneId> {
+        let scope = self.root_scope?;
+        scope.validate().ok()?;
         let target =
             native_execution_target(tx, self.dataspaces, self.world, self.ledger_time_ms).ok()?;
+        if let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope {
+            self.dataspaces.by_id(dataspace_id)?;
+            if matches!(
+                tx.executable(),
+                Some(
+                    iroha_data_model::transaction::Executable::Ivm(_)
+                        | iroha_data_model::transaction::Executable::IvmProved(_)
+                )
+            ) {
+                return None;
+            }
+            // TODO: Define a typed local-control allowlist before private roots admit
+            // parameter changes. Mixed batches must not disguise global control work.
+            let changes_parameters = tx.any_matching_instruction(&mut |instruction| {
+                instruction
+                    .as_any()
+                    .is::<iroha_data_model::isi::SetParameter>()
+            });
+            return (!target.global
+                && !changes_parameters
+                && target.dataspace.is_none_or(|target| target == dataspace_id))
+            .then_some(GLOBAL_LANE);
+        }
         if target.global {
             return Some(GLOBAL_LANE);
         }
@@ -173,6 +213,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
 /// Routing inputs owned for one pass over many transactions: read once from a state view.
 #[derive(Clone, Debug)]
 pub struct RoutingSnapshot {
+    root_scope: Option<SumeragiRootScope>,
     policy: Option<SumeragiLanePolicy>,
     lanes: SumeragiLaneState,
     dataspaces: DataSpaceCatalog,
@@ -184,6 +225,7 @@ impl RoutingSnapshot {
     #[must_use]
     pub fn of(view: &impl StateReadOnly) -> Self {
         Self {
+            root_scope: committed_root_scope(view.world()),
             policy: super::lane_policy(view.world()),
             lanes: view.world().sumeragi_lanes().clone(),
             dataspaces: view.nexus().dataspace_catalog.clone(),
@@ -210,6 +252,7 @@ impl RoutingSnapshot {
     #[must_use]
     pub fn inputs<'a, W>(&'a self, world: &'a W) -> RoutingInputs<'a, W> {
         RoutingInputs {
+            root_scope: self.root_scope,
             policy: self.policy.as_ref(),
             lanes: &self.lanes,
             dataspaces: &self.dataspaces,
@@ -218,6 +261,27 @@ impl RoutingSnapshot {
         }
     }
 }
+
+/// Read the root scope exclusively from immutable, validated genesis metadata in World.
+/// Missing, malformed or unsupported metadata never acquires global routing authority.
+pub fn committed_root_scope(world: &impl WorldReadOnly) -> Option<SumeragiRootScope> {
+    let metadata = world
+        .parameters()
+        .custom()
+        .get(&consensus_metadata::handshake_meta_id())?
+        .payload()
+        .try_into_any::<ConsensusHandshakeMetadata>()
+        .ok()?;
+    metadata.validate().ok()?;
+    if metadata.wire_protocol_version != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION) {
+        return None;
+    }
+    Some(metadata.sumeragi_context.root_scope)
+}
+
+#[cfg(test)]
+#[path = "routing/test_support.rs"]
+pub(crate) mod test_support;
 
 /// The default-route shard of `authority` among `count` shards: `H(authority) mod count` over
 /// the first eight digest bytes.
@@ -321,13 +385,14 @@ mod tests {
 
     #[test]
     fn default_route_shards_by_authority_over_admitted_elastic_lanes() {
-        let world = World::default();
+        let world = test_support::world(SumeragiRootScope::Global);
         let dataspaces = DataSpaceCatalog::default();
         let policy = policy(Vec::new());
         let open = lanes(vec![record(16, 10, None), record(17, 10, None)]);
         let transactions = (1u8..41).map(tx).collect::<Vec<_>>();
         let view = world.view();
         let inputs = RoutingInputs {
+            root_scope: committed_root_scope(&view),
             policy: Some(&policy),
             lanes: &open,
             dataspaces: &dataspaces,
@@ -391,13 +456,14 @@ mod tests {
 
     #[test]
     fn explicit_routes_target_admitted_lanes_only() {
-        let world = World::default();
+        let world = test_support::world(SumeragiRootScope::Global);
         let dataspaces = DataSpaceCatalog::default();
         let fixed = lanes(vec![record(3, 5, None)]);
         let transaction = tx(1);
         let view = world.view();
         let with_policy = |policy: &SumeragiLanePolicy, height: u64| {
             RoutingInputs {
+                root_scope: committed_root_scope(&view),
                 policy: Some(policy),
                 lanes: &fixed,
                 dataspaces: &dataspaces,
@@ -428,7 +494,7 @@ mod tests {
     }
     #[test]
     fn execution_route_preserves_actual_pinned_dataspace_and_closing_boundary() {
-        let world = World::default();
+        let world = test_support::world(SumeragiRootScope::Global);
         let view = world.view();
         let dataspaces = DataSpaceCatalog::default();
         let mut pinned = record(3, 5, Some(8));
@@ -441,6 +507,7 @@ mod tests {
             instruction: Some("Log".into()),
         }]);
         let inputs = RoutingInputs {
+            root_scope: committed_root_scope(&view),
             policy: Some(&policy),
             lanes: &lanes,
             dataspaces: &dataspaces,
@@ -467,6 +534,156 @@ mod tests {
                 GLOBAL_LANE,
                 DataSpaceId::UNIVERSAL
             ))
+        );
+    }
+
+    #[test]
+    fn missing_malformed_or_invalid_scope_never_defaults_to_global() {
+        use iroha_data_model::parameter::{Parameter, custom::CustomParameter};
+        let world = World::new();
+        let absent = world.view();
+        assert_eq!(committed_root_scope(&absent), None);
+        drop(absent);
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            iroha_primitives::json::Json::from_norito_value_ref(&norito::json::Value::Bool(false))
+                .unwrap(),
+        )));
+        parameters.commit();
+        let view = world.view();
+        assert_eq!(committed_root_scope(&view), None);
+        let dataspaces = DataSpaceCatalog::default();
+        let lanes = SumeragiLaneState::default();
+        let inputs = RoutingInputs {
+            root_scope: committed_root_scope(&view),
+            policy: None,
+            lanes: &lanes,
+            dataspaces: &dataspaces,
+            world: &view,
+            ledger_time_ms: 0,
+        };
+        assert!(!inputs.admitted(GLOBAL_LANE, 2));
+        assert!(inputs.shards(2).is_empty());
+        assert_eq!(inputs.execution_route(&tx(1), 2), None);
+        let invalid = RoutingInputs {
+            root_scope: Some(SumeragiRootScope::Dataspace {
+                parent_network_id: tx(1).external().unwrap().network_id().copied().unwrap(),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }),
+            ..inputs
+        };
+        assert!(!invalid.admitted(GLOBAL_LANE, 2));
+        assert!(invalid.shards(2).is_empty());
+        assert_eq!(invalid.execution_route(&tx(1), 2), None);
+    }
+
+    #[test]
+    fn private_root_owns_exact_full_width_scope_and_refuses_global_or_foreign_work() {
+        use iroha_data_model::{
+            isi::{SetParameter, smart_contract_code::RegisterSmartContractBytes},
+            nexus::DataSpaceMetadata,
+            smart_contract::ContractAddress,
+            transaction::{Executable, executable::ContractInvocation},
+        };
+        let pair = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(pair.public_key().clone());
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::new(b"private-root"),
+        ));
+        let own = DataSpaceId::new((1_u64 << 40) + 7);
+        let scope = SumeragiRootScope::Dataspace {
+            parent_network_id: network,
+            dataspace_id: own,
+        };
+        let world = test_support::world(scope);
+        let view = world.view();
+        let dataspaces = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: own,
+                alias: "owner-private".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .unwrap();
+        let lanes = lanes(vec![record(16, 1, None)]);
+        let policy = policy(vec![SumeragiLaneRoute {
+            lane: LaneId::new(16),
+            account: None,
+            instruction: None,
+        }]);
+        let inputs = RoutingInputs {
+            root_scope: committed_root_scope(&view),
+            policy: Some(&policy),
+            lanes: &lanes,
+            dataspaces: &dataspaces,
+            world: &view,
+            ledger_time_ms: 0,
+        };
+        assert_eq!(inputs.root_scope, Some(scope));
+        assert_eq!(inputs.shards(2), vec![GLOBAL_LANE]);
+        assert!(!inputs.admitted(LaneId::new(16), 2));
+        let make = |executable| {
+            AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+                TransactionBuilder::new(
+                    network,
+                    authority.clone(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_executable(executable)
+                .sign(pair.private_key()),
+            ))
+        };
+        let expected = Some(crate::queue::RoutingDecision::new(GLOBAL_LANE, own));
+        let upload = make(Executable::Instructions(
+            vec![
+                RegisterSmartContractBytes {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        own,
+                        Hash::new(b"routing-only-artifact"),
+                    ),
+                    code: vec![1],
+                }
+                .into(),
+            ]
+            .into(),
+        ));
+        assert_eq!(inputs.execution_route(&upload, 2), expected);
+        for (target, expected) in [
+            (own, expected),
+            (DataSpaceId::new(7), None),
+            (DataSpaceId::UNIVERSAL, None),
+        ] {
+            let call = make(Executable::ContractCall(ContractInvocation {
+                contract_address: ContractAddress::derive(&network, &authority, 0, target).unwrap(),
+                expected_code_hash: Hash::new(b"routing-only-artifact"),
+                entrypoint: "call".into(),
+                arguments: None,
+            }));
+            assert_eq!(inputs.execution_route(&call, 2), expected);
+        }
+        let control: InstructionBox =
+            SetParameter::new(test_support::metadata(SumeragiRootScope::Global)).into();
+        let control_only = make(Executable::Instructions(vec![control.clone()].into()));
+        let mixed = make(Executable::Instructions(
+            vec![
+                control,
+                Log::new(iroha_data_model::Level::INFO, "disguise".into()).into(),
+            ]
+            .into(),
+        ));
+        assert_eq!(inputs.execution_route(&control_only, 2), None);
+        assert_eq!(inputs.execution_route(&mixed, 2), None);
+        let no_catalog = DataSpaceCatalog::default();
+        assert_eq!(
+            RoutingInputs {
+                dataspaces: &no_catalog,
+                ..inputs
+            }
+            .execution_route(&upload, 2),
+            None
         );
     }
 }
